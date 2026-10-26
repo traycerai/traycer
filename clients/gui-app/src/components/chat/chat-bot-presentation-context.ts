@@ -19,8 +19,10 @@ export interface ChatBotThreadLine {
 /**
  * How a bot's channel or thread draws its rows (Tracy Bots, decision 41):
  * Slack's message layout - a picture, the sender's name and the time, then
- * the text - for members' messages and the bot's own rows alike, with the
- * state of the request each member's message opened under it.
+ * the text - for members' messages and the bot's own rows alike, with a
+ * jump to the reply that answered a member's message where that reply is
+ * not right under it, and Slack's message actions on hover. The request
+ * state itself (open or answered) is the bot's bookkeeping and is not drawn.
  *
  * A bot surface provides it; every other transcript leaves it `null` and
  * draws its rows as it always has, the bot's trunk and thread sessions
@@ -36,6 +38,14 @@ export interface ChatBotPresentation {
    * thread, reached through the thread line.
    */
   readonly scrollToMessage: ((messageId: string) => void) | null;
+  /**
+   * Whether a reply renders right after the post it answers, by their
+   * message ids, so the jump to it is not offered; `null` where nothing can
+   * tell.
+   */
+  readonly replyFollowsPost:
+    | ((postMessageId: string, replyMessageId: string) => boolean)
+    | null;
   /**
    * The post a bot's direct reply answers, by its message id, as the reply's
    * line names it; `null` when the post is not in the list, and in a thread.

@@ -273,7 +273,7 @@ afterEach(() => {
 describe("<BotChannelView /> a message the host refuses", () => {
   it("says so in the channel with the text kept, and a second Enter sends it again as a plain send", async () => {
     mount(null);
-    const box = screen.getByRole("textbox", { name: "Message #Release Bot" });
+    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
     await typeAndEnter(box, "Ship it");
     expect(mocks.sends).toHaveLength(1);
 
@@ -301,7 +301,7 @@ describe("<BotChannelView /> a message the host refuses", () => {
 
   it("takes the notice away when the person edits the text", async () => {
     mount(null);
-    const box = screen.getByRole("textbox", { name: "Message #Release Bot" });
+    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
     await typeAndEnter(box, "Ship it");
     settle("fail");
     expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();

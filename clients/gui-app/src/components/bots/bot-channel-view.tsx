@@ -26,6 +26,7 @@ import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import {
   BotThreadPanel,
   type BotThreadPanelThread,
@@ -105,9 +106,11 @@ function channelConversation(
 /**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
- * the top level, a line under each post that opens its thread, and the
- * thread panel beside the channel - over it on a narrow pane. The channel's
- * box posts at the top level; the thread panel's box replies in its thread.
+ * the top level, "Reply in thread" among each row's hover actions and a
+ * line under a post whose thread has replies, and the thread panel beside
+ * the channel, as wide as the person dragged it - over it on a narrow pane.
+ * The channel's box posts at the top level; the thread panel's box replies
+ * in its thread.
  *
  * The tab's host serves all of it, whether it runs the bot or not (T65): a
  * host that does not reads the channel from the cloud and lists the threads
@@ -343,7 +346,7 @@ export function BotChannelView(props: {
       <div className="flex min-h-0 w-full">
         <section
           ref={setChannelSection}
-          aria-label={`# ${botTitle}`}
+          aria-label={botTitle}
           data-testid="bot-channel"
           data-conversation-id={channel.conversationId}
           className={cn(
@@ -375,14 +378,21 @@ export function BotChannelView(props: {
             conversationId={channel.conversationId}
             threadId={null}
             announcementId={null}
-            placeholder={`Message #${botTitle}`}
-            label={`Message #${botTitle}`}
+            placeholder={`Message ${botTitle}`}
+            label={`Message ${botTitle}`}
             testId="bot-channel-composer"
             failure={sendFailure}
           />
         </section>
         {threadOpen ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:max-w-xl @3xl:border-l @3xl:border-border/60">
+          <BotResizablePane
+            pane="thread"
+            edge="left"
+            label="Resize thread"
+            className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60"
+            handleClassName="hidden @3xl:block"
+            testId="bot-thread-pane"
+          >
             <BotThreadPanel
               key={openThreadPostId}
               botId={botId}
@@ -394,7 +404,7 @@ export function BotChannelView(props: {
               onClose={() => onOpenThread(null)}
               onOpenUnderTheHood={onOpenUnderTheHood}
             />
-          </div>
+          </BotResizablePane>
         ) : null}
       </div>
     </div>

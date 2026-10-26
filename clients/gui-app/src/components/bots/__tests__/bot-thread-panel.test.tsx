@@ -514,17 +514,44 @@ describe("<BotThreadPanel /> a listed thread", () => {
 });
 
 describe("<BotThreadPanel /> the anchor", () => {
-  it("draws a member's post under their name with its request state", () => {
+  it("draws a member's post under their name, with no request badge whether it is open or resolved", () => {
     mountPanel(listed("user-teammate"), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
     expect(within(anchor).queryByText("APP")).toBeNull();
-    expect(
-      within(anchor)
-        .getByTestId("conversation-request")
-        .getAttribute("data-request-state"),
-    ).toBe("open");
+    expect(within(anchor).queryByTestId("conversation-request")).toBeNull();
+    expect(within(anchor).queryByText("Open")).toBeNull();
+    expect(within(anchor).queryByTestId("bot-message-actions")).toBeNull();
+    cleanup();
+
+    const resolved = listed("user-teammate");
+    if (resolved.kind !== "listed" || resolved.thread.anchor === null) {
+      throw new Error("expected a listed thread with an anchor");
+    }
+    mountPanel(
+      {
+        kind: "listed",
+        thread: {
+          ...resolved.thread,
+          anchor: { ...resolved.thread.anchor, resolvedAt: 3_000 },
+        },
+      },
+      [],
+    );
+    const settled = screen.getByTestId("bot-thread-anchor");
+    expect(within(settled).queryByTestId("conversation-request")).toBeNull();
+    expect(within(settled).queryByText("Resolved")).toBeNull();
+  });
+
+  it("heads the thread with its name, the bot's picture and the bot's title, without a hash", () => {
+    mountPanel(listed("user-teammate"), []);
+
+    const channel = screen.getByTestId("bot-thread-channel");
+    expect(within(channel).getByText("Release Bot")).toBeTruthy();
+    expect(channel.textContent).not.toContain("#");
+    expect(within(channel).getByTestId("bot-avatar")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Thread" })).toBeTruthy();
   });
 
   it("shows the anchor without text while the channel has no row for it, and its text once the channel's row is there", () => {

@@ -1,8 +1,7 @@
 import { useMemo, type ReactNode } from "react";
-import { Hash, X } from "lucide-react";
+import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BotMessageFrame } from "@/components/chat/chat-bot-message";
 import { BotAvatar, MemberAvatar } from "@/components/bots/bot-avatars";
@@ -76,8 +75,12 @@ export function BotThreadPanel(props: {
       <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h2 className="text-ui-md font-semibold text-foreground">Thread</h2>
-          <span className="flex min-w-0 items-center truncate text-ui-xs text-muted-foreground">
-            <Hash className="size-3 shrink-0" aria-hidden="true" />
+          <span
+            className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
+            data-testid="bot-thread-channel"
+          >
+            <span aria-hidden="true">·</span>
+            <BotAvatar size="xs" />
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
@@ -332,10 +335,8 @@ function UnlistedThread(props: {
 
 /**
  * The post the thread answers, drawn as the channel draws it, its text read
- * from the channel's row (`null` while the channel has not loaded it). A
- * thread under a question or proposal hangs off the bot's own row, which
- * opened no request: the reply that opened the thread carries it, in the
- * thread.
+ * from the channel's row (`null` while the channel has not loaded it): a
+ * member's post, or the bot's own question or proposal.
  */
 function ThreadAnchor(props: {
   readonly anchor: NonNullable<BotThreadSummary["anchor"]>;
@@ -345,7 +346,6 @@ function ThreadAnchor(props: {
   readonly avatarUrl: string | null;
 }): ReactNode {
   const { anchor, text, botTitle, senderLabel, avatarUrl } = props;
-  const open = anchor.resolvedAt === null;
   if (anchor.senderUserId === null) {
     return (
       <BotMessageFrame
@@ -355,6 +355,7 @@ function ThreadAnchor(props: {
         sentAt={anchor.sentAt}
         instanceId={anchor.messageId}
         testId="bot-thread-anchor"
+        replyInThread={null}
       >
         {text === null ? null : (
           <TextSegment
@@ -382,6 +383,7 @@ function ThreadAnchor(props: {
       sentAt={anchor.sentAt}
       instanceId={anchor.messageId}
       testId="bot-thread-anchor"
+      replyInThread={null}
     >
       {text === null ? null : (
         <TextSegment
@@ -391,16 +393,6 @@ function ThreadAnchor(props: {
           nextStepActions={null}
         />
       )}
-      <div
-        className="flex items-center gap-2"
-        data-testid="conversation-request"
-        data-request-id={anchor.requestId}
-        data-request-state={open ? "open" : "resolved"}
-      >
-        <Badge variant={open ? "warning" : "success"} size="xs">
-          {open ? "Open" : "Resolved"}
-        </Badge>
-      </div>
     </BotMessageFrame>
   );
 }

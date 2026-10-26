@@ -26,6 +26,28 @@ export function replyRowIdFor(
   return null;
 }
 
+/**
+ * Whether the reply `replyMessageId` renders in the row right after the post
+ * `postMessageId`, where the reader sees the answer without a jump. `false`
+ * when either is not in the rendered rows.
+ */
+export function replyFollowsPost(
+  messages: ReadonlyArray<ChatMessage>,
+  postMessageId: string,
+  replyMessageId: string,
+): boolean {
+  const postIndex = messages.findIndex(
+    (message) => message.persistentMessageId === postMessageId,
+  );
+  if (postIndex === -1) return false;
+  const next = messages.at(postIndex + 1);
+  if (next === undefined) return false;
+  return (
+    next.persistentMessageId === replyMessageId ||
+    next.turnMessageIds?.includes(replyMessageId) === true
+  );
+}
+
 /** A post as the line above a direct reply names it. */
 export interface ChatBotRepliedPost {
   readonly senderLabel: string;

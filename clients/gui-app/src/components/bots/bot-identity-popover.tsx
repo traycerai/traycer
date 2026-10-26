@@ -153,7 +153,7 @@ type BotWork = {
 function botWork(title: string, activity: BotActivity | null): BotWork | null {
   const trunk = activity?.trunk ?? null;
   if (trunk !== null && trunk.state === "replying") {
-    return { where: `#${title}`, since: trunk.startedAt, step: trunk.step };
+    return { where: title, since: trunk.startedAt, step: trunk.step };
   }
   const thread = Object.values(activity?.threads ?? {}).find(
     (entry) => entry.state === "replying",
@@ -163,7 +163,7 @@ function botWork(title: string, activity: BotActivity | null): BotWork | null {
 }
 
 /**
- * "Working in #Tracy · 1m 23s" while the bot runs a turn, as the host's
+ * "Working in Tracy · 1m 23s" while the bot runs a turn, as the host's
  * running state says, with its current step under it; nothing while idle.
  */
 function BotWorkingLine(props: {

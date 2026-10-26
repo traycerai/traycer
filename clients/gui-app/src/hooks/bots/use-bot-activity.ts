@@ -2,7 +2,10 @@ import type {
   BotActivity,
   BotSessionActivity,
 } from "@traycer/protocol/host/bot/schemas";
-import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
+import {
+  useBotSubscriptionForHost,
+  type BotSubscriptionResult,
+} from "@/hooks/bots/use-bot-subscription";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 export type { BotActivity, BotSessionActivity };
@@ -26,11 +29,58 @@ export function useBotActivity(botId: string): BotActivity | null {
   const hostId = useBotTabsStore(
     (state) => lookupBotTab(state.tabs, botId)?.hostId ?? null,
   );
-  const { snapshot, error, deleted } = useBotSubscriptionForHost({
+  const subscription = useBotSubscriptionForHost({
     botId,
     hostId: hostId ?? "",
     enabled: hostId !== null,
   });
-  if (hostId === null || error !== null || deleted) return null;
-  return snapshot?.activity ?? null;
+  if (hostId === null) return null;
+  return liveActivityOf(subscription);
+}
+
+/**
+ * A subscription's activity while it can still move: `null` once the
+ * stream closed for good or the bot is gone, since no frame will update the
+ * last snapshot the cache keeps. A reconnect is not a close and keeps it.
+ */
+export function liveActivityOf(
+  subscription: BotSubscriptionResult,
+): BotActivity | null {
+  if (subscription.error !== null || subscription.deleted) return null;
+  return subscription.snapshot?.activity ?? null;
+}
+
+/**
+ * The session the bot is answering in now, across its trunk and its
+ * threads: the trunk's turn before a thread's, and of the threads the one
+ * that started first. `null` while none is replying, and with no reading.
+ */
+export function replyingSessionOf(
+  activity: BotActivity | null,
+): BotSessionActivity | null {
+  if (activity === null) return null;
+  if (activity.trunk?.state === "replying") return activity.trunk;
+  let first: BotSessionActivity | null = null;
+  for (const thread of Object.values(activity.threads)) {
+    if (thread.state !== "replying") continue;
+    if (first === null || startedBefore(thread, first)) first = thread;
+  }
+  return first;
+}
+
+/**
+ * Whether the bot is answering anywhere now: `true` while its trunk or a
+ * thread is replying, `false` once its trunk's state is known and none is,
+ * `null` while that is not known (no reading, or no host has written the
+ * trunk): unknown is not idle.
+ */
+export function botWorkingOf(activity: BotActivity | null): boolean | null {
+  if (replyingSessionOf(activity) !== null) return true;
+  return activity === null || activity.trunk === null ? null : false;
+}
+
+/** A session with no start time sorts after every one that has one. */
+function startedBefore(a: BotSessionActivity, b: BotSessionActivity): boolean {
+  if (a.startedAt === null) return false;
+  return b.startedAt === null || a.startedAt < b.startedAt;
 }

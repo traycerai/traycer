@@ -35,7 +35,13 @@ import "../../../../../__tests__/test-browser-apis";
  */
 
 import type { UseNavigateResult } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { domMax, LazyMotion } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -92,7 +98,8 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => directory.connectable,
 }));
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
 
@@ -287,9 +294,11 @@ describe("MobileNavDrawer rows", () => {
 
   it("opens the Tracy row's tab on this window's host when its own host can no longer be dialled, and closes the drawer", async () => {
     directory.connectable = { hostIds: ["host-a"], resolved: true };
-    useBotTabsStore
-      .getState()
-      .openBotTab({ botId: TRACY.id, hostId: "host-gone", title: "Tracy" });
+    useBotTabsStore.getState().openBotTab({
+      botId: TRACY.id,
+      hostId: "host-gone",
+      title: "Release Notes",
+    });
     useBotTabsStore.getState().setFixedBotId(TRACY.id);
     useTabsStore.setState({
       ...emptyTabStripLayout(),
@@ -298,7 +307,10 @@ describe("MobileNavDrawer rows", () => {
     });
     renderDrawer();
 
-    fireEvent.click(await screen.findByTestId("mobile-nav-tracy"));
+    const row = await screen.findByTestId("mobile-nav-tracy");
+    expect(row.textContent).toBe("Tracy");
+    expect(within(row).getByTestId("tracy-entry-icon")).toBeTruthy();
+    fireEvent.click(row);
 
     expect(
       lookupBotTab(useBotTabsStore.getState().tabs, TRACY.id)?.hostId,

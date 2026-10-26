@@ -8,7 +8,20 @@
  * environment's machine list.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
@@ -24,6 +37,8 @@ const mocks = vi.hoisted(() => {
   const botRefetch = vi.fn(() => Promise.resolve());
   return {
     hostClient,
+    openLink: vi.fn<(url: string, kind: string) => Promise<void>>(),
+    hasShell: true,
     environmentRefetch,
     botRefetch,
     state: {
@@ -78,6 +93,13 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () =>
+    mocks.hasShell ? { signInUrl: "https://platform.traycer.ai" } : null,
+}));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
+}));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => mocks.hostClient,
 }));
@@ -163,6 +185,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
 }));
 
 import { HomeBotsSection } from "@/components/home/bots/home-bots-section";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 const PERSONAL: EnvironmentDescriptor = {
   environmentId: "env-personal",
@@ -213,14 +236,35 @@ function resolveBothQueries(): void {
 
 function mountSection(): void {
   render(
-    <StrictMode>
-      <HomeBotsSection />
-    </StrictMode>,
+    <QueryClientProvider client={new QueryClient()}>
+      <StrictMode>
+        <HomeBotsSection />
+      </StrictMode>
+    </QueryClientProvider>,
+  );
+}
+
+/** A real query over what the host's `environment.list` answers, for the focus re-read. */
+const hostAnswer = { environments: [] as EnvironmentDescriptor[] };
+
+function useLiveEnvironmentList(enabled: boolean): unknown {
+  return useQuery(
+    queryOptions({
+      queryKey: [
+        ...hostQueryKeys.methodScope("host-1", "environment.list"),
+        {},
+      ],
+      queryFn: () => Promise.resolve({ environments: hostAnswer.environments }),
+      enabled,
+      staleTime: Infinity,
+    }),
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.hasShell = true;
+  mocks.openLink.mockResolvedValue(undefined);
   mocks.state.hostId = "host-1";
   mocks.state.support = true;
   mocks.state.environments.data = undefined;
@@ -576,5 +620,61 @@ describe("HomeBotsSection what each group is told", () => {
     for (const call of mocks.useEnvironmentHostLists.mock.calls) {
       expect(call[2]).toBe(false);
     }
+  });
+});
+
+describe("HomeBotsSection create a team", () => {
+  it("offers a card to a reader in no team, opening the dashboard's create-team page", async () => {
+    const user = userEvent.setup();
+    mocks.state.environments.data = { environments: [PERSONAL] };
+    mocks.state.bots.data = { bots: [], mainBotIds: null };
+    mountSection();
+
+    expect(screen.getAllByTestId("home-bots-group")).toHaveLength(1);
+    const card = screen.getByTestId("home-bots-create-team");
+    await user.click(within(card).getByTestId("home-bots-create-team-open"));
+
+    expect(within(card).getByText("Create a team")).toBeTruthy();
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink.mock.calls[0]?.[0]).toBe(
+      "https://platform.traycer.ai/settings?create-team=1",
+    );
+    expect(mocks.openLink.mock.calls[0]?.[1]).toBe("account");
+  });
+
+  it("re-reads the environment list when the window regains focus, so a team made on the dashboard replaces the card", async () => {
+    hostAnswer.environments = [PERSONAL];
+    mocks.useEnvironmentListQuery.mockImplementation((_client, enabled) =>
+      useLiveEnvironmentList(enabled),
+    );
+    mocks.state.bots.data = { bots: [], mainBotIds: null };
+    mountSection();
+    await screen.findByTestId("home-bots-create-team");
+
+    hostAnswer.environments = [PERSONAL, TEAM];
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByTestId("home-bots-group")
+          .map((group) => group.getAttribute("data-environment-id")),
+      ).toEqual(["env-personal", "env-team"]);
+    });
+    expect(screen.queryByTestId("home-bots-create-team")).toBeNull();
+  });
+
+  it("draws no card when a team is listed, or with no shell to open it", () => {
+    resolveBothQueries();
+    mountSection();
+    expect(screen.queryByTestId("home-bots-create-team")).toBeNull();
+    cleanup();
+
+    mocks.state.environments.data = { environments: [PERSONAL] };
+    mocks.hasShell = false;
+    mountSection();
+    expect(screen.queryByTestId("home-bots-create-team")).toBeNull();
   });
 });
