@@ -46,6 +46,7 @@ describe("<TerminalDeadTileBanner />", () => {
         reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="terminal"
+        destroyedLine={null}
         onClose={() => undefined}
         testId="terminal-tile-1"
       />,
@@ -62,6 +63,7 @@ describe("<TerminalDeadTileBanner />", () => {
         reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="agent"
+        destroyedLine={null}
         onClose={() => undefined}
         testId="terminal-agent-tile-1"
       />,
@@ -76,12 +78,72 @@ describe("<TerminalDeadTileBanner />", () => {
     expect(text).not.toContain("permanently closed");
   });
 
+  it("says who destroyed the sandbox and when, for a terminal or a terminal agent, never a fault", () => {
+    for (const ownerKind of ["terminal", "agent"] as const) {
+      render(
+        <TerminalDeadTileBanner
+          reason="sandbox-destroyed"
+          hostLabel="e2e-sbx-win2"
+          ownerKind={ownerKind}
+          destroyedLine="e2e-sbx-win2 was destroyed by you at 11:01."
+          onClose={() => undefined}
+          testId={`tile-${ownerKind}`}
+        />,
+      );
+
+      const text = screen.getByTestId(`tile-${ownerKind}`).textContent;
+      expect(text).toContain("e2e-sbx-win2 was destroyed by you at 11:01.");
+      expect(text).not.toContain("unreachable");
+      expect(text).not.toContain("permanently closed");
+    }
+  });
+
+  it("tells a terminal agent on a stopped sandbox the same, not that the host is unreachable", () => {
+    render(
+      <TerminalDeadTileBanner
+        reason="sandbox-stopped"
+        hostLabel="e2e-sbx-p1"
+        ownerKind="agent"
+        destroyedLine={null}
+        onClose={() => undefined}
+        testId="tui-agent-tile-1"
+      />,
+    );
+
+    const text = screen.getByTestId("tui-agent-tile-1").textContent;
+    expect(text).toContain(
+      "e2e-sbx-p1 is stopped. Start it to use this terminal again.",
+    );
+    expect(text).not.toContain("unreachable");
+  });
+
+  it("tells a terminal on a stopped sandbox to start it, not that it is permanently closed", () => {
+    render(
+      <TerminalDeadTileBanner
+        reason="sandbox-stopped"
+        hostLabel="e2e-sbx-p1"
+        ownerKind="terminal"
+        destroyedLine={null}
+        onClose={() => undefined}
+        testId="terminal-tile-1"
+      />,
+    );
+
+    expect(screen.getByTestId("terminal-tile-1").textContent).toContain(
+      "e2e-sbx-p1 is stopped. Start it to use this terminal again.",
+    );
+    expect(screen.getByTestId("terminal-tile-1").textContent).not.toContain(
+      "permanently closed",
+    );
+  });
+
   it("keeps the close action available on both variants", () => {
     render(
       <TerminalDeadTileBanner
         reason="host-unreachable"
         hostLabel="h"
         ownerKind="agent"
+        destroyedLine={null}
         onClose={() => undefined}
         testId="t-agent"
       />,

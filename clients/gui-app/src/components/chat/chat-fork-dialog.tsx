@@ -9,6 +9,7 @@ import {
 import { useStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { CreateChatForkSourceV11 } from "@traycer/protocol/host/epic/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -88,6 +90,31 @@ import {
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { useInTaskSandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
+import {
+  handPendingSandboxSend,
+  pickedRunSettings,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  readStagedSandbox,
+  useStagedSandbox,
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+  type StagedSandbox,
+} from "@/stores/composer/staged-sandbox-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
+import { createEmptyNewConversationContent } from "@/stores/epics/new-conversation-modal-store";
+import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  ComposerHostNotice,
+  type ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
+import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
@@ -163,6 +190,13 @@ export interface ChatForkDialogTarget {
    * for every host.
    */
   readonly onlyHostIds: ReadonlySet<string> | null;
+  /**
+   * A New sandbox the chat host chip picked (sandboxes redesign D9): the
+   * dialog opens with it staged, its consequences under the host list, and
+   * Fork creates it, waits for the agent there and forks onto it. `null`
+   * stages nothing; `initialHostId` and `onlyHostIds` are `null` with it.
+   */
+  readonly stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }> | null;
 }
 
 interface ChatForkDialogProps {
@@ -294,16 +328,58 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const selectHostId = useCallback((nextHostId: string): void => {
     setDialogState((current) => ({ ...current, hostId: nextHostId }));
   }, []);
+  // The dialog's own staging: the New sandbox the chip picked, or one picked
+  // in the dialog's host list. Fork creates it and forks onto it; picking a
+  // host drops it.
+  const forkSurfaceKey = chatForkSurfaceKey(epicId, tabId);
+  const forkStage = useStagedSandbox(forkSurfaceKey);
   // A cross-host fork is a different operation: it cannot carry the source
   // machine's working tree, its folder paths, or the provider's on-disk
-  // session. Everything below that changes shape keys on this one fact.
-  const isCrossHost = selectedHostId !== tabHostId;
+  // session. Everything below that changes shape keys on this one fact. A
+  // staged sandbox is another machine too.
+  const isCrossHost = selectedHostId !== tabHostId || forkStage !== null;
   // The target only exists as far as this dialog is concerned while it is
   // OPEN. `target` outlives a close (the opener keeps the last one), so every
   // read that costs something - the owner resolution's cloud-chat list, the
   // staging-slot ownership below - hangs off this rather than off `target`,
   // which would leave a closed dialog holding a query per chat tile.
   const activeWorkspaceTarget = open ? target : null;
+
+  // Stages the chip's New sandbox while the dialog is open; closing drops
+  // whatever is staged. A Fork that took the stage has moved it already.
+  useEffect(() => {
+    if (activeWorkspaceTarget === null) return;
+    if (activeWorkspaceTarget.stagedSandbox !== null) {
+      useStagedSandboxStore
+        .getState()
+        .stage(forkSurfaceKey, activeWorkspaceTarget.stagedSandbox);
+    }
+    return () => {
+      useStagedSandboxStore.getState().clear(forkSurfaceKey);
+    };
+  }, [activeWorkspaceTarget, forkSurfaceKey]);
+  // A team-only list ("Continue on a <team> host") offers no New rows.
+  const sandboxStagingSurface = useInTaskSandboxStagingSurface(
+    epicId,
+    forkSurfaceKey,
+    null,
+    null,
+  );
+  const sandboxStaging =
+    target !== null && target.onlyHostIds !== null
+      ? null
+      : sandboxStagingSurface;
+  // A fork refused at Fork, said in the dialog; any other host pick or
+  // stage, or the dialog closing, retires it.
+  const [stagedRefusal, setStagedRefusal] =
+    useState<ComposerHostNoticeState | null>(null);
+  const [refusalFor, setRefusalFor] = useState(forkStage);
+  const [refusalHostId, setRefusalHostId] = useState(selectedHostId);
+  if (refusalFor !== forkStage || refusalHostId !== selectedHostId) {
+    setRefusalFor(forkStage);
+    setRefusalHostId(selectedHostId);
+    if (stagedRefusal !== null) setStagedRefusal(null);
+  }
 
   // EVERY host-derived read in this dialog hangs off this one client - the
   // create call, the harness/model catalog, seeded-profile validation, folder
@@ -343,21 +419,28 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       }),
     [createChatVersions, tabHostId],
   );
-  // Asked again for the SELECTED host rather than read off the map: the map
-  // exempts the source host (a same-host fork needs no contract), and a host
-  // picked before its first handshake is `unknown` here — permissive, and it
-  // resolves itself once its client answers anything at all.
+  // A stage replaces the selected host as the destination. A new sandbox's
+  // build is unknown until it has a host; the pending driver checks that host
+  // before dispatch. The source's publication gate still applies now.
+  let destinationHostId: string | null = selectedHostId;
+  if (forkStage !== null) {
+    destinationHostId =
+      forkStage.target.kind === "existing"
+        ? forkStage.target.hostId
+        : forkStage.createdHostId;
+  }
+  const destinationVersion =
+    destinationHostId === null
+      ? null
+      : (createChatVersions.get(destinationHostId) ?? null);
   const selectedHostSupport: ChatForkTargetSupport = isCrossHost
-    ? chatForkTargetSupport(createChatVersions.get(selectedHostId) ?? null)
+    ? chatForkTargetSupport(destinationVersion)
     : { kind: "supported" };
 
-  // Is there any host this fork could go to OTHER than the source? Read from
-  // the same directory the version gate uses: a host with no directory entry
-  // has no route this client can dial, so it is not a fork target either.
-  const hasRemoteHostOption = useMemo(
-    () => directoryHostIds.some((hostId) => hostId !== tabHostId),
-    [directoryHostIds, tabHostId],
-  );
+  // A staged sandbox is a remote target before it joins the directory. Its
+  // source publication needs the same check as an existing remote host.
+  const hasRemoteHostOption =
+    isCrossHost || directoryHostIds.some((hostId) => hostId !== tabHostId);
   // Layer 1: does the SOURCE chat's publication let ANY remote host serve this
   // fork? Read through the TAB client, which addresses the owning host by
   // construction - the dialog lives inside the source chat's tile - so this is
@@ -384,16 +467,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // knowable the moment the dialog opens and should be true on first paint,
     // so nobody reaches for a host that could never have worked.
     //
-    // Still not unconditional: an account with no remote host has no row this
-    // could gate, so asking would be pure waste for the single-host case. One
-    // RPC on a surface that already issues catalog and profile reads on open.
+    // With no remote host or staged sandbox, nothing needs this check: a
+    // source-only fork still asks for no publication read.
     enabled: activeWorkspaceTarget !== null && hasRemoteHostOption,
   });
   // ONE verdict from BOTH gates, so the nine (version x publication) cells and
   // their precedence live in one place instead of at each render site.
   const targetVerdict: ChatForkTargetVerdict = chatForkTargetVerdict({
     isCrossHost,
-    version: createChatVersions.get(selectedHostId) ?? null,
+    version: destinationVersion,
     publication,
   });
   // Read from the CLASS resolver, not from the selection verdict: publication
@@ -484,9 +566,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       // A fork CREATES a chat; nothing has negotiated a `chat.subscribe` line
       // for it yet, so the harness-catalog line decides `auto` alone.
       chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: forkSurfaceKey,
     },
   );
-  // Cross-host asks a DIFFERENT question from same-host, and only cross-host.
+  // An existing cross-host destination asks a DIFFERENT question from same-host.
   //
   // The toolbar store retains the previous host's slug across a retarget while
   // the new target's harness/model queries load, so a bare slug-length check
@@ -530,14 +613,39 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A harness a team sandbox does not offer holds Fork shut on that host, and
   // the dialog says so.
   const forkHarnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
-  const teamSandboxHarnessBlocked = useTeamSandboxHarnessBlocked({
+  const pickedHarnessId = useStore(
+    toolbarStore,
+    (s) => s.values.selection.harnessId,
+  );
+  const stagedSignInCheck = useStagedSendSignInCheck({
+    client: selectedHostClient,
+    hostId: selectedHostId,
+    harnessId: pickedHarnessId,
+    active: activeWorkspaceTarget !== null && forkStage !== null,
+  });
+  // On a sandbox host an agent that cannot run there is refused at Fork, with
+  // the configuration's Providers, never swapped; a staged fork is checked
+  // above instead.
+  const sandboxAgentGate = useSandboxAgentGate({
     hostId: selectedHostId,
     client: selectedHostClient,
     harnessId: forkHarnessId,
+    active: activeWorkspaceTarget !== null && forkStage === null,
   });
+  // The selected host's own gate: a staged sandbox is not that host, and the
+  // fork runs on it under its own.
+  const teamSandboxHarnessBlocked =
+    useTeamSandboxHarnessBlocked({
+      hostId: selectedHostId,
+      client: selectedHostClient,
+      harnessId: forkHarnessId,
+    }) && forkStage === null;
+  // A stage's destination does not exist yet. Its driver validates the picked
+  // model there, or reads that sandbox's default when no slug was picked.
   const modelResolved =
-    modelSlugPresent &&
-    (!isCrossHost || catalogConfirmed || catalogSubstituted);
+    forkStage !== null ||
+    (modelSlugPresent &&
+      (!isCrossHost || catalogConfirmed || catalogSubstituted));
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"
@@ -710,24 +818,130 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   }, []);
 
   const close = useCallback(() => {
-    if (createChat.isPending) return;
+    if (createChat.isPending || attachEnvironment.isPending) return;
     clearForkWorkspaces();
     onOpenChange(false);
-  }, [clearForkWorkspaces, createChat.isPending, onOpenChange]);
+  }, [
+    attachEnvironment.isPending,
+    clearForkWorkspaces,
+    createChat.isPending,
+    onOpenChange,
+  ]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
-      if (!nextOpen && createChat.isPending) return;
+      if (!nextOpen && (createChat.isPending || attachEnvironment.isPending))
+        return;
       if (!nextOpen) {
         clearForkWorkspaces();
       }
       onOpenChange(nextOpen);
     },
-    [clearForkWorkspaces, createChat.isPending, onOpenChange],
+    [
+      attachEnvironment.isPending,
+      clearForkWorkspaces,
+      createChat.isPending,
+      onOpenChange,
+    ],
+  );
+
+  const submitStagedFork = useCallback(
+    (staged: StagedSandbox, target: ChatForkDialogTarget): void => {
+      // An agent signed out on the staged configuration is refused here,
+      // before anything is created or woken; the dialog stays as it was.
+      const signedOut = stagedSignInCheck(staged);
+      if (signedOut !== null) {
+        setStagedRefusal(signedOut);
+        return;
+      }
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const ownerUserId = useAuthStore.getState().profile?.userId ?? null;
+      const hand = (): void => {
+        const decision = transitionPendingSend(
+          { kind: "fork", phase: "staged", blocker: "none" },
+          "handoff",
+          {
+            ...UNKNOWN_PENDING_SEND_FACTS,
+            current: true,
+            owns: true,
+            epicConfirmed: true,
+            accountActive:
+              (useAuthStore.getState().profile?.userId ?? null) === ownerUserId,
+            stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
+          },
+        );
+        if (!decision.effects.includes("handoff")) return;
+        const handed = handPendingSandboxSend({
+          fromSurfaceKey: forkSurfaceKey,
+          epicId,
+          request: {
+            kind: "fork",
+            parentId: target.parentId,
+            title: trimmedTitle,
+            forkSource: chatForkSource(target, sourceOwnerUserId),
+            tabId,
+          },
+          content: createEmptyNewConversationContent(),
+          text: trimmedTitle,
+          settings,
+          epicConfirmed: true,
+          now: Date.now(),
+        });
+        if (handed === null) return;
+        clearForkWorkspaces();
+        onOpenChange(false);
+      };
+      const stagedTeamId = stagedTeamToAttach(
+        staged.target.configuration,
+        tabHostTeamId,
+      );
+      if (stagedTeamId === null) {
+        hand();
+        return;
+      }
+      if (attachClient === null) {
+        toastAttachEnvironmentNeedsOwnHost();
+        return;
+      }
+      attachEnvironment.mutate(
+        { epicId, teamId: stagedTeamId },
+        {
+          onSuccess: hand,
+          onError: (error) => {
+            if (isAttachEnvironmentUnsupported(error)) hand();
+          },
+        },
+      );
+    },
+    [
+      attachClient,
+      attachEnvironment,
+      clearForkWorkspaces,
+      epicId,
+      forkSurfaceKey,
+      onOpenChange,
+      sourceOwnerUserId,
+      stagedSignInCheck,
+      tabHostTeamId,
+      tabId,
+      toolbarStore,
+      trimmedTitle,
+    ],
   );
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
+    // A staged sandbox: the fork is handed to the task, which creates the
+    // sandbox, waits for the agent there and forks onto it, through a reload.
+    const staged = readStagedSandbox(forkSurfaceKey);
+    if (staged !== null && staged.phase !== "handoff") {
+      submitStagedFork(staged, target);
+      return;
+    }
+    if (sandboxAgentGate.notice !== null) {
+      setStagedRefusal(sandboxAgentGate.notice);
+      return;
+    }
     // Read back from the CLIENT, not from the picker's state: the request's
     // `hostId` and the machine it travels to have to be the same fact, which is
     // the invariant `useEpicCreateChatForHostClient`'s preflight enforces.
@@ -770,7 +984,22 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
     });
+    const submittedBy = useAuthStore.getState().profile?.userId ?? null;
     const createForkChat = (): void => {
+      const decision = transitionPendingSend(
+        { kind: "fork", phase: "staged", blocker: "none" },
+        "handoff",
+        {
+          ...UNKNOWN_PENDING_SEND_FACTS,
+          current: true,
+          owns: true,
+          epicConfirmed: true,
+          accountActive:
+            (useAuthStore.getState().profile?.userId ?? null) === submittedBy,
+          stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
+        },
+      );
+      if (!decision.effects.includes("handoff")) return;
       createChat.mutate(
         {
           epicId,
@@ -784,26 +1013,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           workspaceMode,
           worktreeIntent,
           initialMessage: null,
-          // Both fork shapes carry the rendered source owner so a destination
-          // with no local chat record can verify the cloud publication's owner.
-          forkSource:
-            target.assistantMessageId === null
-              ? {
-                  boundary: "latest",
-                  sourceChatId: target.sourceChatId,
-                  sourceOwnerUserId,
-                }
-              : {
-                  boundary: "assistantMessage",
-                  sourceChatId: target.sourceChatId,
-                  assistantMessageId: target.assistantMessageId,
-                  interviewBlockId: target.interviewBlockId,
-                  carriedInterviews: target.carriedInterviews,
-                  sourceOwnerUserId,
-                },
+          forkSource: chatForkSource(target, sourceOwnerUserId),
         },
         {
           onSuccess: (result) => {
+            if (
+              (useAuthStore.getState().profile?.userId ?? null) !== submittedBy
+            )
+              return;
             Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
               include_history: true,
@@ -861,7 +1078,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     clearForkWorkspaces,
     createChat,
     epicId,
+    forkSurfaceKey,
     navigateNestedFocus,
+    submitStagedFork,
+    sandboxAgentGate.notice,
     onOpenChange,
     seedIntent,
     selectedHostClient,
@@ -994,7 +1214,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               onKeyDown={(event) => {
                 if (event.key === "Enter") submit();
               }}
-              disabled={createChat.isPending}
+              disabled={createChat.isPending || attachEnvironment.isPending}
               aria-label="Fork agent title"
               placeholder={sourceUntitled ? "Untitled agent" : ""}
             />
@@ -1004,16 +1224,18 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               Harness
             </div>
             <div className="flex min-w-0 items-center gap-2">
-              <ChatForkModelPicker
-                key={modelPickerKey}
-                store={toolbarStore}
-                disabled={createChat.isPending}
-                selectedHostId={selectedHostId}
-              />
+              <ComposerStagedSurfaceKeyProvider surfaceKey={forkSurfaceKey}>
+                <ChatForkModelPicker
+                  key={modelPickerKey}
+                  store={toolbarStore}
+                  disabled={createChat.isPending || attachEnvironment.isPending}
+                  selectedHostId={selectedHostId}
+                />
+              </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
           <ActiveHostWorkspaceControls
-            sandboxStaging={null}
+            sandboxStaging={sandboxStaging}
             // Locked while the create is in flight, like every other control in
             // this dialog. The host picker is LIVE here (`kind: "selected"`), so
             // an unlocked retarget would move `selectedHostId` out from under a
@@ -1022,13 +1244,17 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             // describes the target currently on screen, would then answer "no"
             // and render nothing at all. The user would see the fork fail
             // silently.
-            disabled={createChat.isPending}
+            disabled={createChat.isPending || attachEnvironment.isPending}
             stagingKey={stagingKey}
             layout="stacked"
             workspaceSeed={workspaceSeed}
             seedIntent={seedIntent}
             seedIntentOverride={seedIntentOverride}
             hostScope={workspaceHostScope}
+          />
+          <ComposerHostNotice
+            notice={stagedRefusal}
+            onDismiss={() => setStagedRefusal(null)}
           />
           {teamSandboxHarnessBlocked ? (
             <p
@@ -1054,7 +1280,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           <Button
             type="button"
             variant="outline"
-            disabled={createChat.isPending}
+            disabled={createChat.isPending || attachEnvironment.isPending}
             onClick={close}
           >
             Cancel
@@ -1259,6 +1485,36 @@ function canSubmitFork(input: {
   return true;
 }
 
+/** The fork dialog's staging surface: one per tab, as the dialog is. */
+function chatForkSurfaceKey(epicId: string, tabId: string): string {
+  return `chat-fork:${epicId}:${tabId}`;
+}
+
+/**
+ * What the fork carries from its source. Both shapes carry the rendered
+ * source owner so a destination with no local chat record can verify the
+ * cloud publication's owner.
+ */
+function chatForkSource(
+  target: ChatForkDialogTarget,
+  sourceOwnerUserId: string | null,
+): CreateChatForkSourceV11 {
+  return target.assistantMessageId === null
+    ? {
+        boundary: "latest",
+        sourceChatId: target.sourceChatId,
+        sourceOwnerUserId,
+      }
+    : {
+        boundary: "assistantMessage",
+        sourceChatId: target.sourceChatId,
+        assistantMessageId: target.assistantMessageId,
+        interviewBlockId: target.interviewBlockId,
+        carriedInterviews: target.carriedInterviews,
+        sourceOwnerUserId,
+      };
+}
+
 function forkModeTitlePrefix(mode: ChatForkMode): string {
   if (mode === "cross-question") return "Cross Question";
   if (mode === "ab-worktree") return "A/B Fork";
@@ -1290,4 +1546,19 @@ function forkDialogModelPickerKey(
     seed.agentMode,
     seed.profileId ?? "",
   ]);
+}
+
+/**
+ * The team a staged sandbox's task is attached to before the fork is handed
+ * over: a team's sandbox serves the task once it is attached to the team, as
+ * a fork onto any of that team's hosts does. `null` when the configuration
+ * is personal, or the team is the tab host's own.
+ */
+function stagedTeamToAttach(
+  configuration: StageConfiguration,
+  tabHostTeamId: string | null,
+): string | null {
+  return configuration.kind === "team" && configuration.teamId !== tabHostTeamId
+    ? configuration.teamId
+    : null;
 }

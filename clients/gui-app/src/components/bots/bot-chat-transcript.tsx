@@ -14,7 +14,11 @@ import {
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { repliedPostOf, replyRowIdFor } from "@/lib/bots/reply-row";
+import {
+  repliedPostOf,
+  replyFollowsPost,
+  replyRowIdFor,
+} from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
   botUserSenderId,
@@ -220,8 +224,9 @@ function useResubscribeOnNextSend(input: {
  *
  * `surface` says what the chat is to the person. A channel and a thread
  * draw their rows in Slack's layout: a channel post carries the line that
- * opens its thread, and a thread's resolved request jumps to the reply in
- * this list that resolved it. `null` is one of the bot's own sessions (the
+ * opens its thread, every channel row that can take a thread offers "Reply
+ * in thread" on hover, and a thread's answered message jumps to the reply in
+ * this list that answered it. `null` is one of the bot's own sessions (the
  * trunk, a thread's session): the plain transcript, read-only.
  *
  * `resolveMember` names and pictures the members whose messages the chat
@@ -503,10 +508,13 @@ function BotChatTranscriptBody(props: {
   const getMessageActions = useCallback(() => null, []);
   const presentation = useMemo<ChatBotPresentation | null>(() => {
     if (surface === null) return null;
+    const followsPost = (postMessageId: string, replyMessageId: string) =>
+      replyFollowsPost(messages, postMessageId, replyMessageId);
     if (surface.kind === "thread") {
       return {
         botTitle: title,
         scrollToMessage,
+        replyFollowsPost: followsPost,
         repliedPost: null,
         threadLine: null,
         openThread: null,
@@ -519,6 +527,7 @@ function BotChatTranscriptBody(props: {
       // A thread post's verdict is in its thread, which the thread line
       // opens; a direct post's reply, and the post it answers, are here.
       scrollToMessage,
+      replyFollowsPost: followsPost,
       repliedPost: (messageId) => repliedPostOf(messages, messageId),
       threadLine: surface.threadLine,
       openThread: surface.openThread,

@@ -447,10 +447,12 @@ import {
   hostStatusUpgradeV15ToV16,
   hostStatusUpgradeV16ToV17,
   hostStatusUpgradeV17ToV18,
+  hostStatusUpgradeV18ToV19,
   hostStatusV15,
   hostStatusV16,
   hostStatusV17,
   hostStatusV18,
+  hostStatusV19,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -1143,6 +1145,7 @@ import {
   hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV14,
+  hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -6831,52 +6834,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         0: {
           contract: diagnosticsLogsTailV10,
           upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.status": {
-    1: {
-      latestMinor: 8,
-      versions: {
-        0: {
-          contract: hostStatusV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: hostStatusV11,
-          upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
-        },
-        2: {
-          contract: hostStatusV12,
-          upgradeFromPreviousVersion: hostStatusUpgradeV11ToV12,
-        },
-        3: {
-          contract: hostStatusV13,
-          upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
-        },
-        4: {
-          contract: hostStatusV14,
-          upgradeFromPreviousVersion: hostStatusUpgradeV13ToV14,
-        },
-        5: {
-          contract: hostStatusV15,
-          upgradeFromPreviousVersion: hostStatusUpgradeV14ToV15,
-        },
-        6: {
-          contract: hostStatusV16,
-          upgradeFromPreviousVersion: hostStatusUpgradeV15ToV16,
-        },
-        7: {
-          contract: hostStatusV17,
-          upgradeFromPreviousVersion: hostStatusUpgradeV16ToV17,
-        },
-        // @1.8 adds `crossHostMessaging`: whether messages to and from agents
-        // on the account's other hosts are flowing (traycer#2421).
-        8: {
-          contract: hostStatusV18,
-          upgradeFromPreviousVersion: hostStatusUpgradeV17ToV18,
         },
       },
       downgradePathsFromLatest: {},
@@ -12948,7 +12905,8 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
  * `providers.*` one each crossed the ceiling when the first harness id after
  * 1.5.0 opened a new major on every released line that carries a harness or
  * provider id. Where the cut falls carries no meaning; these seven methods are
- * among the ones whose slots grew the most.
+ * among the ones whose slots grew the most. `host.status` moved here when its
+ * 1.9 minor took the base literal over the ceiling again.
  */
 const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
   "agent.gui.listHarnesses": {
@@ -13483,6 +13441,58 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {
         1: providersFallbackPolicyPreviewTierGroupsDowngradeV20ToV11,
       },
+    },
+  },
+  "host.status": {
+    1: {
+      latestMinor: 9,
+      versions: {
+        0: {
+          contract: hostStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostStatusV11,
+          upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostStatusV12,
+          upgradeFromPreviousVersion: hostStatusUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostStatusV13,
+          upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
+        },
+        4: {
+          contract: hostStatusV14,
+          upgradeFromPreviousVersion: hostStatusUpgradeV13ToV14,
+        },
+        5: {
+          contract: hostStatusV15,
+          upgradeFromPreviousVersion: hostStatusUpgradeV14ToV15,
+        },
+        6: {
+          contract: hostStatusV16,
+          upgradeFromPreviousVersion: hostStatusUpgradeV15ToV16,
+        },
+        7: {
+          contract: hostStatusV17,
+          upgradeFromPreviousVersion: hostStatusUpgradeV16ToV17,
+        },
+        // @1.8 adds `crossHostMessaging`: whether messages to and from agents
+        // on the account's other hosts are flowing (traycer#2421).
+        8: {
+          contract: hostStatusV18,
+          upgradeFromPreviousVersion: hostStatusUpgradeV17ToV18,
+        },
+        // @1.9 adds `sessions`: every running agent and open terminal, named
+        // for the session's owner only (the Sandboxes row's pills).
+        9: {
+          contract: hostStatusV19,
+          upgradeFromPreviousVersion: hostStatusUpgradeV18ToV19,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
 } as const;
@@ -14473,7 +14483,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -14491,6 +14501,10 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         // The five environments-redesign arms; `@1.3` is on staging hosts.
         4: {
           contract: hostNotificationsCloudFeedSubscribeV14,
+        },
+        // `sandbox.notice`; `@1.4` is on staging desktops.
+        5: {
+          contract: hostNotificationsCloudFeedSubscribeV15,
         },
       },
     },

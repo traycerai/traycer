@@ -12,6 +12,10 @@ import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-fo
 import type { HostReachability } from "@/hooks/agent/use-host-reachability";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  forgetEndedSandboxHost,
+  recordEndedSandboxHost,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 import type { PreSnapshotRetryEvidence } from "@/stores/chats/chat-session-store";
 import {
   useChatTileHostUpdate,
@@ -168,6 +172,39 @@ afterEach(() => {
   vi.useRealTimers();
   useSelectionAuthorityStore.getState().reset();
   useDesktopDialogStore.setState(INITIAL_DIALOG_STATE, true);
+  forgetEndedSandboxHost(HOST_ID);
+});
+
+describe("<ChatTilePreContent />: a sandbox a member destroyed", () => {
+  const FATAL = {
+    code: "CHAT_INVALID",
+    reason: "CHAT_INVALID: nope",
+    upgradeGuidance: null,
+  };
+
+  it("renders no failure body for a fatal close on an ended host, since the chat says who destroyed it", () => {
+    recordEndedSandboxHost(HOST_ID, {
+      name: "e2e-sbx-win2",
+      at: 1_000,
+      actor: { userId: "u-me", displayName: null },
+    });
+
+    const { container } = renderPreContent(
+      frameFor(firstRenderWait(), "reachable", vi.fn()),
+      session({ connectionStatus: "closed", fatalClose: FATAL }),
+    );
+
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("still renders the failure body for a fatal close on a host nobody destroyed", () => {
+    renderPreContent(
+      frameFor(firstRenderWait(), "reachable", vi.fn()),
+      session({ connectionStatus: "closed", fatalClose: FATAL }),
+    );
+
+    expect(arm()).toBe("failed");
+  });
 });
 
 describe("<ChatTilePreContent />: the calm waits", () => {

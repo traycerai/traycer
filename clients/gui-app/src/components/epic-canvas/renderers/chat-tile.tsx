@@ -1,5 +1,7 @@
+import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
 import { useFallbackProfileLabels } from "@/components/chat/fallback/fallback-identity";
+import { ChatSandboxDestroyedLine } from "@/components/chat/chat-sandbox-destroyed-line";
 import {
   useCallback,
   useEffect,
@@ -144,6 +146,7 @@ import {
 } from "@/lib/composer/composer-content-image-roots";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { StagedSandboxTarget } from "@/stores/composer/staged-sandbox-store";
 import {
   dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
@@ -735,6 +738,7 @@ function ChatTileForChat(props: ChatTileProps) {
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {deadTileBanner}
       {catchingUpBanner}
+      <SandboxReadyLineForChat chatId={node.id} />
       <TombstonedProfileProvider
         providers={providersList.data?.providers ?? []}
         hostId={tabHostId}
@@ -1721,6 +1725,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 data-chat-pane=""
                 className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
               >
+                <ChatSandboxDestroyedLine hostId={view.tabHostId} />
                 <TranscriptQueuePauseReasonSupportContext
                   value={queuePauseReasonSupport}
                 >
@@ -2928,6 +2933,19 @@ function useChatTileSessionViewModel(
       forkAtAssistantMessage(null, "plain", null, {
         initialHostId: targetHostId,
         onlyHostIds: null,
+        stagedSandbox: null,
+      });
+    },
+    [forkAtAssistantMessage],
+  );
+  // A New row picked in the chat's host chip: the fork lands on that new
+  // sandbox, which the dialog's send creates first.
+  const forkChatOnNewSandbox = useCallback(
+    (target: Extract<StagedSandboxTarget, { kind: "new" }>): void => {
+      forkAtAssistantMessage(null, "plain", null, {
+        initialHostId: null,
+        onlyHostIds: null,
+        stagedSandbox: target,
       });
     },
     [forkAtAssistantMessage],
@@ -2941,6 +2959,7 @@ function useChatTileSessionViewModel(
       forkAtAssistantMessage(null, "plain", null, {
         initialHostId: first.value,
         onlyHostIds: teamHostIds,
+        stagedSandbox: null,
       });
     },
     [forkAtAssistantMessage],
@@ -3539,6 +3558,7 @@ function useChatTileSessionViewModel(
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
           onForkOnHost: forkChatOnHost,
+          onForkOnNewSandbox: forkChatOnNewSandbox,
         }}
       />
     ),
@@ -3556,6 +3576,7 @@ function useChatTileSessionViewModel(
       hasTurnActivity,
       clearMissingPathsAfterBindingCommit,
       forkChatOnHost,
+      forkChatOnNewSandbox,
       viewTabId,
     ],
   );

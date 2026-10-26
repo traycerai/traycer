@@ -129,12 +129,10 @@ import {
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
 import { landingPaneAnchorDraftIds } from "./landing-pane-anchor-store";
 import {
-  stagedSandboxFallbackName,
-  startStagedTerminal,
+  openLandingStagedTerminal,
   useStagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
   useLandingTerminalGesture,
@@ -927,6 +925,7 @@ export function LandingTerminalPanel(): ReactNode {
             title: null,
             activeProcessName: null,
             currentCwd: cwd,
+            taskHome: null,
           }),
           titleSource: "default",
           hostAuthorityAcknowledged: false,
@@ -1006,20 +1005,7 @@ export function LandingTerminalPanel(): ReactNode {
     // the terminal opens on the handoff. Never on the host the composer falls
     // back to meanwhile, and no new-tab chooser is left waiting for it. A
     // staged sandbox that is up already opens it there now.
-    const ask = startStagedTerminal(composerSurfaceKey, (fresh) =>
-      runStaged(composerSurfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(""),
-        taskId: null,
-      }),
-    );
-    if (ask.kind === "awake") {
-      useSurfaceHostSelectionStore
-        .getState()
-        .setSelection(composerSurfaceKey, ask.hostId);
-      useLandingPanelStore
-        .getState()
-        .requestTerminal(composerSurfaceKey, ask.hostId);
-    }
+    const ask = openLandingStagedTerminal(composerSurfaceKey, runStaged);
     if (ask.kind !== "not-taken") {
       dismissPlaceholder();
       return;
@@ -1403,9 +1389,9 @@ export function LandingTerminalPanel(): ReactNode {
 
   // A folderless terminal asked for from outside the panel (a sandbox row's
   // Open terminal, a staged sandbox's handoff), one-shot for the landing visit
-  // it was filed for. It waits while the panel targets another host: the ask
-  // pinned the composer to its host, and a pin moved elsewhere drops it
-  // (`setSelection`). A host that cannot start one (an old host, no home
+  // it was filed for. The panel targets the asked host while it is unserved
+  // (`LandingTerminalGestureProvider`), whether or not the ask also pinned the
+  // composer to it, and a pin moved elsewhere drops it (`setSelection`). A host that cannot start one (an old host, no home
   // directory) never will, so that drops it too; a list that could not be
   // read says nothing permanent, so the request waits through it. It is bound to
   // the start page in front of the person, which drops it when it unmounts
@@ -1752,7 +1738,10 @@ export function LandingTerminalPanel(): ReactNode {
         tab.sessionId,
       );
       if (projection !== undefined) {
-        viewModels[tab.instanceId] = selectPlainTerminalViewModel(projection);
+        viewModels[tab.instanceId] = selectPlainTerminalViewModel(
+          projection,
+          null,
+        );
       }
     }
     return viewModels;

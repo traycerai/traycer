@@ -8,6 +8,7 @@ import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
+  SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL,
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
@@ -50,6 +51,10 @@ function insufficientCreditCopy(
 
 /** The refusals whose sentence depends on nothing but the code. */
 const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
+  [
+    SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
+    "Couldn't rename the sandbox. Try again in a moment.",
+  ],
   [
     SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
     "Sandboxes aren't available right now. Try again later.",

@@ -1,7 +1,7 @@
 import {
   HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
-  type HostNotificationEntryV24,
-  type HostNotificationsCloudFeedRowV14,
+  type HostNotificationEntryV25,
+  type HostNotificationsCloudFeedRowV15,
   type HostNotificationsEntityRef,
   type HostNotificationsIndicatorState,
   type HostNotificationsIndicatorStateResponse,
@@ -172,7 +172,7 @@ function selectHostIndicatorState(
  * stable.
  */
 export function selectCloudNotificationIndicators(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV14>>>,
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV15>>>,
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
 ): HostNotificationsIndicatorStateResponse {
@@ -188,7 +188,7 @@ export interface CloudNotificationIndicatorProjection {
 }
 
 export function selectCloudNotificationIndicatorProjection(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV14>>>,
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV15>>>,
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
 ): CloudNotificationIndicatorProjection {
@@ -236,7 +236,7 @@ export function selectCloudNotificationIndicatorProjection(
 }
 
 function cloudIndicatorEntryIsWanted(
-  row: HostNotificationsCloudFeedRowV14,
+  row: HostNotificationsCloudFeedRowV15,
   wantedEpicIds: ReadonlySet<string>,
   wantedChatIds: ReadonlySet<string>,
 ): boolean {
@@ -295,14 +295,14 @@ interface CloudIndicatorAccumulator {
 /** Exact entity -> origin host -> latest terminal entry in causal write order. */
 type CloudTerminalCandidate = {
   readonly entryId: string;
-  readonly entry: HostNotificationEntryV24;
+  readonly entry: HostNotificationEntryV25;
 };
 
 type CloudTerminalWinners = Map<string, Map<string, CloudTerminalCandidate>>;
 
 function collectCloudIndicatorEntry(
   accumulator: CloudIndicatorAccumulator,
-  row: HostNotificationsCloudFeedRowV14,
+  row: HostNotificationsCloudFeedRowV15,
 ): void {
   const { entry, originHostId } = row;
   const contribution = indicatorContribution(entry);
@@ -349,7 +349,7 @@ function collectCloudIndicatorEntry(
  * prompts belong to their browser tab and do not decorate the requesting chat.
  */
 function indicatorContribution(
-  entry: HostNotificationEntryV24,
+  entry: HostNotificationEntryV25,
 ): HostNotificationsIndicatorState | null {
   if (
     entry.kind === "browser.human.needed" ||
@@ -385,7 +385,7 @@ function retainLatestTerminal(input: {
   readonly entityId: string;
   readonly originHostId: string;
   readonly entryId: string;
-  readonly candidate: HostNotificationEntryV24;
+  readonly candidate: HostNotificationEntryV25;
 }): void {
   if (!isTerminalEntry(input.candidate)) return;
   const originWinners = terminalWinnersForEntity(input.winners, input.entityId);
@@ -420,7 +420,7 @@ function terminalCandidateSupersedes(
   return terminalEntryIsNewer(candidate, current);
 }
 
-function isAutomaticRecoveryEntry(entry: HostNotificationEntryV24): boolean {
+function isAutomaticRecoveryEntry(entry: HostNotificationEntryV25): boolean {
   return (
     entry.kind === "agent.stopped" &&
     "automaticRecovery" in entry.payload &&
@@ -430,19 +430,19 @@ function isAutomaticRecoveryEntry(entry: HostNotificationEntryV24): boolean {
 
 function terminalEntriesForEpic(
   winners: CloudTerminalWinners,
-): ReadonlyArray<HostNotificationEntryV24> {
+): ReadonlyArray<HostNotificationEntryV25> {
   return [...winners.values()].flatMap(terminalEntriesForOrigins);
 }
 
 function terminalEntriesForOrigins(
   winners: Map<string, CloudTerminalCandidate>,
-): ReadonlyArray<HostNotificationEntryV24> {
+): ReadonlyArray<HostNotificationEntryV25> {
   return [...winners.values()].map((candidate) => candidate.entry);
 }
 
 function mergeTerminalContributions(
   current: HostNotificationsIndicatorState | undefined,
-  entries: ReadonlyArray<HostNotificationEntryV24>,
+  entries: ReadonlyArray<HostNotificationEntryV25>,
 ): HostNotificationsIndicatorState | undefined {
   return entries.reduce<HostNotificationsIndicatorState | undefined>(
     (merged, entry) => {
@@ -466,7 +466,7 @@ function terminalWinnersForEntity(
   return created;
 }
 
-function isTerminalEntry(entry: HostNotificationEntryV24): boolean {
+function isTerminalEntry(entry: HostNotificationEntryV25): boolean {
   return entry.severity === "failure" || entry.severity === "done";
 }
 
@@ -485,7 +485,7 @@ function terminalEntryIsNewer(
 }
 
 function terminalIndicatorContribution(
-  entry: HostNotificationEntryV24,
+  entry: HostNotificationEntryV25,
 ): HostNotificationsIndicatorState | null {
   if (entry.readAt !== null || !isTerminalEntry(entry)) return null;
   return {

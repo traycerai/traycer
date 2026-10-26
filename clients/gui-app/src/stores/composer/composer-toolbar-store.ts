@@ -112,6 +112,16 @@ export interface ComposerToolbarCatalog {
    * re-presents the raw sticky harness.
    */
   readonly tuiOnly: boolean;
+  /**
+   * The host is a sandbox: the person's pick is presented and sent as it is,
+   * never swapped for the first runnable harness. A sandbox reports a harness
+   * whose install is still running as unavailable, so a swap there replaces
+   * the model the person chose with one they did not; the surface holds the
+   * send until the install is done (the pack gate) and refuses a harness that
+   * cannot run there (`useSandboxAgentGate`). Only the terminal surface's
+   * capability rule still applies.
+   */
+  readonly keepsUnavailablePick: boolean;
 }
 
 interface ComposerToolbarDerived {
@@ -290,6 +300,8 @@ export function createComposerToolbarStore(
     models: EMPTY_MODELS,
     modelsLoaded: false,
     tuiOnly: input.tuiOnly,
+    // No harness list yet, so nothing to keep a pick against.
+    keepsUnavailablePick: false,
   };
   return createStore<ComposerToolbarStoreState>((set, get) => {
     const update = (patch: Partial<ComposerToolbarValues>): void => {
@@ -680,6 +692,10 @@ function sameCatalog(
     // otherwise be skipped here, stranding a deferred emit that never flushes.
     a.modelsLoaded === b.modelsLoaded &&
     a.tuiOnly === b.tuiOnly &&
+    // A pick kept or swapped is a different presented selection: a stage
+    // written, or a sandbox's row answering after its catalog, changes
+    // nothing else.
+    a.keepsUnavailablePick === b.keepsUnavailablePick &&
     // The third field to belong here for the same reason as the two above, and
     // the costliest to omit: `deriveToolbarState` reads this one as the CLAMP
     // that decides the permission mode the composer actually sends. Left out,
@@ -796,15 +812,37 @@ function presentedHarnessSelection(
     selection,
     catalog.harnesses,
     catalog.tuiOnly,
+    catalog.keepsUnavailablePick,
   );
+}
+
+/**
+ * Whether a kept pick (`keepsUnavailablePick`) passes the one rule a sandbox
+ * still applies: the terminal surface's capability rule. A harness the list
+ * does not name is kept as it is.
+ */
+function pickFitsSurface(
+  selection: HarnessModelSelection,
+  harnesses: ReadonlyArray<HarnessOption>,
+  tuiOnly: boolean,
+): boolean {
+  if (!tuiOnly) return true;
+  const picked = harnesses.find(
+    (harness) => harness.id === selection.harnessId,
+  );
+  return picked === undefined || picked.modes.includes("tui");
 }
 
 function effectiveSelectionFromHarnesses(
   selection: HarnessModelSelection,
   harnesses: ReadonlyArray<HarnessOption> | undefined,
   tuiOnly: boolean,
+  keepsUnavailablePick: boolean,
 ): HarnessModelSelection {
   if (harnesses === undefined) return selection;
+  if (keepsUnavailablePick && pickFitsSurface(selection, harnesses, tuiOnly)) {
+    return selection;
+  }
   let firstEligible: HarnessOption | null = null;
   for (const harness of sortGuiHarnessesByProviderOrder(harnesses)) {
     // A harness whose availability probe is still in flight is NOT yet known to

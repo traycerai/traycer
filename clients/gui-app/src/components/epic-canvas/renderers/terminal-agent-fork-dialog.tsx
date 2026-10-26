@@ -282,6 +282,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       tuiOnly: true,
       // Terminal agents have no `chat.subscribe` stream at all.
       chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: null,
     },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);

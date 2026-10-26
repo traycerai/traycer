@@ -52,13 +52,20 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
+import { sandboxRegionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   formatRunway,
   sandboxBalanceMc,
   sandboxCostTodayMc,
   sandboxRunwayMinutes,
 } from "@/lib/sandboxes/sandbox-balance";
-import { formatCredits, formatMemory } from "@/lib/sandboxes/sandbox-pricing";
+import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
+import {
+  awakeAndRestingRates,
+  formatSandboxCost,
+  formatSandboxDollars,
+  hourlyRate,
+} from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useSandboxEgressEvents } from "@/hooks/sandboxes/use-sandbox-egress-events";
@@ -112,7 +119,9 @@ export function SandboxCard(props: {
   const { summary, state, frozen, teamOwned } = props.sandbox;
   const word = sandboxStateWord(props.sandbox);
   const actions =
-    summary === null ? [] : sandboxCardActions(state, frozen, summary.kind);
+    summary === null
+      ? []
+      : sandboxCardActions(state, frozen, summary.kind, teamOwned);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   return (
     <Card
@@ -158,7 +167,11 @@ export function SandboxCard(props: {
               hostState={props.hostState}
             />
             {sandboxCardShowsCostView(teamOwned) ? (
-              <SandboxCostView sandboxId={summary.id} frozen={frozen} />
+              <SandboxCostView
+                sandboxId={summary.id}
+                frozen={frozen}
+                automation={summary.kind === "automation"}
+              />
             ) : null}
           </>
         )}
@@ -273,22 +286,28 @@ function SandboxFacts(props: {
       )
     : null;
   const now = useSampledNow();
+  const catalogue = useSandboxCatalogue(true).data ?? null;
   const provider =
-    useSandboxCatalogue(true).data?.providers.find(
+    catalogue?.providers.find(
       (p) => p.provider === summary.provider && p.os.includes(summary.os),
     ) ?? null;
   const keeps =
     provider === null
       ? null
       : sandboxSuspendKeepsLine(provider.suspendFidelity);
+  const regionLabel = sandboxRegionLabel(summary);
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
       <dd data-testid="sandbox-card-shape">
         {formatShape(summary.cpus, summary.memoryMb, summary.diskMb)}
       </dd>
-      <dt className="text-muted-foreground">Region</dt>
-      <dd data-testid="sandbox-card-region">{summary.region}</dd>
+      {regionLabel === null ? null : (
+        <>
+          <dt className="text-muted-foreground">Region</dt>
+          <dd data-testid="sandbox-card-region">{regionLabel}</dd>
+        </>
+      )}
       <dt className="text-muted-foreground">Rate</dt>
       <dd data-testid="sandbox-card-rate">
         {summary.kind === "automation"
@@ -438,11 +457,13 @@ function SandboxGuestConfigFailure(props: {
  * The cost view: what this sandbox accrues now, what it cost today, and what
  * the meter has charged since it was created (compute and storage), from the
  * control plane's ledger; then the balance and how long it covers the
- * account's awake burn, and the two-hour and thirty-minute warnings.
+ * account's awake burn, and the two-hour and thirty-minute warnings. The
+ * Automations host's day reads Free, as its rate does.
  */
 function SandboxCostView(props: {
   readonly sandboxId: string;
   readonly frozen: boolean;
+  readonly automation: boolean;
 }): ReactNode {
   // Also mounted by the host list's banner; the hook elects one owner, so a
   // change is still one invalidation (and a phone, which shows the card
@@ -467,7 +488,11 @@ function SandboxCostView(props: {
             </dd>
           </>
         ) : (
-          <SandboxCostFacts cost={cost} now={now} />
+          <SandboxCostFacts
+            cost={cost}
+            now={now}
+            automation={props.automation}
+          />
         )}
         <dt className="text-muted-foreground">Balance</dt>
         <dd data-testid="sandbox-card-balance">
@@ -482,6 +507,7 @@ function SandboxCostView(props: {
 function SandboxCostFacts(props: {
   readonly cost: SandboxCost;
   readonly now: number;
+  readonly automation: boolean;
 }): ReactNode {
   const { cost } = props;
   const charged =
@@ -492,17 +518,19 @@ function SandboxCostFacts(props: {
       <dd data-testid="sandbox-card-cost-now">
         {cost.currentRateMillicreditsPerHour === 0
           ? "Not billing"
-          : `${formatCredits(cost.currentRateMillicreditsPerHour)} credits/hour`}
+          : hourlyRate(cost.currentRateMillicreditsPerHour)}
       </dd>
       <dt className="text-muted-foreground">Today</dt>
       <dd data-testid="sandbox-card-cost-today">
-        {`${formatCredits(sandboxCostTodayMc(cost, props.now))} credits`}
+        {props.automation
+          ? "Free"
+          : formatSandboxCost(sandboxCostTodayMc(cost, props.now))}
       </dd>
       <dt className="text-muted-foreground">Charged</dt>
       <dd data-testid="sandbox-card-cost-charged">
-        {`${formatCredits(charged)} credits since ${formatSandboxDay(cost.charged.sinceCreatedAt)} (${formatCredits(cost.charged.computeMillicredits)} compute · ${formatCredits(cost.charged.storageMillicredits)} storage)`}
+        {`${formatSandboxCost(charged)} since ${formatSandboxDay(cost.charged.sinceCreatedAt)} (${formatSandboxCost(cost.charged.computeMillicredits)} compute · ${formatSandboxCost(cost.charged.storageMillicredits)} storage)`}
         {cost.pendingMillicredits > 0
-          ? ` · ${formatCredits(cost.pendingMillicredits)} pending`
+          ? ` · ${formatSandboxCost(cost.pendingMillicredits)} pending`
           : null}
       </dd>
     </>
@@ -933,7 +961,7 @@ function SandboxDestroyAction(props: {
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const destroy = useSandboxDestroy(props.summary.id);
+  const destroy = useSandboxDestroy(props.summary);
   return (
     <>
       <Button
@@ -998,7 +1026,7 @@ function formatShape(cpus: number, memoryMb: number, diskMb: number): string {
 
 function formatRate(price: SandboxHourlyPrice | null): string {
   if (price === null) return "Not priced here";
-  return `${formatCredits(price.awakeMc)} credits/hour awake · ${formatCredits(price.suspendedMc)} suspended · ${formatCredits(price.stoppedMc)} stopped`;
+  return awakeAndRestingRates(price);
 }
 
 /**
@@ -1012,7 +1040,7 @@ function formatBalance(
   frozen: boolean,
 ): string {
   if (balanceMc === null) return "Loading…";
-  const balance = `${formatCredits(balanceMc)} credits`;
+  const balance = formatSandboxDollars(balanceMc);
   if (frozen || burnMcPerHour === null) return balance;
   const minutes = sandboxRunwayMinutes(balanceMc, burnMcPerHour);
   return minutes === null

@@ -461,6 +461,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: true,
         shown: false,
         mobileViewport: false,
+        botChannel: false,
       }),
     ).toBe(false);
     expect(
@@ -468,6 +469,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: true,
         shown: false,
         mobileViewport: true,
+        botChannel: false,
       }),
     ).toBe(true);
     expect(
@@ -475,6 +477,26 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: false,
         shown: true,
         mobileViewport: true,
+        botChannel: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("never mounts in a bot channel, whatever the region or viewport says", () => {
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        shown: true,
+        mobileViewport: false,
+        botChannel: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        shown: false,
+        mobileViewport: true,
+        botChannel: true,
       }),
     ).toBe(false);
   });

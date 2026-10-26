@@ -20,7 +20,10 @@ import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-m
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import {
+  terminalSessionLabel,
+  type TaskHomeDirectory,
+} from "@/lib/terminals/terminal-title";
 import {
   findOpenTileInTab,
   useEpicCanvasStore,
@@ -53,6 +56,10 @@ import {
   type TerminalSidebarSessionRow,
 } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 import { useResolvePlainTerminalOwnerHostClient } from "@/lib/terminals/resolve-plain-terminal-owner-client";
+import {
+  useTaskHomeDirectory,
+  useTaskHomeDirectoryFor,
+} from "@/hooks/terminal/use-task-home-directory";
 import { withEnvironmentArmTerminals } from "@/lib/terminals/compose-epic-terminal-list";
 import { useEnvironmentArmTerminals } from "@/hooks/environment/use-environment-arms";
 
@@ -157,6 +164,7 @@ export function useEpicTerminalsPanel(args: {
   // as B-bound tiles under A's Epic.
   const hostClient = useEpicSessionHostClient();
   const list = useTerminalList({ kind: "epic", epicId }, hostClient);
+  const taskHomeFor = useTaskHomeDirectoryFor(epicId);
   // Manual escape hatch for a stranded error state: host-scoped queries get
   // no automatic retry/refetch routes (transport already retried), so without
   // this the only recoveries are accidental (collapse/re-expand remounts the
@@ -223,9 +231,10 @@ export function useEpicTerminalsPanel(args: {
         hostId: row.hostId,
         instanceId: uuidv4(),
         durable: row.durable,
+        taskHome: taskHomeFor(row.hostId),
       });
     },
-    [resolveOwnerClient],
+    [resolveOwnerClient, taskHomeFor],
   );
 
   // Host keeps exited sessions for a 60s grace window; filter so a
@@ -355,6 +364,8 @@ export function useEpicTerminalsPanel(args: {
 export interface EpicTerminalRowActions {
   /** What the session is called on screen, from the one shared definition. */
   readonly label: string;
+  /** The task's directory on the row's host, for the row's opened tile name. */
+  readonly taskHome: TaskHomeDirectory | null;
   readonly canRename: boolean;
   /**
    * Commits a rename through whichever authority owns this row, returning
@@ -397,6 +408,7 @@ export function useEpicTerminalRowActions(args: {
   // the ambient host after the list moved: during a re-point they killed and
   // renamed host B's sessions from host A's rows.
   const rowHostClient = useEpicSessionHostClient();
+  const taskHome = useTaskHomeDirectory(epicId, hostId);
   const kill = useTerminalKillFor(
     rowHostClient,
     "Couldn't close the terminal.",
@@ -432,7 +444,7 @@ export function useEpicTerminalRowActions(args: {
   if (renameMode === "capable") renamePending = authority.durableRenamePending;
   if (renameMode === "legacy") renamePending = legacyRename.isPending;
   const canRename = renameMode !== "disabled" && !renamePending;
-  const label = terminalSessionLabel(session);
+  const label = terminalSessionLabel(session, taskHome);
 
   const submitRename = (next: string): boolean => {
     // A refusal has to reach the caller. `canRename` is a CONJUNCTION, and
@@ -496,6 +508,7 @@ export function useEpicTerminalRowActions(args: {
         hostId,
         instanceId: "legacy-close-lookup",
         durable: false,
+        taskHome,
       }),
     );
     if (found !== null) {
@@ -508,6 +521,7 @@ export function useEpicTerminalRowActions(args: {
 
   return {
     label,
+    taskHome,
     canRename,
     submitRename,
     closeDisabled:

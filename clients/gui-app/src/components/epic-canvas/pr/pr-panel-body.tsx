@@ -17,16 +17,8 @@ import type {
   PrLightItem,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
-import { WorkspaceHostSwitcher } from "@/components/home/host-workspace-selector/host-section";
-import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
-import {
-  useSurfaceHostPinWithDefault,
-  type SurfaceHostPin,
-} from "@/hooks/host/use-surface-host-pin";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
-import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
@@ -65,32 +57,28 @@ import {
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * The per-view PR pin defaults to the task's sole agent host, then the canvas
- * host. Both header actions and list consume one selected-host subscription,
- * including on mobile. The header
- * stays mounted through empty, loading and failed reads so the user can always
- * choose another host. Merely opening an epic does not latch a pin.
+ * The panel follows the canvas host: every host serves the same cloud-backed
+ * PR list, so which machine answers only decides whose checkouts fill in
+ * owners, link groups, liveness and the local diff, and that is the canvas
+ * host's job. Header actions and the list share one subscription on that
+ * host, including on mobile.
  */
 export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
   const canvasHostId = useCanvasHostId();
-  const pin = useSurfaceHostPinWithDefault(
-    tabSurfaceKey("pull-requests", props.tabId),
-    canvasHostId,
-  );
-  const streamBinding = useSurfaceHostStreamBinding(pin.resolvedHostId);
+  const streamBinding = useSurfaceHostStreamBinding(canvasHostId);
   return (
     <StreamRuntimeContext.Provider value={streamBinding}>
-      <PrPanelBodyLive {...props} pin={pin} />
+      <PrPanelBodyLive {...props} hostId={canvasHostId} />
     </StreamRuntimeContext.Provider>
   );
 }
 
 function PrPanelBodyLive(
   props: LeftPanelSlotProps & {
-    readonly pin: SurfaceHostPin;
+    readonly hostId: string | null;
   },
 ): ReactNode {
-  const hostId = props.pin.resolvedHostId;
+  const hostId = props.hostId;
   const mainCollapsed = useMainPanelCollapsed(props.tabId);
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");
   const methodSupported = methodSupport !== "unsupported";
@@ -106,7 +94,8 @@ function PrPanelBodyLive(
     enabled,
   });
 
-  // Never attribute the selected host's rows to the canvas host's presence.
+  // Presence is recorded under the host that served these rows, which is the
+  // key the rail reads it back under.
   useRecordPrPresence(hostId, props.epicId, subscription.data?.items ?? null);
 
   return (
@@ -114,8 +103,7 @@ function PrPanelBodyLive(
       className="flex h-full min-h-0 flex-col"
       data-testid="pr-panel-surface"
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border/60 px-2 py-1.5">
-        <PrPanelHostPicker pin={props.pin} />
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 border-b border-border/60 px-2 py-1.5">
         <PrPanelActions
           key={hostId}
           subscription={subscription}
@@ -139,32 +127,6 @@ function PrPanelBodyLive(
           />
         )}
       </div>
-    </div>
-  );
-}
-
-function PrPanelHostPicker(props: { readonly pin: SurfaceHostPin }): ReactNode {
-  const options = useHostOptions();
-  const { pin } = props;
-  return (
-    <div
-      className="flex min-w-0 flex-1 items-center gap-1"
-      data-testid="pr-panel-host-picker"
-    >
-      <WorkspaceHostSwitcher
-        hosts={options.hosts}
-        activeHostId={pin.resolvedHostId}
-        onSelect={pin.setSelection}
-        refusalByHostId={NO_HOST_OPTION_REFUSALS}
-        inertExceptHostId={null}
-        disabled={false}
-        isLoading={options.isLoading}
-        listsFailed={options.listsFailed}
-        onRetryLists={options.retryLists}
-        composer={null}
-        intent="pin"
-        surface="inline"
-      />
     </div>
   );
 }

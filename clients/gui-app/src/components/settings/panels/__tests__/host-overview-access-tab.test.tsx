@@ -3,7 +3,12 @@
 // `HostClient` over an in-memory messenger (`buildAccessHost`), so every
 // request travels the path the app uses and only the host is faked.
 const hostMock = vi.hoisted(
-  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
+  (): {
+    binding: {
+      readonly auth: unknown;
+      readonly directory: unknown;
+    } | null;
+  } => ({ binding: null }),
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -425,6 +430,37 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
 });
 
 describe("<HostOverviewAccessTab /> terminal accounts", () => {
+  it("names the host in the sign-in sentence of a host that is not this machine", async () => {
+    const host = hostWith({}, { providers: [claudeAmbient(true)] });
+    renderTab(host, READY);
+
+    await screen.findAllByTestId("terminal-account-row");
+    expect(
+      screen.getByText(
+        "dev-box's own sign-in, which stays on dev-box. Sign in on Providers to use one everywhere.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says this computer in the sign-in sentence of this machine's own host", async () => {
+    hostMock.binding = {
+      auth: {},
+      directory: {
+        onChange: () => ({ dispose: () => undefined }),
+        getLocalHostId: () => ACCESS_HOST_ID,
+      },
+    };
+    const host = hostWith({}, { providers: [claudeAmbient(true)] });
+    renderTab(host, READY);
+
+    await screen.findAllByTestId("terminal-account-row");
+    expect(
+      screen.getByText(
+        "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("lists only the providers that have an ambient profile", async () => {
     const host = hostWith(
       {},
@@ -443,7 +479,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     expect(within(rows[0]).getByText("Terminal account")).toBeTruthy();
     expect(
       screen.getByText(
-        "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.",
+        "dev-box's own sign-in, which stays on dev-box. Sign in on Providers to use one everywhere.",
       ),
     ).toBeTruthy();
   });
@@ -566,6 +602,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
 
   it("Edit then Save sends the target and the new value, with the grant", async () => {
     hostMock.binding = {
+      directory: null,
       auth: {
         mintExecutableWriteGrant: () =>
           Promise.resolve({

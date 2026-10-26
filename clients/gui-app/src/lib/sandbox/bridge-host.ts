@@ -256,6 +256,11 @@ const FULLSCREEN_EXIT: ForwardedShortcut = {
   alt: false,
   shift: false,
 };
+/** A fullscreen canvas board steps through the reading order on these. */
+const FULLSCREEN_BOARD_STEPS: readonly ForwardedShortcut[] = [
+  { ...FULLSCREEN_EXIT, code: "ArrowLeft" },
+  { ...FULLSCREEN_EXIT, code: "ArrowRight" },
+];
 
 const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
@@ -1011,14 +1016,20 @@ export class SandboxBridgeHost {
       this.phase === "ready" &&
       this.hostContext.displayMode === "fullscreen" &&
       isForwardedShortcut([FULLSCREEN_EXIT], press);
-    const clearsCanvasSelection =
+    const fromCanvasPage =
       this.canvasEnabled() &&
       isRecord(params) &&
-      params.nonce === this.options.document.nonce &&
-      isForwardedShortcut([FULLSCREEN_EXIT], press);
+      params.nonce === this.options.document.nonce;
+    const clearsCanvasSelection =
+      fromCanvasPage && isForwardedShortcut([FULLSCREEN_EXIT], press);
+    const stepsFullscreenBoard =
+      fromCanvasPage &&
+      this.hostContext.displayMode === "fullscreen" &&
+      isForwardedShortcut(FULLSCREEN_BOARD_STEPS, press);
     if (
       exitsFullscreen ||
       clearsCanvasSelection ||
+      stepsFullscreenBoard ||
       isForwardedShortcut(forwarded, press)
     ) {
       this.options.events.onShortcut(press);

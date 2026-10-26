@@ -21,7 +21,7 @@ import {
   movedNoticeShown,
   SETUP_STEPS,
   setupView,
-  TERMINAL_ACCOUNT_SENTENCE,
+  terminalAccountSentence,
   teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
   useEnvironmentNoticesRead,
@@ -155,6 +156,7 @@ function AccessSections(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
+  const localHostId = useReactiveLocalHostId();
   return (
     <>
       <MovedNotice
@@ -177,7 +179,11 @@ function AccessSections(props: {
         sentence={
           props.status.principal?.kind === "team"
             ? teamTerminalAccountSentence(props.status.principal.teamName)
-            : TERMINAL_ACCOUNT_SENTENCE
+            : terminalAccountSentence(
+                props.hostId !== null && props.hostId === localHostId
+                  ? null
+                  : props.hostName,
+              )
         }
       />
       <LocalValuesSection client={props.client} hostId={props.hostId} />

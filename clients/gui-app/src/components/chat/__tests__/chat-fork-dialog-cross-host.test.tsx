@@ -114,6 +114,8 @@ const dialogMocks = vi.hoisted(() => ({
    * reason after an upgrade.
    */
   capabilityProbeHostIds: new Set<string>(),
+  /** True models a catalog read that FAILED: no data, and an error. */
+  modelsFailed: false,
   /** False models the window after a retarget, before the catalog answers. */
   modelsLoaded: true,
   /** The one row the loaded catalog lists (`SETTINGS_SEED.model` by default),
@@ -433,8 +435,14 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
                 ],
         }
       : undefined,
-    isPending: !dialogMocks.modelsLoaded,
+    isError: dialogMocks.modelsFailed,
+    isPending: !dialogMocks.modelsLoaded && !dialogMocks.modelsFailed,
   }),
+}));
+
+// A fork that stages no sandbox never asks the staged sign-in check anything.
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => () => null,
 }));
 
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
@@ -526,6 +534,7 @@ function forkTarget(
     forkMode: "plain",
     initialHostId: null,
     onlyHostIds: null,
+    stagedSandbox: null,
     ...overrides,
   };
 }
@@ -695,6 +704,7 @@ describe("ChatForkDialog cross-host routing", () => {
     });
     dialogMocks.capabilityProbeHostIds.clear();
     dialogMocks.modelsLoaded = true;
+    dialogMocks.modelsFailed = false;
     dialogMocks.catalogSlug = SETTINGS_SEED.model;
     dialogMocks.publicationQuery = { data: undefined };
     dialogMocks.publicationQueryEnabled = false;
@@ -969,6 +979,25 @@ describe("ChatForkDialog cross-host routing", () => {
     // memory write gate is catalog confirmation itself, so it was confirmed when
     // it was recorded. Requiring confirmation again here would disable a fork
     // whenever the models query merely detaches, with no way back.
+    expect(forkButton().disabled).toBe(false);
+
+    const scope = dialogMocks.lastWorkspace?.hostScope;
+    expect(scope?.kind).toBe("selected");
+    if (scope?.kind === "selected") {
+      act(() => {
+        scope.onSelect(OTHER_HOST_ID);
+      });
+    }
+
+    expect(forkButton().disabled).toBe(true);
+  });
+
+  it("a catalog read that FAILED blocks a CROSS-HOST fork but not a same-host one", () => {
+    dialogMocks.modelsLoaded = false;
+    dialogMocks.modelsFailed = true;
+    renderDialog(forkTarget({}), ignoreOpenChange);
+    fillTitle();
+
     expect(forkButton().disabled).toBe(false);
 
     const scope = dialogMocks.lastWorkspace?.hostScope;

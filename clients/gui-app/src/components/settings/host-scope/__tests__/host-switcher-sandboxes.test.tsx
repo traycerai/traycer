@@ -321,7 +321,7 @@ describe("<HostSwitcher /> picking a sleeping sandbox", () => {
       fireEvent.click(row("sbx-suspended"));
 
       expect(wakeSandboxOnPick).toHaveBeenCalledTimes(1);
-      expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED);
+      expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED, null);
       expect(onSelect).toHaveBeenCalledTimes(1);
       expect(onSelect).toHaveBeenCalledWith("sbx-suspended");
       cleanup();
@@ -357,6 +357,23 @@ describe("<HostSwitcher /> picking a sleeping sandbox", () => {
 });
 
 describe("<HostSwitcher /> the Automations pod", () => {
+  it("is never listed in Settings' host list, beside the sandboxes it used to join", () => {
+    renderSwitcher({
+      hosts: [PERSONAL, AWAKE, POD_AWAKE, POD_RELEASED],
+      selected: PERSONAL,
+      action: HOST_LIST_ACTION,
+      intent: "view",
+    });
+
+    expect(row("sbx-awake")).toBeDefined();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-pod-awake"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-pod-released"),
+    ).toBeNull();
+  });
+
   it("is never offered by a picker", () => {
     renderSwitcher({
       hosts: [PERSONAL, POD_AWAKE, POD_RELEASED],
@@ -389,6 +406,7 @@ describe("<HostSwitcher /> a sandbox no host row stands for", () => {
       localHostId: null,
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => false,
       localHostSettingUp: false,
       localHostTerminalRunNote: null,

@@ -82,6 +82,22 @@ export function canvasPageItems(
     notes: Object.entries(snapshot.notes).filter(([, note]) => onPage(note)),
   };
 }
+/** The boards fullscreen steps through: the reading order, pages included. */
+export function fullscreenBoardSequence(
+  snapshot: CanvasLayoutSnapshot,
+): readonly string[] {
+  return snapshot.order.filter((path) => Object.hasOwn(snapshot.boards, path));
+}
+/** The board one step before or after `path` in the reading order. */
+export function adjacentFullscreenBoard(
+  snapshot: CanvasLayoutSnapshot,
+  path: string,
+  direction: -1 | 1,
+): string | null {
+  const sequence = fullscreenBoardSequence(snapshot);
+  const index = sequence.indexOf(path);
+  return index < 0 ? null : (sequence[index + direction] ?? null);
+}
 /** The page's boards nearest the centre, the ones worth a live frame. */
 export function selectLiveBoards(
   items: CanvasPageItems,

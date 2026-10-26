@@ -406,3 +406,172 @@ export function reduceRequestTargetToPath(value: string): string {
     queryStart === -1 ? value : value.slice(0, queryStart),
   );
 }
+
+/**
+ * A character of a home folder's name: any but a separator, whitespace, a
+ * quote or bracket, and those no folder name holds on any OS (`:`, `|`, `*`,
+ * `?`, and `<` and `>`, which is also what makes the rule idempotent:
+ * `<redacted>` is not a name).
+ */
+const HOME_FOLDER_NAME_LETTER = String.raw`[^\s/\\:'"\x60<>|*?()\[\]{}]`;
+
+/** The apostrophe, parentheses, brackets and braces a folder name can hold. */
+const HOME_FOLDER_NAME_DELIMITER = String.raw`['()\[\]{}]`;
+
+/**
+ * One space-free word of a name a separator or a closing delimiter ends: its
+ * letters with any delimiters among them (`O'Brien`, `(Work`, `Account)`,
+ * `[Thetic]`, `a(b)`), so `C:\Users\Syn (Work Account)\...` is one name. A word
+ * holds a letter and ends on a delimiter only where a non-space character
+ * follows, or on `)`, `]` or `}`. So no word is a lone delimiter or ends on a
+ * quote before a space: `'/home/a b' to '/home/c/x'` and
+ * `(/home/a) and (/home/b/x)` hold two names, not one running from `a` to the
+ * second path's slash.
+ */
+const HOME_FOLDER_NAME_WORD = String.raw`${HOME_FOLDER_NAME_DELIMITER}*${HOME_FOLDER_NAME_LETTER}+(?:${HOME_FOLDER_NAME_DELIMITER}+${HOME_FOLDER_NAME_LETTER}+)*(?:${HOME_FOLDER_NAME_DELIMITER}+(?=\S)|[)\]}](?!\S))?`;
+
+/**
+ * A name nothing closes (the path ends at it): also stops at the characters
+ * that end a path quoted in prose or a stack line (`'`, `(`, `)`, `,`, `;`),
+ * except an apostrophe between two name characters.
+ */
+const HOME_FOLDER_NAME_CHAR = String.raw`[^\s/\\:'"\x60<>|()*?,;]`;
+const HOME_FOLDER_NAME_BARE = `${HOME_FOLDER_NAME_CHAR}+(?:'${HOME_FOLDER_NAME_CHAR}+)*`;
+
+/**
+ * What may stand right before an absolute path: the start of the value, also
+ * with the `null` origin {@link reduceUrlToOriginAndPath} gives a `file:` URL
+ * (`null/Users/...`); whitespace; a quote, bracket or `=`, `,`, `;`, `|`; or
+ * a colon (a drive letter, a scheme, a path list) unless two slashes and a
+ * host follow it (`https://home/...`). A path segment or a host never is, so a
+ * `users` or `home` segment inside a URL path, a route or a module id
+ * (`https://x.test/api/users/42`, `@/components/home/...`) is no home root.
+ */
+const HOME_ROOT_START = String.raw`^(?:null)?|[\s"'\x60(\[{<>=,;|]|:(?!//[^/])`;
+
+/**
+ * The mounts a home root is reached under: WSL (`/mnt/c`), Cygwin
+ * (`/cygdrive/c`), Git Bash and MSYS (`/c`, captured, so a bare letter
+ * counts only before the exact `Users` a Windows path names), a macOS volume
+ * (`/Volumes/<disk>`, `/System/Volumes/Data`), FreeBSD's `/usr`, Silverblue's
+ * `/var`, and the Windows share of a WSL distribution
+ * (`\\wsl$\<distro>`, `\\wsl.localhost\<distro>`).
+ */
+const HOME_ROOT_MOUNT = String.raw`[/\\]+(?:mnt[/\\]+[a-z]|cygdrive[/\\]+[a-z]|([a-z])|(?:System[/\\]+)?Volumes[/\\]+[^/\\\r\n]+|usr|var|wsl(?:\$|\.localhost)[/\\]+[^\s/\\]+)`;
+
+/**
+ * The delimiters that close a quoted or bracketed path, each mapped to the
+ * opener it pairs with.
+ */
+const HOME_PATH_OPENER_OF_CLOSER: ReadonlyMap<string, string> = new Map([
+  ["'", "'"],
+  ['"', '"'],
+  ["`", "`"],
+  [")", "("],
+  ["]", "["],
+  ["}", "{"],
+  [">", "<"],
+]);
+const HOME_PATH_OPENERS: ReadonlySet<string> = new Set(
+  HOME_PATH_OPENER_OF_CLOSER.values(),
+);
+
+/**
+ * A delimiter that closes a path, whatever follows it (`'/Users/a b'.`,
+ * `{"cwd":"/home/a b",...}`). Only `'` and `)` can also stand inside a
+ * name, so those two close only where no letter, digit or `_` follows:
+ * `'/Users/O'Brien` keeps its apostrophe inside the name.
+ */
+const HOME_PATH_CLOSER = String.raw`(?:["\x60\]}>]|[')](?![0-9a-z_\u0080-\uffff]))`;
+
+/**
+ * How far before a home root its opener may stand: past a drive, a `\\?\`
+ * prefix or a `file:///` scheme (`'C:\Users\...`, `"file:///Users/..."`).
+ */
+const HOME_PATH_OPENER_LOOKBACK = 16;
+
+/**
+ * The segment right after a `Users` (macOS, Windows) or `home` (Linux) root
+ * that starts an absolute path, under either separator, and under doubled ones
+ * (a JSON-escaped Windows path). Where a separator follows, or a delimiter
+ * that closes the path's quote or bracket, the whole segment goes, with any
+ * run of spaces or tabs before or between its words (a macOS full-name folder,
+ * `/Users/Mary Jane/...`, `scandir '/Users/Mary Jane'`); where neither does,
+ * only the bare name, so `/Users/name is missing` and `see /home/name) here`
+ * keep their prose. Whitespace after the last word is not taken, so a home
+ * root in prose (`under /Users/ and /home/`) is not read as a name.
+ *
+ * Linear in the input: each quantified run is followed by a part that cannot
+ * take its characters, except a word's last delimiters, which a failed match
+ * gives back once per word.
+ */
+const HOME_FOLDER_NAME_PATTERN = new RegExp(
+  String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\]|${HOME_PATH_CLOSER})|${HOME_FOLDER_NAME_BARE})`,
+  "gi",
+);
+
+const HOME_FOLDER_NAME_BARE_PREFIX = new RegExp(
+  `^${HOME_FOLDER_NAME_BARE}`,
+  "i",
+);
+
+/**
+ * The opener a home path at `index` stands inside: the nearest quote or
+ * opening bracket before it, within {@link HOME_PATH_OPENER_LOOKBACK} and with
+ * no whitespace between.
+ */
+function homePathOpener(value: string, index: number): string | undefined {
+  const stop = Math.max(-1, index - HOME_PATH_OPENER_LOOKBACK);
+  for (let at = index; at > stop; at -= 1) {
+    const char = value.charAt(at);
+    if (HOME_PATH_OPENERS.has(char)) return char;
+    if (/\s/.test(char)) return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The OS account's home-folder name, wherever an absolute path carries it:
+ * `/Users/<name>/.traycer/host/install/host-main.cjs` becomes
+ * `/Users/<redacted>/.traycer/host/install/host-main.cjs`. Only that one
+ * segment goes, so a stack frame stays readable, and every machine with the
+ * same install layout renders the same path, so Sentry groups on one form
+ * instead of one per person.
+ *
+ * Not part of {@link redactSensitiveText}: a home path is not a credential,
+ * and the log and support-bundle writers that call it keep their own path
+ * policy (the support bundle pseudonymizes whole paths). Telemetry egress
+ * applies both.
+ *
+ * Idempotent.
+ */
+export function redactHomeDirectoryNames(value: string): string {
+  return value.replace(
+    HOME_FOLDER_NAME_PATTERN,
+    (
+      path: string,
+      root: string,
+      driveLetter: string | undefined,
+      rootName: string,
+      name: string,
+      offset: number,
+    ) => {
+      if (driveLetter !== undefined && rootName !== "Users") return path;
+      // A name a closer ended only when the closer pairs with the path's
+      // opener; past a stray one it is the bare name and the rest is prose.
+      const closerOpener = HOME_PATH_OPENER_OF_CLOSER.get(
+        value.charAt(offset + path.length),
+      );
+      if (
+        closerOpener !== undefined &&
+        homePathOpener(value, offset) !== closerOpener
+      ) {
+        const bare = HOME_FOLDER_NAME_BARE_PREFIX.exec(name)?.[0];
+        return bare === undefined
+          ? path
+          : `${root}${REDACTED}${name.slice(bare.length)}`;
+      }
+      return `${root}${REDACTED}`;
+    },
+  );
+}

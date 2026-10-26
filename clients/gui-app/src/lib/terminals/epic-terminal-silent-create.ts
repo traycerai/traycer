@@ -37,6 +37,8 @@ function unavailableClientError(method: string): HostRpcError {
 
 /**
  * Issues `terminal.plain.create` with no mutation cache write or toast.
+ * A repeated identity is refused by create: discover its authorized row so
+ * replaying a pending send adopts the existing terminal instead of failing.
  * The caller applies those effects only after the durable-create generation
  * fence accepts the attempt.
  */
@@ -44,16 +46,36 @@ export async function runSilentCapableEpicTerminalCreate(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly request: CreatePlainTerminalRequest;
 }): Promise<PlainTerminalProjection> {
-  const response = await withHostQueryErrorBoundary(
-    "terminal.plain.create",
-    () => {
-      if (args.client === null) {
-        return Promise.reject(unavailableClientError("terminal.plain.create"));
-      }
-      return args.client.request("terminal.plain.create", args.request);
-    },
-  );
-  return response.terminal;
+  const client = args.client;
+  const hostId = client?.getActiveHostId() ?? null;
+  try {
+    const response = await withHostQueryErrorBoundary(
+      "terminal.plain.create",
+      () => {
+        if (client === null) {
+          return Promise.reject(
+            unavailableClientError("terminal.plain.create"),
+          );
+        }
+        return client.request("terminal.plain.create", args.request);
+      },
+    );
+    return response.terminal;
+  } catch (error: unknown) {
+    if (client === null || hostId === null) throw error;
+    const snapshot = await withHostQueryErrorBoundary(
+      "terminal.plain.list",
+      () =>
+        client.request("terminal.plain.list", { scope: args.request.scope }),
+    ).catch(() => null);
+    const existing = snapshot?.terminals.find(
+      (terminal) =>
+        terminal.record.hostId === hostId &&
+        terminal.record.terminalId === args.request.terminalId,
+    );
+    if (existing !== undefined) return existing;
+    throw error;
+  }
 }
 
 /**

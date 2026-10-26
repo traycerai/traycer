@@ -22,8 +22,9 @@ import { cn } from "@/lib/utils";
  * differ is this: three pickers each inventing their own icon set and their own
  * word for "offline" is exactly what this replaced.
  *
- * Single-line by design, with one exception: a second line saying why this
- * machine's host is left alone (`terminalRunNote`). Healthy hosts stay quiet;
+ * Single-line by design, with two exceptions: a second line saying why this
+ * machine's host is left alone (`terminalRunNote`), and a name that wraps
+ * where the surface asks (`nameWraps`). Healthy hosts stay quiet;
  * only exception states get a status word. The interaction container owns the trailing selection check so
  * the row does not reserve two competing selection columns.
  */
@@ -64,6 +65,11 @@ export function HostOptionRow(props: {
    */
   readonly nameRef: Ref<HTMLSpanElement>;
   /**
+   * The name wraps onto further lines instead of being cut: the composer and
+   * in-task pickers, where a row's title is read in full before a pick.
+   */
+  readonly nameWraps: boolean;
+  /**
    * The environment this host runs (Tracy Bots), or `null` for a picker that
    * does not say - which is every picker but Settings' host list, the one
    * place the person changes it.
@@ -78,6 +84,7 @@ export function HostOptionRow(props: {
     surfaceState,
     updateView,
     nameRef,
+    nameWraps,
     environmentLabel,
   } = props;
   // Includes "setting up" (M5): host-scope narration for a local host being
@@ -113,14 +120,23 @@ export function HostOptionRow(props: {
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
       {host.terminalRunNote === null ? (
-        <span ref={nameRef} className="min-w-0 flex-1 truncate text-start">
+        <span
+          ref={nameRef}
+          className={cn(
+            "min-w-0 flex-1 text-start",
+            nameWraps ? "wrap-break-word" : "truncate",
+          )}
+        >
           {host.name}
         </span>
       ) : (
         // The one second line a row carries: why this machine's host is left
         // alone, where "setting up" read while the app tried to start one.
         <span className="flex min-w-0 flex-1 flex-col text-start">
-          <span ref={nameRef} className="truncate">
+          <span
+            ref={nameRef}
+            className={nameWraps ? "wrap-break-word" : "truncate"}
+          >
             {host.name}
           </span>
           <span

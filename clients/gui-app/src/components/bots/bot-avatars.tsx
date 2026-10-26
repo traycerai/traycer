@@ -72,6 +72,27 @@ export function BotAvatar(props: {
   );
 }
 
+/**
+ * A named bot's picture outside that bot's own surface, as a channel row in
+ * the sidebar draws each bot it lists.
+ */
+export function NamedBotAvatar(props: {
+  readonly botId: string;
+  readonly title: string;
+  readonly size: IdentityAvatarSize;
+}): ReactElement {
+  return (
+    <IdentityAvatar
+      kind="bot"
+      name={props.title}
+      seed={props.botId}
+      avatarUrl={null}
+      size={props.size}
+      testId="bot-avatar"
+    />
+  );
+}
+
 /** A person's picture: a member of a bot's environment, or its owner. */
 export function MemberAvatar(props: {
   readonly userId: string | null;

@@ -56,7 +56,11 @@ export function useComposerMirrorLine(
     () =>
       name === null || alreadySeen
         ? null
-        : { kind: "mirror", message: composerMirrorLineText(name) },
+        : {
+            kind: "mirror",
+            message: composerMirrorLineText(name),
+            action: null,
+          },
     [alreadySeen, name],
   );
   const markSeen = useCallback((): void => {

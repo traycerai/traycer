@@ -177,12 +177,15 @@ function maybePlatform(byPlatform, key) {
 
 const DEFAULT_MANAGERS = ["homebrew", "winget", "scoop", "deb-rpm"];
 const HOMEBREW_LINUX_CASK_MIN_VERSION = "4.5.0";
-const WINGET_MANIFEST_VERSION = "1.10.0";
+const WINGET_MANIFEST_VERSION = "1.12.0";
 const DESKTOP_WINGET_ID = "Traycer.Desktop";
 // The host's per-user logon task, as `clients/desktop/uninstall-host-autostart.nsh`
 // names it for the production package.
 const DESKTOP_WINDOWS_TASK_NAME = "\\Traycer\\Host";
 const DESKTOP_WINDOWS_TASK_FOLDER = "Traycer";
+// The CLI's install manifest below the user profile (`cliManifestPath` in
+// `protocol/src/config/installation.ts`, production slot).
+const DESKTOP_WINDOWS_CLI_MANIFEST_TAIL = ".traycer\\cli\\manifest.json";
 
 function selectedManagers(rawManagers) {
   if (typeof rawManagers !== "string" || rawManagers.trim().length === 0) {
@@ -402,15 +405,21 @@ function renderDesktopWingetManifests({
   releaseNotesUrl,
   winX64,
 }) {
-  const header = `PackageIdentifier: ${DESKTOP_WINGET_ID}
+  // winget's validator requires each file to open with the schema header of
+  // its own ManifestType and ManifestVersion, as wingetcreate writes it.
+  const header = (
+    type,
+  ) => `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.${WINGET_MANIFEST_VERSION}.schema.json
+
+PackageIdentifier: ${DESKTOP_WINGET_ID}
 PackageVersion: ${version}
 `;
   return {
-    [`${DESKTOP_WINGET_ID}.yaml`]: `${header}DefaultLocale: en-US
+    [`${DESKTOP_WINGET_ID}.yaml`]: `${header("version")}DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: ${WINGET_MANIFEST_VERSION}
 `,
-    [`${DESKTOP_WINGET_ID}.installer.yaml`]: `${header}MinimumOSVersion: 10.0.0.0
+    [`${DESKTOP_WINGET_ID}.installer.yaml`]: `${header("installer")}MinimumOSVersion: 10.0.0.0
 InstallerType: nullsoft
 Scope: user
 InstallModes:
@@ -425,7 +434,7 @@ Installers:
 ManifestType: installer
 ManifestVersion: ${WINGET_MANIFEST_VERSION}
 `,
-    [`${DESKTOP_WINGET_ID}.locale.en-US.yaml`]: `${header}PackageLocale: en-US
+    [`${DESKTOP_WINGET_ID}.locale.en-US.yaml`]: `${header("defaultLocale")}PackageLocale: en-US
 Publisher: Traycer AI
 PublisherUrl: ${homepage}
 PackageName: Traycer
@@ -447,10 +456,16 @@ ManifestVersion: ${WINGET_MANIFEST_VERSION}
 // its NSIS updater would otherwise install a second copy Scoop never tracks.
 //
 // The uninstaller ports the NSIS uninstaller's `customUnInstall`
-// (`clients/desktop/uninstall-host-autostart.nsh`): on `scoop uninstall` only
-// (never on `scoop update`, which also runs it), it removes the host's logon
-// task when the task is this account's, the account's launcher, and the
-// `\Traycer` task folder once empty. Everything is best-effort.
+// (`clients/desktop/resources/bundle/uninstall-host-autostart.nsh`): on
+// `scoop uninstall` only (never on `scoop update`, which also runs it), it
+// removes the host's logon task when the task is this account's, the account's
+// launcher, and the `\Traycer` task folder once empty - only when the CLI's
+// install manifest is a JSON object whose `source` is the string `desktop`.
+// Any other source is a separately installed CLI that still runs the host
+// after Desktop is gone, and a missing, unreadable or malformed manifest (a
+// root array, or a list `source`, which `-ceq` would filter rather than
+// compare) proves nothing, so all three stay.
+// Everything is best-effort.
 function renderDesktopScoopManifest({
   version,
   homepage,
@@ -482,6 +497,9 @@ function renderDesktopScoopManifest({
     uninstaller: {
       script: [
         "if ($cmd -eq 'uninstall') {",
+        "  $cli = $null",
+        `  try { $raw = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '${DESKTOP_WINDOWS_CLI_MANIFEST_TAIL}') -ErrorAction Stop; if ($raw.TrimStart().StartsWith('{')) { $cli = ConvertFrom-Json $raw } } catch {}`,
+        "  if (-not (($cli -is [System.Management.Automation.PSCustomObject]) -and ($cli.source -is [string]) -and ($cli.source -ceq 'desktop'))) { return }",
         "  try {",
         "    $s = New-Object -ComObject Schedule.Service",
         "    $s.Connect()",

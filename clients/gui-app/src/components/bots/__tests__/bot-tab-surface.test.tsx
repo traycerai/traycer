@@ -285,6 +285,7 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -527,6 +528,10 @@ describe("<BotTabSurface /> while the team's onboarding locks its chat", () => {
 });
 
 describe("<BotTabSurface /> bot.open", () => {
+  afterEach(() => {
+    useBotPaneWidthsStore.getState().resetWidth("sidebar");
+  });
+
   it("opens the bot once on mount, for this bot", () => {
     render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
 
@@ -541,6 +546,20 @@ describe("<BotTabSurface /> bot.open", () => {
     expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
+  });
+
+  it("draws the channel sidebar in a pane as wide as the person set it, with a handle on its channel edge", () => {
+    useBotPaneWidthsStore.getState().setWidthPx("sidebar", 300);
+    render(surface());
+
+    const pane = screen.getByTestId("bot-channel-sidebar-pane");
+    expect(pane.style.getPropertyValue("--bot-pane-width")).toBe("300px");
+    expect(within(pane).getByTestId("stub-sidebar")).toBeTruthy();
+    expect(
+      within(pane)
+        .getByTestId("bot-channel-sidebar-pane-resize-handle")
+        .getAttribute("aria-label"),
+    ).toBe("Resize channels");
   });
 
   it("shows the full tab, with no banner, when this host serves the bot", () => {

@@ -148,6 +148,12 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { FocusedComposerKind } from "@/lib/commands/types";
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 
 /**
  * A real, distinct `HostClient` instance (never a cast) so `hostClient` args
@@ -195,6 +201,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     hostId: TEST_HOST_ID,
     tuiOnly,
     chatLineCarriesAutoMode: null,
+    stagedSurfaceKey: null,
   };
 }
 
@@ -1700,6 +1707,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostId: "host-b",
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        stagedSurfaceKey: null,
       }),
     );
 
@@ -1721,6 +1729,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostId: null,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        stagedSurfaceKey: null,
       }),
     );
 
@@ -1750,6 +1759,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           hostId: props.hostId,
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
+          stagedSurfaceKey: null,
         }),
       { initialProps: { hostClient: hostAClient, hostId: "host-a" } },
     );
@@ -1764,5 +1774,74 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // A genuine re-registration - a SECOND recorded call, not the first call's
     // argument silently mutating in place.
     expect(registeredComposerHostClients).toEqual([hostAClient, hostBClient]);
+  });
+});
+
+describe("useComposerToolbarStore on a sandbox host", () => {
+  const SANDBOX_HOST_ID = "sbx-host";
+  const LAPTOP_HOST_ID = "laptop-host";
+
+  function scopeOn(hostId: string): ComposerToolbarCatalogScope {
+    return {
+      hostClient: DEFAULT_TEST_HOST_CLIENT,
+      hostId,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: null,
+    };
+  }
+
+  beforeEach(() => {
+    // Codex is the person's pick; the host reports it unavailable (its pack is
+    // still installing) and Claude runnable.
+    seedDefault("codex");
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "codex", available: false },
+      ],
+    };
+    modelsData.value = undefined;
+    installHostDirectoryRows([
+      sandboxHostEntry(SANDBOX_HOST_ID, null),
+      plainHostEntry(LAPTOP_HOST_ID),
+    ]);
+  });
+
+  afterEach(() => {
+    resetHostDirectoryRows();
+    cleanup();
+  });
+
+  it("keeps the person's pick when the sandbox reports its harness unavailable, never swapping in another", async () => {
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(null, null),
+        null,
+        scopeOn(SANDBOX_HOST_ID),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().catalog.harnesses).toBeDefined(),
+    );
+    expect(result.current.getState().selection.harnessId).toBe("codex");
+    expect(result.current.getState().values.selection.harnessId).toBe("codex");
+  });
+
+  it("still reroutes the same pick to the first runnable harness on a host that is not a sandbox", async () => {
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(null, null),
+        null,
+        scopeOn(LAPTOP_HOST_ID),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.harnessId).toBe("claude"),
+    );
   });
 });

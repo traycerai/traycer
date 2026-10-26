@@ -66,7 +66,6 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Host-backed readiness hook, stubbed to its fail-open answer - the same
   // treatment this suite already gives every other host-dependent hook. It
   // renders `LandingComposer`, which now consults the managed-pack gate.
-  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
     hint: null,
@@ -165,12 +164,28 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
   };
 });
 
+// The agent gates read the placement host's own lists; nothing here stages a
+// sandbox or sits on one, so none of them holds or refuses a send.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => () => null,
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
       profileId: null,
+    },
+    values: {
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: null,
+      },
     },
     // No catalog answered: this suite stages no sandbox to hand off.
     catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
@@ -281,6 +296,10 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: null }),
+}));
+// The setup line prices a resting sandbox from the account's list.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: undefined }),
 }));
 
 vi.mock("@/lib/host", () => ({

@@ -53,6 +53,7 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
     modelsLoaded: true,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    keepsUnavailablePick: false,
   };
 }
 

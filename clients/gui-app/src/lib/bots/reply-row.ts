@@ -26,6 +26,28 @@ export function replyRowIdFor(
   return null;
 }
 
+/**
+ * Whether the reply `replyMessageId` renders in the row right after the post
+ * `postMessageId`, where the reader sees the answer without a jump. `false`
+ * when either is not in the rendered rows.
+ */
+export function replyFollowsPost(
+  messages: ReadonlyArray<ChatMessage>,
+  postMessageId: string,
+  replyMessageId: string,
+): boolean {
+  const postIndex = messages.findIndex(
+    (message) => message.persistentMessageId === postMessageId,
+  );
+  if (postIndex === -1) return false;
+  const next = messages.at(postIndex + 1);
+  if (next === undefined) return false;
+  return (
+    next.persistentMessageId === replyMessageId ||
+    next.turnMessageIds?.includes(replyMessageId) === true
+  );
+}
+
 /** A post as the line above a direct reply names it. */
 export interface ChatBotRepliedPost {
   readonly senderLabel: string;
@@ -50,7 +72,9 @@ export function repliedPostOf(
       message.role === "user" && message.persistentMessageId === messageId,
   );
   if (post === undefined) return null;
-  const text = rowText(post);
+  const text = post.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
   const firstLine =
     text
       .split("\n")
@@ -83,11 +107,5 @@ export function postTextOf(
   }
   return post.blocks
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
-    .join("\n");
-}
-
-function rowText(message: ChatMessage): string {
-  return message.segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
     .join("\n");
 }

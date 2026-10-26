@@ -15,18 +15,25 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { createAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import {
+  forgetEndedSandboxHost,
+  recordEndedSandboxHost,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
-const FAILURE_ID = "stream.transport.error:host-1:chat-1:CONNECTION_LOST";
+const failureId = (hostId: string): string =>
+  `stream.transport.error:${hostId}:chat-1:CONNECTION_LOST`;
 
 const disposers: Array<() => void> = [];
 
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
+  forgetEndedSandboxHost("host-1");
   // The notifications store persists under its name; the next case starts bare.
   window.localStorage.clear();
 });
 
 function buildSession(
+  hostId: string,
   notificationOption: Pick<ChatSessionStoreOptions, "fatalCloseNotification">,
 ): {
   readonly callbacks: () => ChatStreamCallbacks;
@@ -43,7 +50,7 @@ function buildSession(
   const handle = createChatSessionStoreWithNotificationDependencies(
     {
       environment: CHAT_STORE_TEST_ENVIRONMENT,
-      hostId: "host-1",
+      hostId,
       epicId: "epic-1",
       chatId: "chat-1",
       userId: "user-1",
@@ -101,18 +108,46 @@ function closeFatally(callbacks: ChatStreamCallbacks): void {
 
 describe("a chat session's fatal close notification", () => {
   it("raises the stream failure notification when the option is absent", () => {
-    const session = buildSession({});
+    const session = buildSession("host-1", {});
 
     closeFatally(session.callbacks());
 
-    expect(session.failureIds()).toEqual([FAILURE_ID]);
+    expect(session.failureIds()).toEqual([failureId("host-1")]);
   });
 
   it("raises none for a session whose surface says the failure itself", () => {
-    const session = buildSession({ fatalCloseNotification: "silent" });
+    const session = buildSession("host-1", {
+      fatalCloseNotification: "silent",
+    });
 
     closeFatally(session.callbacks());
 
     expect(session.failureIds()).toEqual([]);
+  });
+
+  it("raises none for a host a member destroyed, whose session ends as a revocation", () => {
+    recordEndedSandboxHost("host-1", {
+      name: "e2e-sbx-win2",
+      at: 1_000,
+      actor: { userId: "user-1", displayName: null },
+    });
+    const session = buildSession("host-1", {});
+
+    closeFatally(session.callbacks());
+
+    expect(session.failureIds()).toEqual([]);
+  });
+
+  it("still raises for a host that was not destroyed", () => {
+    recordEndedSandboxHost("host-1", {
+      name: "e2e-sbx-win2",
+      at: 1_000,
+      actor: { userId: "user-1", displayName: null },
+    });
+    const session = buildSession("host-2", {});
+
+    closeFatally(session.callbacks());
+
+    expect(session.failureIds()).toEqual([failureId("host-2")]);
   });
 });

@@ -653,6 +653,116 @@ describe("the canvas bootstrap in a running page", () => {
     });
   });
 
+  describe("left and right arrows", () => {
+    const shortcutPosts = (page: Page) =>
+      page.posted.filter(
+        (message) => message.method === "traycer/notifications/shortcut",
+      );
+    /**
+     * Returns whether the page kept the event (not cancelled), after the
+     * task in which the prelude reads the page's verdict has run.
+     */
+    async function pressArrow(
+      page: Page,
+      target: Element,
+      init: KeyboardEventInit,
+    ): Promise<boolean> {
+      const kept = target.dispatchEvent(
+        new page.window.KeyboardEvent("keydown", {
+          code: "ArrowRight",
+          key: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return kept;
+    }
+    function playing(markup: string): Page {
+      const page = runCanvasPage(markup);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      return page;
+    }
+
+    it("tells the app about a bare arrow the playing page left alone, and never cancels it", async () => {
+      const page = playing(MARKUP);
+      let pageSaw = 0;
+      page.window.document.body.addEventListener("keydown", () => {
+        pageSaw += 1;
+      });
+      await expect(
+        pressArrow(page, page.window.document.body, {}),
+      ).resolves.toBe(true);
+      expect(pageSaw).toBe(1);
+      expect(shortcutPosts(page)).toEqual([
+        {
+          jsonrpc: "2.0",
+          method: "traycer/notifications/shortcut",
+          params: {
+            key: "ArrowRight",
+            code: "ArrowRight",
+            ctrl: false,
+            meta: false,
+            alt: false,
+            shift: false,
+            nonce: NONCE,
+          },
+        },
+      ]);
+    });
+
+    it.each([
+      ["on the body", (page: Page) => page.window.document.body],
+      // The page's own listener on window was added after the prelude's, so
+      // it runs after it; the prelude still honours its cancellation.
+      ["on the window, added after the prelude", (page: Page) => page.window],
+    ])(
+      "leaves an arrow the page cancelled %s to the page",
+      async (_label, target) => {
+        const page = playing(MARKUP);
+        target(page).addEventListener("keydown", (event: Event) => {
+          event.preventDefault();
+        });
+        await pressArrow(page, page.window.document.body, {});
+        expect(shortcutPosts(page)).toEqual([]);
+      },
+    );
+
+    it.each([
+      ["a text field", `<input id="t">`],
+      ["a slider", `<div id="t" role="slider" tabindex="0"></div>`],
+      [
+        "a tab inside a tab list",
+        `<div role="tablist"><button id="t" role="tab">a</button></div>`,
+      ],
+    ])("leaves an arrow pressed in %s to the page", async (_label, markup) => {
+      const page = playing(markup);
+      const target = page.window.document.getElementById("t");
+      if (target === null) throw new Error("no target");
+      await pressArrow(page, target, {});
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it.each([
+      ["Shift", { shiftKey: true }],
+      ["Alt", { altKey: true }],
+      ["ArrowDown", { code: "ArrowDown", key: "ArrowDown" }],
+    ])("leaves %s to the page", async (_label, init) => {
+      const page = playing(MARKUP);
+      await pressArrow(page, page.window.document.body, init);
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it("leaves arrows to the page while editing", async () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      await pressArrow(page, page.window.document.body, {});
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+  });
+
   describe("a wheel on the playing page", () => {
     const panPosts = (page: Page) =>
       page.posted.filter((message) => message.method === "traycer/canvas/pan");

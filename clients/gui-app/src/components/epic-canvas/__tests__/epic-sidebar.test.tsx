@@ -53,10 +53,7 @@ import {
   prPresenceScopeKey,
   usePrPresenceStore,
 } from "@/stores/epics/pr-presence-store";
-import {
-  tabSurfaceKey,
-  useSurfaceHostSelectionStore,
-} from "@/stores/host/surface-host-selection-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { useSidebarRailWidthStore } from "@/stores/epics/sidebar-rail-width-store";
@@ -189,8 +186,9 @@ vi.mock("@/lib/epic-selectors", () => ({
 // re-pointed that mock would have been stranded (installed, never read) and
 // the PR rail item would have silently vanished from every assertion below,
 // which is exactly the producer/consumer split the re-point fixed.
+const canvasHostState = vi.hoisted(() => ({ id: "epic-sidebar-host" }));
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
-  useCanvasHostId: () => HOST_ID,
+  useCanvasHostId: () => canvasHostState.id,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: () => ({ label: "Test host" }),
@@ -199,7 +197,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 const EPIC_ID = "epic-sidebar-test";
 const TAB_ID = "epic-sidebar-tab";
-const PINNED_HOST_ID = "epic-sidebar-pinned-host";
+const OTHER_HOST_ID = "epic-sidebar-other-host";
 
 // One client for the file's lifetime - a fresh one per render strands
 // observers on the old one.
@@ -213,6 +211,7 @@ const HOST_ID = "epic-sidebar-host";
 
 function resetLeftPanelStore(): void {
   window.localStorage.clear();
+  canvasHostState.id = HOST_ID;
   useSurfaceHostSelectionStore.setState({ selections: {} });
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useLeftPanelStore.setState({
@@ -253,12 +252,6 @@ function setPullRequestPresenceForHost(
 
 function setPullRequestPresence(hasPullRequests: boolean): void {
   setPullRequestPresenceForHost(HOST_ID, hasPullRequests);
-}
-
-function pinPullRequestsTo(hostId: string): void {
-  useSurfaceHostSelectionStore
-    .getState()
-    .setSelection(tabSurfaceKey("pull-requests", TAB_ID), hostId);
 }
 
 function resetDndStore(): void {
@@ -1079,7 +1072,7 @@ describe("<EpicLeftPanelRail />", () => {
     });
   });
 
-  describe("host-pinned Pull Requests availability", () => {
+  describe("canvas-host Pull Requests availability", () => {
     function renderLiveHost(): void {
       render(
         <SidebarProvider>
@@ -1106,9 +1099,9 @@ describe("<EpicLeftPanelRail />", () => {
       );
     }
 
-    it("uses the persisted B pin for live, loading and rail availability", () => {
-      pinPullRequestsTo(PINNED_HOST_ID);
-      setPullRequestPresenceForHost(PINNED_HOST_ID, true);
+    it("reads presence under the canvas host for live, loading and rail availability", () => {
+      canvasHostState.id = OTHER_HOST_ID;
+      setPullRequestPresenceForHost(OTHER_HOST_ID, true);
       useLeftPanelStore.getState().setActivePanelId(TAB_ID, "pull-requests");
 
       renderLiveHost();
@@ -1127,8 +1120,8 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
     });
 
-    it("follows canvas host A when unpinned and ignores B-only presence", () => {
-      setPullRequestPresenceForHost(PINNED_HOST_ID, true);
+    it("ignores presence recorded under a host other than the canvas host", () => {
+      setPullRequestPresenceForHost(OTHER_HOST_ID, true);
       renderRail();
       expect(screen.queryByTestId("epic-rail-pull-requests")).toBeNull();
 
@@ -1139,23 +1132,25 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
     });
 
-    it("retains an active PR panel across A-to-B selection until B is observed", () => {
+    it("retains an active PR panel across a canvas-host switch until the new host is observed", () => {
       setPullRequestPresenceForHost(HOST_ID, true);
       useLeftPanelStore.getState().setActivePanelId(TAB_ID, "pull-requests");
-      const rendered = render(
+      const rail = () => (
         <EpicLeftPanelRail
           epicId={EPIC_ID}
           tabId={TAB_ID}
           orientation="vertical"
-        />,
+        />
       );
+      const rendered = render(rail());
 
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
 
+      canvasHostState.id = OTHER_HOST_ID;
       act(() => {
-        pinPullRequestsTo(PINNED_HOST_ID);
         usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
       });
+      rendered.rerender(rail());
 
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
 
@@ -1165,7 +1160,7 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.queryByTestId("epic-rail-pull-requests")).toBeNull();
 
       act(() => {
-        setPullRequestPresenceForHost(PINNED_HOST_ID, true);
+        setPullRequestPresenceForHost(OTHER_HOST_ID, true);
       });
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
 

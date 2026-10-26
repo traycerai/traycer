@@ -68,6 +68,14 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("initial-chat-handoffs")).toBe(
       "traycer-gui-app:initial-chat-handoffs",
     );
+    // Source: src/stores/composer/staged-sandbox-store.ts (plural leaf)
+    expect(persistKey("staged-sandbox-sends")).toBe(
+      "traycer-gui-app:staged-sandbox-sends",
+    );
+    // Source: src/stores/sandboxes/pending-sandbox-send-store.ts (plural leaf)
+    expect(persistKey("pending-sandbox-sends")).toBe(
+      "traycer-gui-app:pending-sandbox-sends",
+    );
     // Source: src/stores/epics/left-panel-store.ts
     expect(persistKey("left-panel")).toBe("traycer-gui-app:left-panel");
     // Source: src/stores/file-tree/file-tree-store.ts

@@ -11,6 +11,7 @@ import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   openSandboxDetails,
@@ -337,6 +338,75 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("keeps an undelivered message waiting on a sandbox for its own account on user-switch, and drops a delivered one's ready line", () => {
+    // Undelivered, the send is the message's only copy: it stays, for its
+    // own account's driver alone, which gives it back on that account's next
+    // sign-in. Delivered, only its ready line is left, and that goes.
+    const settings = {
+      harnessId: "codex",
+      model: "gpt-6.1-sol",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    } as const;
+    usePendingSandboxSendStore.getState().add({
+      id: "send-alice-delivered",
+      userId: "user-alice",
+      epicId: "epic-alice",
+      request: { kind: "chat", parentId: null, placement: null },
+      content: { type: "doc", content: [] },
+      text: "already sent",
+      settings,
+      createdAt: 900,
+      epicConfirmed: true,
+      delivery: {
+        chatId: "chat-alice",
+        hostId: "host-sbx",
+        sandboxId: "sbx-alice",
+        readySeconds: 24,
+      },
+    });
+    usePendingSandboxSendStore.getState().add({
+      id: "send-alice",
+      userId: "user-alice",
+      epicId: "epic-alice",
+      request: { kind: "chat", parentId: null, placement: null },
+      content: { type: "doc", content: [] },
+      text: "fix the login bug",
+      settings: {
+        harnessId: "codex",
+        model: "gpt-6.1-sol",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      },
+      createdAt: 1_000,
+      epicConfirmed: true,
+      delivery: null,
+    });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
+      "send-alice",
+    ]);
+    expect(
+      usePendingSandboxSendStore.getState().sends["send-alice"],
+    ).toMatchObject({ userId: "user-alice", text: "fix the login bug" });
   });
 
   it("drops a terminal a sandbox row asked the landing panel for on user-switch", () => {

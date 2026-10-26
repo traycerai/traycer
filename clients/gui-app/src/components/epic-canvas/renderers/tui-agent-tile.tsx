@@ -41,6 +41,10 @@ import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import {
+  sandboxDeadTileReason,
+  useHostSandboxEnd,
+} from "@/hooks/sandboxes/use-host-sandbox-end";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import type {
@@ -148,6 +152,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const hostId = useTabHostId();
   const epicId = useOpenEpicId();
   const reachability = useHostReachability(hostId);
+  const sandboxEnd = useHostSandboxEnd(hostId);
   // Bounded, worded pre-bootstrap wait - see `terminal-tile.tsx` for the same
   // gate; the two tile families must not describe one host two ways.
   const hostLoad = useBoundedHostLoad({
@@ -262,6 +267,8 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       instanceId: props.node.instanceId,
       hostId,
       hostLabel: reachability.hostLabel,
+      // A sandbox host is another machine (`remote`), which returns above.
+      sandboxStopped: false,
       target: {
         kind: "terminal",
         epicId,
@@ -286,7 +293,10 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
-        reason="host-unreachable"
+        reason={sandboxDeadTileReason(sandboxEnd)}
+        destroyedLine={
+          sandboxEnd?.kind === "destroyed" ? sandboxEnd.line : null
+        }
         hostLabel={reachability.hostLabel}
         ownerKind="agent"
         onClose={closeCanvasTile}
@@ -821,6 +831,7 @@ function TuiAgentTileLive(
     return (
       <TerminalDeadTileBanner
         reason="not-running-remotely"
+        destroyedLine={null}
         hostLabel={hostLabel}
         ownerKind="agent"
         onClose={closeTile}
@@ -1345,6 +1356,7 @@ function TerminalAgentPreLaunchToolbar(
             // Terminal agents cannot fork — the host section is `locked`, so
             // the switch gesture this handles is unreachable here anyway.
             onForkOnHost: null,
+            onForkOnNewSandbox: null,
           }}
         />
       )}

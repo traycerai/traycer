@@ -11,7 +11,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
+import {
+  ActiveHostWorkspaceControls,
+  HostWorkspaceSelector,
+} from "../host-workspace-selector";
+import { stagedSandboxFallbackName } from "@/components/composer/use-staged-sandbox-send";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
@@ -33,7 +38,10 @@ import {
 } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   readStagedWorktreeIntent,
@@ -199,6 +207,51 @@ const ABSENT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
 
 // The picker's sandbox staging reads the account and the catalogue; this suite
 // stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+// The landing's own Open terminal instead is the real `openLandingStagedTerminal`;
+// only the staged run it starts is recorded here.
+const stagedRuns = vi.hoisted(() => ({
+  run: vi.fn<
+    (
+      surfaceKey: string,
+      fresh: boolean,
+      request: {
+        readonly fallbackName: string;
+        readonly taskId: string | null;
+        readonly resume: boolean;
+      },
+    ) => Promise<void>
+  >(() => Promise.resolve()),
+}));
+vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/sandboxes/staged-sandbox-run")
+  >()),
+  runStagedSandbox: (
+    surfaceKey: string,
+    fresh: boolean,
+    request: {
+      readonly fallbackName: string;
+      readonly taskId: string | null;
+      readonly resume: boolean;
+    },
+  ) => stagedRuns.run(surfaceKey, fresh, request),
+}));
+
+// Only an in-epic surface resolves its owner host's client.
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: () => null,
+}));
+// The landing surface's pin and key, which a window supplies in the app.
+vi.mock(
+  "@/hooks/host/use-composer-surface-host-pin",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/host/use-composer-surface-host-pin")
+    >()),
+    useComposerSurfaceHostKey: () => "landing:window-test",
+  }),
+);
+
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
@@ -759,7 +812,11 @@ describe("landing workspace summary empty state", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ActiveHostWorkspaceControls
-            sandboxStaging={{ surfaceKey, task: null }}
+            sandboxStaging={{
+              surfaceKey,
+              task: null,
+              openTerminalInstead: null,
+            }}
             disabled={false}
             stagingKey={{
               surface: "landing",
@@ -788,6 +845,111 @@ describe("landing workspace summary empty state", () => {
     expect(screen.queryByTestId("folder-add")).toBeNull();
     // The picker that staged is the same element: its focus is not lost.
     expect(screen.getByRole("button", { name: /^Host:/ })).toBe(hostTrigger);
+
+    useStagedSandboxStore.setState({ bySurface: {} });
+    queryClient.clear();
+  });
+
+  it("offers Open terminal instead beside the staged block, and runs the surface's terminal when pressed", () => {
+    const surfaceKey = "landing:window-test";
+    const openTerminalInstead = vi.fn<() => void>();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ActiveHostWorkspaceControls
+            sandboxStaging={{ surfaceKey, task: null, openTerminalInstead }}
+            disabled={false}
+            stagingKey={{
+              surface: "landing",
+              hostId: "host-home",
+              draftId: null,
+            }}
+            workspaceSeed={null}
+            seedIntent={null}
+            seedIntentOverride={null}
+            layout="inline"
+            hostScope={{ kind: "active" }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      screen.queryByTestId("consequences-open-terminal-instead"),
+    ).toBeNull();
+
+    act(() => {
+      useStagedSandboxStore.getState().stage(surfaceKey, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "",
+        wakeString: null,
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("consequences-open-terminal-instead"));
+    expect(openTerminalInstead).toHaveBeenCalledTimes(1);
+
+    useStagedSandboxStore.setState({ bySurface: {} });
+    queryClient.clear();
+  });
+
+  it("takes the landing's Open terminal instead as the stage's first action: the staged run starts for a terminal, nothing is created on this host", () => {
+    stagedRuns.run.mockClear();
+    const surfaceKey = "landing:window-test";
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <HostWorkspaceSelector
+            surface={{ kind: "home", draftId: null }}
+            disabled={false}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      useStagedSandboxStore.getState().stage(surfaceKey, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "",
+        wakeString: null,
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("consequences-open-terminal-instead"));
+
+    expect(stagedRuns.run).toHaveBeenCalledTimes(1);
+    expect(stagedRuns.run).toHaveBeenCalledWith(surfaceKey, true, {
+      fallbackName: stagedSandboxFallbackName(""),
+      taskId: null,
+      resume: false,
+    });
+    expect(readStagedSandbox(surfaceKey)?.openTerminal).toBe(true);
+    // Not opened here: the terminal waits for the sandbox to be awake.
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
 
     useStagedSandboxStore.setState({ bySurface: {} });
     queryClient.clear();

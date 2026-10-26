@@ -12,7 +12,7 @@ import {
   hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeClientFrameSchemaV15,
   hostNotificationsSubscribeServerFrameSchemaV16,
-  type HostNotificationEntryV24,
+  type HostNotificationEntryV25,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeServerFrameV16,
@@ -53,7 +53,7 @@ export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
  * negotiated version drops back, and every older minor's frames are strict
  * subsets of this union and still parse.
  */
-export type HostNotificationFeedEntry = HostNotificationEntryV24;
+export type HostNotificationFeedEntry = HostNotificationEntryV25;
 
 export type HostNotificationsFeedFrame = Extract<
   HostNotificationsSubscribeServerFrameV16,

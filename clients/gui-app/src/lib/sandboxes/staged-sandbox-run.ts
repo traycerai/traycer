@@ -13,10 +13,21 @@ import {
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   type SandboxCreateRequest,
   type SandboxSummary,
+  type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  pendingSandboxStageRunAllowed,
+  holdPendingSandboxStageObservation,
+  pendingSandboxStageObservation,
+  recordPendingSandboxStageCreated,
+  markPendingSandboxStageRowSeen,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
-import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  sandboxListQueryOptions,
+  sandboxListReadSentAt,
+} from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
 import type { AuthService } from "@/lib/auth/auth-service";
 import type { HostDirectoryService } from "@/lib/host";
@@ -37,6 +48,7 @@ import {
   readStagedSandbox,
   refusedBeforeCreate,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxFailure,
   type StagedSandboxStep,
   type StagedSandboxTarget,
@@ -67,7 +79,10 @@ export interface StagedSandboxRunDeps {
    * Wakes a resting sandbox, joining a wake already in flight
    * (`startSandboxWake`); resolves `true` once it is awake.
    */
-  readonly wake: (hostId: string) => Promise<boolean>;
+  readonly wake: (
+    hostId: string,
+    gesture: SandboxVerbGesture,
+  ) => Promise<boolean>;
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
 }
@@ -79,18 +94,22 @@ export interface StagedSandboxRunDeps {
  */
 const running = new Map<string, string>();
 
+/** Whether a run in this window is driving the surface's stage. */
+export function stagedRunActive(surfaceKey: string): boolean {
+  return running.has(surfaceKey);
+}
+
 /**
- * Phase 1 of the composer's two-phase handoff (sandboxes plan D1): create the
- * staged sandbox (or wake the staged resting one), then wait until it is
- * awake, its settings applied (`guestConfigured !== false`) and its host
- * connected. Then it pins the surface to the new host and moves the stage to
- * `handoff`; phase 2, the surface's own resubmit, runs from there.
+ * Creates or wakes the staged sandbox and waits until it is awake, its
+ * settings applied (`guestConfigured !== false`) and its host connected.
+ * Then it pins the surface and moves the stage to `handoff`: a pending send's
+ * task driver delivers it, or a composer-owned action resubmits there.
  *
  * Owned by the store, not by a component: the composer may unmount, and the
  * stage, its idempotency key and the draft outlive it. An action on a stage
  * that may have an accepted create behind it reuses the key, so the server
- * answers with the row it already made; `fresh` (`stagedCreateNeedsFreshKey`,
- * or Retry creation after a terminal failure) mints a new one.
+ * answers with the row it already made. Retry creation after a terminal
+ * sandbox failure mints a new one; a wake failure keeps the sandbox and key.
  */
 export async function runStagedSandbox(
   surfaceKey: string,
@@ -99,9 +118,19 @@ export async function runStagedSandbox(
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
   const stage = readStagedSandbox(surfaceKey);
-  if (stage === null || stage.phase === "handoff") return;
   if (
-    !fresh &&
+    stage === null ||
+    stage.phase === "handoff" ||
+    !pendingSandboxStageRunAllowed(surfaceKey, "unknown")
+  )
+    return;
+  // A wake failure still names a usable sandbox, even when the original
+  // pick was New. No retry of that wake may replace the sandbox or its key.
+  const retryingWake =
+    stage.failure?.kind === "failed" && stage.failure.code === "wake";
+  const freshCreate = fresh && !retryingWake;
+  if (
+    !freshCreate &&
     stage.clientRequestId !== null &&
     running.get(surfaceKey) === stage.clientRequestId
   ) {
@@ -116,17 +145,95 @@ export async function runStagedSandbox(
   }
   const clientRequestId = useStagedSandboxStore
     .getState()
-    .begin(surfaceKey, fresh, deps.now());
+    .begin(surfaceKey, freshCreate, deps.now(), request.resume);
   if (clientRequestId === null) return;
   running.set(surfaceKey, clientRequestId);
   try {
-    const started = await startTarget(
+    const started = await startStagedRun(
       { surfaceKey, clientRequestId, ...request },
-      stage.target,
+      stage,
+      freshCreate,
       deps,
     );
     if (started === null) return;
-    await settle(surfaceKey, clientRequestId, started, deps);
+    await settle(
+      { surfaceKey, clientRequestId, started, deps },
+      readStagedSandbox(surfaceKey)?.startedAt ?? deps.now(),
+    );
+  } finally {
+    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
+  }
+}
+
+/**
+ * The new sandbox this key already made, if any. It is read, never created
+ * again: a repeat or a resume after a reload waits on that row, and a row
+ * that failed or is gone stops the wait rather than naming the key a second
+ * time.
+ */
+function sandboxAlreadyMade(
+  stage: StagedSandbox,
+  fresh: boolean,
+): StartedSandbox | null {
+  if (
+    fresh ||
+    stage.target.kind !== "new" ||
+    stage.createdSandboxId === null ||
+    stage.createdHostId === null
+  ) {
+    return null;
+  }
+  return { sandboxId: stage.createdSandboxId, hostId: stage.createdHostId };
+}
+
+/**
+ * Wakes a handed-off stage's sandbox that rested while its action waited.
+ * The original send or terminal ask remains the wake's gesture. Under the
+ * same stage and key, back to its wake step on the line, then the wait.
+ */
+export async function rewakeStagedSandbox(
+  surfaceKey: string,
+  deps: StagedSandboxRunDeps,
+): Promise<void> {
+  const stage = readStagedSandbox(surfaceKey);
+  if (
+    stage === null ||
+    !pendingSandboxStageRunAllowed(surfaceKey, "resting") ||
+    stage.phase !== "handoff" ||
+    stage.clientRequestId === null ||
+    stage.createdSandboxId === null ||
+    stage.createdHostId === null ||
+    running.has(surfaceKey)
+  ) {
+    return;
+  }
+  const { clientRequestId } = stage;
+  const started = {
+    sandboxId: stage.createdSandboxId,
+    hostId: stage.createdHostId,
+  };
+  const now = deps.now();
+  // The line's clock restarts with the wake: the wait it times is this one.
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    phase: "creating",
+    startedAt: now,
+    step: "booting",
+    stepAt: now,
+    failure: null,
+  });
+  running.set(surfaceKey, clientRequestId);
+  try {
+    if (
+      !(await wakeCurrentStage(
+        surfaceKey,
+        clientRequestId,
+        started.hostId,
+        deps,
+      ))
+    ) {
+      return;
+    }
+    await settle({ surfaceKey, clientRequestId, started, deps }, now);
   } finally {
     if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
   }
@@ -137,13 +244,51 @@ interface StartedSandbox {
   readonly hostId: string;
 }
 
+/** The original action survives a retry or reload with the stage. */
+function stagedWakeGesture(stage: StagedSandbox): SandboxVerbGesture {
+  return stage.openTerminal || stage.terminalLaunch !== null
+    ? "open-terminal"
+    : "send";
+}
+
+/** Reports a wake only for the current run, preserving its original action. */
+async function wakeCurrentStage(
+  surfaceKey: string,
+  clientRequestId: string,
+  hostId: string,
+  deps: StagedSandboxRunDeps,
+): Promise<boolean> {
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage === null || !stillCurrent(surfaceKey, clientRequestId))
+    return false;
+  report(surfaceKey, "booting", deps.now());
+  const boundary = holdPendingSandboxStageObservation(surfaceKey);
+  if (boundary === null) return false;
+  const answered = await deps.wake(hostId, stagedWakeGesture(stage));
+  if (!stillCurrent(surfaceKey, clientRequestId)) return false;
+  const observed = pendingSandboxStageObservation(
+    surfaceKey,
+    answered ? "awake" : "waking",
+    {
+      kind: "wake-result",
+      requestedAt: boundary,
+    },
+  );
+  // A newer request owns settlement. Supersession is not a failed wake.
+  if (observed === "unknown") return false;
+  if (!answered)
+    fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
+  return answered;
+}
+
 /** Whether the run is still the one the stage holds (not cancelled or retried). */
 function stillCurrent(surfaceKey: string, clientRequestId: string): boolean {
   const stage = readStagedSandbox(surfaceKey);
   return (
     stage !== null &&
     stage.phase === "creating" &&
-    stage.clientRequestId === clientRequestId
+    stage.clientRequestId === clientRequestId &&
+    pendingSandboxStageRunAllowed(surfaceKey, "unknown")
   );
 }
 
@@ -165,14 +310,48 @@ function fail(surfaceKey: string, failure: StagedSandboxFailure): void {
 export interface StagedRunRequest {
   /** The name a create falls back to when the sheet set none. */
   readonly fallbackName: string;
-  /** The task the surface is in; `null` on the landing composer. */
+  /** The task the action belongs to; `null` before one exists. */
   readonly taskId: string | null;
+  /**
+   * Takes up a run a reload stopped, keeping its step and times; `false` for
+   * a send, Keep waiting or Retry, which start the wait again.
+   */
+  readonly resume: boolean;
 }
 
 /** Which run a step belongs to, and what its create adds. */
 interface StagedRun extends StagedRunRequest {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
+}
+
+/** Reuses a created sandbox and retries its wake before considering a create. */
+async function startStagedRun(
+  run: StagedRun,
+  stage: StagedSandbox,
+  fresh: boolean,
+  deps: StagedSandboxRunDeps,
+): Promise<StartedSandbox | null> {
+  const made = sandboxAlreadyMade(stage, fresh);
+  if (made === null) return startTarget(run, stage.target, deps);
+  if (
+    stage.target.kind === "new" &&
+    !recordPendingSandboxStageCreated(run.surfaceKey, made.sandboxId)
+  )
+    return null;
+  if (
+    stage.failure?.kind === "failed" &&
+    stage.failure.code === "wake" &&
+    !(await wakeCurrentStage(
+      run.surfaceKey,
+      run.clientRequestId,
+      made.hostId,
+      deps,
+    ))
+  ) {
+    return null;
+  }
+  return made;
 }
 
 async function startTarget(
@@ -188,10 +367,14 @@ async function startTarget(
       step: "booting",
       stepAt: deps.now(),
     });
-    const awake = await deps.wake(target.hostId);
-    if (!stillCurrent(surfaceKey, clientRequestId)) return null;
-    if (!awake) {
-      fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
+    if (
+      !(await wakeCurrentStage(
+        surfaceKey,
+        clientRequestId,
+        target.hostId,
+        deps,
+      ))
+    ) {
       return null;
     }
     return { sandboxId: target.sandboxId, hostId: target.hostId };
@@ -217,11 +400,12 @@ async function startTarget(
     // The shape's `null` is "never"; on a create `null` is the configuration's
     // default and `0` is never.
     destroyAfterRestingMinutes: target.shape.destroyAfterRestingMinutes ?? 0,
-    // The surface's task; on the landing composer the task does not exist
-    // yet, since it is created on the new host in phase 2.
+    // The task that owns the run. A pending landing send already created it
+    // on its placement host; a landing terminal ask may have no task yet.
     createdByTaskId: taskId,
     clientRequestId,
   };
+  if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
   const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   if (result.kind !== "ok") {
@@ -237,6 +421,7 @@ async function startTarget(
     return null;
   }
   const { sandboxId, hostId } = result.accepted;
+  if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: sandboxId,
     createdHostId: hostId,
@@ -358,40 +543,28 @@ export function createErrorNeedsFreshKey(error: Error): boolean {
   );
 }
 
+interface SandboxSettlement {
+  readonly surfaceKey: string;
+  readonly clientRequestId: string;
+  readonly started: StartedSandbox;
+  readonly deps: StagedSandboxRunDeps;
+}
+
 /**
- * Waits for the sandbox to be ready for the handoff, reporting each step:
- * booting until awake, applying until the settings verdict, delivering once
- * the host is connected. A failed row, settings that did not apply, or the
- * budget running out stop it with the failure on the line.
+ * Waits for the sandbox to be ready for the handoff, reporting each step.
+ * Cancellation ends the wait, and its budget ends with a failure on the line.
  */
 async function settle(
-  surfaceKey: string,
-  clientRequestId: string,
-  started: StartedSandbox,
-  deps: StagedSandboxRunDeps,
+  input: SandboxSettlement,
+  budgetFrom: number,
 ): Promise<void> {
-  const startedAt = readStagedSandbox(surfaceKey)?.startedAt ?? deps.now();
-  const deadline = startedAt + STAGED_CREATE_BUDGET_MS;
+  const { surfaceKey, clientRequestId, started, deps } = input;
+  const deadline = budgetFrom + STAGED_CREATE_BUDGET_MS;
   while (deps.now() < deadline) {
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    const row = await readRow(deps, started.sandboxId);
+    const row = await readRow(deps, started.sandboxId, surfaceKey);
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    const verdict = row === undefined ? null : settleVerdict(row);
-    if (verdict !== null && verdict.kind === "failure") {
-      fail(surfaceKey, verdict.failure);
-      return;
-    }
-    if (verdict !== null) {
-      report(surfaceKey, "applying", deps.now());
-      void deps.directory.refresh();
-      if (
-        dialableHostEndpoint(deps.directory.findById(started.hostId)) !== null
-      ) {
-        report(surfaceKey, "delivering", deps.now());
-        handOff(surfaceKey, started.hostId);
-        return;
-      }
-    }
+    if ((await settleRow(input, row)) === "finished") return;
     await deps.sleep(POLL_INTERVAL_MS);
   }
   if (!stillCurrent(surfaceKey, clientRequestId)) return;
@@ -399,6 +572,38 @@ async function settle(
     kind: "timed-out",
     step: readStagedSandbox(surfaceKey)?.step ?? "booting",
   });
+}
+
+/** Applies one fresh lifecycle answer, waking retained sandboxes before handoff. */
+async function settleRow(
+  input: SandboxSettlement,
+  row: SandboxSummary | null | undefined,
+): Promise<"waiting" | "finished"> {
+  const { surfaceKey, clientRequestId, started, deps } = input;
+  // Cancel/reload can retain an already-created sandbox after it rested.
+  if (row?.state === "suspended" || row?.state === "stopped") {
+    const awake = await wakeCurrentStage(
+      surfaceKey,
+      clientRequestId,
+      started.hostId,
+      deps,
+    );
+    return awake ? "waiting" : "finished";
+  }
+  const verdict = row === undefined ? null : settleVerdict(row);
+  if (verdict === null) return "waiting";
+  if (verdict.kind === "failure") {
+    fail(surfaceKey, verdict.failure);
+    return "finished";
+  }
+  report(surfaceKey, "applying", deps.now());
+  void deps.directory.refresh();
+  if (dialableHostEndpoint(deps.directory.findById(started.hostId)) === null) {
+    return "waiting";
+  }
+  report(surfaceKey, "delivering", deps.now());
+  handOff(surfaceKey, started.hostId);
+  return "finished";
 }
 
 /**
@@ -409,6 +614,7 @@ async function settle(
 async function readRow(
   deps: StagedSandboxRunDeps,
   sandboxId: string,
+  surfaceKey: string,
 ): Promise<SandboxSummary | null | undefined> {
   // The list query every surface reads, read fresh: the Sandboxes page and
   // the pickers see the new row as the wait does.
@@ -419,7 +625,33 @@ async function readRow(
     })
     .catch(() => undefined);
   if (response === undefined || response === null) return undefined;
-  return response.sandboxes.find((row) => row.id === sandboxId) ?? null;
+  const row = response.sandboxes.find((item) => item.id === sandboxId) ?? null;
+  let host: "awake" | "ended" | "resting" | "waking" = "waking";
+  if (
+    row === null ||
+    row.state === "failed" ||
+    row.state === "destroying" ||
+    row.state === "destroyed"
+  )
+    host = "ended";
+  else if (row.state === "awake") host = "awake";
+  else if (row.state === "stopped" || row.state === "suspended")
+    host = "resting";
+  const observation = {
+    kind: "list",
+    sentAt: sandboxListReadSentAt(response),
+    mountedAt: 0,
+    missingSandboxId: row === null ? sandboxId : undefined,
+  } as const;
+  if (
+    row !== null &&
+    !markPendingSandboxStageRowSeen(surfaceKey, sandboxId, observation)
+  )
+    return undefined;
+  return pendingSandboxStageObservation(surfaceKey, host, observation) ===
+    "unknown"
+    ? undefined
+    : row;
 }
 
 type SettleVerdict =
@@ -467,8 +699,8 @@ export function settleVerdict(
 }
 
 /**
- * Phase 2's start: the surface is pinned to the new host and the stage moves
- * to `handoff`; the surface resubmits once its placement resolves there. A
+ * The surface is pinned to the new host and the stage moves to `handoff`;
+ * its pending driver delivers there, or its composer resubmits there. A
  * stage with no send to resubmit ends here, its terminal asked of the landing
  * panel if one was: one only an explicit terminal ask started, or one whose
  * sending draft is gone (its modal's tab or its start page closed meanwhile)

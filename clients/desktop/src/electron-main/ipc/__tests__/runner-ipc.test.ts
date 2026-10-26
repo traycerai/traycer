@@ -1075,7 +1075,14 @@ describe("RunnerIpcBridge", () => {
     }
 
     await expect(
-      handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
+      handler(
+        bareEvent(),
+        "bearer-1",
+        "sbx_1",
+        "resume",
+        "open-files",
+        119_000,
+      ),
     ).resolves.toEqual({ kind: "ok", settled: true, state: "awake" });
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
@@ -1084,18 +1091,26 @@ describe("RunnerIpcBridge", () => {
       IAP_PROXY_TOKEN,
       "sbx_1",
       "resume",
+      "open-files",
       119_000,
     );
 
     for (const bad of ["119000", null, undefined, {}]) {
       await expect(
-        handler(bareEvent(), "bearer-1", "sbx_1", "resume", bad),
+        handler(bareEvent(), "bearer-1", "sbx_1", "resume", null, bad),
       ).rejects.toThrow("runSandboxVerb.timeoutMs");
     }
     // The old four-argument call, from a renderer that predates the field.
     await expect(
       handler(bareEvent(), "bearer-1", "sbx_1", "resume"),
     ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    // The previous five-argument call: its timeout lands in the gesture slot.
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
+    ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume", "dance", 119_000),
+    ).rejects.toThrow("runSandboxVerb.gesture");
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
@@ -1157,7 +1172,7 @@ describe("RunnerIpcBridge", () => {
       [
         RunnerHostInvoke.runSandboxVerb,
         runSandboxVerbViaHttpMock,
-        ["sbx_1", "resume", 60_000],
+        ["sbx_1", "resume", null, 60_000],
       ],
       [
         RunnerHostInvoke.getSandboxAutomation,

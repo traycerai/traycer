@@ -8,12 +8,16 @@
  * no per-kind branching outside this table.
  */
 import type { ReactNode } from "react";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import { SandboxWakeOnTileOpen } from "@/components/hosts/sandbox-wake-on-tile-open";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  isWorkspaceFileRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
@@ -239,12 +243,23 @@ function tileRenderer<K extends TileKindId>(
  * per host per epic. Gating on reachability was rejected: stale or pending
  * reachability reintroduces exactly the first-click failure this closes.
  */
+/**
+ * The gesture a tile's open wake is recorded under: Open terminal for a
+ * terminal, Open files for a workspace file, none for any other tile.
+ */
+function tileWakeGesture(node: EpicCanvasTileRef): SandboxVerbGesture | null {
+  if (node.type === "terminal") return "open-terminal";
+  if (isWorkspaceFileRef(node)) return "open-files";
+  return null;
+}
+
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
       <SandboxWakeOnTileOpen
         hostId={args.node.hostId}
         instanceId={args.node.instanceId}
+        gesture={tileWakeGesture(args.node)}
       />
       <BrowserSessionsHostBoundary
         hostId={args.node.hostId}

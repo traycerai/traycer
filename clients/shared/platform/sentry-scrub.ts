@@ -1,9 +1,9 @@
 /**
- * Sentry event shaping shared by every browser-SDK-family init a Traycer
- * client runs: the desktop main process (`@sentry/electron/main`), the desktop
- * app-shell renderer (`@sentry/electron/renderer`), and the mobile shell
- * (`@sentry/browser`). One policy, one detection leaf, so a credential class
- * caught on one surface is caught on all of them.
+ * Sentry event shaping shared by every Sentry init a Traycer client runs: the
+ * desktop main process (`@sentry/electron/main`), the desktop app-shell
+ * renderer (`@sentry/electron/renderer`), the mobile shell
+ * (`@sentry/browser`) and the CLI (`@sentry/node`). One policy, one detection
+ * leaf, so a credential class caught on one surface is caught on all of them.
  *
  * `@sentry/electron`'s `electronBreadcrumbsIntegration` writes the full
  * renderer URL into every `webContents.*` breadcrumb it records, and the
@@ -26,6 +26,7 @@
  */
 
 import {
+  redactHomeDirectoryNames,
   redactQueryString,
   redactSensitiveText,
   reduceRequestTargetToPath,
@@ -35,7 +36,19 @@ import {
   deepScrubSentryRecord,
   deepScrubSentryValue,
   isPlainRecord,
+  scrubStackPathsInPlace,
+  type SentryDebugMeta,
+  type SentryStacktraceHolder,
 } from "@traycer/protocol/utils/text/sentry-scrub";
+
+/**
+ * Every string these hooks walk: recognized credentials, then the OS
+ * home-folder name an absolute path carries (an installed app's paths sit
+ * under it, and the SDK's own worker and child-process breadcrumbs quote them).
+ */
+function scrubClientText(value: string): string {
+  return redactHomeDirectoryNames(redactSensitiveText(value));
+}
 
 /** The slice of a Sentry event these hooks read and rewrite. */
 export interface ClientSentryEvent {
@@ -43,8 +56,13 @@ export interface ClientSentryEvent {
   message?: string | undefined;
   logentry?: { message?: string | undefined; params?: unknown } | undefined;
   exception?:
-    | { values?: { value?: string | undefined }[] | undefined }
+    | {
+        values?:
+          | ({ value?: string | undefined } & SentryStacktraceHolder)[]
+          | undefined;
+      }
     | undefined;
+  debug_meta?: SentryDebugMeta | undefined;
   tags?: { [key: string]: unknown } | undefined;
   extra?: { [key: string]: unknown } | undefined;
   contexts?: { [key: string]: unknown } | undefined;
@@ -71,24 +89,28 @@ export interface ClientSentryBreadcrumb extends UrlBearingBreadcrumb {
 
 export function scrubSentryEventInPlace(event: ClientSentryEvent): void {
   if (event.message !== undefined) {
-    event.message = redactSensitiveText(event.message);
+    event.message = scrubClientText(event.message);
   }
   if (event.logentry?.message !== undefined) {
-    event.logentry.message = redactSensitiveText(event.logentry.message);
+    event.logentry.message = scrubClientText(event.logentry.message);
   }
   if (event.logentry?.params !== undefined) {
     event.logentry.params = deepScrubSentryValue(
       event.logentry.params,
-      redactSensitiveText,
+      scrubClientText,
     );
   }
   // The dominant funnel: `captureException(error)` renders the thrown error's
   // message here, and `linkedErrorsIntegration` appends one entry per `cause`.
   for (const exception of event.exception?.values ?? []) {
     if (exception.value !== undefined) {
-      exception.value = redactSensitiveText(exception.value);
+      exception.value = scrubClientText(exception.value);
     }
   }
+  // Only the home-folder name leaves a frame's or a debug image's path, and no
+  // length cap: the path is what Sentry shows, groups on and matches an image
+  // to its frames by, so it keeps one form per install path.
+  scrubStackPathsInPlace(event, redactHomeDirectoryNames);
   // Tags are indexed and searchable in the Sentry UI, which is exactly why a
   // caller reaches for one - and `setTag("url", …)` / a tag built from an
   // error string carries the same credentials `extra` does. The desktop's
@@ -96,13 +118,13 @@ export function scrubSentryEventInPlace(event: ClientSentryEvent): void {
   // `crash-reporter-guest-scope.ts`), so redacting them here cannot reopen
   // that channel.
   if (event.tags !== undefined) {
-    event.tags = deepScrubSentryRecord(event.tags, redactSensitiveText);
+    event.tags = deepScrubSentryRecord(event.tags, scrubClientText);
   }
   if (event.extra !== undefined) {
-    event.extra = deepScrubSentryRecord(event.extra, redactSensitiveText);
+    event.extra = deepScrubSentryRecord(event.extra, scrubClientText);
   }
   if (event.contexts !== undefined) {
-    event.contexts = deepScrubSentryRecord(event.contexts, redactSensitiveText);
+    event.contexts = deepScrubSentryRecord(event.contexts, scrubClientText);
   }
   for (const breadcrumb of event.breadcrumbs ?? []) {
     scrubSentryBreadcrumbInPlace(breadcrumb);
@@ -116,16 +138,18 @@ function scrubRequestInPlace(request: ClientSentryRequest): void {
   delete request.cookies;
   delete request.headers;
   if (request.url !== undefined) {
-    request.url = reduceUrlToOriginAndPath(request.url);
+    request.url = redactHomeDirectoryNames(
+      reduceUrlToOriginAndPath(request.url),
+    );
   }
   if (request.query_string !== undefined) {
     request.query_string =
       typeof request.query_string === "string"
         ? redactQueryString(request.query_string)
-        : deepScrubSentryValue(request.query_string, redactSensitiveText);
+        : deepScrubSentryValue(request.query_string, scrubClientText);
   }
   if (request.data !== undefined) {
-    request.data = deepScrubSentryValue(request.data, redactSensitiveText);
+    request.data = deepScrubSentryValue(request.data, scrubClientText);
   }
 }
 
@@ -134,13 +158,10 @@ export function scrubSentryBreadcrumbInPlace(
 ): void {
   reduceBreadcrumbUrlsInPlace(breadcrumb);
   if (breadcrumb.message !== undefined) {
-    breadcrumb.message = redactSensitiveText(breadcrumb.message);
+    breadcrumb.message = scrubClientText(breadcrumb.message);
   }
   if (breadcrumb.data !== undefined) {
-    breadcrumb.data = deepScrubSentryRecord(
-      breadcrumb.data,
-      redactSensitiveText,
-    );
+    breadcrumb.data = deepScrubSentryRecord(breadcrumb.data, scrubClientText);
   }
 }
 
@@ -197,7 +218,7 @@ export function scrubSentryTransactionInPlace(
 ): void {
   scrubSentryEventInPlace(event);
   if (event.transaction !== undefined) {
-    event.transaction = redactSensitiveText(event.transaction);
+    event.transaction = scrubClientText(event.transaction);
   }
   const trace = event.contexts?.["trace"];
   if (isPlainRecord(trace)) {
@@ -211,7 +232,7 @@ export function scrubSentryTransactionInPlace(
 /** `beforeSendSpan`: child spans travel outside the transaction event. */
 export function scrubSentrySpanInPlace(span: ClientSentrySpan): void {
   if (span.description !== undefined) {
-    span.description = redactSensitiveText(span.description);
+    span.description = scrubClientText(span.description);
   }
   reduceSpanAttributesInPlace(span.data);
 }
@@ -226,14 +247,14 @@ function reduceSpanAttributesInPlace(data: unknown): void {
   // rather than mutating, so its result is written back key by key: the
   // caller holds this object by reference and the reduction below operates on
   // the same one.
-  const scrubbed = deepScrubSentryRecord(data, redactSensitiveText);
+  const scrubbed = deepScrubSentryRecord(data, scrubClientText);
   for (const key of Object.keys(data)) delete data[key];
   Object.assign(data, scrubbed);
   delete data[QUERY_SPAN_ATTRIBUTE];
   for (const key of URL_BEARING_SPAN_ATTRIBUTES) {
     const value = data[key];
     if (typeof value === "string") {
-      data[key] = reduceRequestTargetToPath(value);
+      data[key] = redactHomeDirectoryNames(reduceRequestTargetToPath(value));
     }
   }
 }

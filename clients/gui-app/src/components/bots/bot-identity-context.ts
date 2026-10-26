@@ -14,7 +14,6 @@ export type BotOwner =
     }
   | {
       readonly kind: "team";
-      readonly environmentId: string;
       readonly name: string;
       /** The team's members as its directory lists them; `null` while unread. */
       readonly members: ReadonlyArray<EnvironmentMember> | null;

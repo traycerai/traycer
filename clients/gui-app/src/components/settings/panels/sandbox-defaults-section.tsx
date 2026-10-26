@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/select";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SANDBOX_DEFAULTS_KEY,
@@ -91,8 +90,12 @@ function sizeKey(catalogue: SandboxCatalogue, size: StageSize): string {
   return `${size.os}:${size.cpus}:${size.memoryMb}:${disk ?? ""}`;
 }
 
-/** What the card shows: the form for one who may edit, else the list. */
+/**
+ * What the card shows: the form for one who may edit, else the list, and
+ * neither while the item could not be read (the card says so, with Retry).
+ */
 type DefaultsCardBody =
+  | { readonly kind: "unread" }
   | {
       readonly kind: "form";
       readonly catalogue: SandboxCatalogue;
@@ -112,10 +115,11 @@ function defaultsCardBody(
   environment: SandboxDefaultsEnvironment | null,
   read: SandboxDefaultsRead | null,
 ): DefaultsCardBody {
+  if (read !== null && read.kind === "failed") return { kind: "unread" };
   if (catalogue === null || (read !== null && read.kind === "pending")) {
     return { kind: "list", catalogue: null, shape: null };
   }
-  const ready = read !== null && read.kind === "ready" ? read.value : null;
+  const ready = read === null ? null : read.value;
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
@@ -196,9 +200,10 @@ export function SandboxDefaultsSection(props: {
             });
           }}
         />
-      ) : (
+      ) : null}
+      {body.kind === "list" ? (
         <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
-      )}
+      ) : null}
       <ConfigurationWriteFeedback issue={issue} />
     </section>
   );
@@ -249,7 +254,7 @@ function EditorsClause(props: {
       ? props.environment.environmentId
       : null;
   const members = useEnvironmentMembersList(
-    usePoolTierHostClient(useHostClient()),
+    useHostClient(),
     viewerEnvironmentId,
     viewerEnvironmentId !== null,
   );

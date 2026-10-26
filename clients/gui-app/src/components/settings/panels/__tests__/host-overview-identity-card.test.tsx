@@ -291,6 +291,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           };
         },
       },
@@ -350,6 +351,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           };
         },
       },

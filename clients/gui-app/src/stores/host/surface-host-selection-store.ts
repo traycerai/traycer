@@ -27,7 +27,6 @@ export type SurfaceHostSelection = string | null;
  */
 export type SurfaceKind =
   | "git-diff"
-  | "pull-requests"
   | "file-tree"
   | "new-terminal"
   | "browsers"
@@ -52,7 +51,7 @@ export function surfaceHostKey(kind: SurfaceKind, instanceId: string): string {
 export function tabSurfaceKey(
   kind: Extract<
     SurfaceKind,
-    "git-diff" | "pull-requests" | "file-tree" | "new-terminal" | "browsers"
+    "git-diff" | "file-tree" | "new-terminal" | "browsers"
   >,
   tabId: string,
 ): string {
@@ -64,7 +63,6 @@ export function isTaskPanelSurfaceKey(surfaceKey: string): boolean {
   const kind = surfaceKey.split(SURFACE_KEY_SEP, 1)[0];
   return (
     kind === "git-diff" ||
-    kind === "pull-requests" ||
     kind === "file-tree" ||
     kind === "new-terminal" ||
     kind === "browsers"

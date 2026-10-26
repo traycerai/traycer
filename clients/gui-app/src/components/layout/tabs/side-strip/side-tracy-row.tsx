@@ -1,6 +1,10 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import type { TracyStripEntry } from "../tab-strip-controller";
-import { TracyEntryAvatar, TracyEntryHoverBody } from "../tracy-strip-entry";
+import {
+  TRACY_ENTRY_LABEL,
+  TracyEntryHoverBody,
+  TracyEntryIcon,
+} from "../tracy-strip-entry";
 import { useTracyEntrySignals } from "../use-tracy-entry-signals";
 import {
   SideTabRow,
@@ -12,7 +16,8 @@ import { StripElapsedTime } from "./strip-elapsed-time";
 
 /**
  * The fixed Tracy entry in the vertical strip, after Home in the nav block:
- * the same signals as the top strip's slot, the title bold while unread, the
+ * the same glyph, label and signals as the top strip's slot, the label bold
+ * while unread, the
  * rail tile's unread badge, and the working time as the row's trailing
  * status. Like Home, no drag, no close and no Alt-digit.
  */
@@ -27,7 +32,7 @@ export function SideTracyRow(props: {
     role: "tab",
     tabIndex: 0,
     "aria-selected": isActive,
-    "aria-label": tab.name,
+    "aria-label": TRACY_ENTRY_LABEL,
     "data-testid": "tab-tracy",
     "data-tab-kind": "tracy",
     // Present only while unread, as the header strip's entry marks it.
@@ -50,18 +55,10 @@ export function SideTracyRow(props: {
       tint={null}
       inBlock={false}
       // Its label stands where Home's does, after a 16px icon and space.
-      titleIcon={
-        <TracyEntryAvatar botId={tab.id} title={tab.name} className="me-4" />
-      }
+      titleIcon={<TracyEntryIcon className="me-4" />}
       tile={{
         kind: "icon",
-        icon: (
-          <TracyEntryAvatar
-            botId={tab.id}
-            title={tab.name}
-            className={undefined}
-          />
-        ),
+        icon: <TracyEntryIcon className={undefined} />,
       }}
       badge={signals.unread ? "unread" : null}
       agents={NO_LIVE_AGENTS}
@@ -81,7 +78,7 @@ export function SideTracyRow(props: {
       }
       section={{ title: signals.unread ? "strong" : "normal", detail: null }}
       disclosure={null}
-      title={tab.name}
+      title={TRACY_ENTRY_LABEL}
       hoverCardBody={<TracyEntryHoverBody title={tab.name} signals={signals} />}
       hoverCardOnOverflow={false}
       leaderBadge={null}

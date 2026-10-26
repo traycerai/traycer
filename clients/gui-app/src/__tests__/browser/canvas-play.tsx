@@ -11,7 +11,6 @@ import {
   applyCanvasJson,
   openCanvasLayout,
 } from "@traycer/protocol/persistence/epic/canvas-layout";
-import type { EpicEditArtboardRequest } from "@traycer/protocol/host/epic/artboard-edit";
 import type { EpicReadArtifactObjectRequest } from "@traycer/protocol/host/epic/artifact-objects";
 import type {
   CommentThreadWire,
@@ -61,10 +60,10 @@ import "@/index.css";
  * Two boards, both run live at once (`LIVE_BOARD_LIMIT` easily covers two),
  * so the browser spec can prove the claims jsdom cannot: the same iframe
  * (same running document) survives entering/leaving fullscreen and switching
- * the fullscreen board back and forth, global Play makes every board take
- * input with no per-board "is_interactive" gate, ctrl-wheel zoom changes the
- * zoom readout without moving the pane, and the fullscreen header's Fit/Fill
- * buttons change the board's measured width.
+ * the fullscreen board back and forth, a board's own Play makes just that
+ * board take input with no "is_interactive" gate, ctrl-wheel zoom is anchored
+ * at the cursor, and the fullscreen header's Fit/Fill buttons change the
+ * board's measured width.
  *
  * Each board stamps a random token into a visible element the instant its
  * script runs; the token only changes across page LOADS, so comparing it
@@ -371,7 +370,6 @@ const runnerHost: IRunnerHost = Object.assign(
   { sandboxArtifacts: artifactBridge },
 );
 let requestCounter = 0;
-const edits: EpicEditArtboardRequest[] = [];
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
     registry,
@@ -391,6 +389,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         install: null,
         processMemory: null,
         crossHostMessaging: null,
+        sessions: null,
       }),
       "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
@@ -406,15 +405,12 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
               networkPolicy: "https-only",
             };
       },
-      "epic.editArtboard": (request: EpicEditArtboardRequest) => {
-        edits.push(request);
-        return {
-          ok: true,
-          tid: null,
-          sha256After: "c".repeat(64),
-          splices: [],
-        };
-      },
+      "epic.editArtboard": () => ({
+        ok: true,
+        tid: null,
+        sha256After: "c".repeat(64),
+        splices: [],
+      }),
       // The open records lane is the authoritative source for the seeded
       // threads; this poll only has to answer, not agree with it.
       "epic.listCommentThreads": (_request: ListCommentThreadsRequest) => ({

@@ -242,3 +242,20 @@ export function deriveArtifactPathLayoutRootAgnostic(
   }
   return null;
 }
+
+/** Locate an artifact folder or file link without assuming its entry format. */
+export function artifactLinkPathRootAgnostic(
+  filePath: string,
+  expectedEpicId: string | null,
+): { epicId: string; segments: string[] } | null {
+  const layout = deriveArtifactPathLayoutRootAgnostic(
+    `${filePath.replace(/[\\/]+$/u, "")}/${EPIC_ARTIFACT_INDEX_FILENAME}`,
+    expectedEpicId,
+  );
+  return layout === null
+    ? null
+    : {
+        epicId: layout.epicId,
+        segments: [...layout.parentSegments, layout.folderName],
+      };
+}

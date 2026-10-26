@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -8,6 +9,8 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
@@ -93,6 +96,16 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useInitialChatHandoffStore",
     useInitialChatHandoffStore,
     "traycer-gui-app:initial-chat-handoffs",
+  ],
+  [
+    "useStagedSandboxStore",
+    useStagedSandboxStore,
+    "traycer-gui-app:staged-sandbox-sends",
+  ],
+  [
+    "usePendingSandboxSendStore",
+    usePendingSandboxSendStore,
+    "traycer-gui-app:pending-sandbox-sends",
   ],
   ["useLeftPanelStore", useLeftPanelStore, "traycer-gui-app:left-panel"],
   ["useFileTreeStore", useFileTreeStore, "traycer-gui-app:file-tree"],
@@ -198,6 +211,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useSurfaceHostSelectionStore",
     useSurfaceHostSelectionStore,
     "traycer-gui-app:surface-host-selection:anon",
+  ],
+  [
+    "useBotPaneWidthsStore",
+    useBotPaneWidthsStore,
+    "traycer-gui-app:bot-pane-widths",
   ],
 ];
 

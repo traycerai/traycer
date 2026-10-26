@@ -75,6 +75,7 @@ import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
   shouldMountChatTurnMinimap,
 } from "@/components/chat/chat-turn-minimap-logic";
+import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -3031,6 +3032,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
+  // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
+  // stays registered so the layout editor still lists it for agent chats.
+  const botChannel = use(ChatBotPresentationContext) !== null;
   const quoteEnabled = quoteReplyEnabled && visible && !systemOverlayActive;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
@@ -4289,6 +4293,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       hasContent,
       shown: minimapShown,
       mobileViewport: isMobileViewport,
+      botChannel,
     });
 
   return (

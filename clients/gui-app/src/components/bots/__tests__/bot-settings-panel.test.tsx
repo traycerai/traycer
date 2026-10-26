@@ -302,6 +302,16 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(applyButton().disabled).toBe(true);
   });
 
+  it("says only that the next turn uses what is applied, not what the bot runs on", () => {
+    mountPanel(BOT, null, false);
+
+    expect(
+      screen.getByText("The next turn uses what you apply here."),
+    ).toBeTruthy();
+    expect(screen.getByTestId("stub-harness-model-picker")).toBeTruthy();
+    expect(screen.queryByText(/Runs on/)).toBeNull();
+  });
+
   it("enables Apply once the person picks another model, and applies exactly that", async () => {
     const user = userEvent.setup();
     mountPanel(BOT, null, false);
@@ -683,6 +693,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
         liveStore().getState().setCatalog({
           hostId: "host-1",
           chatLineCarriesAutoMode: null,
+          keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",
           models: [],
@@ -707,7 +718,6 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
   const CHANNEL = "conversation-app";
   const TEAM_OWNER: BotOwner = {
     kind: "team",
-    environmentId: "env-team",
     name: "Acme",
     members: [
       { userId: "user-1", displayName: "Ada", avatarUrl: null },

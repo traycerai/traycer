@@ -1,3 +1,5 @@
+import { recoverPendingSandboxSendsAfterTaskLoss } from "@/lib/sandboxes/pending-sandbox-send";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   captureHeaderLocation,
   restoreHeaderLayout,
@@ -1776,7 +1778,16 @@ export class TabCommandCoordinator {
     return true;
   }
 
-  handleEpicAccessLoss(epicIds: ReadonlyArray<string>): void {
+  handleEpicAccessLoss(
+    epicIds: ReadonlyArray<string>,
+    userId: string | null,
+  ): void {
+    if (
+      userId !== null &&
+      (useAuthStore.getState().profile?.userId ?? null) !== userId
+    )
+      return;
+    recoverPendingSandboxSendsAfterTaskLoss(epicIds, userId);
     pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
