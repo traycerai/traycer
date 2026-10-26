@@ -22,6 +22,9 @@ vi.mock("@/components/settings/panels/general-settings-panel", () => ({
 vi.mock("@/components/settings/panels/secrets-settings-panel", () => ({
   SecretsSettingsPanel: () => <div data-testid="secrets-page-probe" />,
 }));
+vi.mock("@/components/settings/panels/credits-settings-panel", () => ({
+  CreditsSettingsPanel: () => <div data-testid="credits-page-probe" />,
+}));
 vi.mock("@/components/settings/panels/sandboxes-settings-panel", () => ({
   SandboxesSettingsPanel: () => <div data-testid="sandboxes-page-probe" />,
 }));
@@ -81,9 +84,27 @@ describe("<SettingsModalContent />", () => {
     },
   );
 
-  it("opens the gated page itself with its preview feature on", () => {
+  it.each(["off", "unread"] as const)(
+    "opens General for Credits while environments read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      render(<SettingsModalContent section="credits" />);
+
+      expect(screen.getByTestId("general-page-probe")).toBeTruthy();
+      expect(screen.queryByTestId("credits-page-probe")).toBeNull();
+    },
+  );
+
+  it("opens the gated pages themselves with their preview feature on", () => {
     render(<SettingsModalContent section="secrets" />);
     expect(screen.getByTestId("secrets-page-probe")).toBeTruthy();
+    cleanup();
+    render(<SettingsModalContent section="credits" />);
+    expect(screen.getByTestId("credits-page-probe")).toBeTruthy();
   });
 
   // A page result scrolls the pane the SURFACE owns, so every section has one
