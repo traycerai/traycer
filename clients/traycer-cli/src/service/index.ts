@@ -9,6 +9,7 @@ import type { Environment } from "../runner/environment";
 import {
   createLinuxController,
   linuxServiceMayRespawn,
+  linuxUserManagerUnreachable,
 } from "./platforms/linux";
 import {
   createMacosController,
@@ -689,5 +690,20 @@ export async function serviceLabelMayRespawn(
     return await macosServiceMayRespawn(label, null, timeoutMs);
   if (process.platform === "linux")
     return await linuxServiceMayRespawn(label, null, timeoutMs);
+  return false;
+}
+
+/**
+ * Whether this process positively failed to reach the service manager the
+ * respawn probe asks, for the refusal to name. Only Linux has a manager this
+ * process can fail to reach from its environment - launchd is addressed by
+ * uid, and Windows has no respawn probe - so every other platform answers
+ * false. It never clears anything; the caller has already refused.
+ */
+export async function serviceManagerUnreachable(
+  timeoutMs: number,
+): Promise<boolean> {
+  if (process.platform === "linux")
+    return await linuxUserManagerUnreachable(null, timeoutMs);
   return false;
 }

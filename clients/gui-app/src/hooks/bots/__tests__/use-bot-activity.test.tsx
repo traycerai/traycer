@@ -311,37 +311,39 @@ describe("failedOn and failedOnRequest", () => {
   ])(
     "holds a %s session to the request it carries, and to no other",
     (_state, session) => {
-      expect(failedOn(session, session.requestId ?? "")).toBe(true);
-      expect(failedOn(session, "req-other")).toBe(false);
+      expect(failedOn(session, session.requestId ?? "")).toBe(session);
+      expect(failedOn(session, "req-other")).toBeNull();
     },
   );
 
   it("offers nothing on a session that is replying, idle, or unknown, even on its request", () => {
-    expect(failedOn(REPLYING, "req-1")).toBe(false);
-    expect(failedOn({ ...PARKED, state: "idle" }, "req-3")).toBe(false);
-    expect(failedOn(null, "req-3")).toBe(false);
+    expect(failedOn(REPLYING, "req-1")).toBeNull();
+    expect(failedOn({ ...PARKED, state: "idle" }, "req-3")).toBeNull();
+    expect(failedOn(null, "req-3")).toBeNull();
   });
 
   it("offers nothing on a parked session that carries no request", () => {
     const parkedWithNone: BotSessionActivity = { ...PARKED, requestId: null };
 
-    expect(failedOn(parkedWithNone, "req-3")).toBe(false);
+    expect(failedOn(parkedWithNone, "req-3")).toBeNull();
     expect(
       failedOnRequest({ trunk: parkedWithNone, threads: {} }, "req-3"),
-    ).toBe(false);
+    ).toBeNull();
   });
 
-  it("finds a parked request on the trunk or on any thread's session", () => {
-    expect(failedOnRequest({ trunk: PARKED, threads: {} }, "req-3")).toBe(true);
+  it("finds the session holding a parked request, on the trunk or on any thread", () => {
+    expect(failedOnRequest({ trunk: PARKED, threads: {} }, "req-3")).toBe(
+      PARKED,
+    );
     expect(
       failedOnRequest(
         { trunk: null, threads: { a: REPLYING, b: PARKED } },
         "req-3",
       ),
-    ).toBe(true);
+    ).toBe(PARKED);
     expect(
       failedOnRequest({ trunk: null, threads: { a: FAILED } }, "req-3"),
-    ).toBe(false);
-    expect(failedOnRequest(null, "req-3")).toBe(false);
+    ).toBeNull();
+    expect(failedOnRequest(null, "req-3")).toBeNull();
   });
 });

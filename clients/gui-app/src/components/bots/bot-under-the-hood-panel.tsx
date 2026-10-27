@@ -16,8 +16,9 @@ import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-pa
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import { postTextOf } from "@/lib/bots/reply-row";
 import { BotSessionsElsewhere } from "@/components/bots/bot-sessions-elsewhere";
-import { ChannelPostText } from "@/components/bots/bot-channel-post-text";
+import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
@@ -242,15 +243,15 @@ function ThreadExcerpt(props: {
   const { botId, hostId, thread, prefix, fetchCold } = props;
   if (thread.anchor === null) return `${prefix}Thread`;
   return (
-    <ChannelPostText
+    <ChannelPost
       botId={botId}
       hostId={hostId}
       conversationId={thread.conversationId}
       messageId={thread.anchor.messageId}
       fetchCold={fetchCold}
     >
-      {(text) => `${prefix}${threadExcerpt(text)}`}
-    </ChannelPostText>
+      {(post) => `${prefix}${threadExcerpt(postTextOf(post))}`}
+    </ChannelPost>
   );
 }
 

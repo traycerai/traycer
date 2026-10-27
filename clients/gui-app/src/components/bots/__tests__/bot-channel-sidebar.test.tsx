@@ -286,9 +286,13 @@ describe("<BotChannelSidebar /> sections", () => {
       "env-team",
       "env-empty",
     ]);
+    // A section's header is its name and its +, with nothing to fold.
+    expect(within(section("env-team")).getByText("Acme")).toBeTruthy();
     expect(
-      within(section("env-team")).getByRole("button", { name: "Acme" }),
-    ).toBeTruthy();
+      screen
+        .getByTestId("bot-channel-sidebar")
+        .querySelectorAll("[aria-expanded]"),
+    ).toHaveLength(0);
     expect(
       within(section("env-team"))
         .getAllByTestId("bot-channel-row")
@@ -418,8 +422,7 @@ describe("<BotChannelSidebar /> team setup", () => {
     expect(screen.getAllByTestId("bot-channel-section-add")).toHaveLength(3);
   });
 
-  it("gives a team with no bots one call to action, and a team with bots none", async () => {
-    const user = userEvent.setup();
+  it("gives a team with no bots one call to action, and a team with bots none", () => {
     mocks.state.bots = [
       ...mocks.state.bots,
       bot("bot-orphan", "env-left", "orphan-bot"),
@@ -431,14 +434,6 @@ describe("<BotChannelSidebar /> team setup", () => {
         .textContent,
     ).toBe("Set up your team's bots");
     expect(screen.getAllByTestId("bot-channel-section-set-up")).toHaveLength(1);
-
-    // A collapsed section hides it with the rest of its body.
-    await user.click(
-      within(section("env-empty")).getByRole("button", {
-        name: "Quiet team",
-      }),
-    );
-    expect(screen.queryByTestId("bot-channel-section-set-up")).toBeNull();
   });
 
   it("gives an empty personal section a New bot row, and opens the create form for the personal environment from the + and the row", async () => {
@@ -613,9 +608,7 @@ describe("<BotChannelSidebar /> create a team", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
     });
-    expect(
-      within(section("env-team")).getByRole("button", { name: "Acme" }),
-    ).toBeTruthy();
+    expect(within(section("env-team")).getByText("Acme")).toBeTruthy();
   });
 
   it("draws nothing when a team environment is present, or when there is no shell to open it", () => {

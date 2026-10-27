@@ -343,6 +343,7 @@ function mount(options: MountOptions): {
           <BotChannelView
             botId={BOT_ID}
             hostId={HOST_ID}
+            boundHostId={HOST_ID}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
@@ -350,7 +351,6 @@ function mount(options: MountOptions): {
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenUnderTheHood={onOpenUnderTheHood}
-            onOpenTrunkUnderTheHood={vi.fn()}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -553,7 +553,6 @@ describe("<BotChannelView /> channel", () => {
     reopen(QUESTION_1);
 
     const panel = screen.getByTestId("bot-thread-panel");
-    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
     const composer = within(panel).getByTestId("stub-bot-thread-composer");
     expect(composer.getAttribute("data-announcement-id")).toBe("question-1");
@@ -569,7 +568,11 @@ describe("<BotChannelView /> channel", () => {
     const { reopen } = mount({ openThreadPostId: null });
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
     reopen(QUESTION_1);
-    expect(screen.getByTestId("bot-thread-unopened")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-announcement-id"),
+    ).toBe("question-1");
 
     mocks.state.threads = [
       thread("thread-q", "question-1", { replyCount: 1, lastReplyAt: 7_000 }),
@@ -578,7 +581,6 @@ describe("<BotChannelView /> channel", () => {
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-q");
-    expect(within(panel).queryByTestId("bot-thread-unopened")).toBeNull();
     const composer = within(panel).getByTestId("stub-bot-thread-composer");
     expect(composer.getAttribute("data-thread-id")).toBe("thread-q");
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
@@ -592,7 +594,9 @@ describe("<BotChannelView /> channel", () => {
 
     const waiting = screen.getByTestId("bot-thread-panel");
     expect(within(waiting).getByTestId("bot-thread-loading")).toBeTruthy();
-    expect(within(waiting).queryByTestId("bot-thread-unopened")).toBeNull();
+    expect(
+      within(waiting).queryByTestId("stub-bot-thread-composer"),
+    ).toBeNull();
 
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 0 })];
     reopen({ anchorMessageId: "post-a", announcement: false });
@@ -618,7 +622,6 @@ describe("<BotChannelView /> channel", () => {
     again.reopen(opened);
 
     const panel = screen.getByTestId("bot-thread-panel");
-    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
     expect(
       within(panel)
@@ -961,6 +964,6 @@ describe("<BotChannelView /> thread list unavailable", () => {
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
-    expect(within(panel).queryByTestId("bot-thread-unopened")).toBeNull();
+    expect(within(panel).queryByTestId("stub-bot-thread-composer")).toBeNull();
   });
 });

@@ -74,6 +74,7 @@ import {
 import {
   serviceLabelMayRespawn,
   serviceManagerMayRespawn,
+  serviceManagerUnreachable,
   type ServiceLabel,
 } from "../service";
 import { devServiceLabelForSlot, serviceLabelFor } from "../service/label";
@@ -136,7 +137,16 @@ export type SwapQuiescenceGap =
    * an unclean last exit once {@link SERVICE_SETTLE_TIMEOUT_MS} has passed
    * answers this way.
    */
-  | "service-may-respawn";
+  | "service-may-respawn"
+  /**
+   * `service-may-respawn`, on a machine where this process could not reach
+   * the service manager at all: the probe's empty answer was no answer, so
+   * nothing could be confirmed about any job. Refused exactly like
+   * `service-may-respawn` - the split exists only so the refusal can tell the
+   * person what to do (run from a desktop or login session) instead of
+   * describing a crash-looping job that may not exist.
+   */
+  | "service-manager-unreachable";
 
 export type SwapQuiescence =
   | { readonly established: true }
@@ -520,63 +530,102 @@ async function quiescenceOnceServiceSettles(
   const labels = new Map<string, ServiceLabel>(
     initialWriters.extraServiceLabels.map((label) => [label.id, label]),
   );
-  for (;;) {
-    const budget = Math.max(
-      1,
-      Math.min(SERVICE_PROBE_TIMEOUT_MS, Math.ceil(remainingMs())),
-    );
-    // EVERY label seen so far, CONCURRENT, and one budget for the set rather
-    // than one each: the deadline is shared, so probing N labels in sequence
-    // would let a slow manager eat the whole window before the next label is
-    // asked at all. Any job that could start a writer keeps the whole set
-    // unsettled.
-    const probedLabels = [...labels.values()];
-    const answers = await Promise.all([
-      // This environment's own label through the established seam, so every
-      // caller and suite that stubs `serviceManagerMayRespawn` keeps working
-      // and the shipped single-label path stays byte-identical to before.
-      serviceManagerMayRespawn(environment, budget),
-      ...probedLabels.map((label) => serviceLabelMayRespawn(label, budget)),
-    ]);
-    if (!answers.some((mayRespawn) => mayRespawn)) {
-      // Re-read the writers before clearing. The probes above are asynchronous
-      // and take real time, so a host that published during them is invisible
-      // to the reads that preceded them - the same race the post-wait re-read
-      // closes, which the first probe's early return used to skip entirely.
-      return await quiescenceOnceWritersRechecked(
-        environment,
-        surveyRoots,
-        { records: writers, probedLabelIds: [...labels.keys()] },
-        logger,
+  // Asked once, beside the first round that does not settle, and inside the
+  // same budget: its subprocess is capped by what remains, so waiting for it
+  // never stretches the window. Its answer is read only to word a refusal
+  // this loop has already decided, but it is OWNED on every way out - the
+  // clear, the unseen-writers answer, the refusal and a throw all wait for it
+  // - so the read-only child never outlives this call, and a lost mutation
+  // authority it reports still reaches the caller. The no-op catch only keeps
+  // the rejection from reading as unhandled before one of those waits.
+  let unreachable: Promise<boolean> | null = null;
+  const settledDiagnostic = async (): Promise<boolean> =>
+    unreachable !== null && (await unreachable);
+  const settleLoop = async (): Promise<SwapQuiescence> => {
+    for (;;) {
+      const budget = Math.max(
+        1,
+        Math.min(SERVICE_PROBE_TIMEOUT_MS, Math.ceil(remainingMs())),
       );
-    }
-    if (!waited) {
-      waited = true;
-      logger.debug(
-        "Host store-format floor: the service manager still holds a host job after the stop; waiting for it to settle",
-        { environment, timeoutMs: SERVICE_SETTLE_TIMEOUT_MS },
-      );
-    }
-    const remaining = remainingMs();
-    if (remaining <= 0) {
-      logger.info(
-        "Host store-format floor cannot establish quiescence: no host is running, but the service manager still holds a host job that can start one",
-        {
+      // EVERY label seen so far, CONCURRENT, and one budget for the set rather
+      // than one each: the deadline is shared, so probing N labels in sequence
+      // would let a slow manager eat the whole window before the next label is
+      // asked at all. Any job that could start a writer keeps the whole set
+      // unsettled.
+      const probedLabels = [...labels.values()];
+      const answers = await Promise.all([
+        // This environment's own label through the established seam, so every
+        // caller and suite that stubs `serviceManagerMayRespawn` keeps working
+        // and the shipped single-label path stays byte-identical to before.
+        serviceManagerMayRespawn(environment, budget),
+        ...probedLabels.map((label) => serviceLabelMayRespawn(label, budget)),
+      ]);
+      if (!answers.some((mayRespawn) => mayRespawn)) {
+        await settledDiagnostic();
+        // Re-read the writers before clearing. The probes above are asynchronous
+        // and take real time, so a host that published during them is invisible
+        // to the reads that preceded them - the same race the post-wait re-read
+        // closes, which the first probe's early return used to skip entirely.
+        return await quiescenceOnceWritersRechecked(
           environment,
-          waitedMs: Math.round(performance.now() - startedAt),
-        },
-      );
-      return { established: false, reason: "service-may-respawn" };
+          surveyRoots,
+          { records: writers, probedLabelIds: [...labels.keys()] },
+          logger,
+        );
+      }
+      if (unreachable === null) {
+        unreachable = serviceManagerUnreachable(
+          Math.max(
+            1,
+            Math.min(SERVICE_PROBE_TIMEOUT_MS, Math.ceil(remainingMs())),
+          ),
+        );
+        unreachable.catch(() => undefined);
+      }
+      if (!waited) {
+        waited = true;
+        logger.debug(
+          "Host store-format floor: the service manager still holds a host job after the stop; waiting for it to settle",
+          { environment, timeoutMs: SERVICE_SETTLE_TIMEOUT_MS },
+        );
+      }
+      const remaining = remainingMs();
+      if (remaining <= 0) {
+        const managerUnreachable = await settledDiagnostic();
+        logger.info(
+          managerUnreachable
+            ? "Host store-format floor cannot establish quiescence: the service manager could not be reached, so no host job could be confirmed settled"
+            : "Host store-format floor cannot establish quiescence: no host is running, but the service manager still holds a host job that can start one",
+          {
+            environment,
+            waitedMs: Math.round(performance.now() - startedAt),
+          },
+        );
+        return {
+          established: false,
+          reason: managerUnreachable
+            ? "service-manager-unreachable"
+            : "service-may-respawn",
+        };
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(SERVICE_SETTLE_POLL_MS, remaining));
+      });
+      const next = await resolveWriterEvidenceSources(environment, surveyRoots);
+      if (next.kind === "unenumerable") {
+        await settledDiagnostic();
+        return unseenWriters(environment, surveyRoots, next.cause, logger);
+      }
+      writers = next;
+      for (const label of next.extraServiceLabels) labels.set(label.id, label);
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(SERVICE_SETTLE_POLL_MS, remaining));
-    });
-    const next = await resolveWriterEvidenceSources(environment, surveyRoots);
-    if (next.kind === "unenumerable") {
-      return unseenWriters(environment, surveyRoots, next.cause, logger);
-    }
-    writers = next;
-    for (const label of next.extraServiceLabels) labels.set(label.id, label);
+  };
+  try {
+    return await settleLoop();
+  } catch (error) {
+    // The loop's own error wins; the diagnostic is only drained.
+    await settledDiagnostic().catch(() => false);
+    throw error;
   }
 }
 
@@ -669,6 +718,9 @@ function sourcesAppearedSince(
 export function describeQuiescenceGap(reason: SwapQuiescenceGap): string {
   if (reason === "writer-still-running") {
     return "the host that writes them is still running, so it can stamp a store after this check and before the swap";
+  }
+  if (reason === "service-manager-unreachable") {
+    return "Traycer can't reach your systemd user session, so it can't confirm that no host will start during the install";
   }
   if (reason === "service-may-respawn") {
     return "no host is running, but the service manager still held a host job that can start one after waiting for it to settle - a recent crash, or a host that was still starting when the stop ran - so it can stamp a store before the swap lands; retry once it has settled";

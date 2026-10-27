@@ -994,6 +994,36 @@ export async function linuxServiceMayRespawn(
   return !(state === "inactive" || state === "failed" || state === "unknown");
 }
 
+/**
+ * Whether the systemd user manager could NOT be reached from this process, for
+ * the store-format floor's refusal to say so. It never clears anything: the
+ * floor has already refused by the time the answer is read, and only the
+ * wording changes.
+ *
+ * The same `show-environment` call `assertSystemdUserReachable` makes, read
+ * the same way: exit 0 is reachable, and anything else is not - a nonzero
+ * exit (no bus), the runner's `-1` (a spawn failure or a timeout), or a
+ * throw. No stderr text is read.
+ */
+export async function linuxUserManagerUnreachable(
+  runner: ProcessRunner | null,
+  timeoutMs: number,
+): Promise<boolean> {
+  const run = runner ?? runCommand;
+  try {
+    const result = await run("systemctl", ["--user", "show-environment"], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs,
+      tolerateNonZeroExit: true,
+    });
+    return result.exitCode !== 0;
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return true;
+  }
+}
+
 // The error for a `start` / `restart` that did not complete. Only a runner
 // TIMEOUT is special: systemd may already have queued the job, and killing
 // `systemctl` does not cancel it, so it can still finish. Past
