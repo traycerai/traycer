@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   SandboxCreateRequest,
+  SandboxPod,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
@@ -847,6 +848,188 @@ describe("<SandboxRowActions />", () => {
         expect(automation.openSandboxAutomation).toHaveResolved();
       });
       expectNothingFiledOrClosed();
+    });
+
+    describe("a failed team pod's Retry reads the pod list first", () => {
+      /** Ordinal 2 is the clicked row's pod; any other is a different sandbox on its own host. */
+      function podAt(ordinal: number): SandboxPod {
+        const clicked = automationsRow("failed", "env-acme");
+        return {
+          sandbox:
+            ordinal === 2
+              ? clicked
+              : {
+                  ...clicked,
+                  id: `sbx-pod-${ordinal}`,
+                  hostId: `host-pod-${ordinal}`,
+                },
+          ordinal,
+          liveShells: 0,
+          headroom: 1,
+        };
+      }
+
+      function answerWith(pods: readonly SandboxPod[]) {
+        return {
+          kind: "ok",
+          automation: { available: true, sandbox: null, pods },
+        };
+      }
+
+      function renderFailedPod(): QueryClient {
+        const client = new QueryClient({
+          defaultOptions: { queries: { retry: false } },
+        });
+        renderAutomations(client, automationsRow("failed", "env-acme"), TEAM);
+        return client;
+      }
+
+      beforeEach(() => {
+        automation.openSandboxAutomation.mockResolvedValue({
+          kind: "ok",
+          sandbox: automationsRow("awake", "env-acme"),
+          settled: true,
+        });
+      });
+
+      it("stays pending through a cold lookup, then wakes the clicked ordinal once and opens no terminal", async () => {
+        let answer: (result: unknown) => void = () => undefined;
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledWith(
+            "env-acme",
+          );
+        });
+
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+        expect(
+          screen.getByTestId<HTMLButtonElement>("sandbox-row-retry").disabled,
+        ).toBe(true);
+
+        answer(answerWith([podAt(2)]));
+        await waitFor(() => {
+          expect(automation.openSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+        expect(automation.openSandboxAutomation).toHaveBeenCalledWith({
+          environmentId: "env-acme",
+          ordinal: 2,
+        });
+        await waitFor(() => {
+          expect(automation.openSandboxAutomation).toHaveResolved();
+        });
+        expectNothingFiledOrClosed();
+      });
+
+      it("shows a failed lookup on the row without waking, and Retry refetches then wakes the exact pod", async () => {
+        let answer: (result: unknown) => void = () => undefined;
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        answer({ kind: "network-error", detail: "offline" });
+        const alert = await screen.findByRole("alert");
+        expect(alert.textContent).toContain(
+          "Couldn't look up this host. Try again.",
+        );
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+
+        automation.getSandboxAutomation.mockImplementation(() =>
+          Promise.resolve(answerWith([podAt(1), podAt(2)])),
+        );
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+
+        await waitFor(() => {
+          expect(automation.openSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+        // The Retry asked for a fresh lookup before it woke; the wake's own
+        // refresh may read once more.
+        expect(
+          automation.getSandboxAutomation.mock.calls.length,
+        ).toBeGreaterThanOrEqual(2);
+        expect(automation.openSandboxAutomation).toHaveBeenCalledWith({
+          environmentId: "env-acme",
+          ordinal: 2,
+        });
+        expectNothingFiledOrClosed();
+      });
+
+      it("says the host is gone when the settled list lacks the pod, and wakes nothing", async () => {
+        const row = automationsRow("failed", "env-acme");
+        let answer: (result: unknown) => void = () => undefined;
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        answer(
+          answerWith([{ ...podAt(1), sandbox: { ...row, id: "sbx-other" } }]),
+        );
+
+        expect(
+          await screen.findByText("This host no longer exists."),
+        ).toBeTruthy();
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+        expectNothingFiledOrClosed();
+      });
+
+      it("wakes nothing when the account changes before the cold lookup answers, and shows the new account no old state", async () => {
+        const answers: Array<(result: unknown) => void> = [];
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answers.push(resolve);
+            }),
+        );
+        const client = renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+
+        act(() => {
+          useAuthStore.setState({
+            status: "signed-in",
+            contextMetadata: { userId: "u2", username: "grace" },
+          });
+        });
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(2);
+        });
+        for (const answer of answers) answer(answerWith([podAt(2)]));
+        await waitFor(() => {
+          expect(client.isFetching()).toBe(0);
+        });
+
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(
+          screen.getByTestId<HTMLButtonElement>("sandbox-row-retry").disabled,
+        ).toBe(false);
+        expectNothingFiledOrClosed();
+      });
     });
 
     it("closes Settings onto the reserved pane while the start is still pending", async () => {

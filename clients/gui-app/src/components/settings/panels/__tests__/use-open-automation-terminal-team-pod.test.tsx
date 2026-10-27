@@ -350,20 +350,27 @@ describe("opening a terminal on a specific team pod", () => {
 });
 
 describe("the Settings row's Retry on a specific team pod", () => {
-  it("wakes no pod while the named pod list is cold", async () => {
+  it("holds a cold Retry, then wakes the clicked pod's own ordinal once after the list answers, without creating a shell", async () => {
     const held = deferred<SandboxAutomationFetchResult>();
     podsAnswer = () => held.promise;
     renderClickedPodTwo();
     expect(screen.getByLabelText("pods").textContent).toBe("cold");
 
     await userEvent.click(screen.getByRole("button", { name: "Retry row" }));
-
     expect(network.openSandboxAutomation).not.toHaveBeenCalled();
+
     held.resolve(answer([podOne, podTwo]));
     await waitFor(() => {
-      expect(screen.getByLabelText("pods").textContent).toBe("2");
+      expect(network.openSandboxAutomation).toHaveBeenCalledTimes(1);
     });
-    expect(network.openSandboxAutomation).not.toHaveBeenCalled();
+    expect(network.openSandboxAutomation).toHaveBeenCalledWith({
+      environmentId: TEAM,
+      ordinal: 2,
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    expect(
+      network.calls.some((call) => call.method === "terminal.plain.create"),
+    ).toBe(false);
   });
 
   it("wakes the clicked pod's own ordinal once the list is loaded, without creating a shell", async () => {
