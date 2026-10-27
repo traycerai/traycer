@@ -47,6 +47,7 @@ import {
   signInViewer,
   VIEWER_USER_ID,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
+import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -367,13 +368,18 @@ function mountPanel(
   thread: BotThreadPanelThread,
   messages: ReadonlyArray<Message>,
 ): RenderResult {
+  stageSessions(messages);
+  return render(panelTree(thread));
+}
+
+/** The thread's session over `messages`, and the channel's over `channelMessages`. */
+function stageSessions(messages: ReadonlyArray<Message>): void {
   mocks.handle = {
     store: createThreadStore(messages, () => () => undefined),
   } as ChatSessionStoreHandle;
   mocks.channelHandle = {
     store: createThreadStore(channelMessages, channelHold),
   } as ChatSessionStoreHandle;
-  return render(panelTree(thread));
 }
 
 /** The panel on `thread`, over the sessions the last mount made. */
@@ -953,6 +959,36 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
     expect(within(anchor).queryByTestId("conversation-request")).toBeNull();
     expect(within(anchor).queryByText("Open")).toBeNull();
+  });
+
+  it("names no owner on a bot's question it opens on, inside the bot's surface", () => {
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    stageSessions([]);
+    render(
+      <BotIdentityContext
+        value={{
+          botId: BOT_ID,
+          title: "Release Bot",
+          owner: {
+            kind: "person",
+            userId: "owner-1",
+            name: "Olive Owner",
+            avatarUrl: null,
+          },
+          openActivity: null,
+        }}
+      >
+        {panelTree(listed(null))}
+      </BotIdentityContext>,
+    );
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-row-name").textContent).toBe(
+      "Release Bot",
+    );
+    expect(within(anchor).queryByTestId("bot-owner-line")).toBeNull();
+    expect(anchor.textContent).not.toMatch(/managed by/i);
+    expect(anchor.textContent).not.toContain("Olive Owner");
   });
 });
 

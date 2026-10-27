@@ -1,5 +1,9 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsSource,
+} from "@/lib/analytics";
 
 /**
  * Opens an epic in a background header tab without leaving the current
@@ -13,9 +17,8 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 export function openEpicInBackground(
   epicId: string,
   title: string | undefined,
+  source: AnalyticsSource,
 ): void {
-  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, {
-    source: "direct_ui",
-  });
+  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, { source });
   useEpicCanvasStore.getState().openEpicTabInBackground(epicId, title);
 }

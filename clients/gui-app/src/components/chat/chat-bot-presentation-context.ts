@@ -1,6 +1,5 @@
 import { createContext } from "react";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
-import type { ChatBotRepliedPost } from "@/lib/bots/reply-row";
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
@@ -62,9 +61,8 @@ export interface ChatBotPresentation {
   readonly botTitle: string;
   /**
    * Lands the list on a message by its id: the reply that resolved a
-   * request, or the post a direct reply answers. In the channel only a
-   * direct post's reply is in the list; a thread post's verdict is in its
-   * thread, reached through the thread line.
+   * request. In the channel only a direct post's reply is in the list; a
+   * thread post's verdict is in its thread, reached through the thread line.
    */
   readonly scrollToMessage: ((messageId: string) => void) | null;
   /**
@@ -74,13 +72,6 @@ export interface ChatBotPresentation {
    */
   readonly replyFollowsPost:
     | ((postMessageId: string, replyMessageId: string) => boolean)
-    | null;
-  /**
-   * The post a bot's direct reply answers, by its message id, as the reply's
-   * line names it; `null` when the post is not in the list, and in a thread.
-   */
-  readonly repliedPost:
-    | ((messageId: string) => ChatBotRepliedPost | null)
     | null;
   /**
    * The thread line under a channel post, by the post's message id; `null`

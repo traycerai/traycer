@@ -21,6 +21,8 @@ export type AnalyticsSource =
   | "history"
   | "deep_link"
   | "restored_session"
+  // A task's chip in a message's text: a bot's reply or an agent's transcript.
+  | "message_task_chip"
   // The app moved itself: the selected host stopped being dialable and the
   // directory re-homed the window (or handed it back when that host
   // returned). Distinct from every other source here because there was no
@@ -1244,6 +1246,7 @@ const ANALYTICS_SOURCES = new Set<string>([
   "direct_ui",
   "history",
   "keyboard_shortcut",
+  "message_task_chip",
   "native_menu",
   "native_menu_accelerator",
   "notification",
