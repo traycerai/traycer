@@ -119,14 +119,26 @@ describe("bot-tabs store", () => {
     const { setOpenThread } = useBotOpenThreadStore.getState();
     openBotTab({ botId: BOT_A, hostId: "host-1", title: "A" });
     openBotTab({ botId: BOT_B, hostId: "host-1", title: "B" });
-    setOpenThread(BOT_A, { anchorMessageId: "post-a", announcement: false });
-    setOpenThread(BOT_B, { anchorMessageId: "post-b", announcement: false });
+    setOpenThread(BOT_A, {
+      anchorMessageId: "post-a",
+      announcement: false,
+      threadId: null,
+    });
+    setOpenThread(BOT_B, {
+      anchorMessageId: "post-b",
+      announcement: false,
+      threadId: null,
+    });
 
     closeBotTab(BOT_A);
     openBotTab({ botId: BOT_A, hostId: "host-1", title: "A" });
 
     expect(useBotOpenThreadStore.getState().byBotId).toEqual({
-      [BOT_B]: { anchorMessageId: "post-b", announcement: false },
+      [BOT_B]: {
+        anchorMessageId: "post-b",
+        announcement: false,
+        threadId: null,
+      },
     });
   });
 

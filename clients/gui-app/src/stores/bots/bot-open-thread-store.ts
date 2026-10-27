@@ -12,6 +12,12 @@ export interface BotOpenThread {
    * in the channel (reply mode `direct`). `false` for a post's own thread.
    */
   readonly announcement: boolean;
+  /**
+   * The thread's id, when the channel knows it before the thread list does:
+   * the person's post opened it as the send was accepted. `null` for a
+   * thread opened from a row.
+   */
+  readonly threadId: string | null;
 }
 
 interface BotOpenThreadState {

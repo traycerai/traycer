@@ -10,7 +10,7 @@
  * drawn as the bot's, with no request to show. Every state opens on the
  * channel row the thread answers, drawn by the channel's own row component.
  */
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -353,7 +353,12 @@ function mountPanel(
   mocks.channelHandle = {
     store: createThreadStore(channelMessages, channelHold),
   } as ChatSessionStoreHandle;
-  return render(
+  return render(panelTree(thread));
+}
+
+/** The panel on `thread`, over the sessions the last mount made. */
+function panelTree(thread: BotThreadPanelThread): ReactNode {
+  return (
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
@@ -377,7 +382,7 @@ function mountPanel(
           </ChatExpansionTestProviders>
         </TooltipProvider>
       </QueryClientProvider>
-    </StrictMode>,
+    </StrictMode>
   );
 }
 
@@ -590,6 +595,83 @@ describe("<BotThreadPanel /> a listed thread", () => {
         supersedes: null,
       },
     ]);
+  });
+});
+
+describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
+  const POSTED: BotThreadPanelThread = { kind: "posted", threadId: THREAD_ID };
+
+  function replyBox(): HTMLTextAreaElement {
+    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
+    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no reply box");
+    return box;
+  }
+
+  it("opens on the post with no wait, says the bot is replying, and replies in the thread", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    mountPanel(POSTED, []);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe(THREAD_ID);
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-loading")).toBeNull();
+    // No replies to read until the list has the thread.
+    expect(screen.queryByTestId("bot-thread-replies")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-replying-strip")).toBeNull();
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: null,
+          threads: {
+            [THREAD_ID]: {
+              state: "replying",
+              startedAt: 1_000,
+              step: null,
+              requestId: "req-1",
+              reason: null,
+            },
+          },
+        },
+      });
+    });
+    const strip = screen.getByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByText("Release Bot is replying…")).toBeTruthy();
+
+    await user.type(replyBox(), "And the nightly?");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    await waitFor(() => {
+      expect(sent).toEqual([
+        {
+          botId: BOT_ID,
+          conversationId: CONVERSATION_ID,
+          text: "And the nightly?",
+          threadId: THREAD_ID,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+        },
+      ]);
+    });
+  });
+
+  it("keeps the reply box, its draft and its focus when the list returns the thread", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    const view = mountPanel(POSTED, []);
+    const box = replyBox();
+    await user.type(box, "And the nightly?");
+    expect(document.activeElement).toBe(box);
+
+    view.rerender(panelTree(listed("user-teammate")));
+
+    expect(screen.getByTestId("bot-thread-under-the-hood")).toBeTruthy();
+    expect(screen.getByTestId("bot-thread-replies")).toBeTruthy();
+    expect(replyBox()).toBe(box);
+    expect(box.value).toBe("And the nightly?");
+    expect(document.activeElement).toBe(box);
   });
 });
 

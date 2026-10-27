@@ -195,10 +195,12 @@ const LISTED_THREAD: BotThreadSummary = {
 const OPEN_LISTED_THREAD: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
+  threadId: null,
 };
 const OPEN_UNOPENED_THREAD: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
+  threadId: null,
 };
 
 const onOpenUnderTheHood = vi.fn<(sessionChatId: string) => void>();

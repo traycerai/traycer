@@ -336,6 +336,8 @@ let boundHostId: string | null;
 let heldSends: Promise<void> | null;
 /** While set, the host refuses every send. */
 let refuseSends: boolean;
+/** The thread the host answers a send is in; `null` for reply mode `direct`. */
+let answerThreadId: string | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
 
 /** The tab's host client, over a messenger whose `bot.conversation.send` records what it is asked. */
@@ -356,7 +358,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
           messageId: "message-new",
           requestId: "req-new",
           delivery: hold === null ? ("written" as const) : ("queued" as const),
-          threadId: null,
+          threadId: answerThreadId,
         };
         return hold === null
           ? Promise.resolve(response)
@@ -424,6 +426,7 @@ beforeEach(() => {
   boundHostId = BOUND_HOST_ID;
   heldSends = null;
   refuseSends = false;
+  answerThreadId = null;
   onOpenThread.mockClear();
   mocks.openSettings.mockClear();
   useProvidersFocusStore.getState().clearFocusHarnessId();
@@ -677,7 +680,7 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false },
+      { anchorMessageId: POST_ID, announcement: false, threadId: null },
       memberPost(TEAMMATE_USER_ID),
     );
 
@@ -737,6 +740,30 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     });
     expect(box.value).toBe("");
+  });
+
+  it("opens the replacement's thread when the bot answers it in one", async () => {
+    const user = userEvent.setup();
+    answerThreadId = "thread-new";
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+
+    await waitFor(() => {
+      expect(onOpenThread).toHaveBeenCalledWith({
+        anchorMessageId: "message-new",
+        announcement: false,
+        threadId: "thread-new",
+      });
+    });
+    expect(sent[0]?.supersedes).toBe(POST_REQUEST);
+    expect(channelBox().value).toBe("");
   });
 
   it("keeps the draft of an edit opened while an earlier edit's send was in flight", async () => {
@@ -799,7 +826,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false },
+      { anchorMessageId: POST_ID, announcement: false, threadId: null },
       memberPost(VIEWER_USER_ID),
     );
 
@@ -1056,7 +1083,7 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false },
+      { anchorMessageId: POST_ID, announcement: false, threadId: null },
       memberPost(VIEWER_USER_ID),
     );
 

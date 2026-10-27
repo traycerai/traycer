@@ -21,6 +21,7 @@ import {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   BotConversationSendRequest,
+  BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -58,6 +59,13 @@ const mocks = vi.hoisted(() => {
       },
     },
     postIds: [] as string[],
+    // What the host answers a box's accepted send with.
+    sendResponse: {
+      messageId: "post-new",
+      requestId: "request-new",
+      delivery: "written",
+      threadId: "thread-new",
+    },
     threadListCalls: [] as Array<{
       botId: string;
       enabled: boolean;
@@ -195,6 +203,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     placeholder: string;
     testId: string;
     failure: { readonly failed: boolean };
+    onSent: (response: BotConversationSendResponse) => void;
   }) => (
     <div
       data-testid={`stub-${props.testId}`}
@@ -206,6 +215,12 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
       {props.failure.failed ? (
         <BotSendFailedNotice testId={`${props.testId}-send-failed`} />
       ) : null}
+      {/* The host accepting what the box sent, answering `mocks.sendResponse`. */}
+      <button
+        type="button"
+        data-testid={`stub-${props.testId}-sent`}
+        onClick={() => props.onSent(mocks.sendResponse)}
+      />
     </div>
   ),
 }));
@@ -323,6 +338,7 @@ interface MountOptions {
 const QUESTION_1: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
+  threadId: null,
 };
 
 function mount(options: MountOptions): {
@@ -359,7 +375,11 @@ function mount(options: MountOptions): {
   let current: BotOpenThread | null =
     options.openThreadPostId === null
       ? null
-      : { anchorMessageId: options.openThreadPostId, announcement: false };
+      : {
+          anchorMessageId: options.openThreadPostId,
+          announcement: false,
+          threadId: null,
+        };
   const result = render(tree(current));
   return {
     onOpenThread,
@@ -394,6 +414,12 @@ beforeEach(() => {
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.postIds = [];
+  mocks.sendResponse = {
+    messageId: "post-new",
+    requestId: "request-new",
+    delivery: "written",
+    threadId: "thread-new",
+  };
   // jsdom reports no focus until an element takes it; the window starts in
   // the person's foreground here, and a case that needs it elsewhere says so.
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -534,6 +560,7 @@ describe("<BotChannelView /> channel", () => {
     expect(onOpenThread).toHaveBeenCalledWith({
       anchorMessageId: "post-a",
       announcement: false,
+      threadId: null,
     });
   });
 
@@ -590,7 +617,7 @@ describe("<BotChannelView /> channel", () => {
     mocks.postIds = ["post-a"];
     const { reopen } = mount({ openThreadPostId: null });
 
-    reopen({ anchorMessageId: "post-a", announcement: false });
+    reopen({ anchorMessageId: "post-a", announcement: false, threadId: null });
 
     const waiting = screen.getByTestId("bot-thread-panel");
     expect(within(waiting).getByTestId("bot-thread-loading")).toBeTruthy();
@@ -599,7 +626,7 @@ describe("<BotChannelView /> channel", () => {
     ).toBeNull();
 
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 0 })];
-    reopen({ anchorMessageId: "post-a", announcement: false });
+    reopen({ anchorMessageId: "post-a", announcement: false, threadId: null });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
@@ -965,5 +992,105 @@ describe("<BotChannelView /> thread list unavailable", () => {
     expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
     expect(within(panel).queryByTestId("stub-bot-thread-composer")).toBeNull();
+  });
+});
+
+describe("<BotChannelView /> a post whose answer lands in a thread", () => {
+  const POSTED: BotOpenThread = {
+    anchorMessageId: "post-new",
+    announcement: false,
+    threadId: "thread-new",
+  };
+
+  it("opens the post's thread as the channel's box reports the send, before the list has it", async () => {
+    const user = userEvent.setup();
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    expect(onOpenThread).toHaveBeenCalledWith(POSTED);
+
+    reopen(POSTED);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-new");
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    const composer = within(panel).getByTestId("stub-bot-thread-composer");
+    expect(composer.getAttribute("data-thread-id")).toBe("thread-new");
+    expect(composer.getAttribute("data-announcement-id")).toBe("none");
+  });
+
+  it("opens the thread of a post the host queued for a paused bot", async () => {
+    const user = userEvent.setup();
+    mocks.sendResponse = { ...mocks.sendResponse, delivery: "queued" };
+    const { onOpenThread } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    expect(onOpenThread).toHaveBeenCalledWith(POSTED);
+  });
+
+  it("opens nothing for a post the bot answers in the channel", async () => {
+    const user = userEvent.setup();
+    mocks.sendResponse = { ...mocks.sendResponse, threadId: null };
+    const { onOpenThread } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing on a host without the thread list", async () => {
+    const user = userEvent.setup();
+    mocks.state.threadListSupported = false;
+    const { onOpenThread } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("replaces the thread open beside the channel with the new post's", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
+    mocks.postIds = ["post-a"];
+    const { onOpenThread, reopen } = mount({ openThreadPostId: "post-a" });
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-a");
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+    expect(onOpenThread).toHaveBeenCalledWith(POSTED);
+    reopen(POSTED);
+
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-new");
+  });
+
+  it("leaves the open thread as it is when its own box sends", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
+    mocks.sendResponse = {
+      ...mocks.sendResponse,
+      messageId: "reply-new",
+      threadId: "thread-a",
+    };
+    const { onOpenThread } = mount({ openThreadPostId: "post-a" });
+
+    await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("leaves a question's thread as it is when the box under it sends", async () => {
+    const user = userEvent.setup();
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+    reopen(QUESTION_1);
+
+    await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
   });
 });

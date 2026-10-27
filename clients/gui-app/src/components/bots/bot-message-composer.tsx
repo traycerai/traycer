@@ -7,7 +7,10 @@ import {
   type ReactNode,
 } from "react";
 import { SendHorizontal } from "lucide-react";
-import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendDelivery,
+  BotConversationSendResponse,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -54,6 +57,8 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
+  /** The host accepted what the box held, and the box was cleared. */
+  readonly onSent: (response: BotConversationSendResponse) => void;
 }): ReactNode {
   const {
     botId,
@@ -66,6 +71,7 @@ export function BotMessageComposer(props: {
     failure,
     edit,
     onEditEnd,
+    onSent,
   } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
@@ -107,15 +113,17 @@ export function BotMessageComposer(props: {
       },
       {
         onSuccess: (response) => {
-          // The box is cleared, the edit ended and the send's delivery said,
-          // only while it still holds what was sent: an edit the person
-          // opened since keeps its draft, with nothing said under it.
+          // The box is cleared, the edit ended, the send's delivery said and
+          // the send reported, only while it still holds what was sent: an
+          // edit the person opened since keeps its draft, with nothing said
+          // under it.
           if ((currentEditRef.current?.requestId ?? null) !== supersedes) {
             return;
           }
           setText("");
           if (supersedes !== null) onEditEnd();
           setLastDelivery(response.delivery);
+          onSent(response);
         },
         onError: failure.fail,
       },

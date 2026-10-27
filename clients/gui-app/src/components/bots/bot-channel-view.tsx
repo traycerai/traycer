@@ -9,6 +9,7 @@ import {
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   BotConversationRecord,
+  BotConversationSendResponse,
   BotThreadListResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -114,7 +115,8 @@ function channelConversation(
  * line under a post whose thread has replies, and the thread panel beside
  * the channel, as wide as the person dragged it - over it on a narrow pane.
  * The channel's box posts at the top level; the thread panel's box replies
- * in its thread.
+ * in its thread. A post the bot answers in a thread opens that thread as
+ * soon as the host accepts it (decision 97).
  *
  * The tab's host serves all of it, whether it runs the bot or not (T65): a
  * host that does not reads the channel from the cloud and lists the threads
@@ -242,8 +244,27 @@ export function BotChannelView(props: {
   // started.
   const openAnnouncementThread = useCallback(
     (announcementId: string) =>
-      onOpenThread({ anchorMessageId: announcementId, announcement: true }),
+      onOpenThread({
+        anchorMessageId: announcementId,
+        announcement: true,
+        threadId: null,
+      }),
     [onOpenThread],
+  );
+
+  // A post whose answer lands in a thread (reply mode `threaded`) opens that
+  // thread as the send is accepted, in place of any thread open now; one the
+  // bot answers in the channel opens nothing.
+  const openPostedThread = useCallback(
+    (response: BotConversationSendResponse) => {
+      if (response.threadId === null || !threadListSupported) return;
+      onOpenThread({
+        anchorMessageId: response.messageId,
+        announcement: false,
+        threadId: response.threadId,
+      });
+    },
+    [onOpenThread, threadListSupported],
   );
 
   const surface = useMemo<BotTranscriptSurface>(
@@ -269,6 +290,7 @@ export function BotChannelView(props: {
             onOpenThread({
               anchorMessageId: postMessageId,
               announcement: false,
+              threadId: null,
             })
         : null,
       openAnnouncementThread: threadListSupported
@@ -306,6 +328,9 @@ export function BotChannelView(props: {
   const { refetch: refetchThreads } = threadList;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     if (openThread !== null) return { kind: "listed", thread: openThread };
+    if (open !== null && open.threadId !== null) {
+      return { kind: "posted", threadId: open.threadId };
+    }
     if (threadList.isError) {
       return { kind: "failed", retry: () => void refetchThreads() };
     }
@@ -417,6 +442,7 @@ export function BotChannelView(props: {
             failure={sendFailure}
             edit={edit}
             onEditEnd={endEdit}
+            onSent={openPostedThread}
           />
         </section>
         {threadOpen ? (
