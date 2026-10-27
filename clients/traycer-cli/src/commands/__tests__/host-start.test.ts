@@ -6783,6 +6783,44 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
     ).toBe(true);
   });
 
+  it("sends nothing when a stop latches while the standing is being read", async () => {
+    // The classifier awaits pid.json between the wait and the first signal.
+    // A stop that lands inside that read is a newer instruction than the
+    // eviction: no SIGTERM goes out, and the supervisor exits 0 as it does
+    // for a stop during the wait itself.
+    const { recorded, deps: base } = makeRunStubs(sampleRecord(exec), null);
+    const { deps, signals } = withIncumbentRecords(base, { pidRecord: null });
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => true,
+            readPidMetadataEvidence: async () => {
+              process.emit("SIGTERM");
+              return { kind: "absent" };
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(signals).toEqual([]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(
+      recorded.loggerInfos.some(
+        (entry) =>
+          entry.message === "Host supervisor not relaunching - shutting down" &&
+          entry.fields.observed === "during-eviction",
+      ),
+    ).toBe(true);
+  });
+
   it("honours a stop that latches during the eviction grace", async () => {
     const { recorded, deps: base } = makeRunStubs(sampleRecord(exec), null);
     const { deps, signals } = withIncumbentRecords(base, { pidRecord: null });

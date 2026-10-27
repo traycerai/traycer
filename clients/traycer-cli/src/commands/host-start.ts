@@ -3538,6 +3538,11 @@ async function evictWedgedIncumbent(input: {
   readonly shutdownRequested: Promise<void>;
 }): Promise<"exited" | "still-alive" | "shutdown"> {
   const { deps, logger, environment, attemptId, pid } = input;
+  // The classifier awaited reads between the wait and this call, and a stop
+  // may have latched in that gap. A stopping supervisor signals nothing: the
+  // stop is a newer instruction than the eviction, same as it is than the
+  // relaunch. Checked HERE, before the first signal, not only in the polls.
+  if (input.isShuttingDown()) return "shutdown";
   const signal = (name: "SIGTERM" | "SIGKILL"): void => {
     try {
       deps.signalProcess(pid, name);
