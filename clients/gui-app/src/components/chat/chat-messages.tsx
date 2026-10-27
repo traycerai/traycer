@@ -2093,15 +2093,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // not exist there, and the layout it does draw is one framed, sender-lined
   // message per row, which a part cannot be half of.
   const botChannel = use(ChatBotPresentationContext) !== null;
+  // ONE decision, read by all three things that derive a part key: the rows
+  // below, find's projection and `chatTimelineRowKeyForBlock`. A reader that
+  // split differently from the list would name rows the list never built.
+  const splitLongTurns = !botChannel;
 
   const listRows = useMemo(
     () =>
       transcriptListRows({
         window: transcriptWindow,
         rendered: messages,
-        splitLongTurns: !botChannel,
+        splitLongTurns,
       }),
-    [botChannel, transcriptWindow, messages],
+    [splitLongTurns, transcriptWindow, messages],
   );
 
   // Restore the persisted reading position once, on mount (ticket 15: tries
@@ -3480,7 +3484,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // Re-resolved on every issue below, because a turn still streaming can
       // grow a part between them.
       const rowKey = (): string =>
-        chatTimelineRowKeyForBlock(messagesRef.current, messageId, blockId);
+        chatTimelineRowKeyForBlock(
+          messagesRef.current,
+          messageId,
+          blockId,
+          splitLongTurns,
+        );
       const initialIndex = rowIndexByKeyRef.current.get(rowKey());
       if (!list || initialIndex === undefined) return false;
 
@@ -3621,6 +3630,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       finishImperativeScrollOperation,
       settleScrollRequest,
       showNavigationHighlight,
+      splitLongTurns,
     ],
   );
 
@@ -3913,7 +3923,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // The PART that draws the named card, which is the row the reveal below
       // needs mounted; part 0 - the message's own key - whenever none is named.
       const location = chatTimelineLocationForMessage(
-        chatTimelineRowKeyForBlock(messagesRef.current, messageId, blockId),
+        chatTimelineRowKeyForBlock(
+          messagesRef.current,
+          messageId,
+          blockId,
+          splitLongTurns,
+        ),
         rowIndexByKeyRef.current,
         animated,
       );
@@ -3942,6 +3957,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       releaseForExplicitNavigation,
       setScrolledActiveUserMessageIdIfChanged,
       showNavigationHighlight,
+      splitLongTurns,
     ],
   );
 
@@ -4116,6 +4132,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
+    splitLongTurns,
     getFindCoverageMessage,
     getFindPlacement,
     requestIndexJump: requestFindIndexJump,

@@ -85,13 +85,18 @@ export interface ChatTimelineNavigationLocation {
  *
  * `blockId` is `null` for a navigation to the turn itself, which is part 0 by
  * definition - the same row key the message has always had.
+ *
+ * `splitLongTurns` is the SAME decision `transcriptListRows` was given. A
+ * transcript that is not split has one row per turn under the message's own
+ * key, and a part key derived here would name a row the list never built.
  */
 export function chatTimelineRowKeyForBlock(
   messages: ReadonlyArray<ChatMessageModel>,
   messageId: string,
   blockId: string | null,
+  splitLongTurns: boolean,
 ): string {
-  if (blockId === null) return messageId;
+  if (blockId === null || !splitLongTurns) return messageId;
   const message = messages.find((candidate) => candidate.id === messageId);
   if (message === undefined || message.role !== "assistant") return messageId;
   const cuts = assistantTurnPartCuts(message.segments);

@@ -282,6 +282,7 @@ describe.each([
       const units = buildChatFindRows([row], TILE_INSTANCE_ID, new Set(), {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
+        splitLongTurns: true,
       })[0].units;
       const captionUnit = units.find(
         (unit) =>
@@ -381,6 +382,7 @@ describe.each([
     const units = buildChatFindRows([row], TILE_INSTANCE_ID, new Set(), {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
+      splitLongTurns: true,
     })[0].units;
     const captionUnits = units.filter(
       (unit) =>

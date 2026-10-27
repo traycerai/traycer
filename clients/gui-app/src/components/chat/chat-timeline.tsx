@@ -383,12 +383,13 @@ export const ChatTimeline = memo(function ChatTimeline({
       // told it to stand at, so recording one would be the memory reading its
       // own estimate back in as evidence for that estimate.
       if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
-        // `rowId` is the ROW, `partKey` the list item: a long turn is drawn as
-        // several items, and the placeholder that later stands in for that
-        // ordinal stands in for all of them at once.
+        // `rowId` is the ROW and the part is the list item: a long turn is
+        // drawn as several items, and the placeholder that later stands in for
+        // that ordinal stands in for all of them at once.
         rowHeightMemory.recordMeasuredHeight({
           rowId: info.itemData.model.id,
-          partKey: info.itemData.key,
+          partIndex: info.itemData.part?.index ?? 0,
+          partCount: info.itemData.part?.count ?? 1,
           ordinal: info.itemData.ordinal,
           height: info.size,
         });

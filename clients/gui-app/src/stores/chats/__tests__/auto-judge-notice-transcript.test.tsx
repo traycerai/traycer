@@ -753,6 +753,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
           buildChatFindRows([notice.model], "tile-notice", new Set(), {
             hideReasoning: false,
             queuePauseReasonProtocolSupported: null,
+            splitLongTurns: true,
           })[0]?.units,
         ).toEqual([]);
       }

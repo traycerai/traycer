@@ -45,7 +45,8 @@ describe("chat transcript row height memory", () => {
 
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: 4100,
     });
@@ -71,7 +72,8 @@ describe("chat transcript row height memory", () => {
     measured.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -93,7 +95,8 @@ describe("chat transcript row height memory", () => {
     measured.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -110,7 +113,8 @@ describe("chat transcript row height memory", () => {
     measured.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -135,7 +139,8 @@ describe("chat transcript row height memory", () => {
     measured.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -161,7 +166,8 @@ describe("chat transcript row height memory", () => {
     measured.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -170,7 +176,8 @@ describe("chat transcript row height memory", () => {
     memory.observeSkeleton([...measured, late, unseen]);
     memory.recordMeasuredHeight({
       rowId: "late",
-      partKey: "late",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 4,
       height: RAW_8KB,
     });
@@ -194,7 +201,8 @@ describe("chat transcript row height memory", () => {
     rows.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 26_400,
       });
@@ -233,7 +241,8 @@ describe("chat transcript row height memory", () => {
     rows.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 8224,
       });
@@ -272,7 +281,8 @@ describe("chat transcript row height memory", () => {
       if (row.rowId.startsWith("u-") && row.rowId !== "u-next") {
         memory.recordMeasuredHeight({
           rowId: row.rowId,
-          partKey: row.rowId,
+          partIndex: 0,
+          partCount: 1,
           ordinal,
           height: 212,
         });
@@ -280,7 +290,8 @@ describe("chat transcript row height memory", () => {
       if (row.rowId.startsWith("a-") && row.rowId !== "a-next") {
         memory.recordMeasuredHeight({
           rowId: row.rowId,
-          partKey: row.rowId,
+          partIndex: 0,
+          partCount: 1,
           ordinal,
           height: 8_224,
         });
@@ -297,13 +308,15 @@ describe("chat transcript row height memory", () => {
 
     memory.recordMeasuredHeight({
       rowId: "a",
-      partKey: "a",
+      partIndex: 0,
+      partCount: 1,
       ordinal: null,
       height: 100,
     });
     memory.recordMeasuredHeight({
       rowId: "b",
-      partKey: "b",
+      partIndex: 0,
+      partCount: 1,
       ordinal: null,
       height: 300,
     });
@@ -315,13 +328,15 @@ describe("chat transcript row height memory", () => {
     const memory = createChatTranscriptRowHeightMemory();
     memory.recordMeasuredHeight({
       rowId: "a",
-      partKey: "a",
+      partIndex: 0,
+      partCount: 1,
       ordinal: null,
       height: 100,
     });
     memory.recordMeasuredHeight({
       rowId: "a",
-      partKey: "a",
+      partIndex: 0,
+      partCount: 1,
       ordinal: null,
       height: 300,
     });
@@ -345,7 +360,8 @@ describe("chat transcript row height memory", () => {
     for (let index = 0; index < 8; index += 1) {
       memory.recordMeasuredHeight({
         rowId: `live-${index}`,
-        partKey: `live-${index}`,
+        partIndex: 0,
+        partCount: 1,
         ordinal: null,
         height: 40,
       });
@@ -361,13 +377,15 @@ describe("chat transcript row height memory", () => {
 
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: 0,
     });
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: Number.NaN,
     });
@@ -390,7 +408,8 @@ describe("chat transcript row height memory", () => {
     rows.forEach((_row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: `stale-${ordinal}`,
-        partKey: `stale-${ordinal}`,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -404,7 +423,8 @@ describe("chat transcript row height memory", () => {
     for (let index = 0; index < 4_200; index += 1) {
       memory.recordMeasuredHeight({
         rowId: `row-${index}`,
-        partKey: `row-${index}`,
+        partIndex: 0,
+        partCount: 1,
         ordinal: null,
         height: 200,
       });
@@ -436,7 +456,8 @@ describe("row height memory across a layout width change", () => {
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: 4100,
     });
@@ -464,7 +485,8 @@ describe("row height memory across a layout width change", () => {
     measured.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
-        partKey: row.rowId,
+        partIndex: 0,
+        partCount: 1,
         ordinal,
         height: 561,
       });
@@ -492,7 +514,8 @@ describe("row height memory across a layout width change", () => {
     memory.observeSkeleton([row]);
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: 4100,
     });
@@ -509,7 +532,8 @@ describe("row height memory across a layout width change", () => {
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: 4100,
     });
@@ -528,7 +552,8 @@ describe("row height memory across a layout width change", () => {
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
     memory.recordMeasuredHeight({
       rowId: "row-0",
-      partKey: "row-0",
+      partIndex: 0,
+      partCount: 1,
       ordinal: 0,
       height: 4100,
     });

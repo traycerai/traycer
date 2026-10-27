@@ -1,6 +1,7 @@
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { isKnownInterviewDisplayToolName } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { isRoutingCancellationNotice } from "@/stores/chats/hidden-transcript-notices";
+import { segmentContainsBlockId } from "@/stores/chats/segment-block-ids";
 import type { MessageSegment } from "@/stores/composer/chat-store";
 
 /**
@@ -42,6 +43,25 @@ import type { MessageSegment } from "@/stores/composer/chat-store";
  * a tool out of an activity run moves it out of the group and pushes it as its
  * own item at the same position, so it can only ever leave the item count the
  * same or raise it. It can never empty a part.
+ *
+ * ## A part is compared on the whole turn, not on its own slice
+ *
+ * The parts are a MOUNTING unit, not a memo unit. `buildChatActivityTimeline`
+ * reads the whole turn to decide what any one part draws: a question tool in
+ * part k disappears when the interview that answers it arrives in part k+1
+ * (`buildMatchedQuestionToolIds`), the trailing activity group is marked active
+ * only as the turn's last item, and a routing notice is painted by whichever
+ * part holds its error even when the notice segment sits a part away. So a
+ * later segment can change an earlier part's items, and `chat-stable-rows.ts`
+ * compares every part against the whole `ChatMessage` rather than its slice of
+ * segments. A slice comparison would freeze that part's body.
+ *
+ * It costs nothing today: `rendered-messages.ts` caches at the turn level
+ * (`assistantTurnCache`, keyed by the turn's signature) and allocates fresh
+ * segment objects for every block when that signature moves, so a slice
+ * comparison could never bail anyway. Should a per-block segment memo ever
+ * land, this stops being a wash and becomes the thing that keeps the parts
+ * correct - do not reintroduce a slice comparison alongside it.
  */
 
 /** Which slice of a split assistant turn one list row draws. */
@@ -201,20 +221,6 @@ export function assistantTurnPartCuts(
 }
 
 /**
- * The segments one part covers. The row-reuse pass compares exactly this slice
- * to decide whether a part keeps its rendered body, which is what lets an
- * earlier part of a streaming turn bail while the part at the live edge
- * re-renders.
- */
-export function assistantTurnPartSegmentRange(
-  segments: ReadonlyArray<MessageSegment>,
-  partIndex: number,
-): AssistantTurnPartRange {
-  const { ranges } = assistantTurnPartPlan(segments);
-  return ranges[Math.min(Math.max(partIndex, 0), ranges.length - 1)];
-}
-
-/**
  * The list key of one part. Part 0 keeps the ROW's key, so an unsplit turn and
  * every scroll anchor saved before this existed name the same thing they always
  * did; later parts hang off the text segment they start at, which is stable for
@@ -229,17 +235,25 @@ export function assistantTurnPartKey(
 }
 
 /**
- * Which part draws `segmentId`, for navigation: a block, a find unit or a
+ * Which part draws `blockId`, for navigation: a block, a find unit or a
  * fullscreen app has to resolve to the part that holds it, not to part 0.
  * Falls back to part 0 for an id this turn does not carry.
+ *
+ * Matched with {@link segmentContainsBlockId}, so an id NESTED in a segment -
+ * a subagent's child, a file inside a change group, a promoted run's member -
+ * resolves to the part drawing its owner. `messageIdForBlock` picks the owning
+ * message by the same predicate, so the two cannot disagree about where a
+ * navigation target lives.
  */
 export function assistantTurnPartIndexOfSegment(
   segments: ReadonlyArray<MessageSegment>,
-  segmentId: string,
+  blockId: string,
 ): number {
   const { ranges } = assistantTurnPartPlan(segments);
   if (ranges.length === 1) return 0;
-  const at = segments.findIndex((segment) => segment.id === segmentId);
+  const at = segments.findIndex((segment) =>
+    segmentContainsBlockId(segment, blockId),
+  );
   if (at === -1) return 0;
   return Math.max(
     0,

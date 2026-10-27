@@ -118,10 +118,17 @@ interface RememberedRow {
    */
   height: number;
   /**
-   * Last measured height per list item, keyed by the item's key. One entry for
-   * a row drawn whole (keyed by the row id, which is part 0's key).
+   * Last measured height per list item, keyed by the part's INDEX in the row.
+   * One entry at 0 for a row drawn whole.
+   *
+   * The index rather than the list key, so the set can be reconciled against
+   * the row's current part COUNT: a turn redrawn into fewer parts - rewritten,
+   * regenerated, re-projected over fewer blocks - keeps reporting the slots it
+   * still draws and never mentions the ones it dropped, so a key-addressed
+   * entry would linger and hold the remembered total, the pooled role factor
+   * and every placeholder calibrated from them as tall as the turn used to be.
    */
-  readonly parts: Map<string, number>;
+  readonly parts: Map<number, number>;
   /**
    * The role bucket this row contributed to, or `null` if it never has.
    *
@@ -220,11 +227,14 @@ export interface ChatTranscriptRowHeightMemory {
   recordMeasuredHeight(input: {
     readonly rowId: string;
     /**
-     * The LIST ITEM measured. Equal to `rowId` for a row drawn whole; a long
-     * assistant turn reports one of these per part and the row's remembered
-     * height is their sum.
+     * Which LIST ITEM of the row was measured, and how many the row is drawn
+     * as: `0` and `1` for a row drawn whole. A long assistant turn reports one
+     * measurement per part and the row's remembered height is their sum, so
+     * the count is what lets a row redrawn into fewer parts forget the slots
+     * it no longer has (see {@link RememberedRow.parts}).
      */
-    readonly partKey: string;
+    readonly partIndex: number;
+    readonly partCount: number;
     readonly ordinal: number | null;
     readonly height: number;
   }): void;
@@ -341,7 +351,13 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       tallestMeasured = 0;
     },
 
-    recordMeasuredHeight({ rowId, partKey, ordinal, height }): void {
+    recordMeasuredHeight({
+      rowId,
+      partIndex,
+      partCount,
+      ordinal,
+      height,
+    }): void {
       // A zero or negative measurement is an unmounted or not-yet-laid-out row,
       // never an observation about how tall the row is.
       if (!Number.isFinite(height) || height <= 0) return;
@@ -349,7 +365,7 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       if (existing === undefined) {
         const remembered: RememberedRow = {
           height,
-          parts: new Map([[partKey, height]]),
+          parts: new Map([[partIndex, height]]),
           sampledRole: null,
         };
         rows.set(rowId, remembered);
@@ -367,9 +383,17 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       // The delta this PART moved the row's total by. A part the row has not
       // reported before adds its whole height: the row grew by a list item,
       // which is what a streaming turn appending a text block does.
-      const delta = height - (existing.parts.get(partKey) ?? 0);
+      let delta = height - (existing.parts.get(partIndex) ?? 0);
+      existing.parts.set(partIndex, height);
+      // ...and a row that lost parts gives their heights back. Only the parts
+      // still drawn ever report again, so this is the one place that can hear
+      // about the others.
+      for (const [index, partHeight] of existing.parts) {
+        if (index < partCount) continue;
+        existing.parts.delete(index);
+        delta -= partHeight;
+      }
       if (delta === 0) return;
-      existing.parts.set(partKey, height);
       heightTotal += delta;
       existing.height += delta;
       if (existing.height > tallestMeasured) tallestMeasured = existing.height;

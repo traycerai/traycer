@@ -75,6 +75,13 @@ interface ChatFindControllerArgs {
   /** Latest promotion set, read lazily by the adapter's getRows supplier. */
   readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
   /**
+   * Whether the transcript draws a long turn as several list rows - the SAME
+   * decision `transcriptListRows` was given. Find's units carry the row key
+   * they must scroll to, so a projection that split differently from the list
+   * would name rows the list never built.
+   */
+  readonly splitLongTurns: boolean;
+  /**
    * Caveat describing the rows `messagesRef` does NOT contain, read lazily
    * beside it.
    *
@@ -153,6 +160,7 @@ export function useChatFindController(
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
+    splitLongTurns,
     getFindCoverageMessage,
     getFindPlacement,
     requestIndexJump,
@@ -598,6 +606,7 @@ export function useChatFindController(
             hideReasoning: !isThinkingShown(),
             queuePauseReasonProtocolSupported:
               queuePauseReasonSupportRef.current,
+            splitLongTurns,
           },
         );
       },
@@ -645,6 +654,7 @@ export function useChatFindController(
     messagesRef,
     requestFindReconcile,
     requestFindReveal,
+    splitLongTurns,
     tileFindContext,
   ]);
 
