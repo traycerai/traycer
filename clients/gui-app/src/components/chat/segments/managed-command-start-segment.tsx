@@ -199,6 +199,7 @@ export function ManagedCommandStartSegment(
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={setOpen}
       header={header}

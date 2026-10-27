@@ -1,9 +1,3 @@
-import {
-  browserCatalogCapabilitySchema,
-  browserOwnerInventorySnapshotSchema,
-  browserOwnerInventoryEvidenceSchema,
-  browserInventoryMutationAckSchema,
-} from "./catalog-contracts";
 /**
  * `browser.sessions@2.1` and `browser.screencast@2.1` - browser stream
  * contracts between the GUI and host-owned headless browser sessions.
@@ -904,36 +898,8 @@ export const browserSessionsServerFrameSchema = lazySchema(() =>
       .strict(),
   ]),
 );
-export const browserSessionsServerFrameV23Schema = lazySchema(() =>
-  z.discriminatedUnion("kind", [
-    ...browserSessionsServerFrameSchema.options,
-    z.strictObject({
-      kind: z.literal("ownerInventorySnapshot"),
-      ...textFrameFields,
-      capability: browserCatalogCapabilitySchema,
-      inventory: browserOwnerInventorySnapshotSchema,
-    }),
-    z.strictObject({
-      kind: z.literal("ownerInventoryUnavailable"),
-      ...textFrameFields,
-      epicId: z.string().min(1).max(36),
-      hostId: z.string().min(1).max(191),
-      reason: z.string().max(2048),
-    }),
-    z.strictObject({
-      kind: z.literal("ownerInventoryUpdated"),
-      ...textFrameFields,
-      evidence: browserOwnerInventoryEvidenceSchema,
-    }),
-    z.strictObject({
-      kind: z.literal("inventoryMutationAck"),
-      ...textFrameFields,
-      ...browserInventoryMutationAckSchema.shape,
-    }),
-  ]),
-);
 export type BrowserSessionsServerFrame = z.infer<
-  typeof browserSessionsServerFrameV23Schema
+  typeof browserSessionsServerFrameSchema
 >;
 
 /**
@@ -1461,14 +1427,6 @@ export const browserSessionsV22 = defineStreamRpcContract({
   schemaVersion: { major: 2, minor: 2 } as const,
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
-  clientFrameSchema: browserSessionsClientFrameSchema,
-});
-
-export const browserSessionsV23 = defineStreamRpcContract({
-  method: "browser.sessions",
-  schemaVersion: { major: 2, minor: 3 } as const,
-  openRequestSchema: browserSessionsOpenRequestSchema,
-  serverFrameSchema: browserSessionsServerFrameV23Schema,
   clientFrameSchema: browserSessionsClientFrameSchema,
 });
 

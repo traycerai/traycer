@@ -1,4 +1,12 @@
-import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import {
+  buildChatActivityTimeline,
+  type ChatActivityTimelineItem,
+} from "@/components/chat/chat-activity-groups";
+import { assistantTurnPartIndexes } from "@/components/chat/chat-turn-parts";
+import {
+  assistantTurnPartCuts,
+  type TranscriptRowPart,
+} from "@/stores/chats/assistant-turn-parts";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
 import { BrowserSessionRow } from "./segments/browser-session-row";
@@ -20,8 +28,10 @@ import type {
   AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  FoldedBackgroundEvent,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import { backgroundEventEnding } from "@/stores/chats/background-event-fold";
 import { Check, Copy, Sparkles, Split, Square, Volume2 } from "lucide-react";
 import { use, useCallback, useMemo, useRef } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -43,7 +53,7 @@ import {
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { resolveAgentReference } from "./agent-reference-resolution";
 import { knownHarnessId } from "@/lib/chat/sender-display";
-import { formatClockDuration } from "@/lib/format-duration";
+import { formatClockDuration, formatWorkedFor } from "@/lib/format-duration";
 import {
   formatMessageTimeWithSeconds,
   useSampledNow,
@@ -56,7 +66,10 @@ import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
 import { CommandSegment } from "./segments/command-segment";
 import { CompactionSegment } from "./segments/compaction-segment";
-import { AutonomousResumeSegment } from "./segments/autonomous-resume-segment";
+import {
+  AutonomousResumeSegment,
+  type BackgroundEventCardEnding,
+} from "./segments/autonomous-resume-segment";
 import { ErrorSegment } from "./segments/error-segment";
 import type { RoutingSettledNotice } from "@/components/chat/fallback/routing-settled-card";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
@@ -106,6 +119,8 @@ interface AssistantBodyProps {
   turnHasOnlyAutonomousResumeSegments: boolean;
   /** See `ChatMessage.autonomousResumeOwed`. */
   autonomousResumeOwed: boolean;
+  /** See `ChatMessage.foldedBackgroundEvents`; absent when nothing folded. */
+  foldedBackgroundEvents: ReadonlyArray<FoldedBackgroundEvent> | undefined;
   /** Whether this terminal row should render its elapsed completion footer. */
   showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
@@ -160,6 +175,13 @@ interface AssistantBodyProps {
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
+  /**
+   * Which slice of this turn the list item is drawing. Absent, or `null`, for
+   * a turn drawn whole. A long turn is several list items so the transcript
+   * mounts only the ones on screen; see
+   * `stores/chats/assistant-turn-parts.ts`.
+   */
+  part?: TranscriptRowPart | null;
 }
 
 type ProviderNoticeMessageSegment = Extract<
@@ -243,6 +265,29 @@ function recoveryRoleOf(
   };
 }
 
+/** What the body needs to know about the slice it is drawing. */
+interface TurnPartView {
+  /** 0-based part index; 0 for a turn drawn whole. */
+  readonly index: number;
+  /** Whether this item carries the turn's ending - true when it is drawn whole. */
+  readonly isLast: boolean;
+  /** Whether the turn is drawn as several list items at all. */
+  readonly isSplit: boolean;
+}
+
+function turnPartView(
+  part: TranscriptRowPart | null | undefined,
+): TurnPartView {
+  if (part === undefined || part === null) {
+    return { index: 0, isLast: true, isSplit: false };
+  }
+  return {
+    index: part.index,
+    isLast: part.index === part.count - 1,
+    isSplit: true,
+  };
+}
+
 export function AssistantMessageBody({
   segments,
   backgroundToolBlockIds,
@@ -252,6 +297,7 @@ export function AssistantMessageBody({
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
   autonomousResumeOwed,
+  foldedBackgroundEvents,
   showCompletionFooter,
   pausedDurationMs,
   pausedSinceMs,
@@ -264,7 +310,9 @@ export function AssistantMessageBody({
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
+  part,
 }: AssistantBodyProps) {
+  const partView = turnPartView(part);
   const activityTimelineTurnState = runState === null ? "complete" : "active";
   // A ghost while the editor points at hidden Thinking (L-14).
   const thinkingShown = useRegionShown("thinking");
@@ -306,6 +354,27 @@ export function AssistantMessageBody({
       ),
     [timeline],
   );
+  // The items THIS list item draws, with the keys the WHOLE turn assigned
+  // them: `distinctRenderKeys` disambiguates across the turn, so slicing the
+  // timeline before keying would let two parts mint the same key.
+  const partItems = useMemo(() => {
+    if (!partView.isSplit) {
+      return timeline.map((item, index) => ({
+        item,
+        key: timelineKeys[index],
+      }));
+    }
+    const partIndexes = assistantTurnPartIndexes(
+      timeline,
+      assistantTurnPartCuts(segments),
+    );
+    const drawn: { item: ChatActivityTimelineItem; key: string }[] = [];
+    timeline.forEach((item, index) => {
+      if (partIndexes[index] !== partView.index) return;
+      drawn.push({ item, key: timelineKeys[index] });
+    });
+    return drawn;
+  }, [partView, segments, timeline, timelineKeys]);
   // A content-less boundary row's own segments never carry copyable text
   // (the reply lives on an earlier row in the same turn, before the trailing
   // steer bubble) - fall back to the turn-wide text `withTurnCompletion`
@@ -317,24 +386,26 @@ export function AssistantMessageBody({
     () => collectAssistantReplyText(boundaryReplySegments ?? segments),
     [boundaryReplySegments, segments],
   );
-  // A completed turn whose only visible segment is the autonomous-resume
-  // divider is a note about an earlier call, and it always says how it ended.
-  // Two endings draw no reply and are told apart by the footer flag: a
-  // provider turn that ran and said nothing keeps its elapsed footer
-  // ("Resumed · no response"), and a notification no provider turn adopted
-  // carries no timing to report, so it gets a line of its own instead.
+  // A completed turn that is nothing but a background event drew no reply,
+  // and its card says how it ended - so the row draws no footer of its own.
   const silentAutonomousResume =
     stopped === null && turnHasOnlyAutonomousResumeSegments;
-  const agentNotResumed = isAgentNotResumed({
+  const backgroundCard = backgroundCardContent({
     silentAutonomousResume,
     showCompletionFooter,
     autonomousResumeOwed,
     runState,
     completedAt,
+    elapsedStartedAt,
+    pausedDurationMs,
+    meta,
+    foldedBackgroundEvents,
   });
+  const backgroundCardSegmentId = headBackgroundEventSegmentId(shownSegments);
   const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
   const showElapsedFooter =
     !stoppedBeforeResponding &&
+    !silentAutonomousResume &&
     showCompletionFooter &&
     shouldShowElapsedFooter(
       runState,
@@ -379,8 +450,7 @@ export function AssistantMessageBody({
       className="flex w-full max-w-none flex-col gap-2 py-1 @container"
       data-assistant-turn
     >
-      {timeline.map((item, index) => {
-        const key = timelineKeys[index];
+      {partItems.map(({ item, key }) => {
         if (item.kind === "activity_group") {
           return <ActivityGroupSegment key={key} group={item.group} />;
         }
@@ -453,13 +523,85 @@ export function AssistantMessageBody({
               turnId={recovery.turnId}
               settledNotice={recovery.settledNotice}
               settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
-              autonomousResumeVariant={
-                turnHasOnlyAutonomousResumeSegments ? "note" : "card"
+              backgroundCard={
+                item.id === backgroundCardSegmentId ? backgroundCard : null
               }
             />
           </ChatBlockNavigationAnchor>
         );
       })}
+      {partView.isLast ? (
+        <AssistantTurnEnding
+          runState={runState}
+          messageId={messageId}
+          workingVerbSeed={workingVerbSeed}
+          elapsedStartedAt={elapsedStartedAt}
+          pausedDurationMs={pausedDurationMs}
+          pausedSinceMs={pausedSinceMs}
+          completedAt={completedAt}
+          stopped={stopped}
+          stoppedBeforeResponding={stoppedBeforeResponding}
+          showElapsedFooter={showElapsedFooter}
+          meta={meta}
+          replyText={replyText}
+          // A split turn's earlier parts can be unmounted while its footer is
+          // on screen, so speech projects the reply from the segments instead
+          // of reading the rendered DOM - the same path, and the same reason,
+          // as a stopped boundary row whose reply its earlier rows draw.
+          boundaryReplySegments={
+            boundaryReplySegments ?? (partView.isSplit ? segments : null)
+          }
+          forkAction={forkAction}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * How the turn ENDED, and nothing about what it said: the in-progress
+ * indicator, the note for a turn stopped before it replied, and the elapsed
+ * footer with its reply actions. A background event the agent let pass says
+ * how it ended inside its own card, so it has nothing here.
+ *
+ * Its own component because a long turn is drawn as several list items and
+ * exactly one of them - the last - carries this. Keeping the three conditions
+ * beside the item loop would make each of them ask twice, once about the turn
+ * and once about which part is drawing it.
+ */
+function AssistantTurnEnding({
+  runState,
+  messageId,
+  workingVerbSeed,
+  elapsedStartedAt,
+  pausedDurationMs,
+  pausedSinceMs,
+  completedAt,
+  stopped,
+  stoppedBeforeResponding,
+  showElapsedFooter,
+  meta,
+  replyText,
+  boundaryReplySegments,
+  forkAction,
+}: {
+  runState: ChatMessageRunState | null;
+  messageId: string;
+  workingVerbSeed: string | undefined;
+  elapsedStartedAt: number;
+  pausedDurationMs: number;
+  pausedSinceMs: number | null;
+  completedAt: number | null;
+  stopped: ChatMessageStoppedInfo | null;
+  stoppedBeforeResponding: boolean;
+  showElapsedFooter: boolean;
+  meta: AssistantTurnMeta | null;
+  replyText: string;
+  boundaryReplySegments: ReadonlyArray<MessageSegment> | null;
+  forkAction: ChatMessageForkAction | null;
+}) {
+  return (
+    <>
       {/* Trailing indicator keeps the in-progress cue visible for the whole
           turn once content has started streaming, not just the empty gap. */}
       {runState !== null ? (
@@ -473,7 +615,6 @@ export function AssistantMessageBody({
         />
       ) : null}
       {stoppedBeforeResponding ? <StoppedBeforeResponding /> : null}
-      {agentNotResumed ? <AgentNotResumed /> : null}
       {showElapsedFooter ? (
         <AssistantElapsedFooter
           messageId={messageId}
@@ -485,10 +626,9 @@ export function AssistantMessageBody({
           replyText={replyText}
           boundaryReplySegments={boundaryReplySegments}
           forkAction={forkAction}
-          silentAutonomousResume={silentAutonomousResume}
         />
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -564,45 +704,100 @@ function StoppedBeforeResponding() {
   );
 }
 
-/**
- * Whether a finished note-only turn ended without the agent being resumed.
- *
- * Held back while the host still owes the outcome to the agent
- * (`autonomousResumeOwed`): until then "not resumed" would be a verdict on
- * something that has not ended.
- */
-function isAgentNotResumed(input: {
+const NO_FOLDED_BACKGROUND_EVENTS: ReadonlyArray<FoldedBackgroundEvent> = [];
+
+/** What the background card heading this row shows in its foot. */
+interface BackgroundCardContent {
+  readonly ending: BackgroundEventCardEnding | null;
+  readonly folded: ReadonlyArray<FoldedBackgroundEvent>;
+}
+
+type BackgroundCardInput = {
   readonly silentAutonomousResume: boolean;
   readonly showCompletionFooter: boolean;
   readonly autonomousResumeOwed: boolean;
   readonly runState: ChatMessageRunState | null;
   readonly completedAt: number | null;
-}): boolean {
-  return (
-    input.silentAutonomousResume &&
-    !input.showCompletionFooter &&
-    !input.autonomousResumeOwed &&
-    input.runState === null &&
-    input.completedAt !== null
-  );
+  readonly elapsedStartedAt: number;
+  readonly pausedDurationMs: number;
+  readonly meta: AssistantTurnMeta | null;
+  readonly foldedBackgroundEvents:
+    | ReadonlyArray<FoldedBackgroundEvent>
+    | undefined;
+};
+
+function backgroundCardContent(
+  input: BackgroundCardInput,
+): BackgroundCardContent {
+  return {
+    ending: silentBackgroundEventEnding(input),
+    folded: input.foldedBackgroundEvents ?? NO_FOLDED_BACKGROUND_EVENTS,
+  };
 }
 
 /**
- * The ending of a background outcome that no provider turn picked up: the CLI
- * had already delivered it, or the host's retries for it ran out. Without this
- * line the note above is the last thing in the transcript and nothing says the
- * agent is finished.
+ * How a finished turn that is nothing but a background event ended, for its
+ * card to say: "No reply · Ns" when a provider turn ran and said nothing, with
+ * the turn's details behind it, or "Agent not resumed" when no turn picked the
+ * event up - the CLI had already delivered it, or the host's retries for it
+ * ran out. Without one, the card is the last thing in the transcript and
+ * nothing says the agent is finished.
+ *
+ * `null` while the turn runs, and while the host still owes the event to the
+ * agent (`autonomousResumeOwed`): until then "not resumed" would be a verdict
+ * on something that has not ended.
  */
-function AgentNotResumed() {
-  return (
-    <div
-      role="status"
-      data-testid="assistant-agent-not-resumed"
-      className="flex w-fit items-center py-0.5 text-ui-sm leading-5 text-muted-foreground/70"
-    >
-      Agent not resumed
-    </div>
-  );
+function silentBackgroundEventEnding(
+  input: BackgroundCardInput,
+): BackgroundEventCardEnding | null {
+  if (
+    !input.silentAutonomousResume ||
+    input.runState !== null ||
+    input.completedAt === null
+  ) {
+    return null;
+  }
+  if (!input.showCompletionFooter && input.autonomousResumeOwed) return null;
+  const value = backgroundEventEnding({
+    showCompletionFooter: input.showCompletionFooter,
+    completedAt: input.completedAt,
+    elapsedStartedAt: input.elapsedStartedAt,
+    pausedDurationMs: input.pausedDurationMs,
+  });
+  return {
+    value,
+    details:
+      value.kind === "no-reply" ? (
+        <AssistantMetaTooltip
+          meta={input.meta}
+          stopped={null}
+          startedAt={input.elapsedStartedAt}
+          completedAt={input.completedAt}
+        />
+      ) : null,
+  };
+}
+
+/**
+ * The background event that started this row's turn: the last of the
+ * turn-start deliveries at its head, which is the card whose foot says how
+ * the turn ended and lists what was folded into it. `null` for a row no
+ * background event started.
+ */
+function headBackgroundEventSegmentId(
+  segments: ReadonlyArray<MessageSegment>,
+): string | null {
+  let id: string | null = null;
+  for (const segment of segments) {
+    if (
+      segment.kind !== "autonomous_resume" ||
+      segment.deliveryPlacement === "in_turn"
+    ) {
+      break;
+    }
+    id = segment.id;
+  }
+  return id;
 }
 
 /**
@@ -635,7 +830,6 @@ function AssistantElapsedFooter({
   replyText,
   boundaryReplySegments,
   forkAction,
-  silentAutonomousResume,
 }: {
   messageId: string;
   createdAt: number;
@@ -647,7 +841,6 @@ function AssistantElapsedFooter({
   /** The turn's reply when this row does not draw it (a stopped boundary). */
   boundaryReplySegments: ReadonlyArray<MessageSegment> | null;
   forkAction: ChatMessageForkAction | null;
-  silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
   // One rule for both endings: a Stop gets no separate truncated-at-click
@@ -659,9 +852,7 @@ function AssistantElapsedFooter({
   // So the stop's wind-down is excluded by the DATA, not by a second formula.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
-  const nonStoppedElapsedLabel = silentAutonomousResume
-    ? `Resumed · no response · ${formatWorkedFor(elapsedMs)}`
-    : `${verb} for ${formatWorkedFor(elapsedMs)}`;
+  const nonStoppedElapsedLabel = `${verb} for ${formatWorkedFor(elapsedMs)}`;
   const elapsedContent = (
     <>
       <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
@@ -1216,26 +1407,6 @@ function pickElapsedVerb(seed: string): string {
   return ELAPSED_VERBS[index] ?? ELAPSED_VERBS[0];
 }
 
-/**
- * Format an elapsed duration for the "Worked for Nm Xs" footer.
- *
- * Named distinctly from the dictation-bar's `formatElapsed` (M:SS stopwatch
- * format) so an unqualified import never picks the wrong formatter.
- *
- * - Non-finite / negative inputs (clock skew, replay anomalies) → "<1s",
- *   visually distinct from a sub-1s real-fast turn (which reads "<1s" too -
- *   acceptable since both convey "negligible duration" without the misleading
- *   "0s" rounding from `Math.round`).
- * - 1ms..999ms → "<1s".
- * - 1s..59s → "Ns".
- * - 1m..59m → "Nm Xs".
- * - 1h+    → "Nh Nm Xs".
- */
-function formatWorkedFor(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 1000) return "<1s";
-  return formatClockDuration(Math.floor(ms / 1000));
-}
-
 function AssistantRunIndicator({
   runState,
   createdAt,
@@ -1351,10 +1522,11 @@ export interface AssistantSegmentProps {
   settledNotice: RoutingSettledNotice | null;
   settledNoticeFindUnitId: string | null;
   /**
-   * How an `autonomous_resume` divider is drawn: `note` when it is all a
-   * finished turn holds, `card` otherwise. Read by no other segment kind.
+   * What the background card that started this turn shows in its foot, on
+   * that one `autonomous_resume` segment; `null` on every other item. Read
+   * by no other segment kind.
    */
-  autonomousResumeVariant: "card" | "note";
+  backgroundCard: BackgroundCardContent | null;
 }
 
 function ApprovalSegmentCard({
@@ -1397,7 +1569,7 @@ export function AssistantSegment({
   turnId,
   settledNotice,
   settledNoticeFindUnitId,
-  autonomousResumeVariant,
+  backgroundCard,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -1593,7 +1765,9 @@ export function AssistantSegment({
       return (
         <AutonomousResumeSegment
           triggers={segment.triggers}
-          variant={autonomousResumeVariant}
+          variant="card"
+          ending={backgroundCard?.ending ?? null}
+          folded={backgroundCard?.folded ?? NO_FOLDED_BACKGROUND_EVENTS}
         />
       );
     case "interview":

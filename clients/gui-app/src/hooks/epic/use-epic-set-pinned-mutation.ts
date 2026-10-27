@@ -1,10 +1,14 @@
 import { useMemo } from "react";
 import {
-  useMutationState,
   useQueryClient,
   type Query,
   type QueryClient,
 } from "@tanstack/react-query";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+  selectMutationContext,
+} from "@/hooks/use-mutation-state-of";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   useHostBinding,
@@ -486,13 +490,13 @@ function applyPinnedPatch(
  * mutation cache instead lets each row track its own request independently.
  */
 export function usePendingSetPinnedEpicIds(): ReadonlySet<string> {
-  const pendingVariables = useMutationState({
-    filters: {
+  const pendingVariables = useMutationStateOf(
+    {
       mutationKey: epicMutationKeys.setPinned(),
       status: "pending",
     },
-    select: (mutation) => mutation.state.variables,
-  });
+    selectMutationVariables,
+  );
 
   return useMemo(
     () =>
@@ -509,13 +513,13 @@ export function useHasPendingSetPinnedForScope(
   hostId: string | null,
   userId: string | null,
 ): boolean {
-  const pendingContexts = useMutationState({
-    filters: {
+  const pendingContexts = useMutationStateOf(
+    {
       mutationKey: epicMutationKeys.setPinned(),
       status: "pending",
     },
-    select: (mutation) => mutation.state.context,
-  });
+    selectMutationContext,
+  );
   if (hostId === null || userId === null) return false;
   return pendingContexts.some(
     (context) =>

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+  SubagentChildSegment,
+} from "@/stores/composer/chat-store";
 import {
   acceptExhaustedPersistedRestoreFallback,
   buildRowKeyToIndex,
   chatTimelineGetItemType,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
+  chatTimelineRowKeyForBlock,
   chatViewportAnchorRowIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
@@ -31,6 +36,35 @@ function assistant(id: string, createdAt: number): ChatMessageModel {
   };
 }
 
+function textSegment(id: string): Extract<MessageSegment, { kind: "text" }> {
+  return { id, kind: "text", markdown: id, isStreaming: false };
+}
+
+function subagentSegment(
+  id: string,
+  children: ReadonlyArray<SubagentChildSegment>,
+): Extract<MessageSegment, { kind: "subagent" }> {
+  return {
+    id,
+    kind: "subagent",
+    name: "reviewer",
+    agentType: null,
+    task: "Review the implementation",
+    progressUpdates: [],
+    result: null,
+    isStreaming: false,
+    endState: null,
+    stopped: false,
+    startedAt: null,
+    durationMs: null,
+    spawnToolCallId: null,
+    parentId: null,
+    workflowMeta: null,
+    toolImageResults: [],
+    children,
+  };
+}
+
 function a2aUser(id: string, createdAt: number): ChatMessageModel {
   return {
     ...user(id, createdAt),
@@ -44,7 +78,11 @@ function a2aUser(id: string, createdAt: number): ChatMessageModel {
 }
 
 function rowsOf(messages: ReadonlyArray<ChatMessageModel>) {
-  return transcriptListRows({ window: null, rendered: messages });
+  return transcriptListRows({
+    window: null,
+    rendered: messages,
+    splitLongTurns: true,
+  });
 }
 
 function rowOf(message: ChatMessageModel) {
@@ -79,6 +117,26 @@ describe("chatTimelineLocationForMessage", () => {
     expect(
       chatTimelineLocationForMessage("missing", indexById, false),
     ).toBeNull();
+  });
+});
+
+describe("chatTimelineRowKeyForBlock", () => {
+  it("resolves nested blocks to their split owner and keeps the message key on an unsplit transcript", () => {
+    const message: ChatMessageModel = {
+      ...assistant("turn", 2),
+      segments: [
+        textSegment("text-first"),
+        textSegment("text-later"),
+        subagentSegment("subagent-later", [textSegment("nested-block")]),
+      ],
+    };
+
+    expect(
+      chatTimelineRowKeyForBlock([message], message.id, "nested-block", true),
+    ).toBe("turn#text-later");
+    expect(
+      chatTimelineRowKeyForBlock([message], message.id, "nested-block", false),
+    ).toBe(message.id);
   });
 });
 

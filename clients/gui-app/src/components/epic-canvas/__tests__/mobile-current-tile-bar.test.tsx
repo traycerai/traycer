@@ -42,6 +42,11 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicLiveArtifactTitleGenerating: () => false,
 }));
+// The title hook's cloud-list arm (a TanStack query) - this suite mounts no
+// QueryClient, and no tile here is a chat the projection lacks a record for.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({ data: undefined }),
+}));
 
 /**
  * The host client the bar resolves for a terminal's bound host, and what the
