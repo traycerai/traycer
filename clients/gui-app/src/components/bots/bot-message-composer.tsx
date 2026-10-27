@@ -77,7 +77,11 @@ export function BotMessageComposer(props: {
     if (edit !== null) setText(edit.text);
   }
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The edit the box holds now, for a send that lands after the person moved
+  // on to another.
+  const currentEditRef = useRef<BotComposerEdit | null>(edit);
   useEffect(() => {
+    currentEditRef.current = edit;
     if (edit !== null) inputRef.current?.focus();
   }, [edit]);
   const [lastDelivery, setLastDelivery] =
@@ -90,6 +94,7 @@ export function BotMessageComposer(props: {
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
+    const supersedes = edit?.requestId ?? null;
     send.mutate(
       {
         botId,
@@ -98,12 +103,16 @@ export function BotMessageComposer(props: {
         threadId,
         announcementId,
         redeliver: null,
-        supersedes: edit?.requestId ?? null,
+        supersedes,
       },
       {
         onSuccess: (response) => {
-          setText("");
-          if (edit !== null) onEditEnd();
+          // The box is cleared, and the edit ended, only while it still holds
+          // what was sent: an edit the person opened since keeps its draft.
+          if ((currentEditRef.current?.requestId ?? null) === supersedes) {
+            setText("");
+            if (supersedes !== null) onEditEnd();
+          }
           setLastDelivery(response.delivery);
         },
         onError: failure.fail,

@@ -26,6 +26,12 @@ interface ProvidersFocusState {
   readonly focusProfileId: string | null;
   readonly startSignIn: boolean;
   setFocusHarnessId: (harnessId: GuiHarnessId) => void;
+  // A provider on one host: Providers moves to `hostId` and only that host's
+  // rail consumes the harness.
+  setHostHarnessFocus: (input: {
+    readonly harnessId: GuiHarnessId;
+    readonly hostId: string;
+  }) => void;
   setProfileFocus: (input: {
     readonly harnessId: GuiHarnessId;
     readonly hostId: string | null;
@@ -63,6 +69,14 @@ export const useProvidersFocusStore = create<ProvidersFocusState>((set) => ({
       // No host in particular: "open this provider wherever Settings is
       // pointed", so any rail may consume it.
       focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+    }),
+  setHostHarnessFocus: ({ harnessId, hostId }) =>
+    set({
+      focusHarnessId: harnessId,
+      focusHostId: hostId,
+      focusTargetHostId: hostId,
       focusProfileId: null,
       startSignIn: false,
     }),

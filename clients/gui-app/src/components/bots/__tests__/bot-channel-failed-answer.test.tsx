@@ -226,6 +226,30 @@ function memberPost(senderUserId: string): Message {
   };
 }
 
+const SECOND_REQUEST = "req-second";
+const SECOND_TEXT = "Did the nightly run?";
+
+/** The viewer's later post in the channel, its request open too. */
+function secondPost(): Message {
+  return {
+    role: "user",
+    messageId: "post-2",
+    sender: { type: "user", userId: VIEWER_USER_ID },
+    message: {
+      kind: "user",
+      content: textDoc(SECOND_TEXT),
+      browserAnnotations: [],
+    },
+    timestamp: 1_500,
+    sessionAnchor: null,
+    conversationRequest: {
+      requestId: SECOND_REQUEST,
+      resolvedAt: null,
+      resolvedByMessageId: null,
+    },
+  };
+}
+
 /** The thread `senderUserId`'s post opened. */
 function postThread(senderUserId: string): BotThreadSummary {
   return {
@@ -294,6 +318,8 @@ function createChannelStore(
 }
 
 let sent: ReadonlyArray<BotConversationSendRequest>;
+/** While set, the host holds each send until it settles, then answers `queued`. */
+let heldSends: Promise<void> | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
 
 /** The tab's host client, over a messenger whose `bot.conversation.send` records what it is asked. */
@@ -306,12 +332,16 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     handlers: {
       "bot.conversation.send": (params) => {
         sent = [...sent, params];
-        return Promise.resolve({
+        const hold = heldSends;
+        const response = {
           messageId: "message-new",
           requestId: "req-new",
-          delivery: "written",
+          delivery: hold === null ? ("written" as const) : ("queued" as const),
           threadId: null,
-        });
+        };
+        return hold === null
+          ? Promise.resolve(response)
+          : hold.then(() => response);
       },
     },
   });
@@ -330,8 +360,15 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
 
 /** The channel with `post` in it, the viewer's own unless a case says otherwise. */
 function mountChannel(openThread: BotOpenThread | null, post: Message): void {
+  mountChannelWith(openThread, [post]);
+}
+
+function mountChannelWith(
+  openThread: BotOpenThread | null,
+  posts: ReadonlyArray<Message>,
+): void {
   mocks.channelHandle = {
-    store: createChannelStore([post]),
+    store: createChannelStore(posts),
   } as ChatSessionStoreHandle;
   render(
     <StrictMode>
@@ -365,6 +402,7 @@ function channelBox(): HTMLTextAreaElement {
 
 beforeEach(() => {
   sent = [];
+  heldSends = null;
   onOpenThread.mockClear();
   mocks.threads = [];
   activityStore.setState({ activity: null });
@@ -626,6 +664,36 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     });
     expect(box.value).toBe("");
+  });
+
+  it("keeps the draft of an edit opened while an earlier edit's send was in flight", async () => {
+    const user = userEvent.setup();
+    const hold = Promise.withResolvers<void>();
+    heldSends = hold.promise;
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannelWith(null, [memberPost(VIEWER_USER_ID), secondPost()]);
+    await user.click(screen.getByTestId("bot-message-edit"));
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+
+    act(() => {
+      activityStore.setState({ activity: trunkFailedOn(SECOND_REQUEST) });
+    });
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    expect(box.value).toBe(SECOND_TEXT);
+    await act(async () => {
+      hold.resolve();
+      await hold.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-channel-composer-queued")).toBeTruthy();
+    });
+    expect(box.value).toBe(SECOND_TEXT);
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
   });
 
   it("leaves the box empty and sends nothing when the person cancels", async () => {

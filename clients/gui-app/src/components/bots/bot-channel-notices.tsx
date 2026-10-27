@@ -37,6 +37,8 @@ export function BotSendFailedNotice(props: {
  */
 export function BotUnansweredNotice(props: {
   readonly botTitle: string;
+  /** The host the bot's tab is bound to, the one whose session failed. */
+  readonly hostId: string;
   readonly activity: BotSessionActivity | null;
   /** Opens the transcript of the session that failed; `null` where there is none to open. */
   readonly onOpenUnderTheHood: (() => void) | null;
@@ -78,7 +80,7 @@ export function BotUnansweredNotice(props: {
       {reason?.action !== "sign-in" && onOpenUnderTheHood === null ? null : (
         <div className="flex flex-wrap items-center gap-2">
           {reason?.action === "sign-in" ? (
-            <SignInAction harnessId={reason.harnessId} />
+            <SignInAction harnessId={reason.harnessId} hostId={props.hostId} />
           ) : null}
           {onOpenUnderTheHood === null ? null : (
             <Button
@@ -98,25 +100,31 @@ export function BotUnansweredNotice(props: {
 }
 
 /**
- * Settings ▸ Providers on the harness that signed the person out, where the
- * agent chat sends them for the same error; the section root when the
- * harness is not one this client knows.
+ * Settings ▸ Providers on the bot's host, at the harness that signed the
+ * person out, where the agent chat sends them for the same error; the
+ * section root when the harness is not one this client knows.
  */
-function SignInAction(props: { readonly harnessId: string }): ReactNode {
+function SignInAction(props: {
+  readonly harnessId: string;
+  readonly hostId: string;
+}): ReactNode {
   const { openSettings } = useSystemTabModalActions();
+  const { harnessId, hostId } = props;
   const onClick = useCallback(() => {
-    const harness = guiHarnessIdSchema.safeParse(props.harnessId);
+    const harness = guiHarnessIdSchema.safeParse(harnessId);
     if (harness.success) {
-      useProvidersFocusStore.getState().setFocusHarnessId(harness.data);
+      useProvidersFocusStore
+        .getState()
+        .setHostHarnessFocus({ harnessId: harness.data, hostId });
     }
     openSettings({
       section: "providers",
       resetToGeneral: false,
       tab: null,
       draft: null,
-      hostId: null,
+      hostId,
     });
-  }, [openSettings, props.harnessId]);
+  }, [openSettings, harnessId, hostId]);
   return (
     <Button
       type="button"

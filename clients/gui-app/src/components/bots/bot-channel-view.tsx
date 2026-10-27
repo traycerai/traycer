@@ -409,6 +409,7 @@ export function BotChannelView(props: {
           />
           <BotUnansweredNotice
             botTitle={botTitle}
+            hostId={hostId}
             activity={trunk.session}
             onOpenUnderTheHood={onOpenTrunkUnderTheHood}
             testId="bot-channel-unanswered"

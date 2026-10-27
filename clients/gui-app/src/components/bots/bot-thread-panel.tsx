@@ -349,6 +349,7 @@ function ListedThread(
       />
       <BotUnansweredNotice
         botTitle={botTitle}
+        hostId={hostId}
         activity={activity}
         onOpenUnderTheHood={() => onOpenUnderTheHood(thread.sessionChatId)}
         testId="bot-thread-unanswered"

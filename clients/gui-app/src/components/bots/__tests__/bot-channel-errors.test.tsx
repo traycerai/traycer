@@ -560,9 +560,13 @@ describe("<BotChannelView /> an answer the bot does not give", () => {
 
     await user.click(within(notice).getByRole("button", { name: "Sign in" }));
 
-    expect(useProvidersFocusStore.getState().focusHarnessId).toBe("claude");
+    const focus = useProvidersFocusStore.getState();
+    expect(focus.focusHarnessId).toBe("claude");
+    expect(focus.focusHostId).toBe(HOST_ID);
+    expect(focus.focusTargetHostId).toBe(HOST_ID);
     expect(mocks.openSettings).toHaveBeenCalledTimes(1);
     expect(mocks.openSettings.mock.calls[0][0].section).toBe("providers");
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
   });
 
   it("says why a parked trunk is held in the warning state, with nothing to sign in to", () => {
