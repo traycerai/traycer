@@ -421,6 +421,64 @@ describe("requestedAgentReadiness", () => {
     ).toEqual({ kind: "ready", opencodeLine: null });
   });
 
+  it.each([
+    ["pre-registry host", undefined],
+    ["unmanaged provider", null],
+    ["pack not cut over", { status: "absent" }],
+    ["managed download", { status: "downloading", percent: 40 }],
+    [
+      "managed failure",
+      {
+        status: "error",
+        reason: "disk-full",
+        message: "ENOSPC",
+        retryAtMs: null,
+      },
+    ],
+  ] satisfies ReadonlyArray<
+    readonly [string, ProviderManagedInstallState | null | undefined]
+  >)(
+    "uses the non-OpenCode CLI's executable proof while its display version is pending: %s",
+    (_label, state) => {
+      const provider: ProviderCliState = {
+        ...providerRow("claude-code", null),
+        selected: { kind: "path" },
+        candidates: [
+          {
+            kind: "path",
+            path: "/usr/local/bin/claude",
+            available: true,
+            version: null,
+            versionPending: true,
+          },
+        ],
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        managedInstallState: state,
+      };
+      expect(
+        requestedAgentReadiness(
+          "claude",
+          [harnessRow("claude", {})],
+          [provider],
+          null,
+        ),
+      ).toEqual({ kind: "ready", opencodeLine: null });
+      expect(
+        requestedAgentReadiness(
+          "claude",
+          [harnessRow("claude", {})],
+          [{ ...provider, availabilityPending: true }],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
   it("waits while the requested agent's availability is still being probed", () => {
     expect(
       requestedAgentReadiness(

@@ -91,9 +91,9 @@ export function newChatOpencodeLineFromProviders(
 }
 
 /**
- * Positive launch proof for sandbox sends. Unlike Settings' legacy pack
- * status below, missing state means keep preparing. OpenCode-family callers
- * use OpenCode's per-line pack state. The host's `opencode-binary-guard.ts`
+ * Positive launch proof for sandbox sends. OpenCode-family callers require
+ * OpenCode's per-line pack state, and missing state means keep preparing.
+ * The host's `opencode-binary-guard.ts`
  * `resolveOpencodeLine1Launch` (99-151) reads each sibling's own external
  * selection; `resolveOpencodeLine2SiblingLaunch` (207-220) forces Managed 2.
  * OpenCode's external selection chooses a sibling's new-chat line but cannot
@@ -120,20 +120,23 @@ export function providerPackPreparingForSandboxAgent(
   return sandboxOpencodePackPreparing(engine, externalProvider, opencodeLine);
 }
 
+/**
+ * Ordinary CLI harnesses prove their executable in their own availability
+ * probe (for example ClaudeAdapter.isAvailable). A candidate's version is
+ * display metadata, not launch proof; its probe may time out indefinitely.
+ * Older hosts and unmanaged providers also have no managed-pack state. Keep
+ * explicit setup blockers unless a runnable candidate supplies the fallback,
+ * then let the caller require the harness's settled availability.
+ */
 function sandboxProviderPackPreparing(
   provider: ProviderCliState | undefined,
 ): ProviderPackPreparing | null {
-  if (provider === undefined || provider.availabilityPending)
-    return SANDBOX_AGENT_WAITING;
-  if (
-    provider.candidates.some(
-      (entry) => entry.available && !entry.versionPending,
-    )
-  )
-    return null;
-  if (provider.candidates.some((entry) => entry.versionPending))
-    return SANDBOX_AGENT_WAITING;
-  return sandboxPackPreparingFromState(provider.managedInstallState);
+  if (provider === undefined) return null;
+  if (provider.availabilityPending) return SANDBOX_AGENT_WAITING;
+  const preparing = providerPackPreparingForProvider(provider);
+  return preparing !== null && providerPackBlocksExecution(preparing)
+    ? preparing
+    : null;
 }
 
 const SANDBOX_AGENT_WAITING: ProviderPackPreparing = {
@@ -182,7 +185,7 @@ function sandboxManagedLinePreparing(
   return sandboxPackPreparingFromState(managedLine?.managedInstallState);
 }
 
-/** Null and absent are waiting states for a sandbox, never successful setup. */
+/** Missing managed OpenCode line proof is waiting, never successful setup. */
 function sandboxPackPreparingFromState(
   state: ProviderManagedInstallState | null | undefined,
 ): ProviderPackPreparing | null {
