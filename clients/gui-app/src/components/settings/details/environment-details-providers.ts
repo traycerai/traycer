@@ -25,11 +25,7 @@ import type {
   SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
-import {
-  guiHarnessIdToProviderId,
-  providerDisplayName,
-} from "@/lib/provider-ordering";
+import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
 import { sandboxSettingsFailed } from "@traycer/protocol/host/sandbox-settings";
 
 type HistoryResponse = ResponseOfMethod<HostRpcRegistry, "environment.history">;
@@ -60,7 +56,7 @@ function hostStatus(
   return {
     hostId: host.hostId,
     name: host.hostName,
-    item: host.state === "not_used" ? host.reason : null,
+    item: host.state === "not_used" ? unusedSettingLabel(host.reason) : null,
     state: host.state,
     reason: null,
     at: host.at,
@@ -215,20 +211,12 @@ async function deliveryHostRows(input: {
   return [
     current,
     ...(input.unusedListed ? [] : unused).map(
-      ({ key: itemKey }): DetailsHostStatus => {
-        const harness = guiHarnessIdSchema.safeParse(itemKey.split(":")[0]);
-        const provider = harness.success
-          ? guiHarnessIdToProviderId(harness.data)
-          : null;
-        const label =
-          provider === null ? "Agent" : providerDisplayName(provider);
-        return {
-          ...current,
-          item: `${label} key`,
-          state: "not_used",
-          recovery: null,
-        };
-      },
+      ({ key: itemKey }): DetailsHostStatus => ({
+        ...current,
+        item: unusedSettingLabel(itemKey),
+        state: "not_used",
+        recovery: null,
+      }),
     ),
   ];
 }

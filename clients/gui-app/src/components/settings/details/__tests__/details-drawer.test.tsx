@@ -726,6 +726,83 @@ describe("the Secrets header's Details", () => {
   });
 });
 
+describe("a history-reported unused setting", () => {
+  const unusedHost = (reason: string | null) => ({
+    hostId: "host-sbx",
+    hostName: "Build box",
+    state: "not_used",
+    reason,
+    at: AT,
+    lastReportedAt: AT,
+  });
+
+  function mountUnused(reason: string | null): TeamPageHarness {
+    return mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({ hostStates: [unusedHost(reason)] }),
+    });
+  }
+
+  it("names a known harness key by its product, never by the raw key", async () => {
+    const harness = mountUnused("claude:ANTHROPIC_API_KEY");
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Claude Code key · not used on sandboxes");
+    expect(document.body.textContent).not.toMatch(/ANTHROPIC_API_KEY|claude:/);
+  });
+
+  it("keeps an already-friendly label as it is", async () => {
+    const harness = mountUnused("Claude Code key");
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Claude Code key · not used on sandboxes");
+  });
+
+  it("uses a generic label for an unknown harness instead of exposing its key", async () => {
+    const harness = mountUnused("future_harness:PRIVATE_KEY");
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Agent key · not used on sandboxes");
+    expect(document.body.textContent).not.toMatch(/future_harness|PRIVATE_KEY/);
+  });
+
+  it("falls back to a generic key label when the host names no setting, never printing null", async () => {
+    const harness = mountUnused(null);
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Agent key · not used on sandboxes");
+    expect(document.body.textContent).not.toMatch(/\bnull\b/);
+  });
+
+  it("keeps the raw key in the diagnostics export for support", async () => {
+    const harness = mountUnused("claude:ANTHROPIC_API_KEY");
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    await screen.findByText(/not used on sandboxes/);
+
+    await user.click(
+      await screen.findByRole("tab", { name: "Export diagnostics" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
+    const exported = await savedExport();
+
+    expect(exported).toMatchObject({
+      status: {
+        hosts: [
+          {
+            item: "Claude Code key",
+            reason: "claude:ANTHROPIC_API_KEY",
+          },
+        ],
+      },
+    });
+  });
+});
+
 describe("a sandbox's unused settings", () => {
   const HOST_ID = mockLocalHostEntry.hostId;
   const sandboxHost = {
