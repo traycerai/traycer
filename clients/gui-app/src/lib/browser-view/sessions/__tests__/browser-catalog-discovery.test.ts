@@ -137,6 +137,35 @@ function memoryBackend(shared: Map<string, unknown>): BrowserCatalogBackend {
   };
 }
 
+interface PurgeWriteGate {
+  failing: boolean;
+}
+
+function purgeWriteFailingBackend(
+  shared: Map<string, unknown>,
+  gate: PurgeWriteGate,
+): BrowserCatalogBackend {
+  let queue: Promise<unknown> = Promise.resolve();
+  return {
+    read: (key) => Promise.resolve(shared.get(key)),
+    change: (key, apply) => {
+      const run = queue.then(() => {
+        const next = apply(shared.get(key));
+        if (gate.failing && next.blocked !== null)
+          throw new Error("purge write failed");
+        shared.set(key, next);
+        return next;
+      });
+      queue = run.catch(() => undefined);
+      return run;
+    },
+    clear: () => {
+      shared.clear();
+      return Promise.resolve();
+    },
+  };
+}
+
 type ReadFn = (
   request: BrowserCatalogReadRequest,
   signal: AbortSignal,
@@ -349,6 +378,35 @@ describe("browser catalog discovery", () => {
 
     expect(store.read(scope).records).toEqual([]);
     expect(store.read(scope).pendingCount).toBe(0);
+  });
+
+  it("keeps a failed inaccessible purge hidden when the real repair catch tries its unavailable fallback", async () => {
+    const gate: PurgeWriteGate = { failing: false };
+    const failingStore = new BrowserCatalogInventoryStore(
+      purgeWriteFailingBackend(shared, gate),
+    );
+    await failingStore.load(scope);
+    await failingStore.owner(scope, "B", [liveEvidence("B", "s1", 12)]);
+    gate.failing = true;
+    const failingDiscovery = new BrowserCatalogDiscovery(scope, failingStore);
+    const { reader, calls } = readerOf(() =>
+      Promise.resolve<BrowserCatalogReadResponse>({ kind: "inaccessible" }),
+    );
+
+    const release = failingDiscovery.acquire(reader);
+    await advance(0);
+    release();
+
+    expect(calls).toHaveLength(1);
+    expect(failingStore.read(scope).status).toBe("inaccessible");
+    expect(failingStore.read(scope).records).toEqual([]);
+    expect(JSON.stringify([...shared.values()])).toContain('"s1"');
+
+    await expect(failingStore.rehydrate()).rejects.toThrow(
+      "purge write failed",
+    );
+    expect(failingStore.read(scope).records).toEqual([]);
+    expect(failingStore.read(scope).status).toBe("inaccessible");
   });
 
   it("stops polling once the last reader is released", async () => {

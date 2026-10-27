@@ -147,6 +147,77 @@ function memoryBackend(
   };
 }
 
+interface PurgeWriteGate {
+  failing: boolean;
+}
+
+function purgeWriteFailingBackend(
+  shared: Map<string, unknown>,
+  gate: PurgeWriteGate,
+): BrowserCatalogBackend {
+  let queue: Promise<unknown> = Promise.resolve();
+  return {
+    read: (key) => Promise.resolve(shared.get(key)),
+    change: (key, apply) => {
+      const run = queue.then(() => {
+        const next = apply(shared.get(key));
+        if (gate.failing && next.blocked !== null)
+          throw new Error("purge write failed");
+        shared.set(key, next);
+        return next;
+      });
+      queue = run.catch(() => undefined);
+      return run;
+    },
+    clear: () => {
+      shared.clear();
+      return Promise.resolve();
+    },
+  };
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolvePromise: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => resolvePromise(value),
+  };
+}
+
+interface ChangeCompletionGate {
+  holdNext: boolean;
+  readonly committed: Deferred<void>;
+  readonly release: Deferred<void>;
+}
+
+function changeCompletionGatedBackend(
+  shared: Map<string, unknown>,
+  gate: ChangeCompletionGate,
+): BrowserCatalogBackend {
+  const base = memoryBackend(shared, []);
+  return {
+    read: (key) => base.read(key),
+    change: async (key, apply) => {
+      const next = await base.change(key, apply);
+      if (gate.holdNext) {
+        gate.holdNext = false;
+        gate.committed.resolve(undefined);
+        await gate.release.promise;
+      }
+      return next;
+    },
+    clear: () => base.clear(),
+  };
+}
+
 async function openStore(shared: Map<string, unknown>, writes: unknown[]) {
   const store = new BrowserCatalogInventoryStore(memoryBackend(shared, writes));
   await store.load(scope);
@@ -469,6 +540,152 @@ describe("browser catalog inventory", () => {
       expect(store.read(scope).records).toEqual([]);
       expect(store.read(scope).status).toBe("inaccessible");
     });
+
+    it("rejects a delayed local-only result from a stale store after another store purges the task", async () => {
+      const writer = await openStore(shared, []);
+      await writer.owner(scope, "B", [liveEvidence("B", "s1", 12)]);
+      const stale = await openStore(shared, []);
+      const issuedEpoch = stale.epoch(scope);
+
+      await writer.purge(scope);
+
+      await expect(
+        stale.accept(scope, { kind: "local-only" }, issuedEpoch),
+      ).rejects.toThrow("Browser inventory access changed.");
+      expect(stale.epoch(scope)).toBe(writer.epoch(scope));
+      expect(stale.read(scope).status).toBe("inaccessible");
+      expect(stale.read(scope).records).toEqual([]);
+      expect(JSON.stringify([...shared.values()])).not.toContain('"s1"');
+    });
+
+    it.each(["inaccessible", "local-only"] as const)(
+      "keeps %s fail-closed when its purge write fails, then restores only with a fresh authorized epoch",
+      async (kind) => {
+        const gate: PurgeWriteGate = { failing: false };
+        const store = new BrowserCatalogInventoryStore(
+          purgeWriteFailingBackend(shared, gate),
+        );
+        await store.load(scope);
+        await store.owner(scope, "B", [liveEvidence("B", "s1", 12)]);
+        const issuedEpoch = store.epoch(scope);
+        gate.failing = true;
+
+        await expect(
+          store.accept(scope, { kind }, issuedEpoch),
+        ).rejects.toThrow("purge write failed");
+        const purgeEpoch = store.epoch(scope);
+        expect(store.read(scope).status).toBe(kind);
+        expect(store.read(scope).records).toEqual([]);
+        expect(JSON.stringify([...shared.values()])).toContain('"s1"');
+
+        await expect(
+          store.accept(
+            scope,
+            { kind: "unavailable", reason: "cloud" },
+            purgeEpoch,
+          ),
+        ).rejects.toThrow("purge write failed");
+        await expect(
+          store.accept(scope, { kind: "unsupported" }, purgeEpoch),
+        ).rejects.toThrow("purge write failed");
+        await expect(store.rehydrate()).rejects.toThrow("purge write failed");
+        await expect(
+          store.owner(scope, "B", [liveEvidence("B", "s2", 13)]),
+        ).rejects.toThrow();
+        expect(store.read(scope).status).toBe(kind);
+        expect(store.read(scope).records).toEqual([]);
+        expect(JSON.stringify([...shared.values()])).toContain('"s1"');
+
+        gate.failing = false;
+        await store.rehydrate();
+        expect(store.read(scope).status).toBe(kind);
+        expect(store.read(scope).records).toEqual([]);
+        expect(JSON.stringify([...shared.values()])).not.toContain('"s1"');
+
+        const restarted = new BrowserCatalogInventoryStore(
+          purgeWriteFailingBackend(shared, gate),
+        );
+        await restarted.load(scope);
+        expect(restarted.read(scope).status).toBe(kind);
+        expect(restarted.read(scope).records).toEqual([]);
+
+        await expect(
+          store.accept(
+            scope,
+            snapshot(9, {
+              records: [record("A", "stale", 1)],
+              fences: [],
+              revokedHostIds: [],
+            }),
+            issuedEpoch,
+          ),
+        ).rejects.toThrow("Browser inventory access changed.");
+        expect(store.read(scope).status).toBe(kind);
+        expect(store.read(scope).records).toEqual([]);
+
+        await store.accept(
+          scope,
+          snapshot(1, {
+            records: [record("A", "s2", 1)],
+            fences: [],
+            revokedHostIds: [],
+          }),
+          purgeEpoch,
+        );
+        expect(store.read(scope).status).toBe("available");
+        expect(
+          store.read(scope).records.map((entry) => entry.sessionId),
+        ).toEqual(["s2"]);
+      },
+    );
+
+    it.each(["accept", "owner"] as const)(
+      "does not publish an old %s completion after a newer purge committed",
+      async (operation) => {
+        const committed = deferred<void>();
+        const release = deferred<void>();
+        const gate: ChangeCompletionGate = {
+          holdNext: false,
+          committed,
+          release,
+        };
+        const store = new BrowserCatalogInventoryStore(
+          changeCompletionGatedBackend(shared, gate),
+        );
+        await store.load(scope);
+        const oldEpoch = store.epoch(scope);
+        gate.holdNext = true;
+
+        const oldOperation =
+          operation === "accept"
+            ? store.accept(
+                scope,
+                snapshot(1, {
+                  records: [record("A", "old", 1)],
+                  fences: [],
+                  revokedHostIds: [],
+                }),
+                oldEpoch,
+              )
+            : store.owner(scope, "B", [liveEvidence("B", "old", 1)]);
+        await committed.promise;
+
+        await store.purge(scope);
+        const purgedEpoch = store.epoch(scope);
+        expect(purgedEpoch).toBeGreaterThan(oldEpoch);
+        expect(store.read(scope).status).toBe("inaccessible");
+        expect(store.read(scope).records).toEqual([]);
+
+        release.resolve(undefined);
+        await expect(oldOperation).rejects.toThrow(
+          "Browser inventory access changed.",
+        );
+        expect(store.epoch(scope)).toBe(purgedEpoch);
+        expect(store.read(scope).status).toBe("inaccessible");
+        expect(store.read(scope).records).toEqual([]);
+        expect(JSON.stringify([...shared.values()])).not.toContain('"old"');
+      },
+    );
 
     it("keeps authorized stale rows visible through a transient unavailable outcome", async () => {
       const store = await openStore(shared, []);

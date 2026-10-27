@@ -7,8 +7,12 @@ import {
   readBrowserCatalogHeadWakeVersion,
 } from "@traycer/protocol/host/browser/catalog-head-wake-room";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { BrowserCatalogReadRequest } from "@traycer/protocol/host/browser/catalog-contracts";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import { browserCatalogDiscovery } from "@/lib/browser-view/sessions/browser-catalog-discovery";
 import {
   browserCatalogInventory,
@@ -32,6 +36,14 @@ export interface BrowserCatalogModel {
   readonly refresh: () => void;
 }
 
+interface CatalogRead {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly userId: string;
+  readonly request: BrowserCatalogReadRequest;
+  readonly signal: AbortSignal;
+}
+
 export function useBrowserCatalogInventory(args: {
   readonly epicId: string;
   readonly readerClient: HostClient<HostRpcRegistry> | null;
@@ -39,6 +51,36 @@ export function useBrowserCatalogInventory(args: {
   const { epicId, readerClient } = args;
   const active = usePaneVisible();
   const userId = useRequestContextUserId(readerClient);
+  const readiness = useReactiveHostReadiness(readerClient);
+  const { mutateAsync: readCatalog } = useHostMutation<
+    HostRpcRegistry,
+    "browser.catalog.read",
+    unknown,
+    CatalogRead
+  >({
+    client: (variables) => {
+      variables.signal.throwIfAborted();
+      if (
+        variables.client.getRequestContextUserId() !== variables.userId ||
+        variables.client.getActiveHostId() !== variables.hostId
+      )
+        throw new Error("Browser inventory identity changed.");
+      return variables.client;
+    },
+    method: "browser.catalog.read",
+    mapVariables: (variables) => variables.request,
+    signalFor: (variables) => variables.signal,
+    options: {
+      mutationKey: browserMutationKeys.catalogRead(
+        readiness.hostId,
+        userId,
+        epicId,
+      ),
+      retry: false,
+      gcTime: 0,
+      networkMode: "always",
+    },
+  });
   const scope = useMemo(
     () => (userId === null ? null : { userId, epicId }),
     [epicId, userId],
@@ -55,19 +97,21 @@ export function useBrowserCatalogInventory(args: {
       !active ||
       discovery === null ||
       readerClient === null ||
-      userId === null
+      userId === null ||
+      !readiness.canExecute ||
+      readiness.hostId === null
     )
       return;
+    const hostId = readiness.hostId;
     const release = discovery.acquire({
-      read: (request, signal) => {
-        if (readerClient.getRequestContextUserId() !== userId)
-          throw new Error("Browser inventory identity changed.");
-        return readerClient.requestWithSignal(
-          "browser.catalog.read",
+      read: (request, signal) =>
+        readCatalog({
+          client: readerClient,
+          hostId,
+          userId,
           request,
           signal,
-        );
-      },
+        }),
     });
     const changed = readerClient.onChange(discovery.refresh);
     const verdict = readerClient.onCloudVerdictChanged(discovery.refresh);
@@ -76,7 +120,15 @@ export function useBrowserCatalogInventory(args: {
       verdict();
       release();
     };
-  }, [active, discovery, readerClient, userId]);
+  }, [
+    active,
+    discovery,
+    readerClient,
+    userId,
+    readiness.canExecute,
+    readiness.hostId,
+    readCatalog,
+  ]);
 
   useEffect(() => {
     if (discovery === null) return;

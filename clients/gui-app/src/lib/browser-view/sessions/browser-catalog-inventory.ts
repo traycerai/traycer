@@ -237,6 +237,12 @@ interface InventoryEntry {
   state: BrowserCatalogInventory;
   loaded: Promise<void> | null;
   blocked: boolean;
+  pendingPurge: {
+    readonly reason: "local-only" | "inaccessible";
+    readonly epoch: number;
+    readonly issuedEpoch: number | null;
+  } | null;
+  purging: Promise<void> | null;
 }
 
 /** One private cache/journal per caller/task, independent of owner stream refcounts. */
@@ -264,6 +270,8 @@ export class BrowserCatalogInventoryStore {
         state: project(data, "loading"),
         loaded: null,
         blocked: false,
+        pendingPurge: null,
+        purging: null,
       };
       this.entries.set(key, entry);
     }
@@ -301,16 +309,85 @@ export class BrowserCatalogInventoryStore {
     return run;
   }
 
+  private async flushPurge(
+    scope: BrowserCatalogScope,
+    entry: InventoryEntry,
+  ): Promise<void> {
+    const stamp = this.generation;
+    await this.flushClear();
+    while (entry.pendingPurge !== null) {
+      if (entry.purging === null) {
+        const pending = entry.pendingPurge;
+        entry.purging = Promise.resolve()
+          .then(async () => {
+            const outcome = { applied: false };
+            const next = await this.backend.change(scopeKey(scope), (raw) => {
+              if (stamp !== this.generation)
+                throw new Error("Browser inventory identity changed.");
+              const data = parseInventory(raw, scope.epicId);
+              if (
+                pending.issuedEpoch !== null &&
+                data.epoch > pending.issuedEpoch
+              )
+                return data;
+              outcome.applied = true;
+              return {
+                ...emptyInventory(),
+                epoch: Math.max(data.epoch + 1, pending.epoch),
+                blocked: pending.reason,
+              };
+            });
+            if (stamp !== this.generation)
+              throw new Error("Browser inventory identity changed.");
+            if (entry.pendingPurge !== pending) return;
+            entry.pendingPurge = null;
+            entry.blocked = next.blocked !== null;
+            this.publish(entry, next, next.blocked ?? "cached");
+            if (!outcome.applied)
+              throw new Error("Browser inventory access changed.");
+          })
+          .finally(() => {
+            // Keep the intent after a failed write: fallback outcomes and window
+            // rehydration must not restore the private row left on disk.
+            entry.purging = null;
+          });
+      }
+      await entry.purging;
+    }
+  }
+
+  private suppress(
+    scope: BrowserCatalogScope,
+    reason: "local-only" | "inaccessible",
+    issuedEpoch: number | null,
+  ): Promise<void> {
+    const entry = this.entry(scope);
+    if (issuedEpoch !== null && issuedEpoch !== entry.data.epoch)
+      return Promise.reject(new Error("Browser inventory access changed."));
+    const epoch = entry.data.epoch + 1;
+    entry.pendingPurge = { reason, epoch, issuedEpoch };
+    entry.blocked = true;
+    this.publish(
+      entry,
+      { ...emptyInventory(), epoch, blocked: reason },
+      reason,
+    );
+    return this.flushPurge(scope, entry);
+  }
+
   async load(scope: BrowserCatalogScope): Promise<void> {
     const entry = this.entry(scope);
     if (entry.loaded !== null) return entry.loaded;
     const stamp = this.generation;
     const state = entry.state;
     entry.loaded = this.flushClear()
+      .then(() => this.flushPurge(scope, entry))
       .then(() =>
-        this.backend.change(scopeKey(scope), (raw) =>
-          parseInventory(raw, scope.epicId),
-        ),
+        this.backend.change(scopeKey(scope), (raw) => {
+          if (entry.pendingPurge !== null)
+            throw new Error("Browser inventory access changed.");
+          return parseInventory(raw, scope.epicId);
+        }),
       )
       .then((raw) => {
         if (stamp !== this.generation || entry.state !== state) return;
@@ -339,6 +416,8 @@ export class BrowserCatalogInventoryStore {
         if (entry === undefined) return;
         const scope: unknown = JSON.parse(key);
         if (!Array.isArray(scope) || typeof scope[1] !== "string") return;
+        if (typeof scope[0] !== "string") return;
+        await this.flushPurge({ userId: scope[0], epicId: scope[1] }, entry);
         const stamp = this.generation;
         const state = entry.state;
         const raw = await this.backend.read(key);
@@ -429,18 +508,7 @@ export class BrowserCatalogInventoryStore {
   ): Promise<void> {
     const entry = this.entry(scope);
     if (response.kind === "inaccessible" || response.kind === "local-only") {
-      entry.blocked = true;
-      this.publish(entry, emptyInventory(), response.kind);
-      await this.change(
-        scope,
-        (data) => ({
-          ...emptyInventory(),
-          epoch: data.epoch + 1,
-          blocked: response.kind,
-        }),
-        response.kind,
-        epoch,
-      );
+      await this.suppress(scope, response.kind, epoch);
       return;
     }
     if (response.kind !== "available") {
@@ -470,14 +538,21 @@ export class BrowserCatalogInventoryStore {
     const entry = this.entry(scope);
     const stamp = this.generation;
     await this.flushClear();
+    await this.flushPurge(scope, entry);
     const next = await this.backend.change(scopeKey(scope), (raw) => {
       if (stamp !== this.generation)
         throw new Error("Browser inventory identity changed.");
+      if (entry.pendingPurge !== null)
+        throw new Error("Browser inventory access changed.");
       const data = parseInventory(raw, scope.epicId);
       return epoch === null || data.epoch === epoch ? apply(data) : data;
     });
     if (stamp !== this.generation)
       throw new Error("Browser inventory identity changed.");
+    if (entry.pendingPurge !== null)
+      throw new Error("Browser inventory access changed.");
+    if (next.epoch < entry.data.epoch)
+      throw new Error("Browser inventory access changed.");
     entry.blocked = next.blocked !== null;
     this.publish(entry, next, next.blocked ?? status);
     if (
@@ -490,19 +565,7 @@ export class BrowserCatalogInventoryStore {
   }
 
   async purge(scope: BrowserCatalogScope): Promise<void> {
-    const entry = this.entry(scope);
-    entry.blocked = true;
-    this.publish(entry, emptyInventory(), "inaccessible");
-    await this.change(
-      scope,
-      (data) => ({
-        ...emptyInventory(),
-        epoch: data.epoch + 1,
-        blocked: "inaccessible",
-      }),
-      "inaccessible",
-      null,
-    );
+    await this.suppress(scope, "inaccessible", null);
   }
 
   async clear(): Promise<void> {
