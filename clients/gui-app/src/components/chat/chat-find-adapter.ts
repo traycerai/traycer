@@ -119,6 +119,11 @@ interface ChatFindAdapterOptions {
 
 export interface ChatFindRevealTarget {
   readonly messageId: string;
+  /**
+   * The list row to scroll to - the part of a long turn that paints this
+   * match, and the message's own row for everything else.
+   */
+  readonly rowKey: string;
   readonly unitId: string;
   readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
   readonly matchKey: string;
@@ -128,6 +133,8 @@ export interface ChatFindRevealTarget {
 
 export interface ChatFindReconcileTarget {
   readonly messageId: string;
+  /** See {@link ChatFindRevealTarget.rowKey}. */
+  readonly rowKey: string;
   readonly unitId: string;
   readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
   readonly matchKey: string;
@@ -135,6 +142,8 @@ export interface ChatFindReconcileTarget {
 
 interface ChatFindMatch {
   readonly messageId: string;
+  /** See {@link ChatFindRevealTarget.rowKey}. */
+  readonly rowKey: string;
   readonly rowIndex: number;
   readonly unitId: string;
   readonly unitIndex: number;
@@ -1255,6 +1264,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.paintGeneration = generation;
     this.revealMatch({
       messageId: activeMatch.messageId,
+      rowKey: activeMatch.rowKey,
       unitId: activeMatch.unitId,
       owningChain: activeMatch.owningChain,
       matchKey,
@@ -1267,6 +1277,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   private requestReconcile(activeMatch: ChatFindMatch): void {
     this.reconcileMatch({
       messageId: activeMatch.messageId,
+      rowKey: activeMatch.rowKey,
       unitId: activeMatch.unitId,
       owningChain: activeMatch.owningChain,
       matchKey: chatFindMatchKey(activeMatch),
@@ -1452,6 +1463,7 @@ function findMatches(input: {
         const end = index + match.length;
         matches.push({
           messageId: row.messageId,
+          rowKey: unit.rowKey ?? row.messageId,
           rowIndex,
           unitId: unit.unitId,
           unitIndex,

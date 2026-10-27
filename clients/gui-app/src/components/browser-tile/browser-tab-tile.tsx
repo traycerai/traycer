@@ -1,4 +1,3 @@
-import { useBrowserTabRetirement } from "@/lib/browser-view/sessions/use-browser-tab-retirement";
 import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { logBrowserOpenSpan } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
@@ -25,10 +24,7 @@ import {
   type BrowserTileNode,
   type BrowserTilePlacement,
 } from "./browser-tile-placement";
-import {
-  useMaybeBrowserSessionsCoordinatorKey,
-  useBrowserSessionsContext,
-} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -721,52 +717,8 @@ function useRuntimeDemotionNote(
   return { visible: demotedRevision !== null, dismiss };
 }
 
-/**
- * The sessions context this reads is the TILE's host stream: the host surface
- * puts every tile's subtree behind a `BrowserSessionsHostBoundary` for
- * `node.hostId`, so there is no per-tile boundary here.
- */
-function browserTabRetirementPending(
-  canRetire: boolean,
-  session: BrowserSessionInfo | undefined,
-  tab: BrowserSessionInfo["tabs"][number] | undefined,
-  unreachable: boolean,
-): boolean {
-  if (canRetire || unreachable) return false;
-  return session === undefined || tab === undefined;
-}
-
-function BrowserTabClosurePending(props: {
-  readonly errorMessage: string | null;
-  readonly onRetry: () => void;
-}) {
-  return (
-    <div
-      className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-ui-sm text-muted-foreground"
-      role="status"
-    >
-      <span>
-        {props.errorMessage === null
-          ? "Checking whether this tab is closed…"
-          : "Couldn't confirm whether this tab is closed."}
-      </span>
-      <Button variant="ghost" size="sm" onClick={props.onRetry}>
-        Retry
-      </Button>
-    </div>
-  );
-}
-
 export function BrowserTabTile(props: BrowserTabTileProps) {
   const sessions = useBrowserSessionsContext();
-  const coordinatorKey = useMaybeBrowserSessionsCoordinatorKey();
-  const { canRetire, refresh: refreshRetirement } = useBrowserTabRetirement({
-    coordinatorKey,
-    scope: browserTileScope(props.placement),
-    hostId: props.node.hostId,
-    sessionId: props.node.sessionId,
-    tabId: props.node.tabId,
-  });
   const attachTab = sessions.attachTab;
   const moveTab = sessions.moveTab;
   const reachability = useHostReachability(props.node.hostId);
@@ -984,7 +936,6 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   const onRequestClose = props.onRequestClose;
   useEffect(() => {
     if (session !== undefined && tab !== undefined) return;
-    if (!canRetire) return;
     if (sessions.lifecycle !== "live" || !sessions.inventoryReady) return;
     // Belt-and-braces guard, not the primary gate: the coordinator's own
     // "live" lifecycle is sourced from its stream and can lag the
@@ -1000,7 +951,6 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
     clearLastBrowserPeekFrame(browserPeekFrameKey(props.node));
     onRequestClose();
   }, [
-    canRetire,
     onRequestClose,
     sessions.inventoryReady,
     session,
@@ -1009,25 +959,6 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
     reachability.status,
     props.node,
   ]);
-
-  if (
-    browserTabRetirementPending(
-      canRetire,
-      session,
-      tab,
-      reachability.status === "unreachable",
-    )
-  ) {
-    return (
-      <BrowserTabClosurePending
-        errorMessage={sessions.errorMessage}
-        onRetry={() => {
-          sessions.retry();
-          refreshRetirement();
-        }}
-      />
-    );
-  }
 
   if (reachability.status === "unreachable") {
     return (

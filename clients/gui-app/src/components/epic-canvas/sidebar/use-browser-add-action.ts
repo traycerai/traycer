@@ -1,3 +1,4 @@
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { preparePendingBrowserTile } from "@/lib/browser-view/tiles/pending-browser-tab";
 import type { PreparedBrowserTabOpen } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
@@ -6,11 +7,7 @@ import {
 } from "@/stores/settings/settings-store";
 import { useCallback } from "react";
 import { flushSync } from "react-dom";
-import {
-  useIsMutating,
-  useMutation,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
@@ -87,7 +84,7 @@ export function useAddBrowserAction(
   // Counted across every surface adding on this host, not just this hook's
   // own call: the header and the empty state mount together, so a per-hook
   // flag would let one tap on each open two tabs.
-  const isAdding = useIsMutating({ mutationKey: openTabKey }) > 0;
+  const isAdding = useIsMutatingOf({ mutationKey: openTabKey }) > 0;
   const mutate = addMutation.mutate;
   const add = useCallback(() => {
     if (queryClient.isMutating({ mutationKey: openTabKey }) > 0) return;

@@ -93,6 +93,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={setOpen}
       header={header}

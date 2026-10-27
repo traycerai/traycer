@@ -268,16 +268,7 @@ describe("main-owned browser.sessions streams held by preparation and UI", () =>
     registry.open("window-1", KEY);
 
     expect(session.framesOfKind("requestSnapshot")).toHaveLength(1);
-    expect(eventKinds(harness.emitted)).toEqual([
-      "status",
-      "inventoryCapability",
-      "tabBound",
-    ]);
-    expect(
-      harness.emitted
-        .map(({ envelope }) => envelope.event)
-        .find((event) => event.kind === "inventoryCapability"),
-    ).toEqual({ kind: "inventoryCapability", supported: false });
+    expect(eventKinds(harness.emitted)).toEqual(["status", "tabBound"]);
     // Still one stream: the renderer joined it instead of opening a second.
     expect(harness.clients).toHaveLength(1);
     release?.();
@@ -298,16 +289,7 @@ describe("main-owned browser.sessions streams held by preparation and UI", () =>
     expect(session.framesOfKind("requestSnapshot")).toEqual([]);
     // The snapshot the host was already going to send reaches the renderer.
     session.emit(snapshotFrame(), null);
-    expect(eventKinds(harness.emitted)).toEqual([
-      "status",
-      "inventoryCapability",
-      "frame",
-    ]);
-    expect(
-      harness.emitted
-        .map(({ envelope }) => envelope.event)
-        .find((event) => event.kind === "inventoryCapability"),
-    ).toEqual({ kind: "inventoryCapability", supported: false });
+    expect(eventKinds(harness.emitted)).toEqual(["status", "frame"]);
     // Adopting the stream did not promote it: it keeps announcing on-demand
     // readiness, so it cannot relocate an unrelated live headless session.
     expect(

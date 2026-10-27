@@ -346,6 +346,9 @@ describe("resume divider", () => {
   it("names the shell, not a generic Command, for a shell's mid-run output", () => {
     renderInChatTile(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           trigger({
             blockId: "block-live-shell",
@@ -360,7 +363,7 @@ describe("resume divider", () => {
       />,
     );
 
-    expect(screen.getByText("Monitor running")).not.toBeNull();
+    expect(screen.getByText("Monitor update")).not.toBeNull();
   });
 
   it("keeps monitor copy for a legacy trigger that names no shell", () => {
@@ -368,6 +371,9 @@ describe("resume divider", () => {
     // monitor kind still gives the divider its specific label.
     renderInChatTile(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           trigger({
             blockId: "block-live-legacy",
@@ -378,12 +384,15 @@ describe("resume divider", () => {
       />,
     );
 
-    expect(screen.getByText("Monitor running")).not.toBeNull();
+    expect(screen.getByText("Monitor update")).not.toBeNull();
   });
 
   it("names the shell in its terminal copy, by whether it was watching", () => {
     renderInChatTile(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           trigger({
             blockId: "block-quiet",
@@ -417,6 +426,9 @@ describe("resume divider", () => {
     // which keeps its real name.
     renderInChatTile(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[trigger({ status: "failed", managedCommand: null })]}
       />,
     );
@@ -430,6 +442,9 @@ describe("resume divider", () => {
   it("opens the shell's output window when it carries one", () => {
     renderInChatTile(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           trigger({
             managedCommand: {
