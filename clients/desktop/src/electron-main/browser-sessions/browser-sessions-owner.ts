@@ -567,7 +567,6 @@ class BrowserSessionsStream {
   private terminal = false;
   private connectionStatus: StreamConnectionStatus = "connecting";
   private snapshotReady = false;
-  private inventoryCapability: boolean | null = null;
   private lifecycleReadySent = false;
   /**
    * Identity of the live stream incarnation, minted on every open and dropped
@@ -664,13 +663,6 @@ class BrowserSessionsStream {
       browserSessionsLifecycle(this.connectionStatus, null),
       null,
     );
-    // Capability is scoped to the live connection, but each renderer attachment
-    // must receive it before its requested runtime snapshot can retire a tile.
-    if (this.inventoryCapability !== null)
-      this.emit({
-        kind: "inventoryCapability",
-        supported: this.inventoryCapability,
-      });
     if (!this.snapshotReady) return;
     // A main-owned preparation can predate the renderer coordinator. Ask the
     // authoritative host for its inventory; do not keep another copy in main.
@@ -792,10 +784,6 @@ class BrowserSessionsStream {
         wsStreamClient: transport.wsStreamClient,
         scope: this.key.scope,
         callbacks: {
-          onInventoryCapability: (supported) => {
-            this.inventoryCapability = supported;
-            this.emit({ kind: "inventoryCapability", supported });
-          },
           onServerFrame: (frame) => {
             this.handleServerFrame(frame);
           },
@@ -1072,7 +1060,6 @@ class BrowserSessionsStream {
     this.client = null;
     this.connectionStatus = "connecting";
     this.snapshotReady = false;
-    this.inventoryCapability = null;
     this.lifecycleReadySent = false;
     this.teardownTransport();
     this.tearingDown = false;
@@ -1137,7 +1124,6 @@ class BrowserSessionsStream {
       this.electronTabs?.connect();
       this.sendLifecycleReadyIfReady();
     } else {
-      this.inventoryCapability = null;
       this.retireConnection();
       this.resolveCaptureAckWaiters();
       this.electronTabs?.disconnect();

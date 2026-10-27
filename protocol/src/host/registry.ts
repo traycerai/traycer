@@ -1046,7 +1046,6 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
-  browserSessionsV23,
 } from "@traycer/protocol/host/browser/contracts";
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import { browserCatalogReadV10 } from "@traycer/protocol/host/browser/discovery-contracts";
@@ -14879,7 +14878,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 3,
+      latestMinor: 2,
       versions: {
         0: {
           contract: browserSessionsV20,
@@ -14890,7 +14889,6 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         2: {
           contract: browserSessionsV22,
         },
-        3: { contract: browserSessionsV23 },
       },
     },
   },

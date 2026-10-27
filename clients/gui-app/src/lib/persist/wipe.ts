@@ -1,7 +1,3 @@
-import {
-  BROWSER_CATALOG_DB_NAME,
-  browserCatalogInventory,
-} from "@/lib/browser-view/sessions/browser-catalog-inventory";
 import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
   CANVAS_BROWSER_DB_NAME,
@@ -173,7 +169,9 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(transcriptImageMetaDbName(accountId));
   names.add(SKELETON_RESUME_DB_NAME);
   names.add(VIEW_REPLICA_DB_NAME);
-  names.add(BROWSER_CATALOG_DB_NAME);
+  // The retired browser catalog store has no reader left, so only this wipe
+  // reclaims the URLs and titles an earlier build saved there.
+  names.add(persistKey("browser-catalog-v1"));
   // Canvas state and recovery history must be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
@@ -240,7 +238,6 @@ export async function clearAllPersistedStores(args: {
 
   await resetTabRecoveryHistory();
   await retireCanvasBrowserStorage();
-  await browserCatalogInventory.clear();
 
   // Stop edit timers before deleting their journal (step 3 below). Deferred
   // until after the failure-prone host clear above: if `hostClear` rejects,

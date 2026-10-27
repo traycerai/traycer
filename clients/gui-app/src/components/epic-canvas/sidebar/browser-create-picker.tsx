@@ -1,4 +1,4 @@
-import type { BrowserCatalogInventory } from "@/lib/browser-view/sessions/browser-catalog-inventory";
+import type { BrowserCatalogModel } from "@/hooks/browser/use-browser-catalog-inventory";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 import { isBrowserDeviceOffline } from "./browser-device-availability";
 import { Plus, RotateCcw } from "lucide-react";
@@ -42,17 +42,16 @@ import {
 
 function creationDeviceChoices(args: {
   readonly options: HostOptions;
-  readonly inventory: BrowserCatalogInventory | undefined;
+  readonly scope: BrowserCatalogModel["scope"] | undefined;
   readonly ownerHostId: string | null;
   readonly suggestedHostId: string | null;
 }) {
   const eligible =
-    args.inventory?.status === "local-only"
+    args.scope === "local-only"
       ? args.options.hosts.filter((host) => host.hostId === args.ownerHostId)
       : args.options.hosts;
-  const revoked = new Set(args.inventory?.revokedHostIds ?? []);
   const hosts = pickableHostOptions(eligible, args.suggestedHostId).filter(
-    (host) => !revoked.has(host.hostId) && host.health.state !== "removed",
+    (host) => host.health.state !== "removed",
   );
   const suggested = hosts.find(
     (host) =>
@@ -156,7 +155,7 @@ export function BrowserCreatePicker(props: {
   const adding = useIsMutatingOf({ mutationKey: key }) > 0;
   const { ordered, suggestedHostId } = creationDeviceChoices({
     options,
-    inventory: catalog?.inventory,
+    scope: catalog?.scope,
     ownerHostId: localSessions.hostId,
     suggestedHostId: pin.followingHostId,
   });
@@ -169,7 +168,7 @@ export function BrowserCreatePicker(props: {
           size={props.trigger === "icon" ? "icon-sm" : "sm"}
           aria-label="Add browser"
           data-testid={props.testId}
-          disabled={adding || catalog?.inventory.status === "inaccessible"}
+          disabled={adding || catalog?.scope === "inaccessible"}
         >
           {adding ? (
             <AgentSpinningDots
