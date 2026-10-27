@@ -47,36 +47,38 @@ export function DetailsHostRows(props: {
         // Different unused settings can share the same agent label.
         const occurrence = occurrences.get(identity) ?? 0;
         occurrences.set(identity, occurrence + 1);
-        return <li
-          key={`${identity}:${occurrence}`}
-          className="flex flex-wrap items-start justify-between gap-2 py-3"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="break-words font-medium">
-              {host.state === "not_used"
-                ? `${host.item} · not used on sandboxes`
-                : host.name}
-              {host.item === null || host.state === "not_used"
-                ? null
-                : ` · ${host.item}`}
-            </p>
-            <p className="text-ui-xs text-muted-foreground">
-              {host.state === "not_used" ? host.name : stateLabel(host.state)}
-              {host.at === null ? null : ` · ${detailsTime(host.at)}`}
-              {host.reason === null ? null : ` · ${host.reason}`}
-            </p>
-            {host.lastReportedAt === null ? null : (
-              <p className="text-ui-xs text-muted-foreground">
-                Last reported {detailsTime(host.lastReportedAt)}
+        return (
+          <li
+            key={`${identity}:${occurrence}`}
+            className="flex flex-wrap items-start justify-between gap-2 py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="break-words font-medium">
+                {host.state === "not_used"
+                  ? `${host.item} · not used on sandboxes`
+                  : host.name}
+                {host.item === null || host.state === "not_used"
+                  ? null
+                  : ` · ${host.item}`}
               </p>
-            )}
-          </div>
-          <DetailsHostRecovery
-            host={host}
-            onRecover={props.onRecover}
-            pending={props.pending}
-          />
-        </li>;
+              <p className="text-ui-xs text-muted-foreground">
+                {host.state === "not_used" ? host.name : stateLabel(host.state)}
+                {host.at === null ? null : ` · ${detailsTime(host.at)}`}
+                {host.reason === null ? null : ` · ${host.reason}`}
+              </p>
+              {host.lastReportedAt === null ? null : (
+                <p className="text-ui-xs text-muted-foreground">
+                  Last reported {detailsTime(host.lastReportedAt)}
+                </p>
+              )}
+            </div>
+            <DetailsHostRecovery
+              host={host}
+              onRecover={props.onRecover}
+              pending={props.pending}
+            />
+          </li>
+        );
       })}
     </ul>
   );

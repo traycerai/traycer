@@ -44,7 +44,9 @@ describe("SandboxRetryApplyingButton", () => {
   it("tells the surface once the host reports the settings applied, on that host", () => {
     mocks.outcome = { guestConfigured: true };
     const onApplied = vi.fn();
-    render(<SandboxRetryApplyingButton hostId="host-7" onApplied={onApplied} />);
+    render(
+      <SandboxRetryApplyingButton hostId="host-7" onApplied={onApplied} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Retry applying" }));
 
@@ -55,7 +57,9 @@ describe("SandboxRetryApplyingButton", () => {
   it("does not tell the surface when the settings still did not apply", () => {
     mocks.outcome = { guestConfigured: false };
     const onApplied = vi.fn();
-    render(<SandboxRetryApplyingButton hostId="host-7" onApplied={onApplied} />);
+    render(
+      <SandboxRetryApplyingButton hostId="host-7" onApplied={onApplied} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Retry applying" }));
 

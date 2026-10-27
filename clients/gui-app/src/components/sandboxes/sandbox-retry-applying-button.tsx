@@ -6,7 +6,10 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 
 /** Remains on the current surface and shares the named host's operation with its row. */
-export function SandboxRetryApplyingButton(props: { readonly hostId: string; readonly onApplied?: () => void }) {
+export function SandboxRetryApplyingButton(props: {
+  readonly hostId: string;
+  readonly onApplied?: () => void;
+}) {
   const apply = useSandboxRepairGuestConfigurationOnHost(props.hostId);
   const operation = useSandboxSettingsOperation(props.hostId);
   const pending = apply.isPending || operation === "pending";
@@ -17,11 +20,16 @@ export function SandboxRetryApplyingButton(props: { readonly hostId: string; rea
         variant="outline"
         size="sm"
         disabled={pending}
-        onClick={() => apply.mutate({}, {
-          onSuccess: (outcome) => {
-            if (outcome.guestConfigured) props.onApplied?.();
-          },
-        })}
+        onClick={() =>
+          apply.mutate(
+            {},
+            {
+              onSuccess: (outcome) => {
+                if (outcome.guestConfigured) props.onApplied?.();
+              },
+            },
+          )
+        }
       >
         Retry applying
         {pending ? (

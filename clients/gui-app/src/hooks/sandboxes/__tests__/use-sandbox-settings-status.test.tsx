@@ -101,8 +101,8 @@ function gate(): Gate {
 
 /** Answers `environment.status` from a script: each read takes the next answer, the last repeats. */
 function mount(
-  answers: readonly (() => Promise<unknown> | unknown)[],
-  hostStatusAnswers: readonly (() => Promise<unknown> | unknown)[],
+  answers: readonly (() => unknown)[],
+  hostStatusAnswers: readonly (() => unknown)[],
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -129,8 +129,7 @@ function mount(
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === HOST_ID ? mockLocalHostEntry : null,
+    findHostById: (hostId) => (hostId === HOST_ID ? mockLocalHostEntry : null),
     messenger,
   });
   client.setRequestContext(
@@ -185,7 +184,10 @@ describe("useSandboxSettingsStatus readiness", () => {
 
   it("parks the previous wake's receipt: a new awake generation is held until its own fresh applied status", async () => {
     const second = gate();
-    const view = mount([() => APPLIED, () => second.promise], [() => HOST_STATUS]);
+    const view = mount(
+      [() => APPLIED, () => second.promise],
+      [() => HOST_STATUS],
+    );
     await waitFor(() => {
       expect(view.result.current.ready).toBe(true);
     });
@@ -213,7 +215,10 @@ describe("useSandboxSettingsStatus readiness", () => {
     "holds the prior receipt on %s of the same host and wake, until a new read answers",
     async (_name, change) => {
       const second = gate();
-      const view = mount([() => APPLIED, () => second.promise], [() => HOST_STATUS]);
+      const view = mount(
+        [() => APPLIED, () => second.promise],
+        [() => HOST_STATUS],
+      );
       await waitFor(() => {
         expect(view.result.current.ready).toBe(true);
       });
@@ -236,7 +241,10 @@ describe("useSandboxSettingsStatus readiness", () => {
 
   it("keeps a verified ready through an ordinary refetch, pending or completed", async () => {
     const refetch = gate();
-    const view = mount([() => APPLIED, () => refetch.promise], [() => HOST_STATUS]);
+    const view = mount(
+      [() => APPLIED, () => refetch.promise],
+      [() => HOST_STATUS],
+    );
     await waitFor(() => {
       expect(view.result.current.ready).toBe(true);
     });
@@ -258,11 +266,14 @@ describe("useSandboxSettingsStatus readiness", () => {
   });
 
   it("stays held when the status read fails", async () => {
-    const view = mount([
-      () => {
-        throw new Error("host unreachable");
-      },
-    ], [() => HOST_STATUS]);
+    const view = mount(
+      [
+        () => {
+          throw new Error("host unreachable");
+        },
+      ],
+      [() => HOST_STATUS],
+    );
 
     await waitFor(() => {
       expect(view.result.current.fetchStatus).toBe("idle");
@@ -273,7 +284,10 @@ describe("useSandboxSettingsStatus readiness", () => {
   it("is not unlocked by a stale answer to a request begun before the wake", async () => {
     const before = gate();
     const after = gate();
-    const view = mount([() => before.promise, () => after.promise], [() => HOST_STATUS]);
+    const view = mount(
+      [() => before.promise, () => after.promise],
+      [() => HOST_STATUS],
+    );
     await waitFor(() => {
       expect(view.result.current.isFetching).toBe(true);
     });
@@ -295,8 +309,14 @@ describe("useSandboxSettingsStatus readiness", () => {
   });
 
   it.each([
-    ["an explicit settings operation still pending (null operation id)", { ...APPLIED, sandboxSettingsOperationId: null }],
-    ["a status with no principal, though a received revision is cached", { ...APPLIED, principal: null }],
+    [
+      "an explicit settings operation still pending (null operation id)",
+      { ...APPLIED, sandboxSettingsOperationId: null },
+    ],
+    [
+      "a status with no principal, though a received revision is cached",
+      { ...APPLIED, principal: null },
+    ],
   ])("stays held on %s", async (_name, answer) => {
     const view = mount([() => answer], [() => HOST_STATUS]);
 
@@ -323,9 +343,10 @@ describe("useSandboxSettingsStatus readiness", () => {
   });
 
   it("stays held on an item status this app does not know", async () => {
-    const view = mount([
-      () => status([{ kind: "variable", status: "some_future_status" }]),
-    ], [() => HOST_STATUS]);
+    const view = mount(
+      [() => status([{ kind: "variable", status: "some_future_status" }])],
+      [() => HOST_STATUS],
+    );
 
     await waitFor(() => {
       expect(view.result.current.isSuccess).toBe(true);
@@ -375,7 +396,10 @@ describe("useSandboxSettingsStatus readiness", () => {
   it("holds the older-evidence fallback again across a wake until a fresh probe answers", async () => {
     state.support = false;
     const second = gate();
-    const view = mount([() => APPLIED], [() => HOST_STATUS, () => second.promise]);
+    const view = mount(
+      [() => APPLIED],
+      [() => HOST_STATUS, () => second.promise],
+    );
     await waitFor(() => {
       expect(view.result.current.ready).toBe(true);
     });

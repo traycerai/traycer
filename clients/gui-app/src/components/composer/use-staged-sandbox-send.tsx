@@ -158,10 +158,12 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
                   queryOptions({
                     // A staged wake must not join a status read begun before it.
                     queryKey: [
-                      ...hostQueryKeys.method<HostRpcRegistry, "environment.status">(
-                        hostId, "environment.status", {},
-                      ),
-                      "sandbox-settings", uuidv4(),
+                      ...hostQueryKeys.method<
+                        HostRpcRegistry,
+                        "environment.status"
+                      >(hostId, "environment.status", {}),
+                      "sandbox-settings",
+                      uuidv4(),
                     ],
                     queryFn: requestSettings,
                     staleTime: 0,

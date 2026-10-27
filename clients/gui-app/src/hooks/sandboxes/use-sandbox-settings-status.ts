@@ -33,12 +33,14 @@ export function useSandboxSettingsStatus(sandbox: SandboxSummary | null) {
     },
   });
   const legacyReady = supported === false && capability.data !== undefined;
-  const ready = legacyReady || (
-    supported === true && query.data !== undefined &&
-    query.data.sandboxSettingsOperationId !== null &&
-    query.data.principal !== null && query.data.receivedRevision !== null &&
-    sandboxSettingsReady(query.data.items)
-  );
+  const ready =
+    legacyReady ||
+    (supported === true &&
+      query.data !== undefined &&
+      query.data.sandboxSettingsOperationId !== null &&
+      query.data.principal !== null &&
+      query.data.receivedRevision !== null &&
+      sandboxSettingsReady(query.data.items));
   return { ...query, ready };
 }
 
@@ -50,16 +52,23 @@ function useSettingsEpisode(
   const host = useHostDirectoryEntry(sandbox?.hostId ?? null);
   const awake = sandbox?.state === "awake";
   const identity = JSON.stringify([
-    sandbox?.hostId, awake, sandbox?.lastTransitionAt,
-    host?.websocketUrl, host?.version, host?.transportDialability,
+    sandbox?.hostId,
+    awake,
+    sandbox?.lastTransitionAt,
+    host?.websocketUrl,
+    host?.version,
+    host?.transportDialability,
     client?.getRequestContextUserId(),
   ]);
   const mountId = useId();
-  const [episode, setEpisode] = useState(() => ({identity, generation: 0}));
+  const [episode, setEpisode] = useState(() => ({ identity, generation: 0 }));
   let current = episode;
   if (episode.identity !== identity) {
-    current = {identity, generation: episode.generation + 1};
+    current = { identity, generation: episode.generation + 1 };
     setEpisode(current);
   }
-  return { awake, cacheIdentity: ["sandbox-settings", mountId, identity, current.generation] };
+  return {
+    awake,
+    cacheIdentity: ["sandbox-settings", mountId, identity, current.generation],
+  };
 }

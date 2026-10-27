@@ -73,7 +73,11 @@ export function EnvironmentNotificationExtra(props: {
   if (props.detail.kind === "environment_apply_failed") {
     if (props.detail.sandbox !== null && props.detail.sandbox !== undefined)
       return (
-        <SandboxSettingsFailedCard detail={props.detail} details={details} onSettingsApplied={props.onSettingsApplied} />
+        <SandboxSettingsFailedCard
+          detail={props.detail}
+          details={details}
+          onSettingsApplied={props.onSettingsApplied}
+        />
       );
     return (
       <EnvironmentApplyFailedCard

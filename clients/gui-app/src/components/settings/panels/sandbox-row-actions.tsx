@@ -195,11 +195,15 @@ export function SandboxRowActions(props: {
               },
             },
           ),
-    "retry-applying": () => repair.mutate({}, {
-      onSuccess: (outcome) => {
-        if (outcome.guestConfigured) props.onSettingsApplied?.();
-      },
-    }),
+    "retry-applying": () =>
+      repair.mutate(
+        {},
+        {
+          onSuccess: (outcome) => {
+            if (outcome.guestConfigured) props.onSettingsApplied?.();
+          },
+        },
+      ),
     "open-tab": () =>
       openOnLanding(summary, configuration, { terminal: false }),
     "open-terminal": () =>

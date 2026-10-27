@@ -384,24 +384,24 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   describe("the run's settings read", () => {
-    async function runDeps(): Promise<StagedSandboxRunDeps> {
+    function runDeps(): StagedSandboxRunDeps {
       stageCreated("applying", { kind: "settings", code: "SBX-0520" });
       mount(vi.fn());
       fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
-      const deps = mocks.runStagedSandbox.mock.calls[0]?.[3];
+      const deps = mocks.runStagedSandbox.mock.calls.at(0)?.[3];
       if (deps === undefined) throw new Error("no run started");
       return deps;
     }
 
     it("never releases the send on a network failure, even with the method absent from a stale manifest", async () => {
-      const deps = await runDeps();
+      const deps = runDeps();
       mocks.environmentStatus.mockRejectedValue(new Error("socket closed"));
 
       expect(await deps.readSettings(NEW_HOST)).toBeNull();
     });
 
     it("does not join a status read begun on the normal key before the wake", async () => {
-      const deps = await runDeps();
+      const deps = runDeps();
       let releaseOld: (value: string) => void = () => undefined;
       const old = new Promise<string>((resolve) => {
         releaseOld = resolve;
@@ -427,7 +427,7 @@ describe("useStagedSandboxSend's setup line", () => {
     });
 
     it("reads a typed unsupported-method answer as an older host, and a fresh read each time", async () => {
-      const deps = await runDeps();
+      const deps = runDeps();
 
       expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
       expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");

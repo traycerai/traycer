@@ -460,7 +460,9 @@ describe("a sandbox's settings notice", () => {
     );
     expect(legacy).toMatchObject(PAYLOADS["environment.apply.failed"]);
     expect(legacy).not.toBeNull();
-    expect(legacy !== null && "sandbox" in legacy ? legacy.sandbox : undefined).toBeUndefined();
+    expect(
+      legacy !== null && "sandbox" in legacy ? legacy.sandbox : undefined,
+    ).toBeUndefined();
   });
 
   it("titles with the shared line and says the steps in the body, never a raw key or code", () => {
