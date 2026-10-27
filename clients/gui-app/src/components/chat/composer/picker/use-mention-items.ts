@@ -1,4 +1,7 @@
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import {
+  isEpicArtifactKind,
+  isMarkdownArtifactKind,
+} from "@/lib/artifacts/node-display";
 import {
   useCallback,
   useEffect,
@@ -305,6 +308,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // artifact of the epic they're working in. Unlike chats, the artifact mention
   // providers don't query-filter downstream, so filter by the (debounced) query
   // here to stay consistent with the cloud list.
+  //
+  // `epic.mentionArtifacts` is optional on the host (unsupported-degrade). A
+  // host that predates it answers DOWNGRADE_UNSUPPORTED, which would read as
+  // the whole Artifacts list failing, and its prompt converter cannot resolve
+  // an html, canvas or file mention either. Such a host offers the markdown
+  // kinds only, from both the cloud requests and this local set.
+  const supportsArtifactIndex = useHostSupportsMethod(
+    readiness.hostId,
+    "epic.mentionArtifacts",
+  );
   const localArtifactEntries = useMemo<
     ReadonlyArray<EpicMentionArtifactSuggestion>
   >(() => {
@@ -312,13 +325,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       return EMPTY_ARTIFACT_ENTRIES;
     }
     const state = handle.store.getState();
-    return buildCurrentEpicArtifactMentionEntries(
+    const entries = buildCurrentEpicArtifactMentionEntries(
       state.artifacts,
       currentEpicId,
       state.epic.title,
       debouncedQuery,
     );
-  }, [active, handle, currentEpicId, debouncedQuery]);
+    return supportsArtifactIndex
+      ? entries
+      : entries.filter((entry) => isMarkdownArtifactKind(entry.artifactType));
+  }, [active, handle, currentEpicId, debouncedQuery, supportsArtifactIndex]);
 
   // Gated on `active`: while the picker is closed this composer holds no
   // tasks-cache subscription at all, so background cache ticks can't recompute
@@ -430,14 +446,6 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // list, browser tabs) keep serving. Found in review.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
-  );
-  // `epic.mentionArtifacts` is optional on the host (unsupported-degrade), so a
-  // host that predates it would answer DOWNGRADE_UNSUPPORTED and that one
-  // failure would read as the whole Artifacts list failing. Such a host simply
-  // lists no html, canvas or file rows.
-  const supportsArtifactIndex = useHostSupportsMethod(
-    readiness.hostId,
-    "epic.mentionArtifacts",
   );
   const epicRequests = useMemo<ReadonlyArray<MentionEpicRequest>>(
     () =>
