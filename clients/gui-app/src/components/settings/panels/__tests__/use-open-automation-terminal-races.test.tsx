@@ -161,7 +161,7 @@ function plainTerminalCreate(
         hostId,
         terminalId,
         scope: { kind: "independent" },
-        launch: { cwd },
+        launch: { cwd, shellCommand: "zsh", shellArgs: [] },
         manualTitle: null,
         revision: 1,
         createdAt: "2026-10-27T00:00:00Z",
@@ -600,7 +600,7 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       network.openSandboxAutomation.mockResolvedValue(
         openedSandbox(AUTOMATION_HOST, false),
       );
-      const rendered = renderHarness({ existing: null, teamEnvironmentId: null });
+      const rendered = renderHarness(null);
 
       await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
       await waitFor(() => {
@@ -646,7 +646,7 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
     network.openSandboxAutomation.mockResolvedValue(
       openedSandbox(AUTOMATION_HOST, false),
     );
-    const rendered = renderHarness({ existing: null, teamEnvironmentId: null });
+    const rendered = renderHarness(null);
 
     await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
     await waitFor(() => {

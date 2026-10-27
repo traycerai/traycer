@@ -684,7 +684,7 @@ describe("<SandboxRowActions />", () => {
       expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
       if (success !== undefined) automation.request.mockImplementation(success);
       await userEvent.click(
-        screen.getByRole("button", { name: "Retry", exact: true }),
+        screen.getByRole("button", { name: /^Retry$/ }),
       );
       await waitFor(() =>
         expect(useLandingPanelStore.getState().tabs).toHaveLength(1),

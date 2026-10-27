@@ -325,10 +325,25 @@ function dispatchLandingTerminalClose(args: {
  */
 
 /**
- * Legacy terminals need the selected target's capability and launch context.
- * Browsers and host-acknowledged terminals follow their own bound host's
- * lifecycle, so another target's verdict cannot hide their panel or body.
- * Check every row for panel mounting, and the active row for its body.
+ * Whether the selected target's verdict may speak for these rows.
+ *
+ * `target.availability` is the TERMINAL target host's verdict, and it decides
+ * two things about this panel: whether the panel is mounted at all, and whether
+ * its body is replaced by a status line. Both are correct for a legacy terminal
+ * row, which needs that host's capability and launch context.
+ *
+ * A BROWSER row, and a terminal row its own host has acknowledged, are not.
+ * Each follows its own bound host's lifecycle and renders that host's own
+ * reconnecting and dormant state, and none of that is the target's to answer
+ * for - so a target that is unsupported, unselected or still resolving must
+ * not take a working tile off screen and replace it with a sentence about a
+ * machine it has nothing to do with.
+ *
+ * This is the rule in ONE place on purpose. It was first written as a term
+ * inside the body's status branch, and the mount decision above that branch
+ * kept the harm reachable through a sibling verdict - a per-level exemption is
+ * how that happens. Pass what the verdict is about to govern: every row for the
+ * mount decision, the row on screen for the body.
  */
 function landingTargetVerdictGoverns(
   rows: ReadonlyArray<LandingPanelTabRef>,
