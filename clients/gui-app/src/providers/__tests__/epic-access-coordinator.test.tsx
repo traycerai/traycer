@@ -265,6 +265,7 @@ describe("EpicAccessCoordinator", () => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useAuthStore.getState().setSignedOut();
     useComposerRunSettingsStore.getState().resetForTests();
+    useTaskLossRegister.setState({ byUserId: {} });
     __getOpenEpicRegistryForTests().disposeAll();
     clearSessionCreatedEpics();
     toastInfo.mockClear();
@@ -867,9 +868,19 @@ describe("EpicAccessCoordinator", () => {
     }
   });
 
-  it("ejects a created-this-session epic once every grace retry is spent and 'unavailable' lands again", async () => {
+  it("ejects a created-this-session epic once every grace retry is spent and 'unavailable' lands again, and has the title lookups that named it read again", async () => {
     vi.useFakeTimers();
     try {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-1",
+          userName: "Test User",
+          email: "test@example.com",
+          avatarUrl: null,
+        },
+        { userId: "user-1", username: "test-user" },
+        [],
+      );
       markEpicCreatedThisSession("epic-1", "host-x");
       const handle = registerSession("epic-1");
       seedTabs(
@@ -883,7 +894,19 @@ describe("EpicAccessCoordinator", () => {
         upgradeGuidance: null,
       };
 
-      const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+      const { router, queryClient } = renderCoordinatorAt(
+        "/epics/epic-1/tab-1",
+      );
+      const lookupKey = hostQueryKeys.taskReferenceLookup(
+        TEST_HOST_ID,
+        "user-1",
+        "epic-1",
+      );
+      queryClient.setQueryData<GetTaskContextsResponse>(lookupKey, {
+        tasks: {
+          "epic-1": { status: "found", task: listTaskLight("epic-1") },
+        },
+      });
       await act(async () => {
         await Promise.resolve();
       });
@@ -949,6 +972,19 @@ describe("EpicAccessCoordinator", () => {
       expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(
         CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS.length,
       );
+      // An unavailable room can be a revoke or a delete seen on open: a title
+      // read before it no longer stands.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(queryClient.getQueryState(lookupKey)?.isInvalidated).toBe(true);
+      expect(
+        queryClient.getQueryData<GetTaskContextsResponse>(lookupKey)?.tasks,
+      ).toEqual({});
+      expect(
+        taskLossFor(useTaskLossRegister.getState(), "user-1", null, "epic-1")
+          ?.loss,
+      ).toBe("recheck");
     } finally {
       vi.useRealTimers();
     }

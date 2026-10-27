@@ -220,15 +220,12 @@ export function EpicAccessCoordinator() {
         return;
       const wasActive = activeEpicIdRef.current === epicId;
       announceEpicLoss(epicId, reason);
-      // A title read before the loss must not keep the task reachable, but
-      // the signal alone does not say the person lost it (a moved room or a
-      // failed sign-in raise it too): the lookups that named it read again.
+      // A title read before the loss must not keep the task reachable, whatever
+      // the reason: an unavailable room can be a revoke or a delete seen on
+      // open. No reason alone says the person lost it (a moved room or a
+      // failed sign-in raise one too), so the lookups that named it read again.
       const viewerUserId = useAuthStore.getState().profile?.userId ?? null;
-      if (
-        queryClient !== undefined &&
-        viewerUserId !== null &&
-        reason.kind !== "unavailable"
-      ) {
+      if (queryClient !== undefined && viewerUserId !== null) {
         recheckTaskContextAnswers(
           queryClient,
           { hostId: null, userId: viewerUserId },
