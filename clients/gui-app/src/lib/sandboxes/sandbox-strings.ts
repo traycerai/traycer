@@ -455,7 +455,10 @@ export function stoppedSandboxLine(
   name: string,
   savedInDrafts: boolean,
 ): string {
-  return `Stopped ${name}. Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
+  return `Stopped ${name}. ${returnedSandboxMessageLine(savedInDrafts)}`;
+}
+export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
+  return `Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
 }
 export function couldntStopLine(name: string): string {
   return `Couldn't stop ${name}`;
