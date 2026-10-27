@@ -511,16 +511,14 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         });
       },
       completeSubmittedDraftDelete: (draftId) => {
-        set((state) => {
-          if (state.pendingSubmittedDraftDeletes[draftId] === undefined) {
-            return state;
-          }
-          const pendingSubmittedDraftDeletes = {
-            ...state.pendingSubmittedDraftDeletes,
-          };
-          delete pendingSubmittedDraftDeletes[draftId];
-          return { pendingSubmittedDraftDeletes };
-        });
+        // `persist` serializes and writes the whole store after every `set`,
+        // an unchanged state included, and a drafts listing calls this once
+        // per tombstone: an id with nothing pending must not reach `set`.
+        const pending = get().pendingSubmittedDraftDeletes;
+        if (pending[draftId] === undefined) return;
+        const pendingSubmittedDraftDeletes = { ...pending };
+        delete pendingSubmittedDraftDeletes[draftId];
+        set({ pendingSubmittedDraftDeletes });
       },
       bindTarget: (chatId, epicId) => {
         const current = ensureDraft(get().drafts, chatId);

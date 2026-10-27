@@ -3,7 +3,10 @@ import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
+import {
+  deriveArtifactPathLayoutRootAgnostic,
+  EPIC_ARTIFACT_INDEX_FILENAME,
+} from "@traycer/protocol/common/artifact-path";
 import {
   candidateWorkspaceFileRefsForAbsoluteLinkPath,
   candidateWorkspaceFileRefsForRelativeLinkPath,
@@ -133,7 +136,7 @@ export type ChatLinkHandler = (
  * Builds the file-link handler that markdown anchors in chat call when a link
  * points at a file. Two link shapes flow through the handler:
  *
- * - **Artifact links** (`…/epics/<epicId>/artifacts/<chain>/index.md`) resolve
+ * - **Artifact file and folder links** under `…/epics/<epicId>/artifacts/` resolve
  *   via the read-only `epic.resolveArtifactByPath` RPC (against the
  *   ACTIVE/default host, matching sidebar artifact opens) to a stable
  *   `{ artifactId, kind }`, then open the artifact tile: a replaceable PREVIEW
@@ -160,7 +163,8 @@ export type ChatLinkHandler = (
  */
 export function buildChatLinkPolicy(deps: ChatLinkPolicyDeps): ChatLinkHandler {
   return (link, lifecycle) => {
-    if (link.isDirectory) return false;
+    if (link.isDirectory && artifactEpicIdFromLinkPath(link.path) === null)
+      return false;
 
     // Supersession (latest-click-wins): bump the token and SILENTLY cancel any
     // pending projection wait BEFORE branching, so ANY newer click — plain
@@ -219,7 +223,7 @@ export interface ArtifactLinkTarget {
  * not-yet-projected artifact opens as soon as it lands) when it belongs to
  * the currently open epic, or a cross-epic navigate+focus otherwise.
  *
- * Exported/shared so BOTH an already-index.md-shaped link's fast-path
+ * Exported/shared so BOTH an artifact-shaped link's fast-path
  * resolve (`resolveAndOpenArtifactLink`) and a plain-link resolution whose
  * WINNING candidate turned out to be artifact-shaped
  * (`openResolvedWorkspaceTarget`, B) open an artifact the exact same way -
@@ -304,8 +308,21 @@ function resolveAndOpenArtifactLink(
   const fallbackToFilePreview = (): void => {
     if (lifecycle.isDisposed()) return;
     if (!lifecycle.isCurrent(clickToken)) return;
-    if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false)) {
-      lifecycle.onAsyncFailure();
+    if (deriveArtifactPathLayoutRootAgnostic(link.path, null) !== null) {
+      if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false))
+        lifecycle.onAsyncFailure();
+      return;
+    }
+    // Newly recognized bundle links may address ordinary files, or a host
+    // that does not yet resolve object artifacts. Preserve plain-file opening.
+    if (isAbsolutePath(link.path)) {
+      void resolveAndOpenAbsoluteWorkspaceFile(deps, lifecycle, link, {
+        clickToken,
+      });
+    } else {
+      void resolveAndOpenRelativeWorkspaceFile(deps, lifecycle, link, {
+        clickToken,
+      });
     }
   };
   return fetchResolveArtifactByPath({
@@ -334,14 +351,6 @@ function resolveAndOpenArtifactLink(
       });
     })
     .catch(() => {
-      // Mirror the success path's guards: a tab torn down mid-flight, or a
-      // newer click that already superseded this one, must NOT let a slow
-      // rejected resolve open a fallback preview over the user's latest
-      // selection (latest-click-wins). `openChatWorkspaceFilePreview` already
-      // no-ops once disposed, but the supersession check only exists here.
-      // Transport error on an artifact-shaped link: keep the safe no-op (D5) —
-      // out-of-root synthesis stays disabled, so a missing artifact does not
-      // open a raw / error tile.
       fallbackToFilePreview();
     });
 }
@@ -372,7 +381,7 @@ function openChatWorkspaceFilePreview(
   // The chat tab was torn down (unmount cancels the projection wait, which
   // routes here via `onUnavailable`): never open into a dead tab.
   if (lifecycle.isDisposed()) return false;
-  if (deps.hostId === null) return false;
+  if (deps.hostId === null || link.isDirectory) return false;
   // In-root files keep their root-relative ref (correct header + identity).
   // Only the plain-file branch falls back to synthesizing a root from an
   // out-of-root absolute path's own directory.
@@ -411,16 +420,9 @@ interface WorkspaceFileProbeTarget {
 }
 
 /**
- * The winning candidate from either an absolute or relative existence-probe
- * race might structurally BE an artifact `index.md` even though it was
- * reached through the plain-workspace-file resolution path rather than the
- * fast-path `artifactEpicIdFromLinkPath(link.path)` check at the top of the
- * handler (which only catches a link ALREADY written index.md-shaped) - e.g.
- * a relative href resolves, against a bound root, onto
- * `.../epics/<id>/artifacts/<chain>/index.md`. Reclassifying the winner here
- * routes it through the artifact resolver (a collab tile) instead of a raw
- * file preview, keeping it capability-equivalent with a link already
- * authored index.md-shaped (B).
+ * A workspace-file probe can resolve a relative link into the artifact tree.
+ * Reclassify that winner through the same artifact resolver as a direct link,
+ * so both paths open the artifact tile instead of its source file.
  */
 export interface ResolvedWorkspaceFileTarget {
   readonly ref: WorkspaceFileRef;

@@ -1392,10 +1392,16 @@ function nearestScrollContainer(element: HTMLElement): HTMLElement | null {
   return null;
 }
 
+/**
+ * Written as an absolute target rather than a relative `scrollBy`: iOS WebKit
+ * applies a relative scroll twice (the synchronous move, then the same delta
+ * again on the next scroll event), so the reveal overshot by double on the
+ * phone. An absolute `scrollTo` lands once on every engine.
+ */
 function scrollByAmount(element: HTMLElement | null, top: number): void {
   if (element === null) {
-    window.scrollBy({ top, behavior: "auto" });
+    window.scrollTo({ top: window.scrollY + top, behavior: "auto" });
     return;
   }
-  element.scrollBy({ top, behavior: "auto" });
+  element.scrollTo({ top: element.scrollTop + top, behavior: "auto" });
 }
