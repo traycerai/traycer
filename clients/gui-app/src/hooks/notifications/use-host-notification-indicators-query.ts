@@ -265,9 +265,21 @@ function mergeEntityIndicatorStates(
       pendingFork: prior.pendingFork || state.pendingFork,
       unreadFailure: prior.unreadFailure || state.unreadFailure,
       unreadDone: prior.unreadDone || state.unreadDone,
+      // Crossed chunks ask one host about one entity more than once: the
+      // answers count the same rows, so they agree rather than add.
+      unreadCount: sameRowsUnreadCount(prior.unreadCount, state.unreadCount),
     };
   }
   return merged;
+}
+
+function sameRowsUnreadCount(
+  left: number | null,
+  right: number | null,
+): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.max(left, right);
 }
 
 function firstSupportedHostError(

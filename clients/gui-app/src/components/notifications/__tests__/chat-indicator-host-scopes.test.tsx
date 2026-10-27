@@ -88,6 +88,7 @@ function lit(
     pendingFork: false,
     unreadFailure: false,
     unreadDone: false,
+    unreadCount: 0,
     ...flags,
   };
 }

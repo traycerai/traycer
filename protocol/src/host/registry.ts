@@ -1120,8 +1120,10 @@ import {
   hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateUpgradeV11ToV12,
   hostNotificationsIndicatorStateV10,
   hostNotificationsIndicatorStateV11,
+  hostNotificationsIndicatorStateV12,
   hostNotificationsListDowngradeV24ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
@@ -12042,7 +12044,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
   "host.notifications.indicatorState": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsIndicatorStateV10,
@@ -12052,6 +12054,11 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           contract: hostNotificationsIndicatorStateV11,
           upgradeFromPreviousVersion:
             hostNotificationsIndicatorStateUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostNotificationsIndicatorStateV12,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -14199,7 +14206,7 @@ type HostRpcNotificationMethodMap = {
   readonly "host.notifications.indicatorState": {
     readonly degrade: { readonly kind: "unsupported" };
     readonly 1: {
-      readonly latestMinor: 1;
+      readonly latestMinor: 2;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsIndicatorStateV10;
@@ -14208,6 +14215,10 @@ type HostRpcNotificationMethodMap = {
         readonly 1: {
           readonly contract: typeof hostNotificationsIndicatorStateV11;
           readonly upgradeFromPreviousVersion: typeof hostNotificationsIndicatorStateUpgradeV10ToV11;
+        };
+        readonly 2: {
+          readonly contract: typeof hostNotificationsIndicatorStateV12;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsIndicatorStateUpgradeV11ToV12;
         };
       };
       readonly downgradePathsFromLatest: Record<never, never>;

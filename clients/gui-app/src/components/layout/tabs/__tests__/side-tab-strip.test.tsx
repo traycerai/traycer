@@ -343,6 +343,7 @@ const NO_FLAGS = {
   pendingFork: false,
   unreadFailure: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 let queryClient: QueryClient;
@@ -1855,6 +1856,7 @@ describe("<SideTabStrip />", () => {
           pendingApproval: true,
           pendingInterview: false,
           pendingFork: false,
+          unreadCount: 1,
         },
         "e-three": {
           unreadFailure: true,
@@ -1862,6 +1864,7 @@ describe("<SideTabStrip />", () => {
           pendingApproval: false,
           pendingInterview: false,
           pendingFork: false,
+          unreadCount: 1,
         },
       },
       chats: {},

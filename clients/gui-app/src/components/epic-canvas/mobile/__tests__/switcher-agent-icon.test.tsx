@@ -63,6 +63,7 @@ const QUIET: HostNotificationsIndicatorState = {
   pendingApproval: false,
   pendingInterview: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 function chatIndicators(

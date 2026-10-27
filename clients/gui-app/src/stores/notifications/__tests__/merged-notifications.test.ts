@@ -3,6 +3,7 @@ import type {
   HostNotificationEntry,
   HostNotificationEntryV23,
   HostNotificationsCloudFeedRow,
+  HostNotificationsCloudFeedRowV15,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
@@ -16,7 +17,9 @@ import {
   rowFromGlobalEntry,
   rowFromHostEntry,
 } from "@/stores/notifications/merged-notifications";
+import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
+import type { HostNotificationFeedEntry } from "@/stores/notifications/host-notifications-store";
 
 function hostEntry(
   id: string,
@@ -951,6 +954,82 @@ describe("merged notifications feed", () => {
     });
     // Readable and acknowledgeable, but never routed by guesswork.
     expect(row.payload).toBeNull();
+  });
+
+  describe("a bot's answer", () => {
+    function verdictEntry(
+      readAt: number | null,
+      operation: string,
+    ): HostNotificationFeedEntry {
+      return {
+        id: `${operation}:reply-1`,
+        updatedAt: 10,
+        readAt,
+        kind: "host.operation.finished",
+        sourceRef: "reply-1",
+        severity: "done",
+        outcome: "completed",
+        epicId: "bot-1",
+        chatId: "thread-1",
+        payload: {
+          kind: "bot_thread_verdict",
+          operation,
+          title: "Tracy answered",
+          message: "Your question about the release",
+          botId: "bot-1",
+          threadId: "thread-1",
+          replyMessageId: "reply-1",
+        },
+      };
+    }
+
+    function cloudRowOf(
+      entry: HostNotificationFeedEntry,
+    ): HostNotificationsCloudFeedRowV15 {
+      return {
+        entryId: entry.id,
+        originHostId: "host-a",
+        coalesceKey: entry.id,
+        entry,
+        presentation: { epicTitle: null, chatTitle: null },
+      };
+    }
+
+    it.each([
+      {
+        plane: "host feed",
+        rowOf: (entry: HostNotificationFeedEntry) => rowFromHostEntry(entry),
+      },
+      {
+        plane: "cloud feed",
+        rowOf: (entry: HostNotificationFeedEntry) =>
+          rowFromCloudFeedRow(cloudRowOf(entry)),
+      },
+    ])(
+      "is Attention's answer class while unread and Recent once read, from the $plane",
+      ({ rowOf }) => {
+        const unread = rowOf(verdictEntry(null, "bot.thread.verdict"));
+        const read = rowOf(verdictEntry(5, "bot.thread.verdict"));
+
+        expect(unread.botAnswer).toBe(true);
+        expect(classifyNotificationLifecycle(unread)).toEqual({
+          section: "attention",
+          tier: "answer",
+        });
+        expect(classifyNotificationLifecycle(read)).toEqual({
+          section: "recent",
+        });
+      },
+    );
+
+    it("is no answer when the finished operation is another one", () => {
+      const row = rowFromHostEntry(verdictEntry(null, "testbox.provision"));
+
+      expect(row.botAnswer).toBe(false);
+      expect(classifyNotificationLifecycle(row)).toEqual({
+        section: "recent",
+      });
+    });
   });
 
   describe("secrets rows", () => {

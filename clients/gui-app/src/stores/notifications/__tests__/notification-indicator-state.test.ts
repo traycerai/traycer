@@ -2,13 +2,29 @@ import { describe, expect, it } from "vitest";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsCloudFeedRowV15,
+  HostNotificationsIndicatorState,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
+  indicatorHasUnread,
   mergeHostPendingForkIntoCloudIndicators,
+  mergeLocalPartitionIntoCloudIndicators,
   selectCloudNotificationIndicatorProjection,
   selectCloudNotificationIndicators,
   selectNotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
+
+/** An entity whose unread rows light no glyph: they are counted and nothing
+ * else. `null` is a host that does not count. */
+function counted(unreadCount: number | null): HostNotificationsIndicatorState {
+  return {
+    pendingApproval: false,
+    pendingInterview: false,
+    pendingFork: false,
+    unreadFailure: false,
+    unreadDone: false,
+    unreadCount,
+  };
+}
 
 describe("notification indicator state", () => {
   it("merges an unread app-local failure into host indicator flags", () => {
@@ -39,6 +55,7 @@ describe("notification indicator state", () => {
             pendingApproval: true,
             pendingInterview: false,
             unreadDone: true,
+            unreadCount: 1,
           },
         },
       },
@@ -175,6 +192,41 @@ describe("cloud notification indicator derivation", () => {
     });
   }
 
+  /** A bot's answer: the `done` row the host mints once per participant, on
+   * the bot's epic and the thread's chat. */
+  function botAnswer(
+    entryId: string,
+    threadId: string,
+    readAt: number | null,
+  ): HostNotificationsCloudFeedRowV15 {
+    return {
+      entryId,
+      originHostId: "host-b",
+      coalesceKey: `host.operation.finished:${entryId}`,
+      entry: {
+        id: entryId,
+        updatedAt: 1,
+        readAt,
+        kind: "host.operation.finished",
+        sourceRef: null,
+        severity: "done",
+        outcome: "completed",
+        epicId: "bot-1",
+        chatId: threadId,
+        payload: {
+          kind: "bot_thread_verdict",
+          operation: "bot.thread.verdict",
+          title: "Tracy answered",
+          message: "Your question about the release",
+          botId: "bot-1",
+          threadId,
+          replyMessageId: entryId,
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+  }
+
   /** The payload is inert for indicator derivation (only kind, severity and
    * the markers are read), but it is still shaped the way its entry kind's
    * producer shapes it, so the fixture is not a misleading example of a
@@ -210,12 +262,12 @@ describe("cloud notification indicator derivation", () => {
   }
 
   function rowsById(
-    rows: ReadonlyArray<HostNotificationsCloudFeedRow>,
-  ): Record<string, HostNotificationsCloudFeedRow> {
+    rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>,
+  ): Record<string, HostNotificationsCloudFeedRowV15> {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
-  it("does not light the chat's approval glyph for an unresolved browser prompt", () => {
+  it("does not light the chat's approval glyph for an unresolved browser prompt, though its unread row is counted", () => {
     const browserRow: HostNotificationsCloudFeedRowV15 = {
       entryId: "browser-1",
       originHostId: "host-b",
@@ -248,8 +300,8 @@ describe("cloud notification indicator derivation", () => {
       ["chat-1"],
     );
 
-    expect(result.chats).toEqual({});
-    expect(result.epics).toEqual({});
+    expect(result.chats).toEqual({ "chat-1": counted(1) });
+    expect(result.epics).toEqual({ "epic-1": counted(1) });
   });
 
   it("uses the origin's durable terminal ordering cursor", () => {
@@ -280,6 +332,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: false,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -311,6 +364,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: true,
       unreadDone: false,
+      unreadCount: 2,
     });
   });
 
@@ -348,7 +402,7 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("lets a silent automatic recovery clear Error without replacing it with Done", () => {
+  it("lets a silent automatic recovery clear Error without replacing it with Done, the failure row still counted", () => {
     const failure = stoppedAt({
       entryId: "0001-agent-failure",
       severity: "failure",
@@ -381,7 +435,10 @@ describe("cloud notification indicator derivation", () => {
       ["chat-1"],
     );
 
-    expect(result).toEqual({ epics: {}, chats: {} });
+    expect(result).toEqual({
+      epics: { "epic-1": counted(1) },
+      chats: { "chat-1": counted(1) },
+    });
   });
 
   it("does not let automatic recovery erase an unread Done", () => {
@@ -449,6 +506,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: false,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -482,6 +540,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: true,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -565,6 +624,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: true,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -581,6 +641,7 @@ describe("cloud notification indicator derivation", () => {
             pendingFork: false,
             unreadFailure: true,
             unreadDone: true,
+            unreadCount: 1,
           },
         },
         chats: {},
@@ -649,7 +710,7 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"]).toBeUndefined();
   });
 
-  it("keeps a read completion as the quiet winner over an older failure", () => {
+  it("keeps a read completion as the quiet winner over an older failure, which stays counted", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
@@ -671,7 +732,10 @@ describe("cloud notification indicator derivation", () => {
       ["chat-1"],
     );
 
-    expect(result).toEqual({ epics: {}, chats: {} });
+    expect(result).toEqual({
+      epics: { "epic-1": counted(1) },
+      chats: { "chat-1": counted(1) },
+    });
   });
 
   it("lights an approval while it is unresolved, including after it is read", () => {
@@ -692,7 +756,7 @@ describe("cloud notification indicator derivation", () => {
     );
 
     expect(unresolved.chats["chat-1"].pendingApproval).toBe(true);
-    expect(resolvedButUnread.chats["chat-1"]).toBeUndefined();
+    expect(resolvedButUnread.chats["chat-1"]).toEqual(counted(1));
     expect(unresolvedButRead.chats["chat-1"].pendingApproval).toBe(true);
   });
 
@@ -725,17 +789,39 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: false,
       unreadDone: false,
+      unreadCount: 1,
     });
   });
 
-  it("lights nothing for an unread info row", () => {
+  it("lights no glyph for an unread info row, which is counted all the same", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([stopped("info", "info", null)]),
       ["epic-1"],
       ["chat-1"],
     );
 
-    expect(result).toEqual({ epics: {}, chats: {} });
+    expect(result).toEqual({
+      epics: { "epic-1": counted(1) },
+      chats: { "chat-1": counted(1) },
+    });
+  });
+
+  it("counts each unread row on its epic and its chat, and gives a thread with only read rows no entry", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        botAnswer("answer-1", "thread-1", null),
+        botAnswer("answer-2", "thread-1", null),
+        botAnswer("answer-3", "thread-1", 5),
+        botAnswer("answer-4", "thread-2", 5),
+      ]),
+      ["bot-1"],
+      ["thread-1", "thread-2"],
+    );
+
+    expect(result).toEqual({
+      epics: { "bot-1": counted(2) },
+      chats: { "thread-1": counted(2) },
+    });
   });
 
   it("ignores entities the surface did not ask about", () => {
@@ -749,6 +835,60 @@ describe("cloud notification indicator derivation", () => {
   });
 });
 
+describe("an entity's unread count", () => {
+  it("adds the host's local partition to the cloud's, keeping the one count a host did not give", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        epics: {
+          "both-counted": counted(2),
+          "cloud-uncounted": counted(null),
+          "local-uncounted": counted(2),
+          "neither-counted": counted(null),
+        },
+        chats: { "thread-1": counted(2) },
+      },
+      {
+        epics: {
+          "both-counted": counted(1),
+          "cloud-uncounted": counted(4),
+          "local-uncounted": counted(null),
+          "neither-counted": counted(null),
+          "local-only": counted(3),
+        },
+        chats: { "thread-1": counted(1) },
+      },
+      null,
+    );
+
+    expect(merged.epics).toEqual({
+      "both-counted": counted(3),
+      "cloud-uncounted": counted(4),
+      "local-uncounted": counted(2),
+      "neither-counted": counted(null),
+      "local-only": counted(3),
+    });
+    expect(merged.chats).toEqual({ "thread-1": counted(3) });
+  });
+
+  it.each([
+    { name: "a count above zero", state: counted(1), unread: true },
+    { name: "a count of zero", state: counted(0), unread: false },
+    { name: "no count and nothing lit", state: counted(null), unread: false },
+    {
+      name: "no count and an unread done",
+      state: { ...counted(null), unreadDone: true },
+      unread: true,
+    },
+    {
+      name: "no count and an unread failure",
+      state: { ...counted(null), unreadFailure: true },
+      unread: true,
+    },
+  ])("reads $name as unread: $unread", ({ state, unread }) => {
+    expect(indicatorHasUnread(state)).toBe(unread);
+  });
+});
+
 describe("cloud notification indicator authority", () => {
   it("merges only the connected host's pending fork bit into cloud flags", () => {
     const cloud = {
@@ -759,6 +899,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: false,
           unreadFailure: false,
           unreadDone: true,
+          unreadCount: 1,
         },
       },
       chats: {
@@ -768,6 +909,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: false,
           unreadFailure: false,
           unreadDone: false,
+          unreadCount: 1,
         },
       },
     };
@@ -780,6 +922,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: true,
           unreadFailure: true,
           unreadDone: true,
+          unreadCount: 3,
         },
       },
     };
@@ -793,6 +936,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: true,
           unreadFailure: false,
           unreadDone: false,
+          unreadCount: 1,
         },
       },
     });

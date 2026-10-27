@@ -37,6 +37,7 @@ interface ThreadListCall {
 interface IndicatorState {
   readonly unreadDone: boolean;
   readonly unreadFailure: boolean;
+  readonly unreadCount: number | null;
 }
 
 const mocks = vi.hoisted(() => {
@@ -260,6 +261,11 @@ function PostStub(props: {
             : String(line.lastReplyAt)
         }
         data-unread={line === null ? "" : String(line.unread)}
+        data-unread-count={
+          line === null || line.unreadCount === null
+            ? ""
+            : String(line.unreadCount)
+        }
         data-participants={
           line === null
             ? ""
@@ -326,11 +332,16 @@ function thread(
   };
 }
 
+/** A thread's indicator, counting one unread row for each glyph it lights. */
 function indicator(
   unreadDone: boolean,
   unreadFailure: boolean,
 ): IndicatorState {
-  return { unreadDone, unreadFailure };
+  return {
+    unreadDone,
+    unreadFailure,
+    unreadCount: Number(unreadDone) + Number(unreadFailure),
+  };
 }
 
 interface MountOptions {
@@ -511,13 +522,23 @@ describe("<BotChannelView /> channel", () => {
       thread("thread-b", "post-b", { replyCount: 1, lastReplyAt: 8_000 }),
       thread("thread-c", "post-c", { replyCount: 2, lastReplyAt: 9_500 }),
       thread("thread-d", "post-d", { replyCount: 4, lastReplyAt: 9_900 }),
+      thread("thread-e", "post-e", { replyCount: 1, lastReplyAt: 9_950 }),
     ];
     mocks.state.chats = {
-      "thread-a": indicator(true, false),
+      "thread-a": { ...indicator(true, false), unreadCount: 2 },
       "thread-b": indicator(false, false),
       "thread-c": indicator(false, true),
+      // A host that does not count lights the glyph and leaves the count out.
+      "thread-e": { ...indicator(true, false), unreadCount: null },
     };
-    mocks.postIds = ["post-a", "post-b", "post-c", "post-d", "post-new"];
+    mocks.postIds = [
+      "post-a",
+      "post-b",
+      "post-c",
+      "post-d",
+      "post-e",
+      "post-new",
+    ];
     mount({ openThreadPostId: null });
 
     const line = (postId: string): HTMLElement =>
@@ -525,12 +546,18 @@ describe("<BotChannelView /> channel", () => {
     expect(line("post-a").getAttribute("data-reply-count")).toBe("3");
     expect(line("post-a").getAttribute("data-last-reply-at")).toBe("7000");
     expect(line("post-a").getAttribute("data-unread")).toBe("true");
+    expect(line("post-a").getAttribute("data-unread-count")).toBe("2");
     expect(line("post-b").getAttribute("data-reply-count")).toBe("1");
     expect(line("post-b").getAttribute("data-unread")).toBe("false");
+    expect(line("post-b").getAttribute("data-unread-count")).toBe("0");
     expect(line("post-c").getAttribute("data-unread")).toBe("true");
+    expect(line("post-c").getAttribute("data-unread-count")).toBe("1");
     // A thread the viewer took part in nowhere has no indicator and no dot.
     expect(line("post-d").getAttribute("data-reply-count")).toBe("4");
     expect(line("post-d").getAttribute("data-unread")).toBe("false");
+    expect(line("post-d").getAttribute("data-unread-count")).toBe("0");
+    expect(line("post-e").getAttribute("data-unread")).toBe("true");
+    expect(line("post-e").getAttribute("data-unread-count")).toBe("");
     // A post with no thread listed yet has no line to read.
     expect(line("post-new").getAttribute("data-has-line")).toBe("false");
   });

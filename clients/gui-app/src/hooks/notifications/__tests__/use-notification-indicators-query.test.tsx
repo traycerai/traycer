@@ -704,6 +704,7 @@ describe("mixed-plane notification indicators", () => {
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: false,
+          unreadCount: 0,
         },
       },
     });
@@ -846,6 +847,7 @@ describe("local-mode notification indicators", () => {
           pendingApproval: true,
           pendingInterview: false,
           unreadDone: false,
+          unreadCount: 1,
         },
       },
     });
@@ -885,6 +887,7 @@ describe("local-mode notification indicators", () => {
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
+          unreadCount: 1,
         },
       },
     });
@@ -927,6 +930,7 @@ describe("local-mode notification indicators", () => {
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
+          unreadCount: 1,
         },
       },
     });

@@ -50,7 +50,40 @@ export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadDone: false,
 };
 
-const EMPTY_HOST_INDICATOR_STATE = EMPTY_NOTIFICATION_INDICATOR_STATE;
+const EMPTY_HOST_INDICATOR_STATE: HostNotificationsIndicatorState = {
+  pendingFork: false,
+  pendingApproval: false,
+  pendingInterview: false,
+  unreadFailure: false,
+  unreadDone: false,
+  unreadCount: 0,
+};
+
+/**
+ * Two counts of disjoint rows added: `null` (a host that did not count) only
+ * when neither side counted, so a known count is never hidden by an unknown
+ * one. The flags still light the entity the unknown side holds.
+ */
+export function addUnreadCounts(
+  left: number | null,
+  right: number | null,
+): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return left + right;
+}
+
+/**
+ * Whether an entity has anything unread: its unread terminal glyph, or any
+ * unread row its count holds.
+ */
+export function indicatorHasUnread(
+  state: HostNotificationsIndicatorState,
+): boolean {
+  return (
+    state.unreadDone || state.unreadFailure || (state.unreadCount ?? 0) > 0
+  );
+}
 
 export function selectNotificationIndicatorState(
   state: Pick<AppLocalNotificationsState, "byId">,
@@ -305,7 +338,10 @@ function collectCloudIndicatorEntry(
   row: HostNotificationsCloudFeedRowV15,
 ): void {
   const { entry, originHostId } = row;
-  const contribution = indicatorContribution(entry);
+  const contribution = mergeOptionalIndicatorFlags(
+    indicatorContribution(entry),
+    entry.readAt === null ? UNREAD_ROW_CONTRIBUTION : null,
+  );
   const { epicId, chatId } = entry;
   if (epicId !== null && accumulator.wantedEpicIds.has(epicId)) {
     if (contribution !== null) {
@@ -339,9 +375,25 @@ function collectCloudIndicatorEntry(
   }
 }
 
-/** `null` when the entry lights nothing, so an entity with only quiet rows is
- * never allocated an all-false record. */
+/** One unread row's share of its entities' count, and of nothing else. */
+const UNREAD_ROW_CONTRIBUTION: HostNotificationsIndicatorState = {
+  ...EMPTY_HOST_INDICATOR_STATE,
+  unreadCount: 1,
+};
+
+function mergeOptionalIndicatorFlags(
+  left: HostNotificationsIndicatorState | null,
+  right: HostNotificationsIndicatorState | null,
+): HostNotificationsIndicatorState | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return mergeIndicatorFlags(left, right);
+}
+
 /**
+ * `null` when the entry lights nothing, so an entity with only quiet rows is
+ * never allocated an all-false record.
+ *
  * `pendingApproval` is the wire's generic "needs a person" flag: every
  * agent pending-prompt kind but `interview.requested` lights it, driven off the
  * shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS` tuple so a new kind lights
@@ -366,6 +418,7 @@ function indicatorContribution(
     pendingFork: false,
     unreadFailure: false,
     unreadDone: false,
+    unreadCount: 0,
   };
 }
 
@@ -494,11 +547,13 @@ function terminalIndicatorContribution(
     pendingFork: false,
     unreadFailure: entry.severity === "failure",
     unreadDone: entry.severity === "done",
+    // The row's own count is its entity's already, from the feed pass.
+    unreadCount: 0,
   };
 }
 
 /** The host's `MAX(CASE WHEN ...)` aggregate: any contributing row lights the
- * entity's flag. */
+ * entity's flag; the counts of disjoint rows add. */
 function mergeIndicatorFlags(
   current: HostNotificationsIndicatorState | undefined,
   next: HostNotificationsIndicatorState,
@@ -510,6 +565,7 @@ function mergeIndicatorFlags(
     pendingFork: current.pendingFork || next.pendingFork,
     unreadFailure: current.unreadFailure || next.unreadFailure,
     unreadDone: current.unreadDone || next.unreadDone,
+    unreadCount: addUnreadCounts(current.unreadCount, next.unreadCount),
   };
 }
 
@@ -524,7 +580,8 @@ function mergeIndicatorFlags(
  * nor clear correctly, and only the host-local `pendingFork` bit was safe to
  * take. With `@1.1`'s selector the host answers for its local-homed partition
  * ONLY, and the cloud snapshot is exactly the complement - so the two are
- * disjoint and a per-flag OR neither drops a row nor double-counts one.
+ * disjoint and a per-flag OR (and a sum of the counts) neither drops a row
+ * nor double-counts one.
  *
  * `byOriginHostId` gets the same treatment for the ACTIVE host's bucket alone:
  * the local partition belongs to that origin and to no other, so merging it
@@ -624,7 +681,7 @@ function mergePendingForkChats(
   const chats = { ...response.chats };
   for (const [chatId] of pendingChats) {
     chats[chatId] = {
-      ...(chats[chatId] ?? EMPTY_NOTIFICATION_INDICATOR_STATE),
+      ...(chats[chatId] ?? EMPTY_HOST_INDICATOR_STATE),
       pendingFork: true,
     };
   }
@@ -640,7 +697,8 @@ function mergePendingForkChats(
  * make the last answer win for an id two hosts both reported on - `chatId` is
  * host-minted and not unique across hosts, so that is a reachable state - and
  * silently extinguish a real pending flag. The host's own aggregate is
- * `MAX(CASE WHEN ...)`, so OR is the same rule applied one level up.
+ * `MAX(CASE WHEN ...)`, so OR is the same rule applied one level up; the
+ * hosts' rows are their own, so their counts add.
  */
 export function mergeIndicatorStateResponses(
   base: HostNotificationsIndicatorStateResponse,

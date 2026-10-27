@@ -6,6 +6,7 @@ import {
   type BotAnnouncementKind,
   type ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
@@ -696,8 +697,8 @@ function threadStarted(
 
 /**
  * Slack's line under a post: who is in the thread, "N replies" and when the
- * last one landed, the way into the thread. An unread reply in a thread the
- * viewer took part in shows as a dot and bold count. While the bot is
+ * last one landed, the way into the thread. Unread replies in a thread the
+ * viewer took part in show as their count and a bold "N replies". While the bot is
  * answering in the thread, the line says so in place of when the last reply
  * landed.
  */
@@ -725,7 +726,11 @@ function ThreadLine(props: {
         label="In this thread"
         testId="bot-thread-participants"
       />
-      <ThreadLineCount replies={replies} unread={unread} />
+      <ThreadLineCount
+        replies={replies}
+        unread={unread}
+        unreadCount={line.unreadCount}
+      />
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -735,22 +740,35 @@ function ThreadLine(props: {
   );
 }
 
-/** "N replies", bold behind a dot while one is unread. */
+/**
+ * "N replies", bold behind the unread count while one is unread (a 2 badge
+ * before "5 replies" reads two unread of five), or behind a dot where the
+ * host does not count.
+ */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread } = props;
+  const { replies, unread, unreadCount } = props;
   return (
     <>
-      {unread ? (
-        <span
-          className="size-2 shrink-0 rounded-full bg-primary"
-          data-testid="bot-thread-unread"
-          aria-label="Unread replies"
-          role="img"
+      {unreadCount === null ? (
+        unread && (
+          <span
+            className="size-2 shrink-0 rounded-full bg-primary"
+            data-testid="bot-thread-unread"
+            aria-label="Unread replies"
+            role="img"
+          />
+        )
+      ) : (
+        <UnreadCountBadge
+          count={unreadCount}
+          size="xs"
+          testId="bot-thread-unread-count"
         />
-      ) : null}
+      )}
       {replies === 0 ? null : (
         <span
           className={cn("text-primary", unread ? "font-bold" : "font-semibold")}

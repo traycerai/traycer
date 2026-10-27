@@ -3048,6 +3048,7 @@ describe("<NotificationsSessionProvider />", () => {
               pendingApproval: false,
               pendingInterview: false,
               unreadDone: false,
+              unreadCount: 0,
             },
           },
         },

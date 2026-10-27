@@ -1317,6 +1317,7 @@ describe("<EpicRootDragOverlayContent />", () => {
             unreadFailure: false,
             unreadDone: true,
             pendingFork: false,
+            unreadCount: 1,
           },
         },
         chats: {},

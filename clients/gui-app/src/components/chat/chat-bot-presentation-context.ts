@@ -4,14 +4,16 @@ import type { StackedIdentity } from "@/components/bots/bot-avatars";
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
  * shows it: how many replies, when the last one landed, whether it has a
- * reply the viewer has not read, whether the bot is answering in it now, and
- * who is in it: the post's writer, and the bot once it has a reply.
+ * reply the viewer has not read and how many, whether the bot is answering in
+ * it now, and who is in it: the post's writer, and the bot once it has a reply.
  */
 export interface ChatBotThreadLine {
   readonly participants: ReadonlyArray<StackedIdentity>;
   readonly replyCount: number;
   readonly lastReplyAt: number | null;
   readonly unread: boolean;
+  /** The viewer's unread notifications of the thread; `null` where the host does not count, and the line draws a dot. */
+  readonly unreadCount: number | null;
   readonly replying: boolean;
 }
 

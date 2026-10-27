@@ -30,6 +30,7 @@ import {
 import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
+  type HostNotificationFeedEntry,
 } from "@/stores/notifications/host-notifications-store";
 import {
   cloudNotificationFeedId,
@@ -227,6 +228,33 @@ function hostDone(
   };
 }
 
+function hostBotAnswer(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationFeedEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "host.operation.finished",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "bot-1",
+    chatId: "thread-1",
+    payload: {
+      kind: "bot_thread_verdict",
+      operation: "bot.thread.verdict",
+      title: "Tracy answered",
+      message: "Your question about the release",
+      botId: "bot-1",
+      threadId: "thread-1",
+      replyMessageId: id,
+    },
+  };
+}
+
 function cloudDone(
   entryId: string,
   createdAt: number,
@@ -361,7 +389,7 @@ function seedGlobal(entries: ReadonlyArray<NotificationEntry>): void {
 }
 
 function applyHostSnapshot(
-  entries: ReadonlyArray<HostNotificationEntry>,
+  entries: ReadonlyArray<HostNotificationEntry | HostNotificationFeedEntry>,
   summary: HostNotificationsSummary,
 ): void {
   useHostNotificationsStore.getState().applySnapshot({
@@ -633,6 +661,30 @@ describe("merged notification projection (Attention / Recent)", () => {
       hostFeedId("newer-failure"),
       hostFeedId("mid-failure"),
     ]);
+  });
+
+  it("lists an unread bot answer after the prompts and failures however new it is, and drops it to Recent once read", () => {
+    applyHostSnapshot(
+      [
+        hostBotAnswer("newest-answer", 3_000, null),
+        hostFailure("failure", 200, null),
+        hostPrompt("prompt", 100, null),
+        hostBotAnswer("read-answer", 4_000, 1),
+      ],
+      { unreadCount: 3, attentionCount: 3 },
+    );
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      recent: useRecentNotificationIds(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("prompt"),
+      hostFeedId("failure"),
+      hostFeedId("newest-answer"),
+    ]);
+    expect(result.current.recent).toEqual([hostFeedId("read-answer")]);
   });
 });
 
@@ -1119,6 +1171,21 @@ describe("useNotificationBellState", () => {
 
     const { result } = renderHook(() => useNotificationBellState());
     expect(result.current).toEqual({ kind: "attention", count: 150 });
+  });
+
+  it("draws a bot's unread answer as attention once the host's summary counts it", () => {
+    applyHostSnapshot([hostBotAnswer("answer", 10, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result } = renderHook(() => ({
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+    }));
+
+    expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
+    expect(result.current.attention).toEqual([hostFeedId("answer")]);
   });
 
   it("returns quietDot when there is unread activity but no attention", () => {

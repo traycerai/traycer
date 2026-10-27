@@ -52,6 +52,7 @@ const NO_FLAGS: HostNotificationsIndicatorState = {
   pendingFork: false,
   unreadFailure: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 function epicTab(epicId: string): HeaderTab {

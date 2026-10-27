@@ -34,6 +34,7 @@ import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 interface IndicatorState {
   unreadDone: boolean;
   unreadFailure: boolean;
+  unreadCount: number | null;
 }
 
 const mocks = vi.hoisted(() => {
@@ -314,9 +315,13 @@ describe("<BotChannelSidebar /> sections", () => {
 
   it("marks a channel with an unread reply, and the one in view as the current page", () => {
     mocks.state.epics = {
-      "bot-release": { unreadDone: false, unreadFailure: false },
-      "bot-triage": { unreadDone: true, unreadFailure: false },
-      "bot-notes": { unreadDone: false, unreadFailure: true },
+      "bot-release": {
+        unreadDone: false,
+        unreadFailure: false,
+        unreadCount: 0,
+      },
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 1 },
+      "bot-notes": { unreadDone: false, unreadFailure: true, unreadCount: 1 },
     };
     mount("bot-release");
 
@@ -326,6 +331,37 @@ describe("<BotChannelSidebar /> sections", () => {
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
     expect(row("bot-triage").getAttribute("aria-current")).toBeNull();
     expect(row("bot-notes").getAttribute("aria-current")).toBeNull();
+  });
+
+  it("counts a channel's unread notifications at the end of its row, and draws nothing at zero or where the host does not count", () => {
+    mocks.state.epics = {
+      "bot-release": {
+        unreadDone: false,
+        unreadFailure: false,
+        unreadCount: 0,
+      },
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 3 },
+      "bot-notes": {
+        unreadDone: true,
+        unreadFailure: false,
+        unreadCount: null,
+      },
+    };
+    mount("bot-release");
+
+    expect(
+      within(
+        within(row("bot-triage")).getByTestId("bot-channel-row-unread-count"),
+      ).getByText("3"),
+    ).toBeTruthy();
+    expect(row("bot-triage").getAttribute("data-unread")).toBe("true");
+    expect(
+      within(row("bot-release")).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+    expect(
+      within(row("bot-notes")).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+    expect(row("bot-notes").getAttribute("data-unread")).toBe("true");
   });
 });
 
