@@ -20,8 +20,9 @@ name: Protocol Compatibility
 #  - `guarded-files-tripwire` fails any PR that edits (not adds) the compat
 #    governance files without the `protocol-compat-override` label, making
 #    baseline regeneration a deliberate, reviewable act. Like every job here
-#    it is skipped on a team PR into `main`, so it only sees a fork PR, a bot
-#    PR or a PR into another base (see the job). On those it closes the
+#    it is skipped on a team PR into `main`, `integration/*` or `land/*`, so
+#    it only sees a fork PR, a bot PR or a PR into another base (see the
+#    job). On those it closes the
 #    failure mode that shipped `terminal.defaultCwd` (#227): the
 #    frozen-fixture test went red and was silenced by editing the fixture in
 #    the same PR. `host-v1.1.5-mutation-v20.ts` is also covered by the
@@ -57,12 +58,13 @@ jobs:
     # the override label is added, without waiting for a new push. This job
     # doesn't read labels at all, so skip it there - otherwise every unrelated
     # label add reruns the full multi-baseline dump/check for nothing.
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       (
         github.event_name != 'pull_request'
-        || github.base_ref != 'main'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
@@ -191,7 +193,7 @@ jobs:
       github.event_name == 'pull_request'
       && (
         github.event_name != 'pull_request'
-        || github.base_ref != 'main'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
