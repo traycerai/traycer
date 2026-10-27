@@ -23,6 +23,7 @@ import {
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { resolveTabTitle } from "@/lib/browser-view/browser-tab-display";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
@@ -430,12 +431,32 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // `epic.mentionArtifacts` is optional on the host (unsupported-degrade), so a
+  // host that predates it would answer DOWNGRADE_UNSUPPORTED and that one
+  // failure would read as the whole Artifacts list failing. Such a host simply
+  // lists no html, canvas or file rows.
+  const supportsArtifactIndex = useHostSupportsMethod(
+    readiness.hostId,
+    "epic.mentionArtifacts",
+  );
   const epicRequests = useMemo<ReadonlyArray<MentionEpicRequest>>(
     () =>
       active && cloudAuthorized
-        ? mentionProviderRegistry.epicRequests(step, debouncedRequestContext)
+        ? mentionProviderRegistry
+            .epicRequests(step, debouncedRequestContext)
+            .filter(
+              (request) =>
+                supportsArtifactIndex ||
+                request.method !== "epic.mentionArtifacts",
+            )
         : EMPTY_EPIC_REQUESTS,
-    [active, cloudAuthorized, debouncedRequestContext, step],
+    [
+      active,
+      cloudAuthorized,
+      debouncedRequestContext,
+      step,
+      supportsArtifactIndex,
+    ],
   );
 
   const {
