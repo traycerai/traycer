@@ -15,6 +15,7 @@ import {
   act,
   cleanup,
   render,
+  type RenderResult,
   screen,
   waitFor,
   within,
@@ -485,10 +486,10 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
 
 const DIRECTIVE = "Watches CI and answers questions about the nightly run.";
 
-function mountChannel(threads: ReadonlyArray<BotThreadSummary>): void {
+function mountChannel(threads: ReadonlyArray<BotThreadSummary>): RenderResult {
   mocks.threadListData = { threads };
   // The transcript reads the app's send ledger off the query client.
-  render(
+  return render(
     <QueryClientProvider client={new QueryClient()}>
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
@@ -748,10 +749,11 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     return box;
   }
 
-  function mountQuietChannel(): void {
+  function mountQuietChannel(): RenderResult {
     emitSnapshot(CHANNEL_ID, { messages: [] });
-    mountChannel([]);
+    const view = mountChannel([]);
     emitActivity({ trunk: null, threads: {} });
+    return view;
   }
 
   it("opens the thread on the post as the send is accepted, saying the bot is replying, and keeps the reply box when the list catches up", async () => {
@@ -811,7 +813,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     expect(within(panel).getByTestId("bot-thread-replying-strip")).toBeTruthy();
   });
 
-  it("opens the thread of a queued post on the post as sent, saying it was saved, and changes nothing when the post's row lands", async () => {
+  it("opens the thread of a queued post on the post as sent, says it was saved there and not under the channel's box, and retires that once the post's row lands", async () => {
     const user = userEvent.setup();
     // The post's writer is the viewer, as the channel names their own posts.
     useAuthStore.setState({
@@ -822,7 +824,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
         avatarUrl: null,
       },
     });
-    mountQuietChannel();
+    const view = mountQuietChannel();
 
     accept(await postInChannel(user), THREAD_ID, "queued");
 
@@ -834,21 +836,52 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     expect(within(panel).getByTestId("bot-thread-queued").textContent).toBe(
       "Saved. The bot will read it.",
     );
-    const drawn = anchor.textContent;
+    // Said once, where the person now looks.
+    expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
 
-    // The bot's host takes the post and writes its row, at the time it was accepted.
-    const sentAt =
-      useBotOpenThreadStore.getState().byBotId[BOT_ID]?.sent?.sentAt ?? null;
-    if (sentAt === null) throw new Error("the post opened no thread");
+    // The bot's host takes the post and writes its row: what was saved has
+    // been read.
     emitSnapshot(CHANNEL_ID, {
-      messages: [
-        { ...post({ direct: false, resolvedAt: null }), timestamp: sentAt },
-      ],
+      messages: [post({ direct: false, resolvedAt: null })],
     });
 
-    expect(anchor.getAttribute("data-loaded")).toBe("true");
     expect(within(panel).getByTestId("bot-thread-anchor")).toBe(anchor);
-    expect(anchor.textContent).toBe(drawn);
+    expect(anchor.getAttribute("data-loaded")).toBe("true");
+    expect(within(anchor).getByText("Is CI green?")).toBeTruthy();
+    expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
+
+    emitActivity({
+      trunk: null,
+      threads: { [THREAD_ID]: replying("request-1", null) },
+    });
+    const strip = await within(panel).findByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
+
+    // Messages → Under the hood → Messages: the tab unmounts the channel and
+    // mounts it again on the thread it holds open.
+    view.unmount();
+    mountChannel([]);
+    const again = await screen.findByTestId("bot-thread-panel");
+    expect(
+      within(within(again).getByTestId("bot-thread-anchor")).getByText(
+        "Is CI green?",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
+  });
+
+  it("says a queued post the bot answers in the channel under the channel's box", async () => {
+    const user = userEvent.setup();
+    mountQuietChannel();
+
+    accept(await postInChannel(user), null, "queued");
+
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    expect(screen.getByTestId("bot-channel-composer-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
   });
 
   it("opens no thread for a post the bot answers in the channel", async () => {

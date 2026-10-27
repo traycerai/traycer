@@ -178,8 +178,9 @@ type ThreadPanelBodyProps = {
  * the channel and whose Edit hands it to the channel's box. Until the
  * channel's row is there the post is drawn as the person sent it, or with no
  * text from the thread list, and the line says why with no Retry or Edit.
- * A send the host queued says so under the post. Nothing while the post is
- * neither loaded, sent from here nor listed.
+ * A send the host queued says so under the post until its row lands, which
+ * is the bot's host taking it. Nothing while the post is neither loaded,
+ * sent from here nor listed.
  */
 function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const {
@@ -260,7 +261,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
               }
               hoverActions={false}
             />
-            {sent?.delivery === "queued" ? (
+            {post === null && sent?.delivery === "queued" ? (
               <div className="px-3">
                 <BotQueuedNotice testId="bot-thread-queued" />
               </div>
@@ -355,8 +356,13 @@ function UnopenedThread(props: {
 /** A box that never edits: a thread nobody has replied in has nothing to edit. */
 function noEdit(): void {}
 
-/** A reply sent from the panel leaves open the thread it was sent in. */
-function keepOpenThread(): void {}
+/**
+ * A reply sent from the panel leaves open the thread it was sent in, and its
+ * box says the reply's delivery.
+ */
+function keepOpenThread(): boolean {
+  return false;
+}
 
 /**
  * The rule and reply count, the replies and the box of a thread whose id is

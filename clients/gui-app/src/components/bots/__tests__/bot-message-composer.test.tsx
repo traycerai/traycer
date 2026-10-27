@@ -7,7 +7,7 @@
 import type { ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
@@ -57,7 +57,7 @@ const FAILURE: BotSendFailure = {
 };
 
 const onSent =
-  vi.fn<(response: BotConversationSendResponse, text: string) => void>();
+  vi.fn<(response: BotConversationSendResponse, text: string) => boolean>();
 const onEditEnd = vi.fn<() => void>();
 
 function composer(edit: BotComposerEdit | null): ReactNode {
@@ -91,6 +91,11 @@ function lastSend(): SendCallbacks {
   return call[1];
 }
 
+beforeEach(() => {
+  // An owner that says nothing of the send's delivery, as a thread's box.
+  onSent.mockReturnValue(false);
+});
+
 afterEach(() => {
   cleanup();
   mocks.send.mockReset();
@@ -99,6 +104,32 @@ afterEach(() => {
 });
 
 describe("<BotMessageComposer /> reporting a send", () => {
+  async function sendQueued(saidByOwner: boolean): Promise<void> {
+    const user = userEvent.setup();
+    onSent.mockReturnValue(saidByOwner);
+    render(composer(null));
+    await user.type(box(), "Is CI green?");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    act(() => {
+      lastSend().onSuccess?.({ ...RESPONSE, delivery: "queued" });
+    });
+  }
+
+  it("says a queued send was saved when its owner does not say it", async () => {
+    await sendQueued(false);
+
+    expect(screen.getByTestId("bot-channel-composer-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
+  });
+
+  it("says nothing of a queued send its owner says itself", async () => {
+    await sendQueued(true);
+
+    expect(onSent).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
+  });
+
   it("reports the host's answer once it accepts the send, with the box cleared", async () => {
     const user = userEvent.setup();
     render(composer(null));

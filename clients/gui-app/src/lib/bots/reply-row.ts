@@ -109,10 +109,12 @@ export function postTextOf(post: OpenMessage | null): string | null {
 }
 
 /**
- * The post a thread opens on, as the channel's row draws it: `loaded` once
- * it is read from the channel's own row, with its text; before that, what the
- * thread list says of the post (its writer, its time and its request) with
- * no text yet, which nothing can send again.
+ * The post a thread opens on, as the channel's row draws it. `loaded` once
+ * it is read from the channel's own row, the authoritative post that Retry
+ * and Edit act on. Before that the row stands in for it: the post as the
+ * person sent it (its text, writer, time and request), or what the thread
+ * list says of it (its writer, its time and its request, no text), and
+ * nothing can send it again.
  */
 export interface ThreadOriginRow {
   readonly row: ChatMessage;

@@ -203,7 +203,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     placeholder: string;
     testId: string;
     failure: { readonly failed: boolean };
-    onSent: (response: BotConversationSendResponse, text: string) => void;
+    onSent: (response: BotConversationSendResponse, text: string) => boolean;
   }) => (
     <div
       data-testid={`stub-${props.testId}`}

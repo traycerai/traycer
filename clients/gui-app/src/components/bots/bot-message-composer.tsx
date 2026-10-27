@@ -60,11 +60,15 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
-  /** The host accepted `text`, what the box held, and the box was cleared. */
+  /**
+   * The host accepted `text`, what the box held, and the box was cleared.
+   * Answers whether the owner says the send's delivery itself, where the
+   * person now looks; the box says it only when it does not.
+   */
   readonly onSent: (
     response: BotConversationSendResponse,
     text: string,
-  ) => void;
+  ) => boolean;
 }): ReactNode {
   const {
     botId,
@@ -128,8 +132,8 @@ export function BotMessageComposer(props: {
           }
           setText("");
           if (supersedes !== null) onEditEnd();
-          setLastDelivery(response.delivery);
-          onSent(response, trimmed);
+          const deliverySaid = onSent(response, trimmed);
+          setLastDelivery(deliverySaid ? null : response.delivery);
         },
         onError: failure.fail,
       },

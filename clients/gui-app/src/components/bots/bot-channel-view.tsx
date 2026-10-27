@@ -253,11 +253,12 @@ export function BotChannelView(props: {
   );
 
   // A post whose answer lands in a thread (reply mode `threaded`) opens that
-  // thread as the send is accepted, in place of any thread open now; one the
-  // bot answers in the channel opens nothing.
+  // thread as the send is accepted, in place of any thread open now, and the
+  // thread's panel says the send's delivery; one the bot answers in the
+  // channel opens nothing, and the channel's box says it.
   const openPostedThread = useCallback(
-    (response: BotConversationSendResponse, text: string) => {
-      if (response.threadId === null || !threadListSupported) return;
+    (response: BotConversationSendResponse, text: string): boolean => {
+      if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
         anchorMessageId: response.messageId,
         announcement: false,
@@ -270,6 +271,7 @@ export function BotChannelView(props: {
           delivery: response.delivery,
         },
       });
+      return true;
     },
     [onOpenThread, threadListSupported, viewer],
   );
