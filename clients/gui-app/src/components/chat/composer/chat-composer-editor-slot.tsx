@@ -139,15 +139,16 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
   const acceptBinding = useBindingForAction("composer.suggestion.accept");
   // A fill made by a held key: its OS repeats keep arriving after the fill,
   // and with the draft no longer empty they would fall through to the key's
-  // ordinary job - on an Enter binding, submitting the text just filled. They
-  // are taken until the next fresh press of any key.
-  const swallowRepeatsRef = useRef(false);
+  // ordinary job - on an Enter binding, submitting the text just filled. The
+  // repeats of THAT physical key are taken until it is pressed afresh. Keyed
+  // by code, not a flag: a modifier tapped while the key is still held is a
+  // fresh keydown of another key, and must not hand the held key back.
+  const swallowRepeatsOfCodeRef = useRef<string | null>(null);
   const interceptKeyDown = useCallback(
     (event: KeyboardEvent): boolean => {
-      if (!event.repeat) {
-        swallowRepeatsRef.current = false;
-      } else if (swallowRepeatsRef.current) {
-        return true;
+      if (swallowRepeatsOfCodeRef.current === event.code) {
+        if (event.repeat) return true;
+        swallowRepeatsOfCodeRef.current = null;
       }
       if (suggestedPrompt === null) return false;
       if (
@@ -160,7 +161,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
         return false;
       }
       const filled = onAcceptSuggestion(suggestedPrompt);
-      if (filled) swallowRepeatsRef.current = true;
+      if (filled) swallowRepeatsOfCodeRef.current = event.code;
       return filled;
     },
     [acceptBinding, onAcceptSuggestion, pickerStore, suggestedPrompt],

@@ -149,6 +149,28 @@ test("an Enter binding fills without sending, ahead of the editor's submit keyma
   expect(await submits(page)).toBe(0);
 });
 
+// The press that filled is still held and still repeating, and a modifier
+// tapped meanwhile is a fresh keydown of another key. The held Enter's next
+// repeat must not reach the submit keymap with the suggestion now filled.
+test("a held Enter binding does not send the text it filled, even across a Shift tapped meanwhile", async ({
+  page,
+}) => {
+  await openComposer(page);
+  await bind(page, "enter");
+
+  await page.keyboard.down("Enter");
+  await expect(page.locator(EDITOR)).toHaveText(SUGGESTION);
+  await page.keyboard.down("Shift");
+  await page.keyboard.up("Shift");
+  // A second `down` of a key already held is dispatched as an OS repeat.
+  await page.keyboard.down("Enter");
+  await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+
+  await expect(page.locator(EDITOR)).toHaveText(SUGGESTION);
+  expect(await submits(page)).toBe(0);
+});
+
 test("an unbound action accepts nothing, and → moves the caret as usual", async ({
   page,
 }) => {

@@ -221,9 +221,14 @@ describe("ChatComposerEditorSlot", () => {
     // A held key fills on its first press and keeps repeating. With the draft
     // no longer empty those repeats would fall through to the key's ordinary
     // job (an Enter binding would submit the text just filled), so they are
-    // taken - until the next fresh press, which is the person's own.
-    it("takes the OS repeats of the key that filled, and nothing after the next fresh press", () => {
-      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+    // taken - until that key is pressed afresh, which is the person's own.
+    it("takes the OS repeats of the key that filled, until it is pressed afresh", () => {
+      // Fills once; the draft is then no longer empty, so a later fill
+      // declines the way the production fill does.
+      const onAcceptSuggestion = vi
+        .fn<AcceptSuggestion>()
+        .mockReturnValueOnce(true)
+        .mockReturnValue(false);
       const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
       fireAcceptKey(target, ARROW_RIGHT);
@@ -231,14 +236,43 @@ describe("ChatComposerEditorSlot", () => {
       expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
       expect(repeat.defaultPrevented).toBe(true);
 
-      const fresh = fireAcceptKey(target, { key: "a", code: "KeyA" });
+      const fresh = fireAcceptKey(target, ARROW_RIGHT);
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(2);
       expect(fresh.defaultPrevented).toBe(false);
       const laterRepeat = fireAcceptKey(target, {
+        ...ARROW_RIGHT,
+        repeat: true,
+      });
+      expect(laterRepeat.defaultPrevented).toBe(false);
+    });
+
+    // Shift tapped while the accept key is still held is a fresh keydown of
+    // ANOTHER key. It must not hand the held key back: its next repeat would
+    // reach the key's ordinary job with the suggestion already filled.
+    it("keeps taking the held key's repeats across a modifier pressed meanwhile", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      fireAcceptKey(target, ARROW_RIGHT);
+      fireAcceptKey(target, { key: "Shift", code: "ShiftLeft" });
+      const repeat = fireAcceptKey(target, { ...ARROW_RIGHT, repeat: true });
+
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(repeat.defaultPrevented).toBe(true);
+    });
+
+    it("does not take the repeats of another key", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      fireAcceptKey(target, ARROW_RIGHT);
+      const other = fireAcceptKey(target, {
         key: "a",
         code: "KeyA",
         repeat: true,
       });
-      expect(laterRepeat.defaultPrevented).toBe(false);
+
+      expect(other.defaultPrevented).toBe(false);
     });
 
     it("does not take a repeat when nothing was filled", () => {

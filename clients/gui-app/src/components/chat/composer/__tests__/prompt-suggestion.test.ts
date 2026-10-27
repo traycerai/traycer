@@ -235,6 +235,24 @@ describe("isPromptSuggestionAcceptEvent", () => {
     ).toBe(false);
   });
 
+  // AltGr+Q types @ on a German layout and reaches the event as Ctrl+Alt+Q
+  // with AltGraph set; a person bound to mod+alt+q must still get their @.
+  it("does not accept an AltGr chord that types a character", () => {
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "mod+alt+q",
+        event: acceptKeyDown({
+          key: "@",
+          code: "KeyQ",
+          ctrlKey: true,
+          altKey: true,
+          modifierAltGraph: true,
+        }),
+        pickerOpen: false,
+      }),
+    ).toBe(false);
+  });
+
   it("does not accept while composing an IME candidate", () => {
     expect(
       isPromptSuggestionAcceptEvent({

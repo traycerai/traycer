@@ -71,7 +71,7 @@ export type SuggestionFillTarget = Pick<
  *   only, never an invisible fallback to →;
  * - a key something earlier already took (`defaultPrevented`);
  * - an open mention or slash picker, which owns Tab (commit) and the arrows;
- * - an IME still composing a candidate;
+ * - an IME still composing a candidate, or an AltGr chord typing a character;
  * - OS key-repeat, so a held key cannot fill and then act again on the text
  *   it just filled.
  *
@@ -88,6 +88,11 @@ export function isPromptSuggestionAcceptEvent(input: {
   if (binding === null) return false;
   if (event.defaultPrevented || event.repeat || pickerOpen) return false;
   if (event.isComposing) return false;
+  // AltGr is Ctrl+Alt to the event on Windows and Linux, and it types a
+  // character (AltGr+Q is @ on a German layout). The key is the text's,
+  // whatever the binding - the same rule the global provider applies, which
+  // cannot reach this editor-local match.
+  if (event.getModifierState("AltGraph")) return false;
   return chordMatchesEvent(binding, event);
 }
 
