@@ -314,7 +314,12 @@ export function SandboxRowActions(props: {
         operation={operation}
         busy={busy}
         onRetry={(pressed) => {
-          if (pressed === "destroy") destroy.mutate(undefined);
+          if (pressed === "destroy")
+            destroy.mutate(
+              operation?.kind === "failed"
+                ? operation.destroyRequest
+                : undefined,
+            );
           else wake(pressed);
         }}
       />

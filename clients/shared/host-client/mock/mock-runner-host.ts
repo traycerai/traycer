@@ -666,12 +666,14 @@ export class MockRunnerHost implements IRunnerHost {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult> {
     return destroySandboxViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
       sandboxId,
+      onlyIfIdle,
     );
   }
 

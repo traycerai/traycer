@@ -1162,7 +1162,11 @@ describe("RunnerIpcBridge", () => {
         createSandboxViaHttpMock,
         [createRequest],
       ],
-      [RunnerHostInvoke.destroySandbox, destroySandboxViaHttpMock, ["sbx_1"]],
+      [
+        RunnerHostInvoke.destroySandbox,
+        destroySandboxViaHttpMock,
+        ["sbx_1", true],
+      ],
       [
         RunnerHostInvoke.patchSandbox,
         patchSandboxViaHttpMock,

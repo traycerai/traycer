@@ -277,11 +277,11 @@ export function sortSandboxRows(
   });
 }
 
-/** `Destroy all idle` shows only while the filter is exactly this pair. */
+/** The header action is offered with either idle State filter, for any Kind. */
 export function sandboxDestroyAllIdleOffered(
   filter: SandboxRowFilter,
 ): boolean {
-  return filter.kind === "agent" && filter.state === "suspended";
+  return filter.state === "suspended" || filter.state === "stopped";
 }
 
 // ── Who ─────────────────────────────────────────────────────────────────────
