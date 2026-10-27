@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import { Check, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -85,7 +88,7 @@ function usePendingCuratedId(): string | null {
       mutationKey: appearanceMutationKeys.applyCuratedWallpaper(),
       status: "pending",
     },
-    (mutation) => mutation.state.variables,
+    selectMutationVariables,
   );
   // Newest first: `useMutationStateOf` yields matching mutations in invocation
   // order, so with two applies overlapping the OLDEST would otherwise win the

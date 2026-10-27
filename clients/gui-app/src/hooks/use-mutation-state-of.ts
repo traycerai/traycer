@@ -1,5 +1,6 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import {
+  hashKey,
   notifyManager,
   replaceEqualDeep,
   useQueryClient,
@@ -8,28 +9,50 @@ import {
   type MutationFilters,
 } from "@tanstack/react-query";
 
-function createMutationStateStore<TResult>(
+interface MutationCacheSubscription {
+  readonly getVersion: () => number;
+  readonly subscribe: (onStoreChange: () => void) => () => void;
+}
+
+function createMutationCacheSubscription(
   cache: MutationCache,
-  filters: MutationFilters,
-  select: (mutation: Mutation) => TResult,
-) {
-  const read = (): TResult[] => cache.findAll(filters).map(select);
-  let result = read();
+): MutationCacheSubscription {
+  let version = 0;
   return {
-    getSnapshot: () => result,
-    subscribe: (onStoreChange: () => void) => {
-      const update = () => {
-        const next = replaceEqualDeep(result, read());
-        if (next !== result) {
-          result = next;
-          notifyManager.schedule(onStoreChange);
-        }
-      };
-      const unsubscribe = cache.subscribe(update);
-      // A mutation may have changed between rendering and subscribing.
-      update();
+    getVersion: () => version,
+    subscribe: (onStoreChange) => {
+      const unsubscribe = cache.subscribe(() => {
+        version += 1;
+        notifyManager.schedule(onStoreChange);
+      });
+      // React rechecks after subscribing, including changes missed since render.
+      version += 1;
       return unsubscribe;
     },
+  };
+}
+
+function createMutationSnapshotGetter<TResult>(
+  cache: MutationCache,
+  subscription: MutationCacheSubscription,
+  options: {
+    readonly filters: MutationFilters;
+    readonly select: (mutation: Mutation) => TResult;
+    readonly baseline: TResult[];
+  },
+): () => TResult[] {
+  let result = options.baseline;
+  let lastVersion: number | undefined;
+  return () => {
+    const version = subscription.getVersion();
+    if (lastVersion !== version) {
+      result = replaceEqualDeep(
+        result,
+        cache.findAll(options.filters).map(options.select),
+      );
+      lastVersion = version;
+    }
+    return result;
   };
 }
 
@@ -39,18 +62,68 @@ export function useMutationStateOf<TResult>(
   select: (mutation: Mutation) => TResult,
 ): TResult[] {
   const cache = useQueryClient().getMutationCache();
-  const store = useMemo(
-    () => createMutationStateStore(cache, filters, select),
-    [cache, filters, select],
+  const subscription = useMemo(
+    () => createMutationCacheSubscription(cache),
+    [cache],
   );
-  return useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getSnapshot,
+  const plainFilters = {
+    mutationKey: filters.mutationKey,
+    status: filters.status,
+    exact: filters.exact,
+  };
+  const filterKey = hashKey([plainFilters]);
+  const [filterState, setFilterState] = useState({ filterKey, plainFilters });
+  const filtersChanged = filterState.filterKey !== filterKey;
+  const currentPlainFilters = filtersChanged
+    ? plainFilters
+    : filterState.plainFilters;
+  if (filtersChanged) {
+    setFilterState({ filterKey, plainFilters });
+  }
+  const predicate = filters.predicate;
+  const currentFilters = useMemo(
+    () => ({ ...currentPlainFilters, predicate }),
+    [currentPlainFilters, predicate],
   );
+  const [baseline, setBaseline] = useState<TResult[]>([]);
+  // Each render owns its getter's memo. A suspended render with different
+  // filters must not replace the committed render's snapshot.
+  const getSnapshot = useMemo(
+    () =>
+      createMutationSnapshotGetter(cache, subscription, {
+        filters: currentFilters,
+        select,
+        baseline,
+      }),
+    [cache, subscription, currentFilters, select, baseline],
+  );
+  const result = useSyncExternalStore(
+    subscription.subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+  if (baseline !== result) {
+    setBaseline(result);
+  }
+  return result;
 }
 
+/** Stable selector shared by readers of mutation inputs. */
+export function selectMutationVariables(mutation: Mutation): unknown {
+  return mutation.state.variables;
+}
+
+/** Stable selector for the context captured when a mutation starts. */
+export function selectMutationContext(mutation: Mutation): unknown {
+  return mutation.state.context;
+}
+
+const selectPendingMutation = (): boolean => true;
+
+/** Counts matching pending mutations without invalidating selection on render. */
 export function useIsMutatingOf(filters: MutationFilters): number {
-  return useMutationStateOf({ ...filters, status: "pending" }, () => true)
-    .length;
+  return useMutationStateOf(
+    { ...filters, status: "pending" },
+    selectPendingMutation,
+  ).length;
 }

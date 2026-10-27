@@ -1,4 +1,8 @@
-import { useMutation, type UseMutationResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  type Mutation,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   HostRpcError,
@@ -279,6 +283,18 @@ export function useManagedCommandConfigureIsPending(
   );
 }
 
+function selectManagedCommandWrite(mutation: Mutation): {
+  data: unknown;
+  order: number;
+} {
+  return {
+    data: mutation.state.data,
+    // Monotonic per mutation cache, assigned at `mutate()`: press order.
+    // `submittedAt` can collide for two writes in the same millisecond.
+    order: mutation.mutationId,
+  };
+}
+
 /**
  * The relaunch value a surface should SHOW and INVERT for this command: the
  * streamed record's, unless a configure write for the command has already
@@ -301,13 +317,7 @@ export function useManagedCommandRelaunchOnHostRestart(
       ),
       status: "success",
     },
-    (mutation) => ({
-      data: mutation.state.data,
-      // Monotonic per mutation cache, assigned at `mutate()`: press order.
-      // Not `submittedAt` - two presses in one millisecond stamp the same
-      // clock value, which is exactly the collision this has to break.
-      order: mutation.mutationId,
-    }),
+    selectManagedCommandWrite,
   );
   // Newest by the host's `updatedAtMs`, and among writes that landed in the
   // same millisecond - two quick presses can - by press order, which is the

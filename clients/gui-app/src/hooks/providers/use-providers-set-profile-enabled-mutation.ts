@@ -6,7 +6,10 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProvidersListResponse } from "@traycer/protocol/host/provider-schemas";
-import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -102,7 +105,7 @@ export function useProviderProfileEnablementPending(
       status: "pending",
       exact: true,
     },
-    (mutation) => mutation.state.variables,
+    selectMutationVariables,
   );
   const pendingProfileIds = new Set(
     pendingVariables.flatMap((variables) =>

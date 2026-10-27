@@ -5,7 +5,10 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
@@ -174,7 +177,7 @@ export function useSweepingWorktreePaths(
       mutationKey: epicMutationKeys.sweepWorktrees(),
       status: "pending",
     },
-    (mutation) => mutation.state.variables,
+    selectMutationVariables,
   );
   return useMemo(
     () => sweepingWorktreePathsForHost(pendingVariables, hostId),

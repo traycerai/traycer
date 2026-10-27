@@ -4,7 +4,11 @@ import {
   type Query,
   type QueryClient,
 } from "@tanstack/react-query";
-import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+  selectMutationContext,
+} from "@/hooks/use-mutation-state-of";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   useHostBinding,
@@ -491,7 +495,7 @@ export function usePendingSetPinnedEpicIds(): ReadonlySet<string> {
       mutationKey: epicMutationKeys.setPinned(),
       status: "pending",
     },
-    (mutation) => mutation.state.variables,
+    selectMutationVariables,
   );
 
   return useMemo(
@@ -514,7 +518,7 @@ export function useHasPendingSetPinnedForScope(
       mutationKey: epicMutationKeys.setPinned(),
       status: "pending",
     },
-    (mutation) => mutation.state.context,
+    selectMutationContext,
   );
   if (hostId === null || userId === null) return false;
   return pendingContexts.some(

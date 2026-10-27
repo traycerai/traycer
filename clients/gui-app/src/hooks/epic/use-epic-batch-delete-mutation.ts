@@ -11,7 +11,10 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { BatchDeleteItemResult } from "@traycer/protocol/host/epic/unary-schemas";
-import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import {
   useHostBinding,
   useHostClient,
@@ -794,7 +797,7 @@ export function usePendingDeleteEpicIds(): ReadonlySet<string> {
       mutationKey: epicMutationKeys.batchDelete(),
       status: "pending",
     },
-    (mutation) => mutation.state.variables,
+    selectMutationVariables,
   );
   return useMemo(
     () => pendingDeleteEpicIdsFromVariables(pendingVariables),

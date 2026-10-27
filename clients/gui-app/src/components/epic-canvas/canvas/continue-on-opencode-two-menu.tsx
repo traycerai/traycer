@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
+import type { Mutation } from "@tanstack/react-query";
 
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
@@ -49,27 +50,31 @@ export function ContinueOnOpencodeTwoTabMenu(
   );
   const client = useHostClientForHostId(hostId);
   const createChat = useEpicCreateChatForHostClient(client);
+  const isContinuation = useCallback(
+    (mutation: Mutation) => {
+      const variables = mutation.state.variables;
+      return (
+        typeof variables === "object" &&
+        variables !== null &&
+        "epicId" in variables &&
+        variables.epicId === epicId &&
+        "hostId" in variables &&
+        variables.hostId === hostId &&
+        "opencodeLine" in variables &&
+        variables.opencodeLine === 2 &&
+        "forkSource" in variables &&
+        typeof variables.forkSource === "object" &&
+        variables.forkSource !== null &&
+        "sourceChatId" in variables.forkSource &&
+        variables.forkSource.sourceChatId === chatId
+      );
+    },
+    [epicId, hostId, chatId],
+  );
   const creatingContinuation =
     useIsMutatingOf({
       mutationKey: epicMutationKeys.createChat(),
-      predicate: (mutation) => {
-        const variables = mutation.state.variables;
-        return (
-          typeof variables === "object" &&
-          variables !== null &&
-          "epicId" in variables &&
-          variables.epicId === epicId &&
-          "hostId" in variables &&
-          variables.hostId === hostId &&
-          "opencodeLine" in variables &&
-          variables.opencodeLine === 2 &&
-          "forkSource" in variables &&
-          typeof variables.forkSource === "object" &&
-          variables.forkSource !== null &&
-          "sourceChatId" in variables.forkSource &&
-          variables.forkSource.sourceChatId === chatId
-        );
-      },
+      predicate: isContinuation,
     }) > 0;
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const version = useHostMethodSchemaVersion(hostId, "epic.createChat");
