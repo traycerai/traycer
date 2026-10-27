@@ -153,6 +153,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         install: null,
         processMemory: null,
         crossHostMessaging: null,
+        sessions: null,
       }),
     },
   });

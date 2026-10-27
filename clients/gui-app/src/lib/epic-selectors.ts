@@ -1915,14 +1915,33 @@ export function useEpicTabDisplayTitle(
     matchesProjection ? node.id : null,
   );
   const isTerminal = node.type === "terminal";
-  const liveTerminalTitle = useTerminalDisplayTitle({
-    client: isTerminal ? terminalHostClient : null,
-    epicId: isTerminal ? epicId : null,
-    sessionId: isTerminal ? node.id : null,
-  });
-  // An output window's tile carries no label at all (its persisted shape is
-  // just the command pointer), so the kind-explicit title comes from the owning
-  // chat's live set - and follows a rename the agent makes.
+  const liveTerminalTitle = useTerminalDisplayTitle(
+    {
+      client: isTerminal ? terminalHostClient : null,
+      epicId: isTerminal ? epicId : null,
+      sessionId: isTerminal ? node.id : null,
+    },
+    isTerminal ? node.hostId : null,
+  );
+  const liveManagedCommandTitle = useManagedCommandOutputTitle(node, epicId);
+  return (
+    liveArtifactTitle ??
+    liveTerminalTitle ??
+    liveManagedCommandTitle ??
+    node.name
+  );
+}
+
+/**
+ * An output window's live title, `null` for every other node kind. Its tile
+ * carries no label at all (its persisted shape is just the command pointer),
+ * so the kind-explicit title comes from the owning chat's live set - and
+ * follows a rename the agent makes.
+ */
+function useManagedCommandOutputTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): string | null {
   const isManagedCommandOutput = node.type === "managed-command-output";
   const managedCommand = useManagedCommandOnHost({
     epicId,
@@ -1932,14 +1951,7 @@ export function useEpicTabDisplayTitle(
     hostId: isManagedCommandOutput ? (node.hostId ?? "") : "",
     commandId: isManagedCommandOutput ? node.id : "",
   });
-  const liveManagedCommandTitle =
-    managedCommand === null ? null : managedCommandTitle(managedCommand);
-  return (
-    liveArtifactTitle ??
-    liveTerminalTitle ??
-    liveManagedCommandTitle ??
-    node.name
-  );
+  return managedCommand === null ? null : managedCommandTitle(managedCommand);
 }
 
 export function useEpicLiveArtifactTitleGenerating(

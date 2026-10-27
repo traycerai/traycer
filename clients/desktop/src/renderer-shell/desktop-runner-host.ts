@@ -165,6 +165,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
@@ -256,6 +257,7 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
@@ -1264,9 +1266,16 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult> {
-    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
+    return this.bridge.runSandboxVerb(
+      bearerToken,
+      sandboxId,
+      verb,
+      gesture,
+      timeoutMs,
+    );
   }
 
   getSandboxAutomation(

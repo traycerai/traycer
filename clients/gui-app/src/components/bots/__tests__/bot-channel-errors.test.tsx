@@ -20,12 +20,15 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   BotActivity,
   BotSessionActivity,
 } from "@/hooks/bots/use-bot-activity";
+import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 /** One `bot.conversation.send` the view started, settled by the case. */
 interface SendCall {
@@ -43,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   client: { stub: "tab-host-client" },
   sends: [] as SendCall[],
   toastFromHostError: vi.fn<(error: Error, fallback: string) => void>(),
+  openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
   state: {
     threads: [] as BotThreadSummary[],
     activity: null as BotActivity | null,
@@ -60,7 +64,10 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => true,
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
@@ -87,8 +94,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
   return {
     useBotConversationSendMutation: () => {
       const [isPending, setPending] = useState(false);
+      const [variables, setVariables] =
+        useState<BotConversationSendRequest | null>(null);
       const mutate = useCallback(
         (variables: BotConversationSendRequest, callbacks: SendCallbacks) => {
+          setVariables(variables);
           setPending(true);
           mocks.sends.push({
             variables,
@@ -117,7 +127,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
         },
         [],
       );
-      return { mutate, isPending };
+      return { mutate, isPending, variables };
     },
   };
 });
@@ -133,8 +143,13 @@ vi.mock(
     useNotificationMarkEntityRead: () => ({ mutate: vi.fn() }),
   }),
 );
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => mocks.state.activity,
+}));
+// Opening Settings is the router's; the providers focus it sets is real.
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
 vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: { surface: BotTranscriptSurface | null }) => {
@@ -168,7 +183,8 @@ const CHANNEL_ID = "conversation-channel";
 const THREAD_ID = "thread-1";
 const POST_ID = "post-1";
 const SEND_FAILED = "Couldn't send. Edit and try again.";
-const UNANSWERED = "Release Bot couldn't answer this. Send another message.";
+const UNANSWERED = "Release Bot couldn't answer.";
+const REASON_SUMMARY = "Claude is signed out. Sign in to continue.";
 
 const resolveMember: BotMemberResolver = () => null;
 
@@ -202,7 +218,38 @@ function session(
   state: BotSessionActivity["state"],
   requestId: string | null,
 ): BotSessionActivity {
-  return { state, startedAt: 1_000, step: null, requestId };
+  return { state, startedAt: 1_000, step: null, requestId, reason: null };
+}
+
+/** A failed or parked session that says why, as the host's frame carries it. */
+function sessionWithReason(
+  state: "failed" | "parked",
+  action: "sign-in" | "none",
+): BotSessionActivity {
+  return {
+    ...session(state, "req-1"),
+    reason: {
+      summary: REASON_SUMMARY,
+      code: null,
+      harnessId: "claude",
+      action,
+    },
+  };
+}
+
+const SANDBOX_CODE = "SANDBOX_FROZEN";
+const SANDBOX_RAW_SUMMARY =
+  "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+
+/** A failed session whose reason carries `code`, with the host's raw `summary`. */
+function failedWithCode(
+  code: string | null,
+  summary: string,
+): BotSessionActivity {
+  return {
+    ...session("failed", "req-1"),
+    reason: { summary, code, harnessId: "claude", action: "none" },
+  };
 }
 
 function activity(
@@ -211,6 +258,9 @@ function activity(
 ): BotActivity {
   return { trunk, threads };
 }
+
+const onOpenUnderTheHood = vi.fn<(sessionChatId: string) => void>();
+const onOpenTrunkUnderTheHood = vi.fn<() => void>();
 
 function mount(openThread: BotOpenThread | null): void {
   render(
@@ -226,7 +276,8 @@ function mount(openThread: BotOpenThread | null): void {
             resolveMember={resolveMember}
             openThread={openThread}
             onOpenThread={vi.fn()}
-            onOpenUnderTheHood={vi.fn()}
+            onOpenUnderTheHood={onOpenUnderTheHood}
+            onOpenTrunkUnderTheHood={onOpenTrunkUnderTheHood}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -260,6 +311,10 @@ async function typeAndEnter(box: HTMLElement, text: string): Promise<void> {
 beforeEach(() => {
   mocks.sends.length = 0;
   mocks.toastFromHostError.mockClear();
+  mocks.openSettings.mockClear();
+  onOpenUnderTheHood.mockClear();
+  onOpenTrunkUnderTheHood.mockClear();
+  useProvidersFocusStore.getState().clearFocusHarnessId();
   mocks.state.threads = [];
   mocks.state.activity = null;
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -326,7 +381,10 @@ describe("<BotChannelView /> an option pick the host refuses", () => {
       text: "Ship it",
       threadId: null,
       announcementId: null,
+      redeliver: null,
+      supersedes: null,
     });
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     settle("fail");
 
     expect(
@@ -360,6 +418,8 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
       text: "Not yet",
       threadId: THREAD_ID,
       announcementId: null,
+      redeliver: null,
+      supersedes: null,
     });
     settle("fail");
 
@@ -415,23 +475,150 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
 describe("<BotChannelView /> an answer the bot does not give", () => {
   // The host's frames: a failure keeps the post it answered, a park (a
   // delivery the host could not start) carries none, and a failure may too.
+  // None of them says why, as a host that predates the reason sends them.
   it.each([
     ["failed", "req-1"],
     ["parked", null],
     ["failed", null],
   ] as const)(
-    "says the bot couldn't answer a post it holds when its trunk is %s (request %s), with nothing to send again",
-    (state, requestId) => {
+    "says the bot couldn't answer, and only offers the way under the hood, when its trunk is %s (request %s) with no reason",
+    async (state, requestId) => {
+      const user = userEvent.setup();
       mocks.state.activity = activity(session(state, requestId), {});
       mount(null);
 
       const notice = screen.getByTestId("bot-channel-unanswered");
-      expect(notice.textContent).toBe(UNANSWERED);
+      expect(notice.textContent).toBe(`${UNANSWERED}Under the hood`);
       expect(notice.getAttribute("data-state")).toBe(state);
-      expect(within(notice).queryByRole("button")).toBeNull();
+      expect(screen.queryByTestId("bot-unanswered-sign-in")).toBeNull();
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
+      expect(document.body.textContent).not.toContain("Send another message");
+
+      await user.click(
+        within(notice).getByTestId("bot-channel-unanswered-under-the-hood"),
+      );
+
+      expect(onOpenTrunkUnderTheHood).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("says what failed in the host's words, with the way under the hood and no sign-in, when the person can do nothing about it", () => {
+    mocks.state.activity = activity(sessionWithReason("failed", "none"), {});
+    mount(null);
+
+    const notice = screen.getByTestId("bot-channel-unanswered");
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${REASON_SUMMARY}Under the hood`,
+    );
+    expect(notice.getAttribute("data-state")).toBe("failed");
+    expect(
+      within(notice).getByTestId("bot-channel-unanswered-under-the-hood"),
+    ).toBeTruthy();
+    expect(within(notice).queryByTestId("bot-unanswered-sign-in")).toBeNull();
+  });
+
+  it("says a sandbox's refusal in the words the transcript's error row gives it, not the host's raw message", () => {
+    const copy = sandboxRefusalCopyFor(SANDBOX_CODE, SANDBOX_RAW_SUMMARY);
+    if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    mocks.state.activity = activity(
+      failedWithCode(SANDBOX_CODE, SANDBOX_RAW_SUMMARY),
+      {},
+    );
+    mount(null);
+
+    const notice = screen.getByTestId("bot-channel-unanswered");
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${copy.description}Under the hood`,
+    );
+    expect(notice.textContent).not.toContain(SANDBOX_RAW_SUMMARY);
+  });
+
+  it("keeps the host's own summary for a code that is not a sandbox's refusal", () => {
+    mocks.state.activity = activity(
+      failedWithCode("PROVIDER_UNAUTHENTICATED", REASON_SUMMARY),
+      {},
+    );
+    mount(null);
+
+    expect(screen.getByTestId("bot-channel-unanswered").textContent).toBe(
+      `Release Bot couldn't answer: ${REASON_SUMMARY}Under the hood`,
+    );
+  });
+
+  it("offers Sign in when the failure is a sign-out, which opens Settings on that provider", async () => {
+    const user = userEvent.setup();
+    mocks.state.activity = activity(sessionWithReason("failed", "sign-in"), {});
+    mount(null);
+
+    const notice = screen.getByTestId("bot-channel-unanswered");
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${REASON_SUMMARY}Sign inUnder the hood`,
+    );
+    expect(
+      within(notice).getByTestId("bot-channel-unanswered-under-the-hood"),
+    ).toBeTruthy();
+
+    await user.click(within(notice).getByRole("button", { name: "Sign in" }));
+
+    const focus = useProvidersFocusStore.getState();
+    expect(focus.focusHarnessId).toBe("claude");
+    expect(focus.focusHostId).toBe(HOST_ID);
+    expect(focus.focusTargetHostId).toBe(HOST_ID);
+    expect(mocks.openSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.openSettings.mock.calls[0][0].section).toBe("providers");
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+  });
+
+  it("opens Settings on the bot's host with no earlier focus left armed when the harness is not one this client knows", async () => {
+    const user = userEvent.setup();
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-other",
+      profileId: "profile-other",
+      startSignIn: true,
+    });
+    mocks.state.activity = activity(
+      {
+        ...session("failed", "req-1"),
+        reason: {
+          summary: REASON_SUMMARY,
+          code: null,
+          harnessId: "not-a-harness",
+          action: "sign-in",
+        },
+      },
+      {},
+    );
+    mount(null);
+
+    await user.click(
+      within(screen.getByTestId("bot-channel-unanswered")).getByRole("button", {
+        name: "Sign in",
+      }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+    });
+    expect(mocks.openSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+  });
+
+  it("says why a parked trunk is held in the warning state, with nothing to sign in to", () => {
+    mocks.state.activity = activity(sessionWithReason("parked", "none"), {});
+    mount(null);
+
+    const notice = screen.getByTestId("bot-channel-unanswered");
+    expect(notice.getAttribute("data-state")).toBe("parked");
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${REASON_SUMMARY}Under the hood`,
+    );
+    expect(within(notice).queryByTestId("bot-unanswered-sign-in")).toBeNull();
+  });
 
   it("draws the typing line and no notice while the trunk replies", () => {
     mocks.state.activity = activity(session("replying", "req-1"), {});
@@ -460,8 +647,9 @@ describe("<BotChannelView /> a thread the bot does not answer", () => {
   });
 
   it.each(["parked", "failed"] as const)(
-    "says so in the thread when its own session is %s",
-    (state) => {
+    "says so in the thread when its own session is %s, and opens that session under the hood",
+    async (state) => {
+      const user = userEvent.setup();
       mocks.state.activity = activity(null, {
         [THREAD_ID]: session(state, "req-thread"),
       });
@@ -470,11 +658,54 @@ describe("<BotChannelView /> a thread the bot does not answer", () => {
       const notice = within(screen.getByTestId("bot-thread-panel")).getByTestId(
         "bot-thread-unanswered",
       );
-      expect(notice.textContent).toBe(UNANSWERED);
+      expect(notice.textContent).toBe(`${UNANSWERED}Under the hood`);
       expect(notice.getAttribute("data-state")).toBe(state);
       expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+      expect(document.body.textContent).not.toContain("Send another message");
+
+      await user.click(
+        within(notice).getByTestId("bot-thread-unanswered-under-the-hood"),
+      );
+
+      expect(onOpenUnderTheHood).toHaveBeenCalledWith(
+        LISTED_THREAD.sessionChatId,
+      );
+      expect(onOpenTrunkUnderTheHood).not.toHaveBeenCalled();
     },
   );
+
+  it("says what failed in the thread, with Sign in, in the host's words", () => {
+    mocks.state.activity = activity(null, {
+      [THREAD_ID]: sessionWithReason("failed", "sign-in"),
+    });
+    mount(OPEN_LISTED_THREAD);
+
+    const notice = within(screen.getByTestId("bot-thread-panel")).getByTestId(
+      "bot-thread-unanswered",
+    );
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${REASON_SUMMARY}Sign inUnder the hood`,
+    );
+    expect(
+      within(notice).getByRole("button", { name: "Sign in" }),
+    ).toBeTruthy();
+  });
+
+  it("says a sandbox's refusal in the thread in the error row's words too", () => {
+    const copy = sandboxRefusalCopyFor(SANDBOX_CODE, SANDBOX_RAW_SUMMARY);
+    if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    mocks.state.activity = activity(null, {
+      [THREAD_ID]: failedWithCode(SANDBOX_CODE, SANDBOX_RAW_SUMMARY),
+    });
+    mount(OPEN_LISTED_THREAD);
+
+    const notice = within(screen.getByTestId("bot-thread-panel")).getByTestId(
+      "bot-thread-unanswered",
+    );
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${copy.description}Under the hood`,
+    );
+  });
 
   it("says nothing in the thread while its own session is idle, whatever the trunk is doing", () => {
     mocks.state.activity = activity(session("failed", "req-1"), {

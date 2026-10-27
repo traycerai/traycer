@@ -18,6 +18,11 @@ export const scopeBucket = (value: string | null): string =>
 
 export const persistKey = (name: string): string => `${PERSIST_PREFIX}:${name}`;
 
+export const recordMapStoragePrefix = (name: string): string =>
+  `${name}:records:`;
+export const recordMapStorageKey = (name: string, id: string): string =>
+  `${recordMapStoragePrefix(name)}${encodeURIComponent(id)}`;
+
 export const scopedPersistKey = (name: string, ...segments: string[]): string =>
   [persistKey(name), ...segments].join(":");
 
@@ -305,6 +310,19 @@ export const PERSIST_STORES = [
   {
     camelName: "initialChatHandoff",
     leaf: "initial-chat-handoffs",
+    kind: "static",
+  },
+  // A send handed to its task while its sandbox is created: the stage (its
+  // create key and the sandbox it made) and the message with its settings,
+  // so a reload observes the same create and delivers the message once.
+  {
+    camelName: "stagedSandboxSend",
+    leaf: "staged-sandbox-sends",
+    kind: "static",
+  },
+  {
+    camelName: "pendingSandboxSend",
+    leaf: "pending-sandbox-sends",
     kind: "static",
   },
   { camelName: "leftPanel", leaf: "left-panel", kind: "static" },

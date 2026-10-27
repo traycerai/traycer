@@ -102,6 +102,7 @@ function makeMessengerFactory(): (args: {
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           }),
       },
     });

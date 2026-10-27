@@ -47,6 +47,11 @@ vi.mock("@tanstack/react-router", () => ({
   }),
 }));
 
+// A terminal tab asks whether its host is a stopped or destroyed sandbox.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useAuthService: () => ({

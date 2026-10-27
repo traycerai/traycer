@@ -523,6 +523,7 @@ describe.skipIf(baselines.length === 0)(
             // @1.7
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           };
 
           // SELF-CHECKING FIXTURE. Without this, the next released minor a

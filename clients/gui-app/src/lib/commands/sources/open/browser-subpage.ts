@@ -83,7 +83,7 @@ function useBrowserHostItems(
           label: host.name,
           keywords: ["browser", "host", host.name],
           run: () => {
-            wakeSandboxOnPick(host);
+            wakeSandboxOnPick(host, null);
             hostPin.setSelection(host.hostId);
           },
         }),

@@ -6,6 +6,7 @@
  *
  * Amounts are millicredits; a credit is a dollar, so a price reads `$0.12`.
  */
+import type { SandboxOs } from "@traycer/protocol/host/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -38,9 +39,22 @@ export function formatSandboxDollars(mc: number): string {
   return `$${formatCredits(mc)}`;
 }
 
+/**
+ * A cost: `$0.02`, or `under $0.01` below a cent, never a rounded `$0.00`.
+ * Every amount the sandboxes UI says was spent goes through it.
+ */
+export function formatSandboxCost(mc: number): string {
+  return mc < MC_PER_CENT ? UNDER_A_CENT : formatSandboxDollars(mc);
+}
+
 /** `$1.20`, rounded up: an amount the person is told to add. */
 function formatSandboxDollarsRequired(mc: number): string {
   return `$${formatCreditsRequired(mc)}`;
+}
+
+/** `Linux` / `Windows`. */
+export function sandboxOsLabel(os: SandboxOs): string {
+  return os === "windows" ? "Windows" : "Linux";
 }
 
 /** `2 vCPU · 4 GB`. */
@@ -160,6 +174,30 @@ export function unpricedCostLine(
   return `Billed by the hour while awake · ${usesCreditsClause(configuration)}`;
 }
 
+/** Under this, a rate or a cost reads `under $0.01`, never a rounded zero. */
+const MC_PER_CENT = 10;
+const UNDER_A_CENT = "under $0.01";
+
+/** `$0.21 an hour`, or `under $0.01 an hour` for a rate below a cent. */
+export function hourlyRate(mcPerHour: number): string {
+  return mcPerHour > 0 && mcPerHour < MC_PER_CENT
+    ? `${UNDER_A_CENT} an hour`
+    : `${formatSandboxDollars(mcPerHour)} an hour`;
+}
+
+/**
+ * A sandbox's rates: `$0.21 an hour while awake · under $0.01 an hour while
+ * resting`. Resting is the higher of the suspended and stopped storage
+ * rates, so the figure never understates either.
+ */
+export function awakeAndRestingRates(price: {
+  readonly awakeMc: number;
+  readonly suspendedMc: number;
+  readonly stoppedMc: number;
+}): string {
+  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while resting`;
+}
+
 /** The chip's short price: `$0.12/h`. */
 export function shortPriceLabel(priceMcPerHour: number): string {
   return `${formatSandboxDollars(priceMcPerHour)}/h`;
@@ -168,14 +206,33 @@ export function shortPriceLabel(priceMcPerHour: number): string {
 /** The New row's head at a zero or short balance: `needs credits`. */
 export const NEEDS_CREDITS = "needs credits";
 
+/**
+ * The funded New row's sub-line price: `$0.12 an hour while awake`, `from`
+ * unless it is the one shape the catalogue prices exactly.
+ */
+export function fundedRowPrice(priceMcPerHour: number, exact: boolean): string {
+  const price = `${formatSandboxDollars(priceMcPerHour)} an hour while awake`;
+  return exact ? price : `from ${price}`;
+}
+
 /** The New row's sub-line price at a zero or short balance. */
 export function needsCreditsRow(priceMcPerHour: number): string {
   return `from ${formatSandboxDollars(priceMcPerHour)} an hour`;
 }
 
-/** The price clause at a zero or short balance; `Add credits ↗` beside it. */
-export function addCreditsPriceClause(priceMcPerHour: number): string {
-  return `Add credits to start a sandbox · from ${formatSandboxDollars(priceMcPerHour)} an hour while awake`;
+/**
+ * The price clause at a zero or short balance; `Add credits ↗` beside it. A
+ * team's sandbox is paid from the team's credits, so the clause names them.
+ */
+export function addCreditsPriceClause(
+  configuration: SandboxConfigurationCopy,
+  priceMcPerHour: number,
+): string {
+  const credits =
+    configuration.kind === "personal"
+      ? "credits"
+      : `${configuration.teamName} credits`;
+  return `Add ${credits} to start a sandbox · from ${formatSandboxDollars(priceMcPerHour)} an hour while awake`;
 }
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
@@ -307,6 +364,10 @@ export function suspendedPickLabel(name: string): string {
 export function stoppedPickLabel(name: string): string {
   return `${name} · stopped, starts on send`;
 }
+/** A resting pick once its wake is done: `api-refactor · awake`. */
+export function awakePickLabel(name: string): string {
+  return `${name} · awake`;
+}
 
 /** No provider here can create a sandbox: the New rows and the shape sheet. */
 export const SANDBOXES_CANT_BE_CREATED =
@@ -351,20 +412,17 @@ export const COULDNT_VERIFY_BALANCE = "Couldn't verify your balance.";
 
 /** `EU Frankfurt doesn't offer 4 vCPU · 16 GB.` */
 export function shapeNotOfferedLine(region: string, shape: string): string {
-  return `${region} doesn't offer ${shape}.`;
+  return `${region.length === 0 ? "This region" : region} doesn't offer ${shape}.`;
 }
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
 /**
- * The new sandbox is awake but its configuration has no usable provider:
- * `review-box is awake, but no coding agent is signed in on Acme.`
+ * A send to an agent that cannot run on the sandbox's configuration:
+ * `Sign in to a coding agent to run agents on Personal.`
  */
-export function awakeButNoCodingAgentLine(
-  name: string,
-  configuration: string,
-): string {
-  return `${name} is awake, but no coding agent is signed in on ${configuration}.`;
+export function signInToCodingAgentLine(configuration: string): string {
+  return `Sign in to a coding agent to run agents on ${configuration}.`;
 }
 /**
  * The new sandbox is up but the send handed to it stopped short:
@@ -389,6 +447,10 @@ export const OPEN_TERMINAL = "Open terminal";
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
 export const SANDBOX_READY = "Sandbox ready";
+/** The settled line's time to ready: `24 s`. */
+export function readySecondsLabel(seconds: number): string {
+  return `${seconds} s`;
+}
 export const STARTING_TAKING_LONGER =
   "Starting sandbox is taking longer than usual";
 export const RESUMING_TAKING_LONGER =
@@ -402,9 +464,16 @@ export function stepApplyingSettings(configuration: string): string {
 }
 export const STEP_DELIVERING = "Delivering your message";
 
-/** The taking-longer detail: `Last step: Booting, reported 3:50 ago · …`. */
-export function takingLongerDetail(step: string, age: string): string {
-  return `Last step: ${step}, reported ${age} ago · your message waits · nothing is billed until it is awake`;
+/**
+ * The taking-longer detail: `Last step: Booting, reported 3:50 ago · …`.
+ * `awake` once the sandbox has woken: compute is charged from then on.
+ */
+export function takingLongerDetail(
+  step: string,
+  age: string,
+  awake: boolean,
+): string {
+  return `Last step: ${step}, reported ${age} ago · your message waits · ${awake ? "compute is charged while it is awake" : "nothing is billed until it is awake"}`;
 }
 
 export const KEEP_WAITING = "Keep waiting";
@@ -442,9 +511,6 @@ export const STOP = "Stop";
 export function idleRuleLine(idleMinutes: number): string {
   return `After ${idleMinutes} minutes with no agent turn, running shell or attached tab, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
 }
-
-/** The first message's caption while it waits for the sandbox. */
-export const SENT_WHEN_AWAKE = "sent when the sandbox is awake";
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
 
@@ -519,14 +585,14 @@ export function hoverAwakeMinutes(minutes: number): string {
 }
 
 /** A wake's accrual while it is under a cent: never a rounded `$0.00`. */
-export const LESS_THAN_A_CENT_SO_FAR = "Less than $0.01 so far";
+export const LESS_THAN_A_CENT_SO_FAR = "under $0.01 so far";
 
 /** The sandbox list could not be read; the page and the drawer offer Retry. */
 export const SANDBOX_LIST_FAILED = "Couldn't load your sandboxes.";
 
 /** Today's cost; an amount too small to post reads `so far`, never `$0.00`. */
 export function hoverTodayCost(mc: number): string {
-  return mc < 5 ? "so far" : `${formatSandboxDollars(mc)} today`;
+  return `${formatSandboxCost(mc)} today`;
 }
 
 export function hoverSandboxIdentity(args: {

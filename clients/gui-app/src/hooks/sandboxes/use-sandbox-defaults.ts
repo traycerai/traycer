@@ -11,7 +11,6 @@ import {
   useHostQueriesWithResponseMap,
   type HostRequestSpec,
 } from "@/hooks/host/use-host-queries";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import type { SandboxConfigurationDefaults } from "@/lib/sandboxes/sandbox-stage-model";
@@ -66,14 +65,15 @@ export type SandboxDefaultsRead =
 
 /**
  * Each configuration's sandbox defaults, by environment id, from its
- * `sandbox_defaults` item on the configuration pool. One read per
- * environment, shared by the defaults card and the composer's New rows; a
- * save's reread (`useConfigurationItemMutations`) refreshes both.
+ * `sandbox_defaults` item. The read goes to the surface's own host, which
+ * forwards it on the viewer's session; the server pool does not serve it. One
+ * read per environment, shared by the defaults card and the composer's New
+ * rows; a save's reread (`useConfigurationItemMutations`) refreshes both.
  */
 export function useSandboxDefaults(
   environmentIds: readonly string[],
 ): ReadonlyMap<string, SandboxDefaultsRead> {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),

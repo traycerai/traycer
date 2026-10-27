@@ -28,6 +28,8 @@ import type {
 } from "@/components/chat/composer/chat-composer";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
+import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -920,3 +922,63 @@ async function waitForChatTileLoaded(): Promise<void> {
     expect(screen.getByTestId("queued-message-rows")).not.toBeNull();
   });
 }
+
+describe("chat-tile's ready line for an agent whose first message waited for its sandbox", () => {
+  afterEach(() => {
+    usePendingSandboxSendStore.setState({ sends: {} });
+  });
+
+  it("shows Sandbox ready above the conversation once the message was delivered into this chat, and nothing for another chat", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", []);
+    usePendingSandboxSendStore.getState().add(
+      pendingSend({
+        id: "send-ready",
+        text: "fix the login bug",
+        delivery: {
+          chatId: CHAT_ARTIFACT.id,
+          hostId: "sbx-host",
+          sandboxId: "sbx-1",
+          readySeconds: 24,
+        },
+      }),
+    );
+    renderChatTile();
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-testid^="chat-tile-pre-content-"]'),
+      ).toBeNull();
+    });
+
+    const line = await screen.findByTestId("sandbox-ready-line");
+    expect(line.textContent).toContain("Sandbox ready");
+    expect(line.textContent).toContain("24 s");
+  });
+
+  it("shows no ready line for a chat no waiting message was delivered into", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", []);
+    usePendingSandboxSendStore.getState().add(
+      pendingSend({
+        id: "send-other",
+        delivery: {
+          chatId: "some-other-chat",
+          hostId: "sbx-host",
+          sandboxId: "sbx-1",
+          readySeconds: 24,
+        },
+      }),
+    );
+    renderChatTile();
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-testid^="chat-tile-pre-content-"]'),
+      ).toBeNull();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+  });
+});

@@ -549,6 +549,7 @@ const REPLYING: BotSessionActivity = {
   startedAt: 1_760_000_000_000,
   step: "Ran bun test",
   requestId: "req-1",
+  reason: null,
 };
 
 describe("the bot.subscribe activity", () => {

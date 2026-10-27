@@ -11,6 +11,7 @@ import { QueryClient } from "@tanstack/react-query";
 import type {
   SandboxCreateRequest,
   SandboxSummary,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
@@ -27,6 +28,7 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
 import {
   createFailure,
+  rewakeStagedSandbox,
   runStagedSandbox,
   settleVerdict,
   STAGED_CREATE_BUDGET_MS,
@@ -45,6 +47,13 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { authQueryKeys } from "@/lib/query-keys";
+import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const NEW_HOST_ID = "host-new";
 const SANDBOX_ID = "sbx_new";
@@ -209,9 +218,9 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
   const directory = new ScriptedDirectory(script);
   directories.push(directory);
   const clock = { now: 1_000_000, sleeps: 0 };
-  const wake = vi.fn<(hostId: string) => Promise<boolean>>(() =>
-    Promise.resolve(wakeResult),
-  );
+  const wake = vi.fn<
+    (hostId: string, gesture: SandboxVerbGesture) => Promise<boolean>
+  >(() => Promise.resolve(wakeResult));
   const deps: StagedSandboxRunDeps = {
     auth,
     directory,
@@ -241,7 +250,7 @@ function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
   return runStagedSandbox(
     surfaceKey,
     fresh,
-    { fallbackName: "fallback-box", taskId: null },
+    { fallbackName: "fallback-box", taskId: null, resume: false },
     deps,
   );
 }
@@ -314,7 +323,7 @@ describe("runStagedSandbox creating", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: "epic-1" },
+      { fallbackName: "fallback-box", taskId: "epic-1", resume: false },
       deps,
     );
 
@@ -403,6 +412,24 @@ describe("runStagedSandbox through the query cache", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: authQueryKeys.registeredHostsAll(),
     });
+  });
+});
+
+describe("runStagedSandbox on a created sandbox the list has not shown yet", () => {
+  const awake = listOf(row({ state: "awake", guestConfigured: true }));
+  const missing: SandboxListFetchResult = {
+    kind: "ok",
+    response: { sandboxes: [] },
+  };
+
+  it("keeps the old reading for a stage that is no pending send's: no record of an accepted create, so a missing row is gone", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({ lists: [missing, missing, awake] }, true);
+
+    await run(false, deps);
+
+    expect(auth.listReads).toBe(1);
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
   });
 });
 
@@ -535,7 +562,7 @@ describe("runStagedSandbox settling", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: null },
+      { fallbackName: "fallback-box", taskId: null, resume: false },
       deps,
     );
 
@@ -691,7 +718,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     await run(false, deps);
 
     expect(wake).toHaveBeenCalledTimes(1);
-    expect(wake).toHaveBeenCalledWith("host-resting");
+    expect(wake).toHaveBeenCalledWith("host-resting", "send");
     expect(auth.requests).toEqual([]);
     expect(stageOf()).toMatchObject({
       phase: "handoff",
@@ -701,6 +728,115 @@ describe("runStagedSandbox on a resting sandbox", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
       "host-resting",
     );
+  });
+
+  it("wakes a New sandbox that was already created after a failed wake instead of creating it again", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+    const { auth, wake, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("keeps the accepted New sandbox and request key when its wake fails again", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+    const requestId = stageOf().clientRequestId;
+    const { auth, wake, deps } = harness({}, false);
+
+    await run(true, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
+    expect(stageOf()).toMatchObject({
+      phase: "creating",
+      clientRequestId: requestId,
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+  });
+
+  it("wakes the same created sandbox after Cancel retains it while it is resting", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+    const requestId = stageOf().clientRequestId;
+    store.cancel(surfaceKey);
+    const { auth, wake, deps } = harness(
+      {
+        lists: [
+          listOf(row({ state: "suspended" })),
+          listOf(row({ state: "awake", guestConfigured: true })),
+        ],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      clientRequestId: requestId,
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("re-wakes a staged landing terminal with the open-terminal gesture", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      phase: "handoff",
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      openTerminal: true,
+    });
+    const { wake, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+
+    await rewakeStagedSandbox(surfaceKey, deps);
+
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "open-terminal");
+    expect(readStagedSandbox(surfaceKey)).toBeNull();
+    expect(useLandingPanelStore.getState().terminalRequest).toMatchObject({
+      surfaceKey,
+      hostId: NEW_HOST_ID,
+    });
   });
 
   it("fails on the wake step when the wake did not bring it up", async () => {
@@ -812,6 +948,321 @@ describe("runStagedSandbox guards", () => {
       phase: "handoff",
       clientRequestId: auth.requests[1].clientRequestId,
     });
+  });
+});
+
+describe("runStagedSandbox for a pending send that holds a durable Stop", () => {
+  let SEND = "";
+  let sendCount = 0;
+
+  /** A pending send of the signed-in owner, this window holding its ownership. */
+  async function pendingOwnerWith(stopRequested: boolean): Promise<void> {
+    sendCount += 1;
+    SEND = `send-stop-run-${sendCount}`;
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+    surfaceKey = pendingSendSurfaceKey(SEND);
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: SEND, stopRequested }));
+    onTestFinished(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+    });
+    const ownership = holdPendingSandboxSendOwnership(SEND);
+    onTestFinished(ownership.release);
+    await ownership.ready;
+  }
+
+  it("records the accepted create on the pending send before any read, waits through two fresh misses, then marks its row seen on the read that lists it", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const miss = (): SandboxListFetchResult => ({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const { auth, deps } = harness(
+      {
+        lists: [
+          miss(),
+          miss(),
+          listOf(row({ state: "awake", guestConfigured: true })),
+        ],
+      },
+      true,
+    );
+    const request = usePendingSandboxSendStore.getState().sends[SEND];
+    const boundary = Math.max(
+      request.createdAt,
+      request.observationRequestedAt ?? 0,
+    );
+    // Every clock sample from here on is later than the last: each read's
+    // send time is after the request boundary by construction.
+    let clock = boundary + 1_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => (clock += 1));
+    onTestFinished(() => now.mockRestore());
+    const recordAtRead: Array<unknown> = [];
+    const read = auth.listSandboxes.bind(auth);
+    vi.spyOn(auth, "listSandboxes").mockImplementation(() => {
+      recordAtRead.push(
+        usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+      );
+      return read();
+    });
+
+    await run(false, deps);
+
+    expect(auth.listReads).toBeGreaterThanOrEqual(3);
+    // The accepted create is on the record before the first read, and the
+    // two misses leave it unseen rather than calling the sandbox gone.
+    expect(recordAtRead.slice(0, 3)).toEqual([
+      { sandboxId: SANDBOX_ID, rowSeen: false },
+      { sandboxId: SANDBOX_ID, rowSeen: false },
+      { sandboxId: SANDBOX_ID, rowSeen: false },
+    ]);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+    expect(stageOf()).toMatchObject({ phase: "handoff" });
+    expect(stageOf().failure).toBeNull();
+  });
+
+  it("calls the sandbox gone when a fresh read misses a row an earlier read had seen, with rowSeen kept true", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { deps } = harness(
+      {
+        lists: [
+          listOf(row({ state: "creating" })),
+          { kind: "ok", response: { sandboxes: [] } },
+        ],
+      },
+      true,
+    );
+
+    // Each read is sent strictly after the one before and the request boundary.
+    const request = usePendingSandboxSendStore.getState().sends[SEND];
+    let clock = Math.max(
+      request.createdAt,
+      request.observationRequestedAt ?? 0,
+    );
+    const now = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (clock += 1_000));
+    onTestFinished(() => now.mockRestore());
+
+    await run(false, deps);
+
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+  });
+
+  it("does not hand off while the seen marker cannot be stored, and does once storage takes it", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    // Quota: the record takes the unseen marker, then refuses the seen one.
+    const failedWrite = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key.includes(SEND) && value.includes('"rowSeen":true'))
+          throw new Error("quota exceeded");
+        originalSetItem.call(this, key, value);
+      });
+    onTestFinished(() => failedWrite.mockRestore());
+    const read = auth.listSandboxes.bind(auth);
+    vi.spyOn(auth, "listSandboxes").mockImplementation(() => {
+      // The third read finds storage working again.
+      if (auth.listReads === 2) failedWrite.mockRestore();
+      return read();
+    });
+
+    await run(false, deps);
+
+    // Handing off on the first read would leave a claim that can never use absence.
+    expect(auth.listReads).toBeGreaterThanOrEqual(3);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+    expect(stageOf()).toMatchObject({ phase: "handoff" });
+  });
+
+  it("times out a never-seen create after its budget ends, rather than calling it gone", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [{ kind: "ok", response: { sandboxes: [] } }] },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.listReads).toBeGreaterThan(1);
+    expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+  });
+
+  it("runs a stage for a pending send that holds no Stop, which is what makes the Stop cases below a real difference", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { wake, deps } = harness(
+      {
+        lists: [
+          listOf(
+            sandboxSummaryFixture({
+              id: "sbx_resting",
+              hostId: "host-resting",
+              state: "awake",
+              guestConfigured: true,
+            }),
+          ),
+        ],
+        entries: [{ ...DIALABLE, hostId: "host-resting" }],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(stageOf().phase).toBe("handoff");
+  });
+
+  it.each([true, false])(
+    "ignores a wake answered %s whose boundary was superseded: no handoff, and no synthetic wake failure",
+    async (answered) => {
+      await pendingOwnerWith(false);
+      const store = useStagedSandboxStore.getState();
+      store.stage(surfaceKey, RESTING);
+      store.begin(surfaceKey, false, 1_000_000, false);
+      store.report(surfaceKey, {
+        phase: "handoff",
+        createdSandboxId: "sbx_resting",
+        createdHostId: "host-resting",
+      });
+      const { wake, deps } = harness(
+        { entries: [{ ...DIALABLE, hostId: "host-resting" }] },
+        true,
+      );
+      // A newer observation boundary lands while the old wake is still answering.
+      wake.mockImplementation(() => {
+        usePendingSandboxSendStore.setState((state) => ({
+          sends: {
+            ...state.sends,
+            [SEND]: {
+              ...state.sends[SEND],
+              observationRequestedAt: Date.now() + 60_000,
+            },
+          },
+        }));
+        return Promise.resolve(answered);
+      });
+
+      await rewakeStagedSandbox(surfaceKey, deps);
+
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(stageOf().phase).not.toBe("handoff");
+      expect(stageOf().failure).toBeNull();
+    },
+  );
+
+  it("does not start a run, wake or create for a stage whose pending send holds a Stop", async () => {
+    await pendingOwnerWith(true);
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { auth, wake, deps } = harness({}, true);
+
+    await run(false, deps);
+
+    expect(wake).not.toHaveBeenCalled();
+    expect(auth.requests).toEqual([]);
+    expect(stageOf().phase).not.toBe("handoff");
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[surfaceKey],
+    ).toBeUndefined();
+  });
+
+  it("stops a run whose Stop lands as its create is accepted: no handoff, no host pin, no wake", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, wake, deps } = harness(
+      {
+        createSandbox: () => {
+          usePendingSandboxSendStore.setState((state) => ({
+            sends: {
+              ...state.sends,
+              [SEND]: { ...state.sends[SEND], stopRequested: true },
+            },
+          }));
+          return created;
+        },
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toHaveLength(1);
+    expect(stageOf().phase).not.toBe("handoff");
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[surfaceKey],
+    ).toBeUndefined();
+    expect(wake).not.toHaveBeenCalled();
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.stopRequested,
+    ).toBe(true);
+  });
+
+  it("does not re-wake a handed-off stage whose pending send holds a Stop", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { wake, deps } = harness(
+      {
+        lists: [
+          listOf(
+            sandboxSummaryFixture({
+              id: "sbx_resting",
+              hostId: "host-resting",
+              state: "awake",
+              guestConfigured: true,
+            }),
+          ),
+        ],
+        entries: [{ ...DIALABLE, hostId: "host-resting" }],
+      },
+      true,
+    );
+    await run(false, deps);
+    expect(stageOf().phase).toBe("handoff");
+    expect(wake).toHaveBeenCalledTimes(1);
+
+    // Without a Stop the resting stage is woken again.
+    await rewakeStagedSandbox(surfaceKey, deps);
+    expect(wake).toHaveBeenCalledTimes(2);
+    expect(stageOf().phase).toBe("handoff");
+
+    usePendingSandboxSendStore.setState((state) => ({
+      sends: {
+        ...state.sends,
+        [SEND]: { ...state.sends[SEND], stopRequested: true },
+      },
+    }));
+    await rewakeStagedSandbox(surfaceKey, deps);
+
+    expect(wake).toHaveBeenCalledTimes(2);
+    expect(stageOf().phase).toBe("handoff");
   });
 });
 

@@ -116,6 +116,7 @@ function renderToolbarStore() {
       hostId: "host-a",
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: null,
     }),
   );
 }

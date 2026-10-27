@@ -187,7 +187,6 @@ export const GENERAL = defineSettingsSection("general", {
     availableWhen: alwaysAvailable,
     keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
   },
-  // Everything about bots on this device. T63 adds to it.
   bots: {
     kind: "group",
     search: { anchor: "general-bots" },

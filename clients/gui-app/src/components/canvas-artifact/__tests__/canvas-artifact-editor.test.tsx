@@ -1122,10 +1122,6 @@ describe("CanvasArtifactEditor board shield and panning", () => {
       document.querySelectorAll("[data-canvas-frame-overlay]"),
     ).toHaveLength(2);
   });
-
-  // Play now removes every board's shield outright (see "CanvasArtifactEditor
-  // board frames in play"), so there is no shield left to pan through here;
-  // that case is covered by `overlayCount()` there instead.
 });
 
 describe("CanvasArtifactEditor late resize commits", () => {

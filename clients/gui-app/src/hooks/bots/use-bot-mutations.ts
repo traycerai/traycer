@@ -179,11 +179,20 @@ interface BotConversationSendContext {
 }
 
 /**
+ * The `bot.conversation.send` line that retries a failed message
+ * (`redeliver`) and replaces one with an edit (`supersedes`): an older host
+ * would drop both and take the message as a new post.
+ */
+export const BOT_CONVERSATION_RETRY_VERSION = { major: 1, minor: 1 } as const;
+
+/**
  * One member's message: a post on the channel (`threadId: null`) or a reply
  * in a thread. Accepted whether or not the bound
  * host is reachable: `delivery: "queued"` means the message waits in the
  * cross-host mailbox and the row appears when the bound host drains it. No
  * toast on error - the composer states the refusal inline, under the field.
+ * A retry or an edit's replacement is refused before it leaves by a host
+ * below {@link BOT_CONVERSATION_RETRY_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through.
@@ -204,6 +213,13 @@ export function useBotConversationSendMutation(
   >({
     client,
     method: "bot.conversation.send",
+    requiredHostMethodVersion: (variables) =>
+      variables.redeliver === null && variables.supersedes === null
+        ? null
+        : {
+            method: "bot.conversation.send",
+            version: BOT_CONVERSATION_RETRY_VERSION,
+          },
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),

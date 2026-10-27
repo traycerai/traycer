@@ -219,10 +219,11 @@ function canvasBridge() {
   });
   bridges.push(bridge);
   const setMode = vi.spyOn(bridge, "setMode").mockResolvedValue(true);
+  const navigationDone = Promise.resolve(true);
   const navigateCanvas = vi
     .spyOn(bridge, "navigateCanvas")
-    .mockResolvedValue(true);
-  return { bridge, setMode, navigateCanvas };
+    .mockReturnValue(navigationDone);
+  return { bridge, setMode, navigateCanvas, navigationDone };
 }
 
 const HTML_SOURCE: SandboxSource = { kind: "html", html: "<p>page</p>" };
@@ -660,7 +661,7 @@ describe("the frame's mode", () => {
 
   it("remounts a board that navigated during play once play stops", async () => {
     mount({ live: true });
-    const { bridge, navigateCanvas } = canvasBridge();
+    const { bridge, navigateCanvas, navigationDone } = canvasBridge();
     fromPage("Home", (props) => props.onBridge?.(bridge));
     fromPage("Home", (props) => props.onStatus("ready"));
     fireEvent.click(
@@ -669,10 +670,11 @@ describe("the frame's mode", () => {
     const before = frameOf("Home").remountKey;
 
     // A same-board link navigates inside the frame.
-    await act(async () => {
+    act(() => {
       frameOf("Home").onRelativeLink?.("home.html#next");
-      await Promise.resolve();
-      await Promise.resolve();
+    });
+    await act(async () => {
+      await navigationDone;
     });
     expect(navigateCanvas).toHaveBeenCalledWith({
       search: "",
@@ -790,6 +792,47 @@ describe("the fullscreen board", () => {
     ).toBeNull();
   });
 
+  function shownBoard(): string | null {
+    return within(fullscreenHeader()).getByRole("button", {
+      name: "Choose board",
+    }).textContent;
+  }
+
+  it("steps through the reading order with the header arrows and the arrow keys", () => {
+    openFullscreen({});
+    const header = fullscreenHeader();
+    const previous = within(header).getByRole("button", {
+      name: "Previous board",
+    });
+    const next = within(header).getByRole("button", { name: "Next board" });
+    expect(shownBoard()).toBe("Home");
+    expect(previous).toHaveProperty("disabled", true);
+
+    next.focus();
+    fireEvent.click(next);
+    expect(shownBoard()).toBe("Checkout");
+    expect(next).toHaveProperty("disabled", true);
+    expect(isFullscreen()).toBe(true);
+    // The step that disabled Next hands focus to Previous, so the reader
+    // stays on the steppers: never on the exit button (whose next Enter
+    // would leave fullscreen) and never dropped to the body (where the arrow
+    // keys would no longer reach the surface).
+    expect(document.activeElement).toBe(previous);
+
+    fireEvent.keyDown(canvasSurface(), { code: "ArrowLeft" });
+    expect(shownBoard()).toBe("Home");
+    // The first board has nothing before it; the key is a no-op, not an exit.
+    fireEvent.keyDown(canvasSurface(), { code: "ArrowLeft" });
+    expect(shownBoard()).toBe("Home");
+    expect(isFullscreen()).toBe(true);
+
+    // A chord is someone else's; only the bare arrow steps.
+    fireEvent.keyDown(canvasSurface(), { code: "ArrowRight", altKey: true });
+    expect(shownBoard()).toBe("Home");
+    fireEvent.keyDown(canvasSurface(), { code: "ArrowRight" });
+    expect(shownBoard()).toBe("Checkout");
+  });
+
   it("opens the board a link points at, and ignores links that point elsewhere", async () => {
     const onRelativeLink = vi.fn();
     openFullscreen({ frameEvents: frameEvents({ onRelativeLink }) });
@@ -810,12 +853,11 @@ describe("the fullscreen board", () => {
 
     // The hash survives to the board it lands on, so once Checkout's own
     // page is ready, the bridge is asked to apply it.
-    const { bridge, navigateCanvas } = canvasBridge();
+    const { bridge, navigateCanvas, navigationDone } = canvasBridge();
     await act(async () => {
       fromPage("Checkout", (props) => props.onBridge?.(bridge));
       fromPage("Checkout", (props) => props.onStatus("ready"));
-      await Promise.resolve();
-      await Promise.resolve();
+      await navigationDone;
     });
     expect(navigateCanvas).toHaveBeenCalledExactlyOnceWith({
       search: "",

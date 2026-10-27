@@ -133,6 +133,7 @@ function hostStatusResponse() {
     install: null,
     processMemory: null,
     crossHostMessaging: null,
+    sessions: null,
   };
 }
 

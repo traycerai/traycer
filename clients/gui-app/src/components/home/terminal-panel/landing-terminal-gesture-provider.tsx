@@ -3,6 +3,7 @@ import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schema
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { useHostDirectory } from "@/lib/host";
 import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
@@ -64,8 +65,25 @@ export function LandingTerminalGestureProvider(props: {
   // host the chip resolved (`useComposerPlacement`); a derivation move
   // re-resolves the placement and hands this provider a new client.
   const placement = useComposerPlacement(null);
-  const activeHostId = placement.target.resolvedHostId;
-  const defaultClient = placement.submitTarget.client;
+  // A terminal asked for from outside the panel on another host (the
+  // Automations row's Open terminal) is opened on THAT host, folderless,
+  // without moving the composer: while it is unserved the panel targets the
+  // asked host, and once it is served the target is the composer's again.
+  // The tab it opens stays bound to its own host.
+  const terminalRequest = useLandingPanelStore(
+    (state) => state.terminalRequest,
+  );
+  const requestedHostId =
+    terminalRequest !== null &&
+    terminalRequest.hostId !== placement.target.resolvedHostId &&
+    (terminalRequest.landingPageId === null ||
+      terminalRequest.landingPageId === draftId)
+      ? terminalRequest.hostId
+      : null;
+  const requestedClient = useHostClientForHostId(requestedHostId);
+  const activeHostId = requestedHostId ?? placement.target.resolvedHostId;
+  const defaultClient =
+    requestedHostId === null ? placement.submitTarget.client : requestedClient;
   const hostDirectory = useHostDirectory();
   const probe = useTerminalListFor(defaultClient, INDEPENDENT_SCOPE);
   const availability = resolveLandingTerminalAvailability(
@@ -101,7 +119,7 @@ export function LandingTerminalGestureProvider(props: {
   // slot is keyed by the same pair, so a pick made under the gesture's host
   // cannot surface on the one the picker moved to.
   const workspaceHostId =
-    openGesture === null ? activeHostId : openGesture.hostId;
+    openGesture === null ? placement.target.resolvedHostId : openGesture.hostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -230,9 +248,13 @@ export function LandingTerminalGestureProvider(props: {
         ? {
             draftId,
             hostId: activeHostId,
-            primaryWorkspacePath: liveWorkspacePath,
-            workspacePaths: liveWorkspacePaths,
-            launchWorkspacePath: liveLaunchWorkspacePath,
+            // The composer's folders are its host's; an asked host's
+            // terminal opens in that host's home.
+            primaryWorkspacePath:
+              requestedHostId === null ? liveWorkspacePath : null,
+            workspacePaths: requestedHostId === null ? liveWorkspacePaths : [],
+            launchWorkspacePath:
+              requestedHostId === null ? liveLaunchWorkspacePath : null,
             availability,
             generation: 0,
             client: defaultClient,
@@ -247,6 +269,7 @@ export function LandingTerminalGestureProvider(props: {
       liveWorkspacePath,
       liveWorkspacePaths,
       openGesture,
+      requestedHostId,
     ],
   );
 

@@ -3,13 +3,6 @@ import { Avatar as AvatarPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 
-/**
- * The shape of an avatar's picture, as the clip of its picture layer (the
- * image and the initials): a person is a circle and a bot a squircle, so a
- * glance at a row says which wrote it. The root carries the clip as
- * `--avatar-clip` and is not clipped itself, so a corner badge and a
- * group's ring outside the picture are not cut.
- */
 const CIRCLE_CLIP = "circle(50%)";
 
 /**
@@ -19,6 +12,13 @@ const CIRCLE_CLIP = "circle(50%)";
 const SQUIRCLE_PATH =
   "M .5 0 C .92 0 1 .08 1 .5 C 1 .92 .92 1 .5 1 C .08 1 0 .92 0 .5 C 0 .08 .08 0 .5 0 Z";
 
+/**
+ * The shape of an avatar's picture, as the clip of its picture layer (the
+ * image and the initials): a person is a circle and a bot a squircle, so a
+ * glance at a row says which wrote it. The root carries the clip as
+ * `--avatar-clip` and is not clipped itself, so a corner badge and a
+ * group's ring outside the picture are not cut.
+ */
 function Avatar({
   className,
   size = "default",

@@ -117,7 +117,7 @@ function hangVerbUntilItsTimeout(
   lateMs: number,
 ): void {
   binding.auth.runSandboxVerb.mockImplementation(
-    (_sandboxId, _verb, timeoutMs) =>
+    (_sandboxId, _verb, _gesture, timeoutMs) =>
       new Promise((resolve) => {
         setTimeout(
           () =>
@@ -159,7 +159,7 @@ describe("wakeSandboxOnPick", () => {
       mocks.binding = binding;
       scriptListUntilVerb(binding, state);
 
-      wakeSandboxOnPick(sandboxOption(state, false));
+      wakeSandboxOnPick(sandboxOption(state, false), null);
       await settleWake();
 
       expect(binding.auth.listSandboxes).toHaveBeenCalled();
@@ -167,6 +167,7 @@ describe("wakeSandboxOnPick", () => {
       expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         verb,
+        null,
         WAKE_BUDGET_MS,
       );
       // A woken host dials the moment the directory says so.
@@ -174,6 +175,47 @@ describe("wakeSandboxOnPick", () => {
       expect(mocks.toastWarning).not.toHaveBeenCalled();
       expect(mocks.toastError).not.toHaveBeenCalled();
     }
+  });
+
+  it("hands the verb the gesture the pick came from", async () => {
+    for (const gesture of ["open-terminal", "send", "open-files"] as const) {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      scriptListUntilVerb(binding, "suspended");
+
+      wakeSandboxOnPick(sandboxOption("suspended", false), gesture);
+      await settleWake();
+
+      expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
+        "sbx_1",
+        "resume",
+        gesture,
+        WAKE_BUDGET_MS,
+      );
+    }
+  });
+
+  it("keeps the first pick's gesture when a second pick joins the wake in flight", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    binding.auth.runSandboxVerb.mockResolvedValue(
+      refusal(402, "insufficient_credit"),
+    );
+
+    wakeSandboxOnPick(sandboxOption("suspended", false), "open-terminal");
+    wakeSandboxOnPick(sandboxOption("suspended", false), "send");
+    await settleWake();
+
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
+      "sbx_1",
+      "resume",
+      "open-terminal",
+      WAKE_BUDGET_MS,
+    );
   });
 
   it("resumes once for two picks of one host while the first wake is in flight, and toasts the outcome once", async () => {
@@ -186,8 +228,8 @@ describe("wakeSandboxOnPick", () => {
       refusal(402, "insufficient_credit"),
     );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
 
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
@@ -211,7 +253,7 @@ describe("wakeSandboxOnPick", () => {
       shortfallMc: 10_100,
     });
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
@@ -221,7 +263,7 @@ describe("wakeSandboxOnPick", () => {
     binding.auth.runSandboxVerb.mockResolvedValueOnce(
       refusal(402, "insufficient_credit"),
     );
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
@@ -239,9 +281,9 @@ describe("wakeSandboxOnPick", () => {
       refusal(402, "insufficient_credit"),
     );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
 
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(2);
@@ -252,9 +294,9 @@ describe("wakeSandboxOnPick", () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
 
-    wakeSandboxOnPick(sandboxOption("suspended", true));
-    wakeSandboxOnPick(sandboxOption("awake", false));
-    wakeSandboxOnPick(hostScopeOptionFixture({ hostId: HOST_ID }));
+    wakeSandboxOnPick(sandboxOption("suspended", true), null);
+    wakeSandboxOnPick(sandboxOption("awake", false), null);
+    wakeSandboxOnPick(hostScopeOptionFixture({ hostId: HOST_ID }), null);
     await settleWake();
 
     expect(binding.auth.listSandboxes).not.toHaveBeenCalled();
@@ -273,7 +315,7 @@ describe("wakeSandboxOnPick", () => {
       detail: "the request never completed (TypeError)",
     });
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
 
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
@@ -289,7 +331,7 @@ describe("wakeSandboxOnPick", () => {
   it("does nothing, and says nothing, for a wake with no host binding", async () => {
     mocks.binding = null;
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // Synchronous: no mutation was ever created.
     expect(wakeMutations()).toBe(0);
     await settleWake();
@@ -309,7 +351,7 @@ describe("wakeSandboxOnPick", () => {
     scriptListUntilVerb(binding, "suspended");
     expect(wakeMutations()).toBe(0);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // Past the first reads, parked on the poll sleep.
     await vi.advanceTimersByTimeAsync(0);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
@@ -328,7 +370,7 @@ describe("wakeSandboxOnPick", () => {
         .getMutationCache()
         .findAll({ mutationKey: sandboxMutationKeys.wake(HOST_ID) });
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
 
     const settled = findWakes();
@@ -351,9 +393,9 @@ describe("wakeSandboxOnPick", () => {
     // The verb's own request outlives the whole budget, and is aborted at it.
     hangVerbUntilItsTimeout(binding, 0);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // A second pick while it is pending joins it: one verb, one outcome.
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(119_000);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
     expect(mocks.toastError).not.toHaveBeenCalled();
@@ -377,7 +419,7 @@ describe("wakeSandboxOnPick", () => {
       settled: true,
       state: "awake",
     });
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
   });
@@ -387,7 +429,7 @@ describe("wakeSandboxOnPick", () => {
     mocks.binding = binding;
     scriptListUntilVerb(binding, "suspended");
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
     // The one timer left is the mutation cache's own gc timer for the settled
     // wake; an uncancelled 120 s budget would make it two.
@@ -406,7 +448,7 @@ describe("wakeSandboxOnPick", () => {
       "Sandboxes aren't available in the staging build.",
     );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // Synchronous: no mutation was ever created.
     expect(wakeMutations()).toBe(0);
     await settleWake();
@@ -443,12 +485,13 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
   it("answers timed out at 120 s, and the request was handed that same 120 s to live", async () => {
     const binding = hungHost(0);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "resume",
+      null,
       120_000,
     );
 
@@ -466,10 +509,10 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
   it("joins a retry made before the timeout: one request, whatever the wake has waited", async () => {
     const binding = hungHost(0);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60_000);
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
@@ -480,7 +523,7 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
     // The abort lands 5 s after the budget is spent.
     const binding = hungHost(5_000);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // Past the first reads, so the budget starts at t = 0.
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(119_999);
@@ -489,7 +532,7 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
     expect(wakeMutations()).toBe(0);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
 
     // Nothing is sent into the first request's transition.
@@ -499,13 +542,13 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
   it("starts a fresh wake for a retry made once the request has settled, with a full budget again", async () => {
     const binding = hungHost(5_000);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // Past the first reads, so the budget starts at t = 0.
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(125_000);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(2);
@@ -513,6 +556,7 @@ describe("wakeSandboxOnPick when the lifecycle request hangs", () => {
       2,
       "sbx_1",
       "resume",
+      null,
       120_000,
     );
   });
@@ -574,7 +618,7 @@ describe("wakeSandboxOnPick across accounts", () => {
       listOf({ state: "suspended" }),
     );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     // The first read and the verb are done; the wake is waiting to poll.
     await vi.advanceTimersByTimeAsync(0);
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
@@ -596,7 +640,7 @@ describe("wakeSandboxOnPick across accounts", () => {
       .mockImplementationOnce(listOf({ state: "suspended" }))
       .mockImplementationOnce(() => poll.promise);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(2_000);
     // The verb was sent and the poll is in flight.
@@ -620,7 +664,7 @@ describe("wakeSandboxOnPick across accounts", () => {
     const verb = deferred<SandboxLifecycleVerbFetchResult>();
     binding.auth.runSandboxVerb.mockImplementation(() => verb.promise);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
 
@@ -645,7 +689,7 @@ describe("wakeSandboxOnPick across accounts", () => {
       })(),
     );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
     signInAs("user-b");
     await vi.advanceTimersByTimeAsync(2_000);
@@ -654,7 +698,7 @@ describe("wakeSandboxOnPick across accounts", () => {
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
     expectNothingReported(binding);
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
 
     // It read the list again and sent its own verb, rather than awaiting the
@@ -685,7 +729,7 @@ describe("wakeSandboxOnPick across accounts", () => {
         })(),
       );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(2_000);
     // A's verb was sent and A's next list read is in flight.
@@ -693,7 +737,7 @@ describe("wakeSandboxOnPick across accounts", () => {
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
 
     signInAs("user-b");
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await vi.advanceTimersByTimeAsync(0);
 
     // B's own attempt read the list and, the row being asleep, sent its own verb.
@@ -733,7 +777,7 @@ describe("wakeSandboxOnPick across accounts", () => {
       refusal(402, "insufficient_credit"),
     );
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
 
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
@@ -751,7 +795,7 @@ describe("wakeSandboxOnPick across accounts", () => {
     mocks.binding = binding;
     scriptListUntilVerb(binding, "suspended");
 
-    wakeSandboxOnPick(sandboxOption("suspended", false));
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
 
     expect(binding.directory.refresh).toHaveBeenCalledTimes(1);

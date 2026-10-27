@@ -74,7 +74,7 @@ export function useEnvironmentMembers(
  * {@link useEnvironmentMembers} reads, in order. The list is `null` until
  * every page asked for has answered, and while the gate is shut.
  */
-export interface EnvironmentMemberDirectory {
+interface EnvironmentMemberDirectory {
   readonly resolve: BotMemberResolver;
   readonly members: ReadonlyArray<EnvironmentMember> | null;
 }

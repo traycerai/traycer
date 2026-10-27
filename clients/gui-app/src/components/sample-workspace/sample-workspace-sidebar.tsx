@@ -540,6 +540,7 @@ function sampleEmptyBody(panelId: LeftPanelId): () => ReactNode {
         icon={definition.icon}
         title={definition.title}
         description={`The sample task has no ${definition.title.toLowerCase()}.`}
+        action={null}
         testId={undefined}
       />
     );

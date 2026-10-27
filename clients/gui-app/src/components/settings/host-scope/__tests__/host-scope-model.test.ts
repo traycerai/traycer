@@ -11,6 +11,7 @@ import {
   transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import { composerComputerSubLine } from "@/components/settings/host-scope/host-option-model";
 import {
   hostLeaseFixture,
   hostScopeOptionFixture,
@@ -55,6 +56,7 @@ function buildOne(input: {
     localHostId: input.localHostId,
     activeHostId: null,
     localService: undefined,
+    localPlatform: null,
     hasLiveSession: () => false,
     // The helper models one host at a time and none of these cases is about a
     // machine mid-install; the "setting up" row state has its own test.
@@ -156,6 +158,7 @@ describe("buildHostScopeOptions connectable — the route, not the lease", () =>
       localHostId: null,
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => false,
       leases: [
         hostLeaseFixture("healthy", null),
@@ -219,6 +222,7 @@ describe("buildHostScopeOptions connectable — composed against real mapped ent
       localHostId: null,
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => hasLiveSession,
       localHostSettingUp: false,
       localHostTerminalRunNote: null,
@@ -470,6 +474,7 @@ describe("buildHostScopeOptions settingUp", () => {
       localHostId: "local-host",
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => false,
       localHostSettingUp: true,
       localHostTerminalRunNote: null,
@@ -492,6 +497,7 @@ describe("buildHostScopeOptions settingUp", () => {
       localHostId: "local-host",
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => false,
       localHostSettingUp: false,
       localHostTerminalRunNote: null,
@@ -531,6 +537,7 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       localHostId: null,
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => false,
       localHostSettingUp: false,
       localHostTerminalRunNote: null,
@@ -566,6 +573,7 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       localHostId: null,
       activeHostId: null,
       localService: undefined,
+      localPlatform: null,
       hasLiveSession: () => false,
       localHostSettingUp: false,
       localHostTerminalRunNote: null,
@@ -577,5 +585,69 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       expect(option.health.state).not.toBe("offline");
       expect(option.health.state).not.toBe("removed");
     }
+  });
+});
+
+describe("buildHostScopeOptions the computer's OS in the composer sub-line", () => {
+  function composerSubLines(input: {
+    readonly localPlatform: string | null;
+    readonly registryPlatform: string | null;
+  }): { readonly local: string; readonly other: string } {
+    const options = buildHostScopeOptions({
+      leases: [
+        hostLeaseFixture("windows-host", null),
+        hostLeaseFixture("linux-host", null),
+      ],
+      authorityAttached: true,
+      directory: [
+        entry({
+          hostId: "windows-host",
+          kind: "local",
+          label: "windows-test-machine",
+        }),
+        entry({ hostId: "linux-host", label: "build-box" }),
+      ],
+      registry: [
+        {
+          ...registryItem("build-box"),
+          hostId: "linux-host",
+          platform: "linux-x64",
+        },
+        {
+          ...registryItem("windows-test-machine"),
+          hostId: "windows-host",
+          platform: input.registryPlatform,
+        },
+      ],
+      localHostId: "windows-host",
+      activeHostId: null,
+      localService: undefined,
+      localPlatform: input.localPlatform,
+      hasLiveSession: () => false,
+      localHostSettingUp: false,
+      localHostTerminalRunNote: null,
+      sandboxes: null,
+      nowMs: 0,
+    });
+    const line = (hostId: string): string => {
+      const option = options.find((candidate) => candidate.hostId === hostId);
+      if (option === undefined) throw new Error(`no row for ${hostId}`);
+      return composerComputerSubLine(option, true);
+    };
+    return { local: line("windows-host"), other: line("linux-host") };
+  }
+
+  it("names this machine's OS from the desktop when the registry row has none", () => {
+    expect(
+      composerSubLines({ localPlatform: "win32", registryPlatform: null })
+        .local,
+    ).toBe("windows-test-machine · Windows · Active");
+  });
+
+  it("names another computer's OS from its registry row", () => {
+    expect(
+      composerSubLines({ localPlatform: "win32", registryPlatform: null })
+        .other,
+    ).toBe("Linux · Active");
   });
 });

@@ -43,6 +43,12 @@ const authorityState = vi.hoisted((): AuthorityTestState => ({
   importReset: vi.fn<() => void>(),
 }));
 
+// A terminal's task directory is named by its host's directory row; this
+// suite has no host directory and no task terminal in the task's own folder.
+vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
+  useTaskHomeDirectory: () => null,
+  useTaskHomeDirectoryFor: () => () => null,
+}));
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useTabPlainTerminalAuthority: (scope: { kind: "epic"; epicId: string }) => ({
     hostId: "host-1",

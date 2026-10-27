@@ -43,6 +43,9 @@
 !ifndef TRAYCER_HOST_LAUNCHER
 !define TRAYCER_HOST_LAUNCHER "$PROFILE\.traycer\cli\host-start-hidden.vbs"
 !endif
+!ifndef TRAYCER_CLI_MANIFEST_TAIL
+!define TRAYCER_CLI_MANIFEST_TAIL ".traycer\cli\manifest.json"
+!endif
 
 !macro customUnInstall
   ; THE UPDATE GUARD - the single most important line in this file.
@@ -85,9 +88,23 @@
     ; is emptied only when the task is gone or was that account's. Everything
     ; else - the app, this account's launcher - is still removed.
     ;
+    ; WHICH INSTALL OWNS THE HOST - asked first. The task and its launcher
+    ; belong to whichever Traycer CLI registered them, and Desktop coexists
+    ; with a CLI a package manager or the user installed (`cli-reconcile.ts`
+    ; never overwrites one). The CLI's install manifest, beside the launcher,
+    ; names that install's `source`. Only a JSON object whose `source` is the
+    ; string `desktop` proves the host is this app's to remove. Any other
+    ; source is a CLI that outlives this uninstall, and a missing, unreadable
+    ; or malformed manifest proves nothing - a root array, or a `source` that
+    ; is a list (`-ceq` on a list filters it, and a non-empty result is true)
+    ; - so in every case but that one the task, the launcher and the folder
+    ; stay.
+    ;
     ; The probe, a PowerShell bounded by nsExec's /TIMEOUT (a stalled
     ; Schedule.Service RPC or account lookup answers `timeout`, which is not 0
     ; or 2), exits:
+    ;   5  the CLI manifest does not say     -> none of the three, and the
+    ;      `desktop`, or cannot be read          launcher stays
     ;   0  the task is this account's        -> end it, delete it, folder
     ;   2  there is no such task, or no such  -> folder only
     ;      folder (0x80070002 / 0x80070003)
@@ -100,7 +117,7 @@
     ; principal that reads back as an account name is resolved to one first.
     ; Nothing about either account is printed. `$R1` holds the answer: the
     ; same code re-runs GetParameters into it right after this macro.
-    nsExec::ExecToLog /TIMEOUT=30000 `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect()}catch{exit 4};try{$$t=$$s.GetFolder('\').GetTask('${TRAYCER_WINDOWS_TASK_NAME}')}catch{$$e=$$_.Exception;if($$e.InnerException){$$e=$$e.InnerException};if(($$e.HResult -eq -2147024894) -or ($$e.HResult -eq -2147024893)){exit 2};exit 4};try{$$u=[string]$$t.Definition.Principal.UserId;if($$u -notmatch '^S-1-[0-9]+(-[0-9]+)+$$'){$$u=(New-Object System.Security.Principal.NTAccount($$u)).Translate([System.Security.Principal.SecurityIdentifier]).Value};$$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;if($$u -ieq $$me){exit 0};exit 3}catch{exit 4}"`
+    nsExec::ExecToLog /TIMEOUT=30000 `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$r=Get-Content -Raw -LiteralPath (Join-Path $$env:USERPROFILE '${TRAYCER_CLI_MANIFEST_TAIL}') -ErrorAction Stop;if(-not $$r.TrimStart().StartsWith('{')){exit 5};$$m=ConvertFrom-Json $$r}catch{exit 5};if(-not (($$m -is [System.Management.Automation.PSCustomObject]) -and ($$m.source -is [string]) -and ($$m.source -ceq 'desktop'))){exit 5};try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect()}catch{exit 4};try{$$t=$$s.GetFolder('\').GetTask('${TRAYCER_WINDOWS_TASK_NAME}')}catch{$$e=$$_.Exception;if($$e.InnerException){$$e=$$e.InnerException};if(($$e.HResult -eq -2147024894) -or ($$e.HResult -eq -2147024893)){exit 2};exit 4};try{$$u=[string]$$t.Definition.Principal.UserId;if($$u -notmatch '^S-1-[0-9]+(-[0-9]+)+$$'){$$u=(New-Object System.Security.Principal.NTAccount($$u)).Translate([System.Security.Principal.SecurityIdentifier]).Value};$$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;if($$u -ieq $$me){exit 0};exit 3}catch{exit 4}"`
     Pop $R1
 
     ${if} $R1 == "0"
@@ -117,13 +134,22 @@
       ; coming back at every future logon.
       nsExec::ExecToLog 'schtasks /Delete /TN "${TRAYCER_WINDOWS_TASK_NAME}" /F'
       Pop $R0
+    ${elseIf} $R1 == "5"
+      DetailPrint "Traycer: the host autostart is not this app's to remove; leaving it in place"
     ${elseIf} $R1 != "2"
       DetailPrint "Traycer: the host's Scheduled Task is owned by another user; leaving it in place"
     ${endIf}
 
     ; Remove the launcher this account's task pointed at. It lives under THIS
-    ; account's profile whoever owns the task, so it goes either way.
-    Delete "${TRAYCER_HOST_LAUNCHER}"
+    ; account's profile whoever owns the task, so it goes either way - but
+    ; only on an answer the probe gives after the manifest said `desktop`
+    ; (0, 2, 3 or 4). A 5, a timeout or an error proves no ownership.
+    ${if} $R1 == "0"
+    ${orIf} $R1 == "2"
+    ${orIf} $R1 == "3"
+    ${orIf} $R1 == "4"
+      Delete "${TRAYCER_HOST_LAUNCHER}"
+    ${endIf}
 
     ; `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it lived
     ; in survives and stays visible in the Task Scheduler tree. schtasks has no

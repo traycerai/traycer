@@ -915,6 +915,69 @@ describe("canvas Escape", () => {
   });
 });
 
+describe("canvas fullscreen arrows", () => {
+  const press = (overrides: Record<string, unknown>) =>
+    notification("traycer/notifications/shortcut", {
+      key: "ArrowRight",
+      code: "ArrowRight",
+      ctrl: false,
+      meta: false,
+      alt: false,
+      shift: false,
+      nonce: NONCE,
+      ...overrides,
+    });
+  const fullscreen = (harness: Harness): void => {
+    harness.host.updateHostContext({
+      ...HOST_CONTEXT,
+      displayMode: "fullscreen",
+      availableDisplayModes: ["inline", "fullscreen"],
+    });
+  };
+
+  it.each([["ArrowLeft"], ["ArrowRight"]])(
+    "forwards a bare %s from the proven canvas page while fullscreen",
+    (code) => {
+      const harness = createHarness({ canvas: true, ready: true });
+      fullscreen(harness);
+      harness.host.receive(press({ key: code, code }));
+      expect(harness.onShortcut).toHaveBeenCalledWith({
+        key: code,
+        code,
+        ctrl: false,
+        meta: false,
+        alt: false,
+        shift: false,
+      });
+    },
+  );
+
+  it("drops the arrow from an inline board, whose arrows belong to its page", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    harness.host.receive(press({}));
+    expect(harness.onShortcut).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a wrong nonce", { nonce: "other" }],
+    ["Shift held", { shift: true }],
+    ["Alt held", { alt: true }],
+    ["ArrowUp", { key: "ArrowUp", code: "ArrowUp" }],
+  ])("drops an arrow press with %s", (_label, overrides) => {
+    const harness = createHarness({ canvas: true, ready: true });
+    fullscreen(harness);
+    harness.host.receive(press(overrides));
+    expect(harness.onShortcut).not.toHaveBeenCalled();
+  });
+
+  it("drops the arrow from a fullscreen page that is not a canvas", () => {
+    const harness = createHarness({ canvas: false, ready: true });
+    fullscreen(harness);
+    harness.host.receive(press({}));
+    expect(harness.onShortcut).not.toHaveBeenCalled();
+  });
+});
+
 describe("canvas page errors outside a healthy ready page", () => {
   const EARLY_ERROR = "traycer/notifications/early-error";
   const DOCUMENT_READY = "traycer/notifications/document-ready";

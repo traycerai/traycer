@@ -512,10 +512,10 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  *   where starting work on it would outlive the task it was made for.
  * - `hidden`: left out of this list.
  *
- * The Automations pod (`kind: "automation"`) is a slim host for scheduled
- * runs: the host list shows it with the user's sandboxes, and no picker
- * offers it. It is reached by its `automation` alias and the configuration's
- * Sandboxes page.
+ * The Automations host (`kind: "automation"`) runs shells and refuses
+ * agents. It is created by the first shell sent to it, never by a person, so
+ * no list offers it: it is reached by its `automation` alias and listed on
+ * the configuration's Sandboxes page.
  *
  * `listsAgentSandboxes` is the host list (Settings), every other surface is a
  * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
@@ -549,9 +549,7 @@ export function hostOptionPickerGroup(
   if (!listsAgentSandboxes && isUnenrolledSandboxOption(host)) return "hidden";
   const summary = host.sandbox.summary;
   if (summary === null) return listsAgentSandboxes ? "sandbox" : "hidden";
-  if (summary.kind === "automation") {
-    return listsAgentSandboxes ? "sandbox" : "hidden";
-  }
+  if (summary.kind === "automation") return "hidden";
   if (summary.burst) return listsAgentSandboxes ? "agent-sandbox" : "hidden";
   if (
     composerViewer !== null &&
@@ -589,10 +587,10 @@ function viewerStartedOrKept(
 
 /**
  * Whether Activate may be offered for this row: exactly the rows a full-host
- * picker offers. The host list keeps the Automations pod, burst sandboxes and
- * an unconfirmed sandbox (`summary === null`) visible for management.
- * Activating one would route the window's new work to a scheduled-run pod or
- * a task-owned sandbox, which every picker hides for that reason. Asked
+ * picker offers. The host list keeps burst sandboxes and an unconfirmed
+ * sandbox (`summary === null`) visible for management. Activating one would
+ * route the window's new work to a task-owned sandbox, which every picker
+ * hides for that reason. Asked
  * without the composer's viewer, so who started a sandbox never decides it.
  */
 export function hostOptionCanActivate(host: HostScopeOption): boolean {

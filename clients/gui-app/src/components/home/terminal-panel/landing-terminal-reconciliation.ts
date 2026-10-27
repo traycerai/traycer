@@ -125,6 +125,7 @@ export function resolveLandingTerminalSyncedTitle(input: {
     title: input.title,
     activeProcessName: input.activeProcessName,
     currentCwd: resolveLandingTerminalTitleCwd(input),
+    taskHome: null,
   });
 }
 
@@ -514,7 +515,7 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
     ) {
       return [];
     }
-    const view = selectPlainTerminalViewModel(terminal);
+    const view = selectPlainTerminalViewModel(terminal, null);
     const tab: LandingTerminalTabRef = {
       kind: "terminal",
       instanceId: input.mintInstanceId(),
@@ -577,5 +578,6 @@ function defaultLandingTerminalTitle(
     title: session.title,
     activeProcessName: session.activeProcessName,
     currentCwd: liveCwd,
+    taskHome: null,
   });
 }

@@ -70,6 +70,7 @@ const REPLYING: BotSessionActivity = {
   startedAt: 5_000,
   step: "bun test",
   requestId: null,
+  reason: null,
 };
 
 const REPLYING_SNAPSHOT: BotSubscribeServerFrame = {

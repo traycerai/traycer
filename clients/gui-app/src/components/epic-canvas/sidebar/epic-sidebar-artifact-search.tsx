@@ -464,6 +464,7 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
         icon={SearchX}
         title="Search isn't available on this host."
         description="Update this device's Traycer host to search artifacts."
+        action={null}
         testId="epic-artifact-search-unsupported"
       />
     );
@@ -517,6 +518,7 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
         icon={Search}
         title="Artifact search isn't ready yet."
         description="This Epic's artifacts are still syncing to this device."
+        action={null}
         testId="epic-artifact-search-mirror-unavailable"
       />
     );
@@ -534,6 +536,7 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
             ? "More results exist beyond the search limit - refine your query."
             : null
         }
+        action={null}
         testId="epic-artifact-search-empty"
       />
     );

@@ -386,7 +386,6 @@ function BotTabContent(props: {
     if (environment.ownerKind === "organization") {
       return {
         kind: "team",
-        environmentId: environment.environmentId,
         name: environment.label,
         members: directory.members,
       };
@@ -474,6 +473,7 @@ function BotTabContent(props: {
                 openThread={openThread}
                 onOpenThread={setOpenThread}
                 onOpenUnderTheHood={openUnderTheHood}
+                onOpenTrunkUnderTheHood={openBotActivity}
               />
             </TabsContent>
             <TabsContent

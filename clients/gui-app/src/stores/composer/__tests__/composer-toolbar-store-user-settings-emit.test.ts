@@ -61,6 +61,7 @@ function catalog(
     modelsLoaded,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    keepsUnavailablePick: false,
   };
 }
 

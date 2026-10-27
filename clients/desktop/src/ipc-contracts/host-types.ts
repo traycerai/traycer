@@ -121,4 +121,5 @@ export type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";

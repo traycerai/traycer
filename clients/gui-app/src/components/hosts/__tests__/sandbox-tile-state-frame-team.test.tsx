@@ -179,6 +179,7 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
         expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
           "sbx_1",
           verb,
+          null,
           expect.any(Number),
         );
       });
@@ -202,6 +203,7 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         "start",
+        null,
         expect.any(Number),
       );
     });

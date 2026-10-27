@@ -289,6 +289,20 @@ const REPRESENTATIVE_ENTRIES: Readonly<
       outcome: "destroyed",
     },
   },
+  "sandbox.notice": {
+    ...ENTRY_BASE,
+    kind: "sandbox.notice",
+    epicId: null,
+    chatId: null,
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "sandbox_notice",
+      sandboxId: "sandbox-1",
+      sandboxName: "build box",
+      notice: { kind: "resting_destroyed" },
+    },
+  },
   "host.operation.finished": {
     ...ENTRY_BASE,
     kind: "host.operation.finished",

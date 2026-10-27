@@ -388,6 +388,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -505,6 +506,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -573,6 +575,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
       },
     });
@@ -621,6 +624,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -762,6 +766,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -910,6 +915,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1013,6 +1019,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         // The catalog does NOT list "1.6.0" — the attempt's own target.
         // Falsifies: routing the dialog's Force through `installForce`
@@ -1095,6 +1102,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1211,6 +1219,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         // Registered so "never called" is a fact about the page's routing and
         // not about a handler that was missing anyway.
@@ -1310,6 +1319,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1439,6 +1449,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
@@ -1716,6 +1727,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         ...overrides,
       },
@@ -1876,6 +1888,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
       },
     });
@@ -1929,6 +1942,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
       },
     });
@@ -2016,6 +2030,7 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         }),
         "host.update.check": () => {
           checkCalls += 1;
@@ -2208,6 +2223,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,

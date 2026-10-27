@@ -1,4 +1,4 @@
-export interface CanvasBoardDestination {
+interface CanvasBoardDestination {
   readonly path: string;
   readonly search: string;
   readonly hash: string;

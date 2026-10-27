@@ -3,14 +3,21 @@ import { sandboxCredentialLine } from "@/lib/sandboxes/sandbox-credential-mode";
 
 describe("sandboxCredentialLine", () => {
   it("says a placeholder credential stays with Traycer, in the plain tone", () => {
-    expect(sandboxCredentialLine("placeholder", null)).toEqual({
+    expect(sandboxCredentialLine("claude", "placeholder", null)).toEqual({
       tone: "plain",
       text: "On this sandbox its credential stays with Traycer: agents can use it, never read it",
     });
   });
 
+  it("names Traycer's key for Traycer's own harness", () => {
+    expect(sandboxCredentialLine("traycer", "placeholder", null)).toEqual({
+      tone: "plain",
+      text: "Uses Traycer's key on this sandbox. Agents can use it but never see it.",
+    });
+  });
+
   it("says a process-scoped credential is readable by agents, in the caution tone", () => {
-    expect(sandboxCredentialLine("process-scoped", null)).toEqual({
+    expect(sandboxCredentialLine("claude", "process-scoped", null)).toEqual({
       tone: "caution",
       text: "Runs with its own credential on this sandbox, readable by agents",
     });
@@ -18,7 +25,11 @@ describe("sandboxCredentialLine", () => {
 
   it("appends the note after the unsupported line", () => {
     expect(
-      sandboxCredentialLine("unsupported", "  needs a browser sign-in  "),
+      sandboxCredentialLine(
+        "claude",
+        "unsupported",
+        "  needs a browser sign-in  ",
+      ),
     ).toEqual({
       tone: "unavailable",
       text: "Not available on sandboxes: needs a browser sign-in",
@@ -28,7 +39,7 @@ describe("sandboxCredentialLine", () => {
   it.each([null, undefined, "", "   \n "])(
     "drops the colon for the unsupported note %j",
     (note) => {
-      expect(sandboxCredentialLine("unsupported", note)).toEqual({
+      expect(sandboxCredentialLine("claude", "unsupported", note)).toEqual({
         tone: "unavailable",
         text: "Not available on sandboxes",
       });
@@ -36,7 +47,7 @@ describe("sandboxCredentialLine", () => {
   );
 
   it("says nothing for a null or undefined mode", () => {
-    expect(sandboxCredentialLine(null, null)).toBeNull();
-    expect(sandboxCredentialLine(undefined, "ignored")).toBeNull();
+    expect(sandboxCredentialLine("claude", null, null)).toBeNull();
+    expect(sandboxCredentialLine("claude", undefined, "ignored")).toBeNull();
   });
 });

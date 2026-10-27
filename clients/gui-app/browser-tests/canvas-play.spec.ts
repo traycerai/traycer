@@ -3,12 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // Browser regressions for canvas Play and fullscreen: claims jsdom cannot
-// decide because they depend on the SAME iframe document surviving a DOM
-// move (fullscreen's manual top-layer popover promotes the existing canvas
-// in place) and on real wheel/paint behaviour (ctrl-wheel zoom, Fit/Fill
-// width). Store rules and the toolbar's own button wiring stay in Vitest
-// (`components/canvas-artifact/__tests__/`); this file only proves what a
-// real browser session shows.
+// decide because they depend on the SAME iframe document surviving the
+// fullscreen transitions (the current tile is absolute-positioned, with no
+// manual top-layer popover) and on real wheel/paint behaviour (ctrl-wheel
+// zoom, Fit/Fill width). Store rules and the toolbar's own button wiring stay
+// in Vitest (`components/canvas-artifact/__tests__/`); this file only proves
+// what a real browser session shows.
 
 test.use({ viewport: { width: 1400, height: 900 }, actionTimeout: 10_000 });
 
@@ -110,6 +110,52 @@ test.describe("fullscreen keeps the same running board", () => {
     await page.getByRole("button", { name: "Back to canvas" }).click();
     expect(await tokenOf(page, "A")).toBe(tokenA);
     expect(await tokenOf(page, "B")).toBe(tokenB);
+  });
+});
+
+test.describe("fullscreen steps through the reading order", () => {
+  // Real input is the claim: a button that becomes disabled while focused
+  // drops focus in Chrome, so the handoff to the other stepper is what keeps
+  // a later arrow press inside the surface; and a key pressed INSIDE the
+  // board's frame only reaches the app through the sandbox bridge's replay.
+  test("the header steppers and a real arrow press, on the surface and inside the board", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByRole("button", { name: "Play A fullscreen" }).click();
+    await expect(fullscreenBoardChoice(page)).toHaveText("A");
+
+    const next = page.getByRole("button", { name: "Next board" });
+    const previous = page.getByRole("button", { name: "Previous board" });
+    await expect(previous).toBeDisabled();
+    await next.click();
+    await expect(fullscreenBoardChoice(page)).toHaveText("B");
+    await expect(next).toBeDisabled();
+    await expect(previous).toBeFocused();
+
+    await page.keyboard.press("ArrowLeft");
+    await expect(fullscreenBoardChoice(page)).toHaveText("A");
+
+    // Click into the running board so its document owns the keyboard, then
+    // step from there. By coordinates: the fullscreen frame is scaled, and
+    // the claim is that a real press inside it reaches the app.
+    const frame = await page.locator('iframe[title="A"]').boundingBox();
+    if (frame === null) throw new Error("the fullscreen board has no box");
+    await page.mouse.click(
+      frame.x + frame.width / 2,
+      frame.y + frame.height / 2,
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.activeElement?.getAttribute("title")),
+      )
+      .toBe("A");
+    await page.keyboard.press("ArrowRight");
+    await expect(fullscreenBoardChoice(page)).toHaveText("B");
+    await expect(canvasSurface(page)).toHaveAttribute(
+      "data-canvas-fullscreen",
+      "true",
+    );
   });
 });
 
@@ -430,8 +476,7 @@ test.describe("the comment draft composer", () => {
     // Selecting the Comment TOOL is what turns comment mode on
     // (`chooseTool`: `setCommenting(next === "comment")`); the sidebar's
     // Comments toggle reaches the same `commenting` flag by a separate
-    // path, and once it is on either way the toolbar - the tool included -
-    // hides, so the tool must be picked first, while it is still visible.
+    // path. The toolbar stays up either way.
     await commentTool(page).click();
     // Empty canvas below both boards (laid out at y 0..420, 0.6 zoom).
     const pane = page.getByRole("application", { name: "Canvas workspace" });

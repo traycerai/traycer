@@ -94,6 +94,10 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
     onChange: () => () => undefined,
   }),
 }));
+// This suite files no terminal request, so no other host's client is asked for.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
   useTerminalListFor: () => ({
     data: { sessions: [], homeCwd: null },

@@ -212,7 +212,11 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         ) : (
           <div className="flex flex-col gap-2 p-2.5">
             {stagedSend.line}
-            <ConsequencesBlock input={consequences} onMoveFirst={null} />
+            <ConsequencesBlock
+              input={consequences}
+              onMoveFirst={null}
+              onOpenTerminalInstead={null}
+            />
           </div>
         )}
         {staging?.sheet}
@@ -318,11 +322,16 @@ function useTerminalStagedLaunch(input: {
   const { onLaunch, surfaceKey } = input;
   const hostOptions = useHostOptions();
   const task = useSandboxStagingTask(input.epicId);
-  const surface = useMemo(() => ({ surfaceKey, task }), [surfaceKey, task]);
+  // The picker's own action is the terminal: no `Open terminal instead`.
+  const surface = useMemo(
+    () => ({ surfaceKey, task, openTerminalInstead: null }),
+    [surfaceKey, task],
+  );
   const staging = useSandboxStaging({
     surface,
     memoryHostId: input.resolvedHostId,
     hosts: hostOptions.hosts,
+    forkOnNew: null,
   });
   // Opened from the line before the handoff, the terminal is the one this
   // stage was for: the stage ends so the handoff opens no second one.

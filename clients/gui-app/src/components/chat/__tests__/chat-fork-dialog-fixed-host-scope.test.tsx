@@ -189,6 +189,11 @@ vi.mock(
   }),
 );
 
+// A fork that stages no sandbox never asks the staged sign-in check anything.
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => () => null,
+}));
+
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
@@ -246,6 +251,7 @@ function forkTarget(): ChatForkDialogTarget {
     forkMode: "plain",
     initialHostId: null,
     onlyHostIds: null,
+    stagedSandbox: null,
   };
 }
 

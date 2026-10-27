@@ -88,6 +88,7 @@ import {
   restorePreview,
   renameArtifact,
   renameTerminalTiles,
+  replaceTab,
   adoptHostTerminalProjection,
   removeTerminalTiles,
   restoreTilePreview as restoreTilePreviewCanvas,
@@ -705,6 +706,21 @@ export interface EpicCanvasStore {
    * A removed team member's tiles on the team's hosts.
    */
   closeTilesOnHosts: (hostIds: ReadonlySet<string>) => number;
+  /**
+   * Swaps a published-copy tab for the live chat tile the row would open now
+   * (`PublishedChatTile`'s conversion), in the published tab's own slot. The
+   * published copy is NOT captured as a closed tile: a reopen gesture or
+   * Back/Forward entry that resurrected the stale copy over the live chat
+   * would recreate the trap this replaces. No-op when the instance is not a
+   * tab of that pane (the canvas renders a copy over a live ref without the
+   * copy ever being in the store).
+   */
+  replacePublishedChatTileInTab: (
+    tabId: string,
+    paneId: string,
+    publishedInstanceId: string,
+    liveRef: EpicCanvasTileRef,
+  ) => void;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
     paneId: string,
@@ -2814,6 +2830,44 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }
           }
           return targets.length;
+        },
+
+        replacePublishedChatTileInTab: (
+          tabId,
+          paneId,
+          publishedInstanceId,
+          liveRef,
+        ) => {
+          // The dedup path of `replaceTab` CLOSES the copy rather than
+          // swapping it; if the copy was its pane's only tab, that pane goes
+          // and can dissolve its parent group, remounting a sibling's painted
+          // chat. Predict it before `set()`, as `closeCanvasTab` does.
+          const before = canvasForExistingTab(get(), tabId);
+          const pane =
+            before === null ? null : findPaneById(before.root, paneId);
+          if (
+            before !== null &&
+            pane !== null &&
+            pane.tabInstanceIds.length === 1 &&
+            pane.tabInstanceIds[0] === publishedInstanceId &&
+            findPaneTabForRef(before, liveRef) !== null
+          ) {
+            flushChatTabViewportHandoff(
+              paneRemovalDissolveHandoffTargets(before.root, paneId),
+            );
+          }
+          set((state) => {
+            const updated = updateTabCanvas(state, tabId, (canvas) =>
+              replaceTab(canvas, paneId, publishedInstanceId, liveRef),
+            );
+            if (updated === state) return state;
+            // The one tile this removes is the published copy, and it must
+            // not come back: keep the closed-tile ledger as it was.
+            return {
+              ...updated,
+              closedTilePayloadsByTabId: state.closedTilePayloadsByTabId,
+            };
+          });
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {

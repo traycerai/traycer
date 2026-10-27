@@ -79,7 +79,11 @@ import {
 } from "@/stores/composer/mention-pick-memory-store";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
-import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import {
+  terminalSessionLabel,
+  type TaskHomeDirectory,
+} from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 import type {
@@ -205,6 +209,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     { kind: "epic", epicId: epicIdOrEmpty },
   );
   const terminalSessions = terminalListQuery.data?.sessions;
+  const readiness = useReactiveHostReadiness(hostClient);
+  const taskHome = useTaskHomeDirectory(currentEpicId, readiness.hostId);
   const epicTerminalEntries = useMemo<
     ReadonlyArray<EpicTerminalMentionEntry>
   >(() => {
@@ -214,8 +220,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     return epicTerminalMentionEntriesFromSessions(
       terminalSessions,
       currentEpicId,
+      taskHome,
     );
-  }, [terminalSessions, currentEpicId]);
+  }, [terminalSessions, currentEpicId, taskHome]);
 
   // Browser tabs are sourced live from the same coordinator the canvas/sidebar
   // browser surfaces read - no host RPC of its own, so this needs no
@@ -251,7 +258,6 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // just the canvas host's coordinator: a tab on another host is still
   // mentionable, as snapshot-only context (spec decision #10). Only tabs on
   // the chat's OWN host keep the drive token.
-  const readiness = useReactiveHostReadiness(hostClient);
   const hostDirectory = useHostDirectory();
   const hostLabelOf = useCallback(
     (candidateHostId: string): string | null =>
@@ -1016,10 +1022,11 @@ export function epicAgentMentionEntriesFromEpic(
 export function epicTerminalMentionEntriesFromSessions(
   sessions: ReadonlyArray<CanonicalTerminalSessionInfo>,
   epicId: string,
+  taskHome: TaskHomeDirectory | null,
 ): ReadonlyArray<EpicTerminalMentionEntry> {
   const entries = sessions.flatMap((session) => {
     if (!isVisibleEpicTerminalSession(session, epicId)) return [];
-    return [buildTerminalMentionEntry(session, epicId)];
+    return [buildTerminalMentionEntry(session, epicId, taskHome)];
   });
   return entries.length === 0 ? EMPTY_TERMINAL_ENTRIES : entries;
 }
@@ -1254,6 +1261,7 @@ function useBrowserTabMentionEntries(args: {
 function buildTerminalMentionEntry(
   session: CanonicalTerminalSessionInfo,
   epicId: string,
+  taskHome: TaskHomeDirectory | null,
 ): EpicTerminalMentionEntry {
   return {
     kind: "epic-terminal",
@@ -1261,7 +1269,7 @@ function buildTerminalMentionEntry(
     token: `terminal:${epicId}/${session.sessionId}`,
     epicId,
     terminalId: session.sessionId,
-    label: terminalSessionLabel(session),
+    label: terminalSessionLabel(session, taskHome),
     // The chip's tooltip and the row's secondary line: where this shell is.
     description: session.cwd,
     cwd: session.cwd,

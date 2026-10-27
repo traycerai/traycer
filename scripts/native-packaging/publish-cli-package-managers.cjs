@@ -183,6 +183,9 @@ const DESKTOP_WINGET_ID = "Traycer.Desktop";
 // names it for the production package.
 const DESKTOP_WINDOWS_TASK_NAME = "\\Traycer\\Host";
 const DESKTOP_WINDOWS_TASK_FOLDER = "Traycer";
+// The CLI's install manifest below the user profile (`cliManifestPath` in
+// `protocol/src/config/installation.ts`, production slot).
+const DESKTOP_WINDOWS_CLI_MANIFEST_TAIL = ".traycer\\cli\\manifest.json";
 
 function selectedManagers(rawManagers) {
   if (typeof rawManagers !== "string" || rawManagers.trim().length === 0) {
@@ -453,10 +456,16 @@ ManifestVersion: ${WINGET_MANIFEST_VERSION}
 // its NSIS updater would otherwise install a second copy Scoop never tracks.
 //
 // The uninstaller ports the NSIS uninstaller's `customUnInstall`
-// (`clients/desktop/uninstall-host-autostart.nsh`): on `scoop uninstall` only
-// (never on `scoop update`, which also runs it), it removes the host's logon
-// task when the task is this account's, the account's launcher, and the
-// `\Traycer` task folder once empty. Everything is best-effort.
+// (`clients/desktop/resources/bundle/uninstall-host-autostart.nsh`): on
+// `scoop uninstall` only (never on `scoop update`, which also runs it), it
+// removes the host's logon task when the task is this account's, the account's
+// launcher, and the `\Traycer` task folder once empty - only when the CLI's
+// install manifest is a JSON object whose `source` is the string `desktop`.
+// Any other source is a separately installed CLI that still runs the host
+// after Desktop is gone, and a missing, unreadable or malformed manifest (a
+// root array, or a list `source`, which `-ceq` would filter rather than
+// compare) proves nothing, so all three stay.
+// Everything is best-effort.
 function renderDesktopScoopManifest({
   version,
   homepage,
@@ -488,6 +497,9 @@ function renderDesktopScoopManifest({
     uninstaller: {
       script: [
         "if ($cmd -eq 'uninstall') {",
+        "  $cli = $null",
+        `  try { $raw = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '${DESKTOP_WINDOWS_CLI_MANIFEST_TAIL}') -ErrorAction Stop; if ($raw.TrimStart().StartsWith('{')) { $cli = ConvertFrom-Json $raw } } catch {}`,
+        "  if (-not (($cli -is [System.Management.Automation.PSCustomObject]) -and ($cli.source -is [string]) -and ($cli.source -ceq 'desktop'))) { return }",
         "  try {",
         "    $s = New-Object -ComObject Schedule.Service",
         "    $s.Connect()",

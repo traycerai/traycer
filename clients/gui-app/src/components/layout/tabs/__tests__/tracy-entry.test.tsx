@@ -304,6 +304,7 @@ function replying(step: string | null): BotActivity {
       startedAt: Date.now() - 3 * 60_000,
       step,
       requestId: "req-1",
+      reason: null,
     },
     threads: {},
   };
@@ -803,13 +804,20 @@ describe("the fixed Tracy entry - signals", () => {
 
   it("shows the timer and the step while a thread replies and the trunk is idle", async () => {
     scripted.activity = {
-      trunk: { state: "idle", startedAt: null, step: null, requestId: null },
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
       threads: {
         "thread-1": {
           state: "replying",
           startedAt: Date.now() - 2 * 60_000,
           step: "Reading the diff",
           requestId: "req-9",
+          reason: null,
         },
       },
     };
@@ -835,6 +843,7 @@ describe("the fixed Tracy entry - signals", () => {
           startedAt: Date.now() - 4 * 60_000,
           step: null,
           requestId: null,
+          reason: null,
         },
       },
     };
@@ -853,6 +862,7 @@ describe("the fixed Tracy entry - signals", () => {
         startedAt: null,
         step: "bun test",
         requestId: null,
+        reason: null,
       },
       threads: {},
     };
@@ -869,7 +879,13 @@ describe("the fixed Tracy entry - signals", () => {
 
   it("shows no timer and an Idle hover while Tracy is not replying", async () => {
     scripted.activity = {
-      trunk: { state: "idle", startedAt: null, step: null, requestId: null },
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
       threads: {},
     };
     mountTopStrip("/");

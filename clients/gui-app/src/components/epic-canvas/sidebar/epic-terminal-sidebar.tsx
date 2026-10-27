@@ -318,8 +318,9 @@ function TerminalRow(props: TerminalRowProps) {
         hostId,
         instanceId: uuidv4(),
         durable,
+        taskHome: actions.taskHome,
       }),
-    [durable, hostId, session],
+    [actions.taskHome, durable, hostId, session],
   );
   const dragData = useMemo<EpicCanvasTerminalTileDragData>(
     () => ({

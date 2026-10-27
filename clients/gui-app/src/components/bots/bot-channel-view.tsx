@@ -21,7 +21,10 @@ import {
   BotChatTranscript,
   type BotTranscriptSurface,
 } from "@/components/bots/bot-chat-transcript";
-import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import {
+  BotMessageComposer,
+  type BotComposerEdit,
+} from "@/components/bots/bot-message-composer";
 import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
@@ -37,7 +40,9 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import {
+  failedOnRequest,
   useBotActivity,
   type BotActivity,
   type BotSessionActivity,
@@ -136,6 +141,8 @@ export function BotChannelView(props: {
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
   readonly onOpenUnderTheHood: (sessionChatId: string) => void;
+  /** Opens the transcript of the bot's own session, which answers direct posts. */
+  readonly onOpenTrunkUnderTheHood: () => void;
 }): ReactNode {
   const {
     botId,
@@ -147,6 +154,7 @@ export function BotChannelView(props: {
     openThread: open,
     onOpenThread,
     onOpenUnderTheHood,
+    onOpenTrunkUnderTheHood,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -188,11 +196,40 @@ export function BotChannelView(props: {
           text: choice,
           threadId: null,
           announcementId: null,
+          redeliver: null,
+          supersedes: null,
         },
         { onError: failSend },
       );
     },
     [botId, channelId, clearSendFailure, failSend, send],
+  );
+
+  // A post the bot failed to answer, in a thread or at the top level, is
+  // retried as it is or edited in the channel's box, which posts its
+  // replacement.
+  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
+  const endEdit = useCallback(() => setEdit(null), []);
+  const failedOnChannel = useCallback(
+    (requestId: string) => failedOnRequest(activity, requestId),
+    [activity],
+  );
+  const failedRequest = useBotFailedRequest({
+    client,
+    hostId,
+    botId,
+    conversationId: channelId,
+    threadId: null,
+    failedOn: failedOnChannel,
+    onEdit: setEdit,
+    failure: sendFailure,
+  });
+  const editPostFromThread = useCallback(
+    (postEdit: BotComposerEdit) => {
+      onOpenThread(null);
+      setEdit(postEdit);
+    },
+    [onOpenThread],
   );
 
   // A question, a proposal or a direct post with no thread yet shows a box
@@ -233,6 +270,7 @@ export function BotChannelView(props: {
         ? openAnnouncementThread
         : null,
       chooseOption: sending ? null : chooseOption,
+      failedRequest,
       intro: { botTitle, directive },
     }),
     [
@@ -240,6 +278,7 @@ export function BotChannelView(props: {
       activity?.threads,
       chooseOption,
       directive,
+      failedRequest,
       isUnread,
       onOpenThread,
       openAnnouncementThread,
@@ -370,7 +409,9 @@ export function BotChannelView(props: {
           />
           <BotUnansweredNotice
             botTitle={botTitle}
+            hostId={hostId}
             activity={trunk.session}
+            onOpenUnderTheHood={onOpenTrunkUnderTheHood}
             testId="bot-channel-unanswered"
           />
           <BotMessageComposer
@@ -382,6 +423,8 @@ export function BotChannelView(props: {
             label={`Message ${botTitle}`}
             testId="bot-channel-composer"
             failure={sendFailure}
+            edit={edit}
+            onEditEnd={endEdit}
           />
         </section>
         {threadOpen ? (
@@ -403,6 +446,7 @@ export function BotChannelView(props: {
               resolveMember={resolveMember}
               onClose={() => onOpenThread(null)}
               onOpenUnderTheHood={onOpenUnderTheHood}
+              onEditPost={editPostFromThread}
             />
           </BotResizablePane>
         ) : null}
