@@ -13,6 +13,11 @@ import {
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
 import { requestedAgentReadiness } from "@/lib/sandboxes/pending-sandbox-send";
+import { useChatOpencodeLine } from "@/hooks/harnesses/chat-opencode-line-context";
+import {
+  guiHarnessIdToProviderId,
+  providerDisplayName,
+} from "@/lib/provider-ordering";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   configurationLabel,
@@ -38,14 +43,27 @@ const NOT_BLOCKED: SandboxAgentGate = {
   notice: null,
 };
 
+/** The pending notice holds Send while the destination proves launch readiness. */
+function sandboxAgentPreparingGate(harnessId: GuiHarnessId): SandboxAgentGate {
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  const label =
+    providerId === null ? harnessId : providerDisplayName(providerId);
+  const hint = `Preparing ${label}…`;
+  return {
+    blocked: true,
+    hint,
+    notice: { kind: "mirror", message: hint, pending: true, action: null },
+  };
+}
+
 /**
  * "Can the agent picked run on this sandbox?" for a composer whose host is a
  * sandbox (sandboxes redesign Flow 1). A sandbox's toolbar keeps the person's
  * pick whatever the host reports (`keepsUnavailablePick`), so a pick that
- * cannot run there is refused here, never swapped. An install still running
- * is the pack gate's wait, and an availability still being probed holds
- * nothing. Every other host passes, as does a host whose lists have not
- * answered: the host has the final word.
+ * cannot run there is refused here, never swapped. Missing launch proof and
+ * pending probes hold Send until the destination's own lists prove readiness.
+ * A bound chat checks its recorded OpenCode line; a new chat follows the
+ * destination's selection. Every other host passes.
  */
 export function useSandboxAgentGate(
   input: {
@@ -56,6 +74,7 @@ export function useSandboxAgentGate(
   } & SandboxAgentRemedies,
 ): SandboxAgentGate {
   const configuration = useSandboxHostConfiguration(input.hostId);
+  const opencodeLine = useChatOpencodeLine();
   const watching = input.active && configuration !== null;
   const activity = { enabled: watching, subscribed: watching };
   const harnesses = useGuiHarnessesQueryForClient(input.client, activity);
@@ -73,14 +92,20 @@ export function useSandboxAgentGate(
     input.harnessId,
     harnesses.data?.harnesses,
     providers.data?.providers,
+    opencodeLine,
   );
   if (readiness.kind === "not-offered") {
     const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
     return { blocked: true, hint: notice.message, notice };
   }
-  if (readiness.kind !== "unusable") return NOT_BLOCKED;
+  if (readiness.kind === "ready") return NOT_BLOCKED;
+  if (readiness.kind === "waiting")
+    return sandboxAgentPreparingGate(input.harnessId);
   const label = configurationLabel(stageConfigurationCopy(configuration));
-  const hint = enableSandboxInferenceLine(label);
+  const hint =
+    readiness.kind === "setup-failed"
+      ? readiness.detail
+      : enableSandboxInferenceLine(label);
   const openProviders = providersOpener(configuration);
   return {
     blocked: true,
