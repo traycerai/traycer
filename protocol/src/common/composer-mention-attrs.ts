@@ -1,7 +1,6 @@
 import type { WorkspaceMentionGitType } from "@traycer/protocol/host/workspace/unary-schemas";
 
-import type { EpicArtifactKind } from "./registry";
-import { epicArtifactKindSchema } from "@traycer/protocol/common/_internal/schemas";
+import { epicArtifactKindSchema, type EpicArtifactKind } from "./registry";
 import { DEFAULT_GITHUB_MENTION_HOST } from "./github-mention-host";
 import { githubMentionTokenReference } from "./github-mention-identity";
 
