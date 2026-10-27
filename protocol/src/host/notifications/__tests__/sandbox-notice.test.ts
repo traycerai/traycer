@@ -373,3 +373,101 @@ describe("a member's destroy with the confirmed destroy time", () => {
     );
   });
 });
+
+describe("a member's confirmed Suspend or Stop with its time", () => {
+  // 07:48 on 2026-10-25 in Asia/Kolkata.
+  const CONFIRMED_AT = Date.parse("2026-10-25T02:18:00.000Z");
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function manualRest(
+    verb: "suspend" | "stop",
+    outcome: "confirmed" | "failed",
+    byYou: boolean,
+    extra: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return noticeEntry(
+      {
+        kind: "manual_rest",
+        verb,
+        outcome,
+        byYou,
+        actorName: byYou ? null : "Alex",
+        ...extra,
+      },
+      "e2e-sbx-t1",
+    );
+  }
+
+  it("parses and keeps an optional confirmedAt on the notice", () => {
+    const payload = hostNotificationSandboxNoticePayloadSchema.parse(
+      manualRest("suspend", "confirmed", false, { confirmedAt: CONFIRMED_AT })[
+        "payload"
+      ],
+    );
+
+    expect(payload.notice).toEqual({
+      kind: "manual_rest",
+      verb: "suspend",
+      outcome: "confirmed",
+      byYou: false,
+      actorName: "Alex",
+      confirmedAt: CONFIRMED_AT,
+    });
+  });
+
+  it.each([
+    ["suspend", "suspended"],
+    ["stop", "stopped"],
+  ] as const)(
+    "words another member's confirmed %s with the time in the viewer's zone and an empty body",
+    async (verb, done) => {
+      const entry = manualRest(verb, "confirmed", false, {
+        confirmedAt: CONFIRMED_AT,
+      });
+
+      expect(await formatIn("Asia/Kolkata", entry)).toEqual({
+        title: `Alex ${done} e2e-sbx-t1 at 07:48.`,
+        body: "",
+      });
+      expect((await formatIn("America/Los_Angeles", entry)).title).toBe(
+        `Alex ${done} e2e-sbx-t1 at 19:18.`,
+      );
+    },
+  );
+
+  it("keeps the previous copy for a confirmed notice without the time", async () => {
+    expect(
+      await formatIn(
+        "Asia/Kolkata",
+        manualRest("suspend", "confirmed", false, {}),
+      ),
+    ).toEqual({
+      title: "Alex suspended e2e-sbx-t1",
+      body: "Its files are kept.",
+    });
+  });
+
+  it("leaves a failed notice and your own receipt as they were, time or not", async () => {
+    expect(
+      await formatIn(
+        "Asia/Kolkata",
+        manualRest("stop", "failed", false, { confirmedAt: CONFIRMED_AT }),
+      ),
+    ).toEqual({
+      title: "Alex couldn't stop e2e-sbx-t1",
+      body: "It is still running.",
+    });
+    expect(
+      await formatIn(
+        "Asia/Kolkata",
+        manualRest("suspend", "confirmed", true, { confirmedAt: CONFIRMED_AT }),
+      ),
+    ).toEqual({
+      title: "Suspended e2e-sbx-t1",
+      body: "Its files are kept.",
+    });
+  });
+});

@@ -133,6 +133,15 @@ export function formatHostNotificationPresentation(
 const SANDBOX_FILES_LINE =
   "Files on this sandbox cannot be recovered; published chats stay readable.";
 
+/** The confirmed event's clock time in the viewer's current time zone. */
+function sandboxEventTime(at: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(at));
+}
+
 /**
  * When a sandbox is destroyed, in the reader's own time zone: `at 10:36`
  * today, `tomorrow at 10:36`, `on Oct 27 at 10:36` after that. The formats
@@ -140,11 +149,7 @@ const SANDBOX_FILES_LINE =
  */
 export function sandboxDestroyWhen(destroyAt: number, now: number): string {
   const at = new Date(destroyAt);
-  const time = new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(at);
+  const time = sandboxEventTime(destroyAt);
   const today = new Date(now);
   const tomorrow = new Date(
     today.getFullYear(),
@@ -224,11 +229,7 @@ function sandboxNoticePresentation(
     case "destroyed_by_member": {
       const actor = notice.actorName ?? "A member";
       if (notice.destroyedAt !== undefined) {
-        const time = new Intl.DateTimeFormat("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hourCycle: "h23",
-        }).format(new Date(notice.destroyedAt));
+        const time = sandboxEventTime(notice.destroyedAt);
         return {
           title: `${actor} destroyed ${name} at ${time}.`,
           body: [
@@ -247,6 +248,12 @@ function sandboxNoticePresentation(
     case "manual_rest": {
       const done = notice.verb === "suspend" ? "suspended" : "stopped";
       const confirmed = notice.outcome === "confirmed";
+      if (confirmed && !notice.byYou && notice.confirmedAt !== undefined) {
+        return {
+          title: `${notice.actorName ?? "A member"} ${done} ${name} at ${sandboxEventTime(notice.confirmedAt)}.`,
+          body: "",
+        };
+      }
       let title: string;
       if (notice.byYou) {
         title = confirmed

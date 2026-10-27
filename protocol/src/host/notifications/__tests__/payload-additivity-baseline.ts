@@ -985,6 +985,11 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
               outcome: { type: "string", enum: ["confirmed", "failed"] },
               byYou: { type: "boolean" },
               actorName: { anyOf: [{ type: "string" }, { type: "null" }] },
+              confirmedAt: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
             },
             required: ["kind", "verb", "outcome", "byYou", "actorName"],
             additionalProperties: false,

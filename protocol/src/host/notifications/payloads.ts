@@ -1000,6 +1000,7 @@ export const hostNotificationSandboxNoticeSchema = lazySchema(() =>
       outcome: z.enum(["confirmed", "failed"]),
       byYou: z.boolean(),
       actorName: z.string().nullable(),
+      confirmedAt: z.number().int().nonnegative().optional(),
     }),
   ]),
 );
