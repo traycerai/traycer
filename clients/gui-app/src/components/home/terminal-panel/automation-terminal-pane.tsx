@@ -19,7 +19,9 @@ export function AutomationTerminalPane(props: {
         className="flex flex-wrap items-baseline gap-2 text-ui-sm"
       >
         <span className="text-destructive">
-          Couldn't open a terminal on Automations.
+          {open.failureCode === "automation-pod-missing"
+            ? "This host no longer exists."
+            : "Couldn't open a terminal on Automations."}
         </span>
         <Button
           type="button"

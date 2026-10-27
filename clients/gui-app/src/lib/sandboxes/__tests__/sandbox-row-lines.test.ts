@@ -903,6 +903,90 @@ describe("team payer copy", () => {
       "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your Acme credits",
     );
   });
+  describe("an agent-created team row", () => {
+    const WARNING = "waking it makes you the payer";
+    const CREATOR = "created by Planner for Sandbox setup";
+    const agentRow = (overrides: Partial<SandboxSummary>): SandboxSummary => ({
+      ...summary,
+      burst: true,
+      createdByAgentId: "agent-1",
+      createdByAgentName: "Planner",
+      createdByTaskTitle: "Sandbox setup",
+      ...overrides,
+    });
+
+    it.each(["suspended", "stopped"] as const)(
+      "warns a non-payer before a %s row is woken and keeps the creator beside it",
+      (state) => {
+        const text = sandboxShapeAndCostLine(
+          agentRow({ state }),
+          team,
+          "other",
+        );
+
+        expect(text).toContain(WARNING);
+        expect(text).toContain(CREATOR);
+        expect(text).toContain("$0.21 an hour while awake");
+      },
+    );
+
+    it("does not warn the current payer, an awake row, or a personal row, and still names the creator", () => {
+      const resting = agentRow({ state: "suspended" });
+
+      for (const text of [
+        sandboxShapeAndCostLine(resting, team, "payer"),
+        sandboxShapeAndCostLine(agentRow({ state: "awake" }), team, "other"),
+        sandboxShapeAndCostLine(resting, { kind: "personal" }, "other"),
+      ]) {
+        expect(text).not.toContain(WARNING);
+        expect(text).toContain(CREATOR);
+      }
+    });
+  });
+  describe("a resting team row the server does not price", () => {
+    const SHAPE = "Linux · 2 vCPU · 4 GB";
+    const unpriced = (overrides: Partial<SandboxSummary>): SandboxSummary => ({
+      ...summary,
+      priceMcPerHour: null,
+      ...overrides,
+    });
+
+    it("warns a non-payer without inventing a rate, and keeps the named creator beside it", () => {
+      expect(
+        sandboxShapeAndCostLine(
+          unpriced({
+            state: "suspended",
+            burst: true,
+            createdByAgentId: "agent-1",
+            createdByAgentName: "Planner",
+            createdByTaskTitle: "Sandbox setup",
+          }),
+          team,
+          "other",
+        ),
+      ).toBe(
+        `${SHAPE} · waking it makes you the payer · created by Planner for Sandbox setup`,
+      );
+    });
+
+    it("warns a non-payer on a row no agent created, with nothing else", () => {
+      expect(
+        sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team, "other"),
+      ).toBe(`${SHAPE} · waking it makes you the payer`);
+    });
+
+    it("leaves the current payer, an awake row and a personal row at the bare shape", () => {
+      const resting = unpriced({ state: "suspended" });
+
+      expect(sandboxShapeAndCostLine(resting, team, "payer")).toBe(SHAPE);
+      expect(
+        sandboxShapeAndCostLine(unpriced({ state: "awake" }), team, "other"),
+      ).toBe(SHAPE);
+      expect(
+        sandboxShapeAndCostLine(resting, { kind: "personal" }, "other"),
+      ).toBe(SHAPE);
+    });
+  });
   it("never substitutes a member for an unavailable payer name", () => {
     expect(
       sandboxPaidByLabel(

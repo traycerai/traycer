@@ -113,6 +113,24 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
   useSandboxTeamPods: () => network.teamPods,
+  useSandboxAutomation: (environmentId: string | null) => ({
+    data: {
+      available: true,
+      sandbox: null,
+      pods:
+        environmentId === null
+          ? []
+          : (network.teamPods.get(environmentId) ?? []),
+    },
+    isPending: false,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    isSuccess: true,
+    error: null,
+    status: "success",
+    refetch: vi.fn(),
+  }),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -410,6 +428,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
@@ -979,6 +998,58 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
     });
     expect(
       network.calls.some((call) => call.method === "terminal.plain.create"),
+    ).toBe(true);
+  });
+
+  it("ignores a released read sent after the click but before the open is accepted", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    installHost(AUTOMATION_HOST, false);
+    const accepted = deferred<SandboxAutomationOpenFetchResult>();
+    network.openSandboxAutomation.mockReturnValue(accepted.promise);
+    const rendered = renderHarness(null);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
+    await waitFor(() => {
+      expect(network.openSandboxAutomation).toHaveBeenCalledTimes(1);
+    });
+    const releasedBeforeAccept = sandboxSummaryFixture({
+      id: "sbx-automation",
+      hostId: AUTOMATION_HOST,
+      kind: "automation",
+      state: "released",
+    });
+    network.sandboxListData = { sandboxes: [releasedBeforeAccept] };
+    vi.setSystemTime(1_000_100);
+    network.sandboxListSentAt = Date.now();
+    rendered.rerenderHarness();
+
+    vi.setSystemTime(1_000_200);
+    accepted.resolve(openedSandbox(AUTOMATION_HOST, false));
+    await waitFor(() => {
+      expect(network.hostClientLookups).toContain(AUTOMATION_HOST);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    network.sandboxListData = {
+      sandboxes: [{ ...releasedBeforeAccept, state: "awake" }],
+    };
+    vi.setSystemTime(1_000_300);
+    network.sandboxListSentAt = Date.now();
+    setHostReady(AUTOMATION_HOST);
+    rendered.rerenderHarness();
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(
+      network.calls.some(
+        (call) =>
+          call.hostId === AUTOMATION_HOST &&
+          call.method === "terminal.plain.create",
+      ),
     ).toBe(true);
   });
 

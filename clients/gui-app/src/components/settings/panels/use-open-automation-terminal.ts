@@ -49,6 +49,7 @@ export function useOpenAutomationTerminal(
         ? []
         : (pods.get(input.teamEnvironmentId) ?? []),
     );
+    if (target === undefined) return;
     open.mutate(target);
   };
   return { run, retry, starting: open.isPending };
