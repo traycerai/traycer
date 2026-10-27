@@ -448,6 +448,18 @@ export const OPEN_TERMINAL = "Open terminal";
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
 export const SANDBOX_READY = "Sandbox ready";
+export function stoppingSandboxLine(name: string): string {
+  return `Stopping ${name} · pending`;
+}
+export function stoppedSandboxLine(
+  name: string,
+  savedInDrafts: boolean,
+): string {
+  return `Stopped ${name}. Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
+}
+export function couldntStopLine(name: string): string {
+  return `Couldn't stop ${name}`;
+}
 /** The settled line's time to ready: `24 s`. */
 export function readySecondsLabel(seconds: number): string {
   return `${seconds} s`;
