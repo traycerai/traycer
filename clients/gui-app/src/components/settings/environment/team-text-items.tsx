@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { Badge } from "@/components/ui/badge";
@@ -61,9 +61,7 @@ export function TeamTextItems(props: {
             configurationTextValueSchema.parse(item.value).value ===
               pending.value,
         ));
-  useEffect(() => {
-    if (observed) setPending(null);
-  }, [observed]);
+  if (observed) setPending(null);
   const inventory = [...props.items];
   if (
     pending?.original !== null &&
@@ -149,14 +147,13 @@ function TeamTextItemEditor(props: {
   const [value, setValue] = useState(saved);
   const [accepted, setAccepted] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!accepted || props.pending !== null) return;
+  if (accepted && props.pending === null) {
     if (props.item === null) {
       setName("");
       setValue("");
     }
     setAccepted(false);
-  }, [accepted, props.pending, props.item]);
+  }
   const title = props.item?.key ?? "New variable";
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const validName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());

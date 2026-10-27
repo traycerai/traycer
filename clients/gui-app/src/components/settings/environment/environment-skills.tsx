@@ -1,6 +1,6 @@
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
 import type { EnvironmentSkill } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -523,9 +523,7 @@ function ProviderSkillsList(props: {
         skill.offFor.length === pending.offFor.length &&
         skill.offFor.every((provider) => pending.offFor.includes(provider)),
     );
-  useEffect(() => {
-    if (observed) setPending(null);
-  }, [observed]);
+  if (observed) setPending(null);
   const switchIssue =
     setProviders.data === undefined
       ? null

@@ -357,16 +357,14 @@ export function EnvOverrideEditor(props: {
   const { credentialRefusal, namePlaceholder, emptyLabel } = props;
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<PendingEnvWrite | null>(null);
-  const pendingRef = useRef<PendingEnvWrite | null>(null);
+  const submittingRef = useRef(false);
   const [writeError, setWriteError] = useState<string | null>(null);
   const disabled = props.disabled || pending !== null;
   const observed = envWriteObserved(props.overrides, pending);
-  useEffect(() => {
-    if (!observed || pending === null) return;
+  if (observed && pending !== null) {
     if (pending.oldKey === "" && pending.action === "put") setAdding(false);
-    pendingRef.current = null;
     setPending(null);
-  }, [observed, pending]);
+  }
   // Only a submitted write is retained, never a second cache of the list.
   // Its read can lag acceptance, or arrive before the mutation's reply.
   const overrides = envRowsWithPending(props.overrides, pending);
@@ -375,23 +373,20 @@ export function EnvOverrideEditor(props: {
     write: PendingEnvWrite,
     run: () => void | Promise<void>,
   ): Promise<void> {
-    if (pendingRef.current !== null) return;
-    pendingRef.current = write;
+    if (pending !== null || submittingRef.current) return;
+    submittingRef.current = true;
     setPending(write);
     setWriteError(null);
     try {
       await run();
-      if (pendingRef.current !== write) return;
-      const accepted = { ...write, accepted: true };
-      pendingRef.current = accepted;
-      setPending(accepted);
+      setPending({ ...write, accepted: true });
     } catch (error) {
-      if (pendingRef.current !== write) return;
-      pendingRef.current = null;
       setPending(null);
       setWriteError(
         error instanceof Error ? error.message : "Couldn't save this variable.",
       );
+    } finally {
+      submittingRef.current = false;
     }
   }
   const onCommit = (
