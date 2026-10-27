@@ -46,6 +46,7 @@ import {
   type PublishedCopyRefresh,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
+import { usePublishedChatLiveConversion } from "@/hooks/chats/use-published-chat-live-conversion";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 
 /**
@@ -215,8 +216,8 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const servingReachability = useHostReachability(servingHostId);
   // The SAME reachability source the live dead-tile banner reads, so the two
   // surfaces can never describe one host two ways. This tile is opened
-  // precisely because the owner is out of reach, and it stays readable if that
-  // host returns (the row then offers the live tab).
+  // precisely because the owner is out of reach, and when that host returns it
+  // converts itself into the live tile (`usePublishedChatLiveConversion`).
   const ownerReachability = useHostReachability(node.ownerHostId);
   useOfflineOwnerRecoveryRead(node.ownerHostId, ownerReachability);
   const identity = useMemo(
@@ -302,14 +303,20 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // The one transition an on-demand read cannot cover: the owner came back
   // while this copy was open. Same reachability source the sidebar row's lock
   // reads - a second source could disagree with the row that opened this tile.
-  // No "open it live" affordance, and no claim that the owner is back.
-  // Licensing a live open needs PROOF that this copy is a local chat's live
-  // lineage, and a published tile is only ever opened for a row that had no
-  // such proof. Reachability alone was the approximation that produced a button
-  // routing to a record-backed tile which opened nothing at all. Cross-host live
-  // open is a real future capability - a tab bound to the OWNER host rendering
-  // the owner's session - but it waits on distinct host identities (ticket 26)
-  // and an owner-side presence answer rather than being guessed at from here.
+  // Rather than an "open it live" affordance (reachability alone once produced
+  // a button routing to a record-backed tile which opened nothing), the copy
+  // converts ITSELF into the live tile the row would open now, and only with
+  // the proof the button lacked: the epic's own record for this chat, under
+  // this owner host. `tileId` is the pane this tile is a tab of.
+  usePublishedChatLiveConversion({
+    node,
+    epicId: props.epicId,
+    viewTabId: props.viewTabId,
+    paneId: props.tileId,
+    ownerStatus: ownerReachability.status,
+    ownerRefusesStore,
+    ownerIsThisHost,
+  });
   const conversion = useMemo(
     () =>
       state.kind === "ready" ? convertPublishedChat(state.presented) : null,
