@@ -14,8 +14,8 @@ import { EnvOverrideEditor } from "../env-override-editor";
  * read that follows shows it: the person's Add and Remove must stay
  * represented the whole time, never as "No variables" or as the old value,
  * and a refused write keeps the draft to correct. The parent owns the
- * mutation (`onCommit` and `onDelete` return the write's promise) and the
- * rows it passes back; here the "host" is a test-held write and a test-held
+ * mutation (`onCommit` and `onDelete` resolve after the post-write read) and
+ * the rows it passes back; here the "host" is a test-held write and a test-held
  * read, so each gap is something the test opens and closes.
  */
 
@@ -23,6 +23,7 @@ const EMPTY_LABEL = "No environment variables.";
 
 interface Write {
   readonly settle: (outcome: "ok" | "refused") => Promise<void>;
+  readonly finishRead: () => Promise<void>;
 }
 
 interface Row {
@@ -41,18 +42,38 @@ function Parent(props: {
   useEffect(() => {
     onRows(setRows);
   }, [onRows]);
-  const start = (): Promise<void> =>
-    new Promise<void>((resolve, reject) => {
+  const start = (): Promise<void> => {
+    const completed = new Promise<void>((resolve, reject) => {
+      let accepted = false;
+      let readComplete = false;
       props.onWrite({
+        finishRead: async () => {
+          await act(async () => {
+            readComplete = true;
+            if (accepted) {
+              resolve();
+              await completed;
+            }
+          });
+        },
         settle: async (outcome) => {
           await act(async () => {
-            if (outcome === "ok") resolve();
-            else reject(new Error("The host refused this change."));
-            await Promise.resolve();
+            if (outcome === "ok") {
+              accepted = true;
+              if (readComplete) {
+                resolve();
+                await completed;
+              }
+            } else {
+              reject(new Error("The host refused this change."));
+              await completed.catch(() => undefined);
+            }
           });
         },
       });
     });
+    return completed;
+  };
   return (
     <EnvOverrideEditor
       overrides={rows}
@@ -95,10 +116,8 @@ function mountEditor(initial: readonly Row[]) {
   };
   /** The read the host answers once it has applied the write. */
   const observe = async (rows: readonly Row[]): Promise<void> => {
-    await act(async () => {
-      held.setRows(rows);
-      await Promise.resolve();
-    });
+    act(() => held.setRows(rows));
+    await held.write?.finishRead();
   };
   return {
     settle,
@@ -157,6 +176,74 @@ describe("EnvOverrideEditor left mounted across a write", () => {
     expect(screen.queryByText(EMPTY_LABEL)).toBeNull();
   });
 
+  it.each([
+    { reason: "changed elsewhere", rows: [{ key: "NEW_VAR", value: "other" }] },
+    { reason: "removed elsewhere", rows: [] },
+    {
+      reason: "normalized by the host",
+      rows: [{ key: "NEW_VAR", value: "ONE" }],
+    },
+  ])(
+    "unlocks after an accepted Add is $reason in the next read",
+    async ({ rows }) => {
+      const { settle, observe } = mountEditor([]);
+
+      stageAdd("NEW_VAR", "one");
+      await settle("ok");
+      expectPendingDraft();
+
+      await observe(rows);
+
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByLabelText("New variable name")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Add a variable" }),
+      ).toHaveProperty("disabled", false);
+      if (rows.length > 0) {
+        expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+          "value",
+          rows[0]?.value,
+        );
+      } else {
+        expect(screen.getByText(EMPTY_LABEL)).toBeTruthy();
+      }
+    },
+  );
+
+  it("unlocks when the completed read keeps the original empty array through structural sharing", async () => {
+    const original: readonly Row[] = [];
+    const { settle, observe } = mountEditor(original);
+    stageAdd("NEW_VAR", "one");
+    await settle("ok");
+    expectPendingDraft();
+
+    await observe(original);
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", false);
+    expect(screen.getByText(EMPTY_LABEL)).toBeTruthy();
+  });
+
+  it("waits for write completion when the normalized read arrives first", async () => {
+    const { settle, observe } = mountEditor([]);
+    stageAdd("NEW_VAR", "one");
+    await observe([{ key: "NEW_VAR", value: "ONE" }]);
+    expectPendingDraft();
+
+    await settle("ok");
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+      "value",
+      "ONE",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", false);
+  });
+
   it("shows a removed variable as Removing from Remove until the read drops it, not as a value still Set", async () => {
     const { settle, observe, held } = mountEditor([
       { key: "OLD_VAR", value: "token" },
@@ -186,6 +273,54 @@ describe("EnvOverrideEditor left mounted across a write", () => {
     expect(screen.queryByText(/OLD_VAR/)).toBeNull();
     expect(screen.queryByText(/removing/i)).toBeNull();
     expect(screen.getByText(EMPTY_LABEL)).toBeTruthy();
+  });
+
+  it("settles an accepted Remove when the post-write read shows the key recreated elsewhere", async () => {
+    const { settle, observe } = mountEditor([
+      { key: "OLD_VAR", value: "original" },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove OLD_VAR" }));
+    await settle("ok");
+    await observe([{ key: "OLD_VAR", value: "recreated" }]);
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByLabelText("Value for OLD_VAR")).toHaveProperty(
+      "value",
+      "recreated",
+    );
+    expect(
+      screen.getByRole("button", { name: "Remove OLD_VAR" }),
+    ).toHaveProperty("disabled", false);
+  });
+
+  it("shows a normalized saved edit without overwriting another row's draft or resubmitting on blur", async () => {
+    const { settle, observe, held } = mountEditor([
+      { key: "OLD_VAR", value: "original" },
+      { key: "OTHER_VAR", value: "saved" },
+    ]);
+    fireEvent.change(screen.getByLabelText("Value for OTHER_VAR"), {
+      target: { value: "unsaved" },
+    });
+    fireEvent.change(screen.getByLabelText("Value for OLD_VAR"), {
+      target: { value: "submitted" },
+    });
+    fireEvent.blur(screen.getByLabelText("Value for OLD_VAR"));
+    await settle("ok");
+    await observe([
+      { key: "OLD_VAR", value: "NORMALIZED" },
+      { key: "OTHER_VAR", value: "saved" },
+    ]);
+
+    expect(screen.getByLabelText("Value for OLD_VAR")).toHaveProperty(
+      "value",
+      "NORMALIZED",
+    );
+    expect(screen.getByLabelText("Value for OTHER_VAR")).toHaveProperty(
+      "value",
+      "unsaved",
+    );
+    fireEvent.blur(screen.getByLabelText("Value for OLD_VAR"));
+    expect(held.writes()).toBe(1);
   });
 
   it("puts a refused Add back as an editable draft with the refusal, nothing pending", async () => {
