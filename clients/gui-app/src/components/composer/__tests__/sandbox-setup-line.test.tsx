@@ -238,9 +238,7 @@ describe("SandboxSetupLine's Stop action", () => {
     );
 
     const line = screen.getByTestId("sandbox-setup-line");
-    expect(
-      within(line).getByRole("button", { name: "Stop" }),
-    ).toBeDefined();
+    expect(within(line).getByRole("button", { name: "Stop" })).toBeDefined();
 
     fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
 

@@ -653,7 +653,9 @@ describe("<SandboxesSettingsPanel />", () => {
           "New sandboxes take these; sandboxes you already have keep theirs.",
         ),
       ).toBeNull();
-      expect(screen.getByRole("button", { name: "Save defaults" })).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Save defaults" }),
+      ).toBeDefined();
       expect(idle).toHaveProperty("value", "45");
       expect(
         screen.getByTestId("sandboxes-defaults-shape-select").textContent,
