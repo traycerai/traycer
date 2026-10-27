@@ -370,7 +370,8 @@ function SandboxNoticeExtra(props: {
       notice={props.notice}
       onDetails={() => props.onActivate(props.row)}
       onDismiss={() => actions.clear(props.row)}
-      onExtended={() => actions.markAsRead(props.row)}
+      active={props.row.resolvedAt === null}
+      onExtended={() => actions.resolveNotice(props.row)}
     />
   );
 }

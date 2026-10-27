@@ -17,7 +17,7 @@ import {
   notificationBellAccessibleLabel,
   type NotificationBellState,
 } from "@/stores/notifications/merged-notifications";
-import { useNeedsYouTaskCount } from "@/stores/notifications/needs-you-task-count-store";
+import { useNotificationsNeedsYouCount } from "@/stores/notifications/needs-you-task-count-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 /**
@@ -32,9 +32,9 @@ const BADGE_PRESENT = { opacity: 1, scale: 1 } as const;
 const BADGE_TRANSITION = { duration: 0.14, ease: "easeOut" } as const;
 
 /**
- * Top-level notifications trigger in the app header. Shows the Needs you task
- * count as an amber badge, as the sidebar's Notifications row does, or with no
- * task waiting the red count of what needs attention, and opens
+ * Top-level notifications trigger in the app header. Shows tasks and actionable
+ * notices as an amber badge, as the sidebar's Notifications row does, or the
+ * red count of other unread attention rows, and opens
  * the `NotificationsPopover` on click. Native toast/chime
  * emission is owned by `NotificationEmissionController` so all sources share
  * the same hold/coalescing/focus policy.
@@ -69,7 +69,7 @@ export function NotificationsBell() {
   // thing wherever it is drawn. With no task waiting, what still needs
   // attention (a failure, an app-local transport error) keeps its red count,
   // so no failure goes unshown.
-  const needsYouCount = useNeedsYouTaskCount();
+  const needsYouCount = useNotificationsNeedsYouCount();
   const mark = bellMarkOf(bellState, needsYouCount);
   const ariaLabel =
     mark === "needsYou"
@@ -204,7 +204,7 @@ export function NotificationsBell() {
 type BellMark = "needsYou" | "attention" | "unknown" | "quietDot" | null;
 
 /**
- * The amber Needs you count while a task needs the person; else the red count
+ * The amber count of tasks and actionable notices; else the red count
  * of what needs attention, failures among it; else the hollow `unknown` dot;
  * else the quiet dot for anything unread.
  */
@@ -226,8 +226,8 @@ function needsYouBellLabel(
   needsYou: number,
   state: NotificationBellState,
 ): string {
-  const tasks = needsYou === 1 ? "1 task needs" : `${needsYou} tasks need`;
+  const needs = needsYou === 1 ? "1 needs" : `${needsYou} need`;
   return state.kind === "unknown"
-    ? `Notifications, ${tasks} you, status unavailable`
-    : `Notifications, ${tasks} you`;
+    ? `Notifications, ${needs} you, status unavailable`
+    : `Notifications, ${needs} you`;
 }

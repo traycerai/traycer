@@ -1,4 +1,8 @@
-import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationSeverity,
+  HostNotificationSandboxNoticePayload,
+  HostNotificationKind,
+} from "@traycer/protocol/host/notifications/contracts";
 import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
 
 export type NotificationAttentionTier = "blocking" | "failure";
@@ -7,25 +11,39 @@ export interface NotificationLifecycleInput {
   readonly source: MergedNotificationSource;
   readonly severity: HostNotificationSeverity;
   readonly readAt: number | null;
-  /** Only host approval/interview rows carry a meaningful value; every other
-   * row passes `null`, which never satisfies the unresolved-prompt branch. */
+  /** Resolution is independent of read acknowledgement on actionable notices. */
   readonly resolvedAt: number | null;
+  readonly hostKind?: HostNotificationKind | null;
+  readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
 }
 
 export type NotificationLifecycleClassification =
   | { readonly section: "attention"; readonly tier: NotificationAttentionTier }
   | { readonly section: "recent" };
 
+/** The producer decides actionability; reading a notice does not do its action. */
+export function isActionableNotice(row: NotificationLifecycleInput): boolean {
+  return (
+    row.severity === "needs_action" &&
+    (row.sandboxNotice != null || row.hostKind === "environment.apply.failed")
+  );
+}
+
 /**
  * The single lifecycle classifier: every feed row belongs to Attention or
  * Recent, never both. Attention membership is unread host prompts,
- * unread host failures, and unread app-local failures - collaboration rows
- * are never attention-eligible.
+ * unread host failures, unread app-local failures and unresolved actionable
+ * notices. Collaboration rows are never attention-eligible.
  */
 export function classifyNotificationLifecycle(
   row: NotificationLifecycleInput,
 ): NotificationLifecycleClassification {
   if (row.source === "global") return { section: "recent" };
+  if (isActionableNotice(row)) {
+    return row.resolvedAt === null
+      ? { section: "attention", tier: "blocking" }
+      : { section: "recent" };
+  }
   if (row.severity === "needs_action") {
     return row.readAt === null
       ? { section: "attention", tier: "blocking" }

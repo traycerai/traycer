@@ -18,12 +18,13 @@ export const DISMISS = "Dismiss";
  */
 export function SandboxNoticeActions(props: {
   readonly notice: HostNotificationSandboxNoticePayload;
+  readonly active: boolean;
   readonly onDetails: () => void;
   readonly onDismiss: () => void;
   readonly onExtended: () => void;
 }): ReactNode {
   const warning =
-    props.notice.notice.kind === "resting_warning" ? props.notice.notice : null;
+    props.active && props.notice.notice.kind === "resting_warning" ? props.notice.notice : null;
   return (
     <div
       className="flex flex-wrap items-center gap-2"
