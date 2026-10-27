@@ -54,6 +54,7 @@ import type {
   SandboxCreateRequest,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -353,7 +354,7 @@ const mocks = vi.hoisted(() => ({
     (
       hostId: string,
       gesture: SandboxVerbGesture,
-    ) => Promise<{ readonly kind: "awake" } | null>
+    ) => Promise<SandboxWakeOutcome | null>
   >(),
   /** What reached the sandbox's client, in order: puts, then the create. */
   wire: [] as string[],

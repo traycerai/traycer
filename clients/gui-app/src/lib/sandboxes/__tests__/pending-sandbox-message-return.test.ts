@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserAnnotationRecord } from "@traycer/protocol/host/browser/annotations";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
   buildUnrecordedPromptHandoff,

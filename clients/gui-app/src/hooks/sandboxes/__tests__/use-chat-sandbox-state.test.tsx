@@ -2,6 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
@@ -166,13 +167,14 @@ describe("useChatSandboxState", () => {
   it("reads an awake sandbox the transport cannot reach as unreachable, with the minutes since the directory last saw it", () => {
     sources.sandboxes = [row({ state: "awake" })];
     const base = remoteEntry(HOST, null);
-    sources.entry = {
+    const seen: RemoteHostDirectoryEntry = {
       ...base,
       remoteStatus: {
         ...base.remoteStatus,
         lastSeenAt: new Date(NOW - 7 * 60_000 - 20_000).toISOString(),
       },
     };
+    sources.entry = seen;
 
     expect(stateOf(false)).toMatchObject({
       kind: "unreachable",
