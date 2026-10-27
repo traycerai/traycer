@@ -839,7 +839,9 @@ function EnvOverrideAddRow(props: {
             ariaLabel="New variable value"
             className={VALUE_FIELD_PLACEMENT}
             onModeChange={(mode) => edit((current) => ({ ...current, mode }))}
-            onValueChange={(value) => edit((current) => ({ ...current, value }))}
+            onValueChange={(value) =>
+              edit((current) => ({ ...current, value }))
+            }
             onBlur={() => undefined}
           />
         ) : (
