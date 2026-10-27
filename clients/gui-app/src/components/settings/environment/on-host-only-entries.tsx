@@ -112,7 +112,12 @@ function OnHostOnlyCard(props: {
             <div className="min-w-0">
               <div className="truncate text-ui-sm">{entry.name}</div>
               <div className="truncate text-ui-xs text-muted-foreground">
-                {onHostScopePhrase(entry.place.target)}
+                {props.entryKind === "skills"
+                  ? "folder on this computer"
+                  : onHostScopePhrase(entry.place.target)}
+                {props.entryKind === "skills" && entry.place.target !== null
+                  ? ` · ${onHostScopePhrase(entry.place.target)}`
+                  : null}
               </div>
             </div>
             <AddToConfigurationButton
