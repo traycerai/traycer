@@ -247,7 +247,7 @@ export function BotChannelView(props: {
       onOpenThread({
         anchorMessageId: announcementId,
         announcement: true,
-        threadId: null,
+        sent: null,
       }),
     [onOpenThread],
   );
@@ -256,15 +256,22 @@ export function BotChannelView(props: {
   // thread as the send is accepted, in place of any thread open now; one the
   // bot answers in the channel opens nothing.
   const openPostedThread = useCallback(
-    (response: BotConversationSendResponse) => {
+    (response: BotConversationSendResponse, text: string) => {
       if (response.threadId === null || !threadListSupported) return;
       onOpenThread({
         anchorMessageId: response.messageId,
         announcement: false,
-        threadId: response.threadId,
+        sent: {
+          threadId: response.threadId,
+          requestId: response.requestId,
+          text,
+          senderUserId: viewer?.userId ?? null,
+          sentAt: Date.now(),
+          delivery: response.delivery,
+        },
       });
     },
-    [onOpenThread, threadListSupported],
+    [onOpenThread, threadListSupported, viewer],
   );
 
   const surface = useMemo<BotTranscriptSurface>(
@@ -290,7 +297,7 @@ export function BotChannelView(props: {
             onOpenThread({
               anchorMessageId: postMessageId,
               announcement: false,
-              threadId: null,
+              sent: null,
             })
         : null,
       openAnnouncementThread: threadListSupported
@@ -328,12 +335,12 @@ export function BotChannelView(props: {
   const { refetch: refetchThreads } = threadList;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     if (openThread !== null) return { kind: "listed", thread: openThread };
-    if (open !== null && open.threadId !== null) {
-      return { kind: "posted", threadId: open.threadId };
+    const retry = threadList.isError ? () => void refetchThreads() : null;
+    // A thread its post opened keeps its box through a failed read.
+    if (open !== null && open.sent !== null) {
+      return { kind: "posted", threadId: open.sent.threadId, retry };
     }
-    if (threadList.isError) {
-      return { kind: "failed", retry: () => void refetchThreads() };
-    }
+    if (retry !== null) return { kind: "failed", retry };
     if (open?.announcement === true) return { kind: "unopened" };
     return { kind: "pending" };
   }, [open, openThread, refetchThreads, threadList.isError]);
@@ -425,6 +432,7 @@ export function BotChannelView(props: {
             instanceId={`bot-channel:${botId}`}
             surface={surface}
             resolveMember={resolveMember}
+            showConnecting
           />
           <BotReplyingStrip
             botTitle={botTitle}
@@ -462,6 +470,7 @@ export function BotChannelView(props: {
               botTitle={botTitle}
               conversationId={channel.conversationId}
               originMessageId={openThreadPostId}
+              sent={open?.sent ?? null}
               thread={panelThread}
               anchorSenderLabel={anchorSenderLabel}
               resolveMember={resolveMember}

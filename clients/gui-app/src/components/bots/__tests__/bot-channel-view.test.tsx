@@ -203,7 +203,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     placeholder: string;
     testId: string;
     failure: { readonly failed: boolean };
-    onSent: (response: BotConversationSendResponse) => void;
+    onSent: (response: BotConversationSendResponse, text: string) => void;
   }) => (
     <div
       data-testid={`stub-${props.testId}`}
@@ -219,7 +219,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
       <button
         type="button"
         data-testid={`stub-${props.testId}-sent`}
-        onClick={() => props.onSent(mocks.sendResponse)}
+        onClick={() => props.onSent(mocks.sendResponse, POSTED_TEXT)}
       />
     </div>
   ),
@@ -292,6 +292,8 @@ import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+/** What the stub box reports it sent. */
+const POSTED_TEXT = "Ship the release today?";
 const HOST_ID = "host-bound";
 
 const resolveMember: BotMemberResolver = (userId) =>
@@ -338,7 +340,7 @@ interface MountOptions {
 const QUESTION_1: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
-  threadId: null,
+  sent: null,
 };
 
 function mount(options: MountOptions): {
@@ -378,7 +380,7 @@ function mount(options: MountOptions): {
       : {
           anchorMessageId: options.openThreadPostId,
           announcement: false,
-          threadId: null,
+          sent: null,
         };
   const result = render(tree(current));
   return {
@@ -560,7 +562,7 @@ describe("<BotChannelView /> channel", () => {
     expect(onOpenThread).toHaveBeenCalledWith({
       anchorMessageId: "post-a",
       announcement: false,
-      threadId: null,
+      sent: null,
     });
   });
 
@@ -617,7 +619,7 @@ describe("<BotChannelView /> channel", () => {
     mocks.postIds = ["post-a"];
     const { reopen } = mount({ openThreadPostId: null });
 
-    reopen({ anchorMessageId: "post-a", announcement: false, threadId: null });
+    reopen({ anchorMessageId: "post-a", announcement: false, sent: null });
 
     const waiting = screen.getByTestId("bot-thread-panel");
     expect(within(waiting).getByTestId("bot-thread-loading")).toBeTruthy();
@@ -626,7 +628,7 @@ describe("<BotChannelView /> channel", () => {
     ).toBeNull();
 
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 0 })];
-    reopen({ anchorMessageId: "post-a", announcement: false, threadId: null });
+    reopen({ anchorMessageId: "post-a", announcement: false, sent: null });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
@@ -999,8 +1001,25 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
   const POSTED: BotOpenThread = {
     anchorMessageId: "post-new",
     announcement: false,
-    threadId: "thread-new",
+    sent: {
+      threadId: "thread-new",
+      requestId: "request-new",
+      text: POSTED_TEXT,
+      senderUserId: null,
+      sentAt: 5_000,
+      delivery: "written",
+    },
   };
+
+  /** The thread the channel opened, as the tab's store would hold it. */
+  function opened(
+    onOpenThread: Mock<(open: BotOpenThread | null) => void>,
+  ): BotOpenThread {
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    const open = onOpenThread.mock.calls[0][0];
+    if (open === null) throw new Error("the channel closed the thread");
+    return open;
+  }
 
   it("opens the post's thread as the channel's box reports the send, before the list has it", async () => {
     const user = userEvent.setup();
@@ -1008,27 +1027,57 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
 
     await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
 
-    expect(onOpenThread).toHaveBeenCalledTimes(1);
-    expect(onOpenThread).toHaveBeenCalledWith(POSTED);
-
-    reopen(POSTED);
+    const open = opened(onOpenThread);
+    // Accepted just now; the rest is what the box sent and the host answered.
+    expect(open.sent?.sentAt).toBeGreaterThan(0);
+    expect({
+      ...open,
+      sent: open.sent === null ? null : { ...open.sent, sentAt: 5_000 },
+    }).toEqual(POSTED);
+    reopen(open);
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-new");
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    // The channel has no row for the post yet: it is drawn as it was sent.
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText(POSTED_TEXT)).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-queued")).toBeNull();
     const composer = within(panel).getByTestId("stub-bot-thread-composer");
     expect(composer.getAttribute("data-thread-id")).toBe("thread-new");
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
   });
 
-  it("opens the thread of a post the host queued for a paused bot", async () => {
+  it("opens the thread of a post the host queued for a paused bot, on the post as sent and saying it was saved", async () => {
     const user = userEvent.setup();
     mocks.sendResponse = { ...mocks.sendResponse, delivery: "queued" };
-    const { onOpenThread } = mount({ openThreadPostId: null });
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
 
     await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
 
-    expect(onOpenThread).toHaveBeenCalledWith(POSTED);
+    const open = opened(onOpenThread);
+    expect(open.sent?.delivery).toBe("queued");
+    reopen(open);
+    const panel = screen.getByTestId("bot-thread-panel");
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText(POSTED_TEXT)).toBeTruthy();
+    expect(within(panel).getByTestId("bot-thread-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
+  });
+
+  it("keeps the box beside a failed read of the thread list, and reads it again on Retry", async () => {
+    const user = userEvent.setup();
+    mocks.state.threadListAnswered = false;
+    mocks.state.threadListError = true;
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(POSTED);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("stub-bot-thread-composer")).toBeTruthy();
+    const failure = within(panel).getByTestId("bot-thread-error");
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
   });
 
   it("opens nothing for a post the bot answers in the channel", async () => {
@@ -1061,8 +1110,9 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     ).toBe("thread-a");
 
     await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
-    expect(onOpenThread).toHaveBeenCalledWith(POSTED);
-    reopen(POSTED);
+    const open = opened(onOpenThread);
+    expect(open.sent?.threadId).toBe("thread-new");
+    reopen(open);
 
     expect(
       screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),

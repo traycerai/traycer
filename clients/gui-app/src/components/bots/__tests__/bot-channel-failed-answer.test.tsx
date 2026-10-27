@@ -680,7 +680,7 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, threadId: null },
+      { anchorMessageId: POST_ID, announcement: false, sent: null },
       memberPost(TEAMMATE_USER_ID),
     );
 
@@ -756,11 +756,17 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
     await waitFor(() => {
-      expect(onOpenThread).toHaveBeenCalledWith({
-        anchorMessageId: "message-new",
-        announcement: false,
-        threadId: "thread-new",
-      });
+      expect(onOpenThread).toHaveBeenCalledTimes(1);
+    });
+    const open = onOpenThread.mock.calls[0][0];
+    expect(open?.anchorMessageId).toBe("message-new");
+    expect(open?.announcement).toBe(false);
+    expect(open?.sent).toMatchObject({
+      threadId: "thread-new",
+      requestId: "req-new",
+      text: POST_TEXT,
+      senderUserId: VIEWER_USER_ID,
+      delivery: "written",
     });
     expect(sent[0]?.supersedes).toBe(POST_REQUEST);
     expect(channelBox().value).toBe("");
@@ -826,7 +832,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, threadId: null },
+      { anchorMessageId: POST_ID, announcement: false, sent: null },
       memberPost(VIEWER_USER_ID),
     );
 
@@ -1083,7 +1089,7 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, threadId: null },
+      { anchorMessageId: POST_ID, announcement: false, sent: null },
       memberPost(VIEWER_USER_ID),
     );
 

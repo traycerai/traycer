@@ -122,12 +122,12 @@ describe("bot-tabs store", () => {
     setOpenThread(BOT_A, {
       anchorMessageId: "post-a",
       announcement: false,
-      threadId: null,
+      sent: null,
     });
     setOpenThread(BOT_B, {
       anchorMessageId: "post-b",
       announcement: false,
-      threadId: null,
+      sent: null,
     });
 
     closeBotTab(BOT_A);
@@ -137,7 +137,7 @@ describe("bot-tabs store", () => {
       [BOT_B]: {
         anchorMessageId: "post-b",
         announcement: false,
-        threadId: null,
+        sent: null,
       },
     });
   });

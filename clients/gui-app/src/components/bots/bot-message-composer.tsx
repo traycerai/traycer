@@ -17,7 +17,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
-import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
+import {
+  BotQueuedNotice,
+  BotSendFailedNotice,
+} from "@/components/bots/bot-channel-notices";
 
 const MESSAGE_MAX = 100_000;
 
@@ -57,8 +60,11 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
-  /** The host accepted what the box held, and the box was cleared. */
-  readonly onSent: (response: BotConversationSendResponse) => void;
+  /** The host accepted `text`, what the box held, and the box was cleared. */
+  readonly onSent: (
+    response: BotConversationSendResponse,
+    text: string,
+  ) => void;
 }): ReactNode {
   const {
     botId,
@@ -123,7 +129,7 @@ export function BotMessageComposer(props: {
           setText("");
           if (supersedes !== null) onEditEnd();
           setLastDelivery(response.delivery);
-          onSent(response);
+          onSent(response, trimmed);
         },
         onError: failure.fail,
       },
@@ -233,15 +239,7 @@ function ComposerStatus(props: {
     return <BotSendFailedNotice testId={`${props.testId}-send-failed`} />;
   }
   if (!props.queued) return null;
-  return (
-    <p
-      role="status"
-      className="text-ui-xs text-muted-foreground"
-      data-testid={`${props.testId}-queued`}
-    >
-      Saved. The bot will read it.
-    </p>
-  );
+  return <BotQueuedNotice testId={`${props.testId}-queued`} />;
 }
 
 /** A failed message loaded into the box to be edited and sent again. */

@@ -10,7 +10,7 @@
  * drawn as the bot's, with no request to show. Every state opens on the
  * channel row the thread answers, drawn by the channel's own row component.
  */
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useSyncExternalStore, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -59,6 +59,7 @@ import type {
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
+import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 type ThreadTranscriptState = Pick<
@@ -98,6 +99,15 @@ const mocks = vi.hoisted(() => ({
   locatedOrdinal: null as number | null,
   /** Every locate the component asked for while it had a target. */
   locateTargets: [] as ChatLocateRowArgs["target"][],
+  /**
+   * The thread's session handle as the registry hands it out: ready at once,
+   * or (`held`) not yet acquired, as the real registry's first render is,
+   * until the case acquires it.
+   */
+  threadHandle: {
+    held: false,
+    listeners: new Set<() => void>(),
+  },
 }));
 
 vi.mock("@/lib/host-error-toast", () => ({
@@ -113,8 +123,16 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   useChatSessionHandleForContainer: (
     _botId: string,
     chatId: string,
-  ): ChatSessionStoreHandle | null =>
-    chatId === CONVERSATION_ID ? mocks.channelHandle : mocks.handle,
+  ): ChatSessionStoreHandle | null => {
+    const thread = useSyncExternalStore(
+      (listener) => {
+        mocks.threadHandle.listeners.add(listener);
+        return () => mocks.threadHandle.listeners.delete(listener);
+      },
+      () => (mocks.threadHandle.held ? null : mocks.handle),
+    );
+    return chatId === CONVERSATION_ID ? mocks.channelHandle : thread;
+  },
 }));
 // The thread's typing line is `bot-channel-typing.test.tsx`'s; the bot is
 // idle unless a case says its thread's session failed.
@@ -307,6 +325,8 @@ const channelHold = vi.fn<(ordinal: number) => () => void>(
 const channelRelease = vi.fn<() => void>();
 
 let sent: ReadonlyArray<BotConversationSendRequest>;
+/** The post as its send opened the thread; `null` for a thread opened from a row. */
+let panelSent: BotSentPost | null;
 const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
 /** What the host answers the next `bot.conversation.send` with. */
 let sendAnswer: () => Promise<BotConversationSendResponse>;
@@ -370,6 +390,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               botTitle="Release Bot"
               conversationId={CONVERSATION_ID}
               originMessageId={originOf(thread)}
+              sent={panelSent}
               thread={thread}
               anchorSenderLabel={(senderUserId) =>
                 senderUserId === null ? "You" : "Tess Teammate"
@@ -392,6 +413,8 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 
 beforeEach(() => {
   sent = [];
+  panelSent = null;
+  mocks.threadHandle.held = false;
   onEditPost.mockClear();
   activityStore.setState({ activity: null });
   channelMessages = [];
@@ -599,7 +622,19 @@ describe("<BotThreadPanel /> a listed thread", () => {
 });
 
 describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
-  const POSTED: BotThreadPanelThread = { kind: "posted", threadId: THREAD_ID };
+  const POSTED: BotThreadPanelThread = {
+    kind: "posted",
+    threadId: THREAD_ID,
+    retry: null,
+  };
+
+  /** The thread's session acquired by the registry, as its effect does after the first render. */
+  function acquireThreadHandle(): void {
+    act(() => {
+      mocks.threadHandle.held = false;
+      for (const listener of mocks.threadHandle.listeners) listener();
+    });
+  }
 
   function replyBox(): HTMLTextAreaElement {
     const box = screen.getByRole("textbox", { name: "Reply in the thread" });
@@ -672,6 +707,79 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     expect(replyBox()).toBe(box);
     expect(box.value).toBe("And the nightly?");
     expect(document.activeElement).toBe(box);
+  });
+
+  it("draws nothing between the post and the box while a listed thread's session connects", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    const view = mountPanel(POSTED, []);
+    const box = replyBox();
+    await user.type(box, "And the nightly?");
+    const zero = listed("user-teammate");
+    if (zero.kind !== "listed") throw new Error("expected a listed thread");
+
+    mocks.threadHandle.held = true;
+    view.rerender(
+      panelTree({ kind: "listed", thread: { ...zero.thread, replyCount: 0 } }),
+    );
+
+    expect(screen.queryByTestId("bot-chat-transcript-connecting")).toBeNull();
+    const replies = screen.getByTestId("bot-thread-replies");
+    expect(replies.childElementCount).toBe(0);
+    expect(screen.getByTestId("bot-thread-anchor").nextElementSibling).toBe(
+      replies,
+    );
+
+    acquireThreadHandle();
+    expect(screen.queryByTestId("bot-chat-transcript-connecting")).toBeNull();
+    expect(within(replies).getByTestId("bot-chat-transcript")).toBeTruthy();
+    expect(replies.textContent).toBe("");
+    expect(replyBox()).toBe(box);
+    expect(box.value).toBe("And the nightly?");
+  });
+
+  it("holds the place of a thread with replies with a spinner while its session connects", () => {
+    mocks.threadHandle.held = true;
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    expect(
+      within(screen.getByTestId("bot-thread-replies")).getByTestId(
+        "bot-chat-transcript-connecting",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says a failed read of the list under the post, keeps the box and its draft, and shows the thread once Retry reads it", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<() => void>();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    const view = mountPanel({ ...POSTED, retry }, []);
+    const box = replyBox();
+    await user.type(box, "And the nightly?");
+
+    const failure = screen.getByTestId("bot-thread-error");
+    expect(
+      screen
+        .getByTestId("bot-thread-anchor")
+        .nextElementSibling?.contains(failure),
+    ).toBe(true);
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+
+    // The read Retry asked for returns the thread, with the bot's answer.
+    act(() => {
+      mocks.handle?.store.setState({ messages: [botReply(null)] });
+    });
+    view.rerender(panelTree(listed("user-teammate")));
+
+    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
+    expect(
+      within(screen.getByTestId("bot-thread-replies")).getByText(
+        "Which way should I go?",
+      ),
+    ).toBeTruthy();
+    expect(replyBox()).toBe(box);
+    expect(box.value).toBe("And the nightly?");
   });
 });
 

@@ -2,6 +2,7 @@ import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-sc
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
 /**
@@ -120,21 +121,38 @@ export interface ThreadOriginRow {
 
 /**
  * The post a thread opens on (Tracy Bots, decision 90): from the channel's
- * row once it is loaded, else from the thread list's anchor. A member's post
- * carries its request, so a post the bot failed to answer says so here as in
- * the channel; the bot's own question or proposal carries its announcement.
- * `null` while neither is known.
+ * row once it is loaded, else from the post as the person sent it (a send
+ * the host queued has no row until the bot's host takes it), else from the
+ * thread list's anchor. A member's post carries its request, so a post the
+ * bot failed to answer says so here as in the channel; the bot's own
+ * question or proposal carries its announcement. `null` while none is known.
  */
 export function threadOriginRow(input: {
+  /** The post's message id. */
+  readonly messageId: string;
   readonly post: OpenMessage | null;
+  readonly sent: BotSentPost | null;
   readonly anchor: BotThreadAnchor | null;
   /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
   readonly senderLabel: (senderUserId: string | null) => string;
   readonly senderAvatarUrl: (senderUserId: string) => string | null;
 }): ThreadOriginRow | null {
-  const { post, anchor, senderLabel, senderAvatarUrl } = input;
+  const { post, sent, anchor, senderLabel, senderAvatarUrl } = input;
   if (post !== null) {
     return { row: loadedOriginRow(post, input), loaded: true };
+  }
+  if (sent !== null) {
+    const row = memberOriginRow(
+      originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+      sent.senderUserId,
+      {
+        requestId: sent.requestId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+      { senderLabel, senderAvatarUrl },
+    );
+    return { row, loaded: false };
   }
   if (anchor === null) return null;
   const base = originRowBase(

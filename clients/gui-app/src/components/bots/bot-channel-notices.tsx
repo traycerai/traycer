@@ -19,3 +19,19 @@ export function BotSendFailedNotice(props: {
     </p>
   );
 }
+
+/**
+ * A message the host accepted while the bot cannot be reached: it waits in
+ * the bot's mailbox, and the bot reads it once it can be reached.
+ */
+export function BotQueuedNotice(props: { readonly testId: string }): ReactNode {
+  return (
+    <p
+      role="status"
+      className="text-ui-xs text-muted-foreground"
+      data-testid={props.testId}
+    >
+      Saved. The bot will read it.
+    </p>
+  );
+}

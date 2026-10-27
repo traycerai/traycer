@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
 
 /**
  * The thread open beside a bot's channel, by the message it hangs off: a
@@ -13,11 +14,24 @@ export interface BotOpenThread {
    */
   readonly announcement: boolean;
   /**
-   * The thread's id, when the channel knows it before the thread list does:
-   * the person's post opened it as the send was accepted. `null` for a
-   * thread opened from a row.
+   * The person's post that opened the thread as its send was accepted, which
+   * the channel knows before the thread list or the channel's own row does.
+   * `null` for a thread opened from a row.
    */
-  readonly threadId: string | null;
+  readonly sent: BotSentPost | null;
+}
+
+/** A post as its send was accepted: what the panel draws until the channel's row and the thread list catch up. */
+export interface BotSentPost {
+  readonly threadId: string;
+  readonly requestId: string;
+  readonly text: string;
+  /** The person who sent it; `null` when nobody was signed in. */
+  readonly senderUserId: string | null;
+  /** When the send was accepted. */
+  readonly sentAt: number;
+  /** `queued`: it waits for the bot's host, and the panel says so under it. */
+  readonly delivery: BotConversationSendDelivery;
 }
 
 interface BotOpenThreadState {

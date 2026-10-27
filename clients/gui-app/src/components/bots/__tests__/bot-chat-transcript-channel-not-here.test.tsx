@@ -165,6 +165,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         instanceId="bot-channel:test"
         surface={surface}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
+        showConnecting
       />
     </QueryClientProvider>
   );

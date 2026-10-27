@@ -14,7 +14,10 @@ import {
   useBotSendFailure,
   type BotSendFailure,
 } from "@/hooks/bots/use-bot-send-failure";
-import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
+import {
+  BotQueuedNotice,
+  BotSendFailedNotice,
+} from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -30,6 +33,7 @@ import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentatio
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
+import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -41,7 +45,12 @@ import { cn } from "@/lib/utils";
  */
 export type BotThreadPanelThread =
   | { readonly kind: "listed"; readonly thread: BotThreadSummary }
-  | { readonly kind: "posted"; readonly threadId: string }
+  | {
+      readonly kind: "posted";
+      readonly threadId: string;
+      /** The list's read failed: Retry reads it again. `null` while it has not. */
+      readonly retry: (() => void) | null;
+    }
   | { readonly kind: "pending" }
   | { readonly kind: "unopened" }
   | { readonly kind: "failed"; readonly retry: () => void };
@@ -72,6 +81,8 @@ export function BotThreadPanel(props: {
   readonly conversationId: string;
   /** The post the thread opens on, by its message id. */
   readonly originMessageId: string;
+  /** That post as the person sent it, when its send opened the thread; `null` otherwise. */
+  readonly sent: BotSentPost | null;
   readonly thread: BotThreadPanelThread;
   /** The viewer's own name for their posts, as the channel shows them. */
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
@@ -151,6 +162,7 @@ type ThreadPanelBodyProps = {
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
+  readonly sent: BotSentPost | null;
   readonly thread: BotThreadPanelThread;
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
@@ -164,8 +176,10 @@ type ThreadPanelBodyProps = {
  * channel's row (fetched when the channel has not loaded it), and the line
  * under it while the bot failed to answer it, whose Retry posts it again in
  * the channel and whose Edit hands it to the channel's box. Until the
- * channel's row is there its text is not known, so the line says why with no
- * Retry or Edit. Nothing while the post is neither loaded nor listed.
+ * channel's row is there the post is drawn as the person sent it, or with no
+ * text from the thread list, and the line says why with no Retry or Edit.
+ * A send the host queued says so under the post. Nothing while the post is
+ * neither loaded, sent from here nor listed.
  */
 function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const {
@@ -175,6 +189,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     botTitle,
     conversationId,
     originMessageId,
+    sent,
     anchorSenderLabel,
     resolveMember,
     onEditPost,
@@ -225,7 +240,9 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     >
       {(post) => {
         const origin = threadOriginRow({
+          messageId: originMessageId,
           post,
+          sent,
           anchor,
           senderLabel: anchorSenderLabel,
           senderAvatarUrl,
@@ -243,6 +260,11 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
               }
               hoverActions={false}
             />
+            {sent?.delivery === "queued" ? (
+              <div className="px-3">
+                <BotQueuedNotice testId="bot-thread-queued" />
+              </div>
+            ) : null}
           </div>
         );
       }}
@@ -279,11 +301,19 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         threadId={thread.thread.threadId}
         conversationId={thread.thread.conversationId}
         listed={thread.thread}
+        retry={null}
       />
     );
   }
   if (thread.kind === "posted") {
-    return <KnownThread {...props} threadId={thread.threadId} listed={null} />;
+    return (
+      <KnownThread
+        {...props}
+        threadId={thread.threadId}
+        listed={null}
+        retry={thread.retry}
+      />
+    );
   }
   if (thread.kind === "unopened") {
     return (
@@ -332,14 +362,17 @@ function keepOpenThread(): void {}
  * The rule and reply count, the replies and the box of a thread whose id is
  * known. A thread with no reply yet draws neither the count nor room for
  * replies, so its box follows the post; a listed one's transcript stays
- * subscribed, and takes the room once a reply is listed. A thread the list
- * has not returned yet (`listed: null`) has no replies to read, and still
- * says the bot is replying and takes a reply.
+ * subscribed with nothing drawn while it connects, and takes the room once
+ * a reply is listed. A thread the list has not returned yet (`listed:
+ * null`) has no replies to read, and still says the bot is replying and
+ * takes a reply; a failed read of the list says so where the replies go,
+ * with Retry, and keeps the box as it is.
  */
 function KnownThread(
   props: Omit<ThreadPanelBodyProps, "thread"> & {
     readonly threadId: string;
     readonly listed: BotThreadSummary | null;
+    readonly retry: (() => void) | null;
   },
 ): ReactNode {
   const {
@@ -350,6 +383,7 @@ function KnownThread(
     conversationId,
     threadId,
     listed,
+    retry,
     resolveMember,
     sendFailure,
   } = props;
@@ -429,7 +463,9 @@ function KnownThread(
           <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
         </div>
       ) : null}
-      {listed === null ? null : (
+      {listed === null ? (
+        <ThreadListReadFailure retry={retry} />
+      ) : (
         <div
           className={cn("flex min-h-0 flex-col", hasReplies && "flex-1")}
           data-testid="bot-thread-replies"
@@ -443,6 +479,7 @@ function KnownThread(
             instanceId={`bot-thread:${threadId}`}
             surface={surface}
             resolveMember={resolveMember}
+            showConnecting={hasReplies}
           />
         </div>
       )}
@@ -465,6 +502,22 @@ function KnownThread(
         onSent={keepOpenThread}
       />
     </>
+  );
+}
+
+/** A failed read of the thread list, with Retry; nothing while it has not failed. */
+function ThreadListReadFailure(props: {
+  readonly retry: (() => void) | null;
+}): ReactNode {
+  if (props.retry === null) return null;
+  return (
+    <div className="shrink-0 px-4 pt-2">
+      <BotReadFailure
+        message="Couldn't load this thread."
+        onRetry={props.retry}
+        testId="bot-thread-error"
+      />
+    </div>
   );
 }
 

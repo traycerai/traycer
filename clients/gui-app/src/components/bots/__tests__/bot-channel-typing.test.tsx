@@ -27,6 +27,7 @@ import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { commandActivityLabel } from "@traycer/protocol/host/agent/gui/activity-step-label";
 import type {
+  BotConversationSendDelivery,
   BotConversationSendRequest,
   BotConversationSendResponse,
   BotThreadSummary,
@@ -49,6 +50,7 @@ import {
   useBotOpenThreadStore,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
   StubHostStreamClient,
@@ -560,6 +562,7 @@ afterEach(() => {
   mocks.threadListData = { threads: [] };
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useAuthStore.setState({ profile: null });
   __resetBotSubscriptionsForTesting();
   mocks.streamClient = null;
 });
@@ -724,12 +727,16 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     return call[1];
   }
 
-  function accept(callbacks: SendCallbacks, threadId: string | null): void {
+  function accept(
+    callbacks: SendCallbacks,
+    threadId: string | null,
+    delivery: BotConversationSendDelivery,
+  ): void {
     act(() => {
       callbacks.onSuccess?.({
         messageId: POST_ID,
         requestId: "request-1",
-        delivery: "written",
+        delivery,
         threadId,
       });
     });
@@ -751,12 +758,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     const user = userEvent.setup();
     mountQuietChannel();
 
-    const callbacks = await postInChannel(user);
-    // The host writes the post to the channel, then answers the send.
-    emitSnapshot(CHANNEL_ID, {
-      messages: [post({ direct: false, resolvedAt: null })],
-    });
-    accept(callbacks, THREAD_ID);
+    accept(await postInChannel(user), THREAD_ID, "written");
 
     const panel = await screen.findByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe(THREAD_ID);
@@ -767,6 +769,15 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     ).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
     expect(textbox("Message Tracy").value).toBe("");
+    // The channel's row lands after the host answered the send.
+    emitSnapshot(CHANNEL_ID, {
+      messages: [post({ direct: false, resolvedAt: null })],
+    });
+    expect(
+      within(within(panel).getByTestId("bot-thread-anchor")).getByText(
+        "Is CI green?",
+      ),
+    ).toBeTruthy();
 
     emitActivity({
       trunk: null,
@@ -800,11 +811,51 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     expect(within(panel).getByTestId("bot-thread-replying-strip")).toBeTruthy();
   });
 
+  it("opens the thread of a queued post on the post as sent, saying it was saved, and changes nothing when the post's row lands", async () => {
+    const user = userEvent.setup();
+    // The post's writer is the viewer, as the channel names their own posts.
+    useAuthStore.setState({
+      profile: {
+        userId: USER_ID,
+        userName: "Tess Teammate",
+        email: "tess@example.com",
+        avatarUrl: null,
+      },
+    });
+    mountQuietChannel();
+
+    accept(await postInChannel(user), THREAD_ID, "queued");
+
+    // No channel row yet: the bot's host has not taken the post.
+    const panel = await screen.findByTestId("bot-thread-panel");
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Is CI green?")).toBeTruthy();
+    expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
+    expect(within(panel).getByTestId("bot-thread-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
+    const drawn = anchor.textContent;
+
+    // The bot's host takes the post and writes its row, at the time it was accepted.
+    const sentAt =
+      useBotOpenThreadStore.getState().byBotId[BOT_ID]?.sent?.sentAt ?? null;
+    if (sentAt === null) throw new Error("the post opened no thread");
+    emitSnapshot(CHANNEL_ID, {
+      messages: [
+        { ...post({ direct: false, resolvedAt: null }), timestamp: sentAt },
+      ],
+    });
+
+    expect(anchor.getAttribute("data-loaded")).toBe("true");
+    expect(within(panel).getByTestId("bot-thread-anchor")).toBe(anchor);
+    expect(anchor.textContent).toBe(drawn);
+  });
+
   it("opens no thread for a post the bot answers in the channel", async () => {
     const user = userEvent.setup();
     mountQuietChannel();
 
-    accept(await postInChannel(user), null);
+    accept(await postInChannel(user), null, "written");
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(textbox("Message Tracy").value).toBe("");

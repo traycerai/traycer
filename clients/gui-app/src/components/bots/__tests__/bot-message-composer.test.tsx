@@ -56,7 +56,8 @@ const FAILURE: BotSendFailure = {
   clear: () => undefined,
 };
 
-const onSent = vi.fn<(response: BotConversationSendResponse) => void>();
+const onSent =
+  vi.fn<(response: BotConversationSendResponse, text: string) => void>();
 const onEditEnd = vi.fn<() => void>();
 
 function composer(edit: BotComposerEdit | null): ReactNode {
@@ -110,7 +111,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
     });
 
     expect(onSent).toHaveBeenCalledTimes(1);
-    expect(onSent).toHaveBeenCalledWith(RESPONSE);
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
     expect(box().value).toBe("");
   });
 
@@ -138,7 +139,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
     });
 
     expect(onEditEnd).toHaveBeenCalledTimes(1);
-    expect(onSent).toHaveBeenCalledWith(RESPONSE);
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
   });
 
   it("reports nothing for an edit's send the person moved on from, and keeps the edit they opened since", async () => {
