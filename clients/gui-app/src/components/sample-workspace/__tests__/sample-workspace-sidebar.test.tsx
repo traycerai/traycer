@@ -28,6 +28,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 
 /**
  * The surface a session's rail drag happens on (L-115), plus - since F3 -
@@ -60,6 +61,7 @@ beforeEach(() => {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
   });
+  usePrPanelStore.setState({ stateFilter: "open" });
   useLayoutEditorStore.getState().endSession();
 });
 
@@ -283,6 +285,9 @@ describe("the sample sidebar's body", () => {
   });
 
   it("switches the displayed body to the selected rail region, showing the sample PR rows", () => {
+    // The sample list holds open and merged PRs and this case expects all of
+    // them; the panel's default filter lists only the open ones.
+    usePrPanelStore.setState({ stateFilter: "all" });
     render(<SampleWorkspaceSidebar />);
 
     act(() => {
