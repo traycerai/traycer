@@ -106,9 +106,14 @@ import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
   isProcessAlive,
   ownProcessStartIdentityAsync,
+  readLiveProcessStartTimeMs,
   type PublishedProcessIdentityVerdict,
 } from "../store/process-identity";
-import type { HostPidMetadata } from "../host/pid-metadata";
+import {
+  readHostPidMetadataEvidence,
+  type HostPidMetadataEvidence,
+} from "../host/pid-metadata";
+import { isReadablePid } from "../host/pid-value";
 import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
@@ -753,6 +758,17 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // scripted without a real process to kill. The one path on which this
   // supervisor signals a process that is not its own child.
   readonly signalProcess: (pid: number, signal: "SIGTERM" | "SIGKILL") => void;
+  // The two reads that decide whether that pid may be signalled at all.
+  // pid.json as EVIDENCE, not a record-or-null: an unreadable file must stay
+  // inconclusive, because the teardown port's `readPidMetadata` folds it
+  // into "absent" and absent is half of the wedged verdict. And the live
+  // process's OS start time, ordered against the lock holder's own
+  // `startedAt`: a process that began AFTER the lock was taken is a recycled
+  // pid, not the holder, whatever else the records say.
+  readonly readPidMetadataEvidence: (
+    environment: Environment,
+  ) => Promise<HostPidMetadataEvidence>;
+  readonly readProcessStartTimeMs: (pid: number) => number | null;
   // Consecutive relaunches allowed before the supervisor gives up and hands
   // the machine back to launchd / systemd / the next logon. A dependency
   // rather than a bare constant so a test can state which behaviour it is
@@ -933,6 +949,8 @@ const defaultRunDeps: RunHostStartDeps = {
   signalProcess: (pid, signal) => {
     process.kill(pid, signal);
   },
+  readPidMetadataEvidence: readHostPidMetadataEvidence,
+  readProcessStartTimeMs: readLiveProcessStartTimeMs,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
   resumeCrashReports: resumeHostCrashReports,
@@ -3246,9 +3264,20 @@ async function yieldedIncumbent(
   if (read.kind !== "frame" || read.frame.attemptId !== attemptId) return null;
   if (read.frame.layer0 !== "declined") return null;
   const evidence = read.frame.incumbentEvidence;
-  return evidence.kind === "pid-metadata"
-    ? { pid: evidence.pid, startedAt: evidence.startedAt }
-    : null;
+  if (evidence.kind !== "pid-metadata") return null;
+  // The frame decoder accepts any number as a pid, and this pid reaches
+  // `process.kill`. `isReadablePid` owns why 0, a negative and a fraction
+  // are not pids; pid 1 and this supervisor's own pid are nothing a child
+  // of ours can have yielded to, and the one answer for a frame naming them
+  // is today's: nothing to wait on.
+  if (
+    !isReadablePid(evidence.pid) ||
+    evidence.pid <= 1 ||
+    evidence.pid === process.pid
+  ) {
+    return null;
+  }
+  return { pid: evidence.pid, startedAt: evidence.startedAt };
 }
 
 type YieldedIncumbentSettlement =
@@ -3325,6 +3354,12 @@ async function settleYieldedIncumbent(input: {
           standing: standing.kind,
           ...(standing.kind === "booting" ? { lockAgeMs: standing.ageMs } : {}),
           ...(standing.kind === "serving" ? { verdict: standing.verdict } : {}),
+          ...(standing.kind === "recycled"
+            ? { startedAfterLockByMs: standing.startedAfterLockByMs }
+            : {}),
+          ...(standing.kind === "indeterminate"
+            ? { reason: standing.reason }
+            : {}),
         },
       );
       return { kind: "leave-incumbent" };
@@ -3394,19 +3429,34 @@ type LiveIncumbentStanding =
       readonly kind: "serving";
       readonly verdict: PublishedProcessIdentityVerdict;
     }
-  // No pid.json for it, but the lock is young enough to be a boot in progress
-  // (or its age cannot be read). The next supervisor cycle looks again.
-  | { readonly kind: "booting"; readonly ageMs: number | null }
-  // No pid.json for it and the lock is older than any boot is allowed to be.
+  // No pid.json for it, but the lock is young enough to be a boot in
+  // progress. The next supervisor cycle looks again.
+  | { readonly kind: "booting"; readonly ageMs: number }
+  // The live process began AFTER the lock was taken: a recycled pid, not the
+  // holder. Nothing of ours to end.
+  | { readonly kind: "recycled"; readonly startedAfterLockByMs: number }
+  // A read the verdict needs did not answer. Leave, as before; the next
+  // cycle may read it.
+  | {
+      readonly kind: "indeterminate";
+      readonly reason:
+        | "pid-json-unreadable"
+        | "lock-time-unparseable"
+        | "process-start-unreadable";
+    }
+  // No pid.json for it, the lock is older than any boot is allowed to be,
+  // and the process is old enough to be the one that took it.
   | { readonly kind: "wedged"; readonly ageMs: number };
 
 /**
  * What a pid that outlived `YIELDED_INCUMBENT_EXIT_WAIT_MS` is. Decided from
- * records that exist today - pid.json and the lock holder's `startedAt` -
- * and biased toward leaving: an unreadable pid.json, an identity verdict
- * that cannot rule the record out, or an unparseable lock time all read as
- * "not wedged". Only the combination the incident showed - no record for
- * the pid, a lock older than the boot ceiling - earns an eviction.
+ * records that exist today - pid.json, the lock holder's `startedAt` and
+ * the OS's start time for the pid - and biased toward leaving: an
+ * unreadable pid.json, an identity verdict that cannot rule the record out,
+ * an unparseable lock time or an unreadable process start all read as "not
+ * wedged". Only the combination the incident showed - no record for the
+ * pid, a lock older than the boot ceiling, a process at least as old as the
+ * lock - earns an eviction.
  */
 async function classifyLiveIncumbent(input: {
   readonly pid: number;
@@ -3414,18 +3464,24 @@ async function classifyLiveIncumbent(input: {
   readonly deps: RunHostStartDeps;
   readonly environment: Environment;
 }): Promise<LiveIncumbentStanding> {
-  const teardown = input.deps.lifecycle.teardown;
-  let record: HostPidMetadata | null;
+  const { deps } = input;
+  let evidence: HostPidMetadataEvidence;
   try {
-    record = await teardown.readPidMetadata(input.environment);
+    evidence = await deps.readPidMetadataEvidence(input.environment);
   } catch {
-    // Cannot tell; the next cycle may.
-    return { kind: "booting", ageMs: null };
+    return { kind: "indeterminate", reason: "pid-json-unreadable" };
   }
+  // Unreadable is NOT absent. A file that exists and cannot be read (a torn
+  // write, a permission slip) may well name this pid, and absent is half of
+  // the wedged verdict.
+  if (evidence.kind === "unreadable") {
+    return { kind: "indeterminate", reason: "pid-json-unreadable" };
+  }
+  const record = evidence.kind === "read" ? evidence.metadata : null;
   if (record !== null && record.pid === input.pid) {
     let verdict: PublishedProcessIdentityVerdict;
     try {
-      verdict = await teardown.verifyPublishedInstance(
+      verdict = await deps.lifecycle.teardown.verifyPublishedInstance(
         record.pid,
         record.processStartIdentity,
       );
@@ -3438,12 +3494,29 @@ async function classifyLiveIncumbent(input: {
     // as the inconclusive answer it is.
     if (verdict !== "mismatch") return { kind: "serving", verdict };
   }
-  const startedAtMs = Date.parse(input.lockStartedAt);
-  if (Number.isNaN(startedAtMs)) return { kind: "booting", ageMs: null };
-  const ageMs = Date.now() - startedAtMs;
-  return ageMs >= STALE_INCUMBENT_LOCK_AGE_MS
-    ? { kind: "wedged", ageMs }
-    : { kind: "booting", ageMs };
+  const lockStartedAtMs = Date.parse(input.lockStartedAt);
+  if (Number.isNaN(lockStartedAtMs)) {
+    return { kind: "indeterminate", reason: "lock-time-unparseable" };
+  }
+  const ageMs = Date.now() - lockStartedAtMs;
+  if (ageMs < STALE_INCUMBENT_LOCK_AGE_MS) return { kind: "booting", ageMs };
+  // Old lock, no record: the shape of a wedged host. Before a signal goes
+  // anywhere, is the live process the one that took the lock? The frame's
+  // pid was the holder when the child read it, but that was the whole wait
+  // ago; a pid freed and reused inside one poll would be a stranger. The
+  // holder recorded `startedAt` after it had started, so the holder's OS
+  // start time is at or before it; a process that started later is not it.
+  const processStartedAtMs = deps.readProcessStartTimeMs(input.pid);
+  if (processStartedAtMs === null) {
+    return { kind: "indeterminate", reason: "process-start-unreadable" };
+  }
+  if (processStartedAtMs > lockStartedAtMs) {
+    return {
+      kind: "recycled",
+      startedAfterLockByMs: processStartedAtMs - lockStartedAtMs,
+    };
+  }
+  return { kind: "wedged", ageMs };
 }
 
 /**

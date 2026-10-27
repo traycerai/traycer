@@ -495,6 +495,11 @@ function makeRunStubs(
     signalProcess: () => {
       throw new Error("signalProcess is not expected in this test");
     },
+    // The reads that gate that signal: unset, the real `pid.json` and the
+    // real OS process table. Absent and unreadable here, which together can
+    // never earn an eviction.
+    readPidMetadataEvidence: async () => ({ kind: "absent" }),
+    readProcessStartTimeMs: () => null,
     sleep: async () => undefined,
     closeLogFd: async () => undefined,
     // Pin the shared harness to a SINGLE attempt. Every test built on
@@ -6109,7 +6114,11 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
     recorded: Recorded,
     deps: Partial<RunHostStartDeps>,
     evidence:
-      | { readonly kind: "pid-metadata"; readonly startedAt?: string }
+      | {
+          readonly kind: "pid-metadata";
+          readonly pid?: number;
+          readonly startedAt?: string;
+        }
       | { readonly kind: "held-retry-window" },
   ): Partial<RunHostStartDeps> {
     const originalSpawn = deps.spawn;
@@ -6145,7 +6154,7 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
               evidence.kind === "pid-metadata"
                 ? {
                     kind: "pid-metadata",
-                    pid: incumbentPid,
+                    pid: evidence.pid ?? incumbentPid,
                     hostId: "host-a",
                     // Old by default: a lock far past the boot ceiling, so
                     // the never-evict rows below have to EARN their answer
@@ -6231,11 +6240,17 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
    * and the identity verdict on whatever it names, with every signal the
    * supervisor sends to a non-child pid recorded.
    */
+  /** The fixture lock's `startedAt`, as `withYieldingFirstAttempt` reports it. */
+  const fixtureLockStartedAtMs = Date.parse("2026-10-16T00:34:11.000Z");
+
   function withIncumbentRecords(
     deps: Partial<RunHostStartDeps>,
     records: {
-      readonly pidRecord: HostPidMetadata | null;
+      readonly pidRecord: HostPidMetadata | null | "unreadable";
       readonly verdict?: PublishedProcessIdentityVerdict;
+      // The OS start time of the live pid. Defaults to a process that is
+      // older than the fixture lock, i.e. the one that took it.
+      readonly processStartedAtMs?: number | null;
     },
   ): {
     readonly deps: Partial<RunHostStartDeps>;
@@ -6253,11 +6268,20 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
         signalProcess: (pid, signal) => {
           signals.push({ pid, signal });
         },
+        readPidMetadataEvidence: async () =>
+          records.pidRecord === "unreadable"
+            ? { kind: "unreadable", cause: "EACCES" }
+            : records.pidRecord === null
+              ? { kind: "absent" }
+              : { kind: "read", metadata: records.pidRecord },
+        readProcessStartTimeMs: () =>
+          records.processStartedAtMs === undefined
+            ? fixtureLockStartedAtMs - 1_000
+            : records.processStartedAtMs,
         lifecycle: {
           ...baseLifecycle,
           teardown: {
             ...baseLifecycle.teardown,
-            readPidMetadata: async () => records.pidRecord,
             verifyPublishedInstance: async () =>
               records.verdict ?? "indeterminate",
           },
@@ -6402,7 +6426,157 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
     expect(recorded.spawnCalls).toHaveLength(1);
     expect(recorded.exited).toBe(0);
     expect(signals).toEqual([]);
+    const left = recorded.loggerWarns.find(
+      (entry) =>
+        entry.message ===
+        "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+    );
+    expect(left?.fields.standing).toBe("indeterminate");
+    expect(left?.fields.reason).toBe("lock-time-unparseable");
   });
+
+  it("leaves the incumbent alone when pid.json exists but cannot be read", async () => {
+    // Unreadable is not absent: a torn write or a permission slip on a file
+    // that may well name this pid. The teardown port's `readPidMetadata`
+    // folds that into `null`, which is why the classifier reads EVIDENCE.
+    const { recorded, deps: base } = makeRunStubs(sampleRecord(exec), null);
+    const { deps, signals } = withIncumbentRecords(base, {
+      pidRecord: "unreadable",
+    });
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => true,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(signals).toEqual([]);
+    const left = recorded.loggerWarns.find(
+      (entry) =>
+        entry.message ===
+        "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+    );
+    expect(left?.fields.reason).toBe("pid-json-unreadable");
+  });
+
+  it("leaves a pid that started after the lock was taken - a recycled pid, not the holder", async () => {
+    // The frame's pid was the lock holder when the child read it, a whole
+    // wait ago. A process that began after the lock's own `startedAt`
+    // cannot be the one that took it, whatever else is missing.
+    const { recorded, deps: base } = makeRunStubs(sampleRecord(exec), null);
+    const { deps, signals } = withIncumbentRecords(base, {
+      pidRecord: null,
+      processStartedAtMs: fixtureLockStartedAtMs + 60_000,
+    });
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => true,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(signals).toEqual([]);
+    const left = recorded.loggerWarns.find(
+      (entry) =>
+        entry.message ===
+        "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+    );
+    expect(left?.fields.standing).toBe("recycled");
+    expect(left?.fields.startedAfterLockByMs).toBe(60_000);
+  });
+
+  it("leaves the incumbent alone when the OS will not say when the pid started", async () => {
+    const { recorded, deps: base } = makeRunStubs(sampleRecord(exec), null);
+    const { deps, signals } = withIncumbentRecords(base, {
+      pidRecord: null,
+      processStartedAtMs: null,
+    });
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => true,
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(signals).toEqual([]);
+    const left = recorded.loggerWarns.find(
+      (entry) =>
+        entry.message ===
+        "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+    );
+    expect(left?.fields.reason).toBe("process-start-unreadable");
+  });
+
+  it.each([
+    ["zero, the caller's own process group", 0],
+    ["a negative, a process group", -1],
+    ["a fraction", 1098.5],
+    ["pid 1", 1],
+    ["this supervisor's own pid", process.pid],
+  ])(
+    "treats a frame naming %s as naming nothing: no wait, no signal, exit 0",
+    async (_label, badPid) => {
+      // The decoder accepts any number; `process.kill` does not read every
+      // number as a pid. None of these can be a process a child of ours
+      // yielded to, so the answer is the no-pid answer: today's exit 0.
+      const { recorded, deps: base } = makeRunStubs(sampleRecord(exec), null);
+      const { deps, signals } = withIncumbentRecords(base, { pidRecord: null });
+      const livenessProbes: number[] = [];
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...withYieldingFirstAttempt(recorded, deps, {
+                kind: "pid-metadata",
+                pid: badPid,
+              }),
+              isProcessAlive: (pid) => {
+                livenessProbes.push(pid);
+                return true;
+              },
+            },
+          ),
+        recorded,
+      );
+
+      expect(recorded.spawnCalls).toHaveLength(1);
+      expect(recorded.exited).toBe(0);
+      expect(livenessProbes).toEqual([]);
+      expect(signals).toEqual([]);
+    },
+  );
 
   it("evicts a wedged incumbent - alive, unpublished, lock past the boot ceiling - and relaunches", async () => {
     // The 2026-10-26 staging outage: a host parked in Node's exit path after
