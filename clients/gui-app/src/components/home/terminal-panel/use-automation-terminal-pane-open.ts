@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxAutomationResponse,
+} from "@traycer/protocol/host/sandbox-control";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   useAutomationTerminalReadinessFailed,
@@ -24,7 +28,7 @@ import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-s
 import { automationTerminalTarget } from "@/lib/sandboxes/automation-terminal-target";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
-import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
+import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { settledForStartingAccount } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useLandingPanelStore,
@@ -54,11 +58,9 @@ export function useAutomationTerminalPaneOpen(
       currentAttempt.current = null;
     };
   }, [attempt]);
-  const podEnvironmentIds = useMemo(
-    () => (teamEnvironmentId === null ? [] : [teamEnvironmentId]),
-    [teamEnvironmentId],
-  );
-  const pods = useSandboxTeamPods(podEnvironmentIds);
+  const automation = useSandboxAutomation(teamEnvironmentId);
+  const { target: openTarget, failureCode: podFailureCode } =
+    automationTerminalWakeTarget(attempt, teamEnvironmentId, automation);
   const activeAttempt = settledForStartingAccount(attempt) ? attempt : null;
   const hostId = activeAttempt === null ? null : activeAttempt.hostId;
   const client = useHostClientForHostId(hostId);
@@ -75,15 +77,17 @@ export function useAutomationTerminalPaneOpen(
     hostId,
     createSupport,
   );
-  const failureCode = automationTerminalFailureCode({
-    wakeError: open.error,
-    readinessFailed,
-    directoryFailed: launch.failed,
-    directoryError: launch.bindings.error,
-    listError: list.error,
-    createError: create.error,
-    unsupported: createSupport === false,
-  });
+  const failureCode =
+    podFailureCode ??
+    automationTerminalFailureCode({
+      wakeError: open.error,
+      readinessFailed,
+      directoryFailed: launch.failed,
+      directoryError: launch.bindings.error,
+      listError: list.error,
+      createError: create.error,
+      unsupported: createSupport === false,
+    });
   const failed = failureCode !== null;
   const starting =
     open.isPending ||
@@ -172,15 +176,11 @@ export function useAutomationTerminalPaneOpen(
     instanceId,
   ]);
   const { mutateAsync: wake } = open;
-  const openTarget = automationTerminalTarget(
-    attempt.sandboxId,
-    teamEnvironmentId,
-    teamEnvironmentId === null ? [] : (pods.get(teamEnvironmentId) ?? []),
-  );
   // Wake exactly once per observation attempt, including after a failed wake.
   useEffect(() => {
     if (
       attempt.hostId !== null ||
+      openTarget === undefined ||
       currentAttempt.current !== attempt ||
       wakeDispatched.current === attempt ||
       !settledForStartingAccount(attempt)
@@ -201,6 +201,7 @@ export function useAutomationTerminalPaneOpen(
             return;
           const ready = {
             ...attempt,
+            startedAt: Date.now(),
             hostId: opened.sandbox.hostId,
             sandboxId: opened.sandbox.id,
           };
@@ -219,6 +220,7 @@ export function useAutomationTerminalPaneOpen(
     setRetryCode(failureCode);
     open.reset();
     create.reset();
+    if (podFailureCode !== null) void automation.refetch();
     dispatched.current = false;
     const next = newAutomationTerminalAttempt(
       request,
@@ -237,6 +239,36 @@ export function useAutomationTerminalPaneOpen(
     starting,
     failureCode: failureCode ?? retryCode,
     hostId: activeAttempt?.hostId ?? request.existing?.hostId ?? null,
+  };
+}
+
+/** Only a successful pod lookup can authorize waking a specifically named pod. */
+function automationTerminalWakeTarget(
+  attempt: AutomationTerminalAttempt,
+  teamEnvironmentId: string | null,
+  automation: UseQueryResult<SandboxAutomationResponse | null>,
+): {
+  readonly target: SandboxAutomationOpenTarget | null | undefined;
+  readonly failureCode: string | null;
+} {
+  const target = automationTerminalTarget(
+    attempt.sandboxId,
+    teamEnvironmentId,
+    automation.data?.pods ?? [],
+  );
+  if (
+    teamEnvironmentId === null ||
+    attempt.sandboxId === null ||
+    attempt.hostId !== null
+  )
+    return { target, failureCode: null };
+  if (automation.isPending || automation.isFetching)
+    return { target: undefined, failureCode: null };
+  if (automation.isError)
+    return { target: undefined, failureCode: "automation-pod-query-failed" };
+  return {
+    target,
+    failureCode: target === undefined ? "automation-pod-missing" : null,
   };
 }
 

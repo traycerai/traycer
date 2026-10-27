@@ -232,6 +232,11 @@ export function SandboxRowActions(props: {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2">
+      {openAutomationTerminal.failure ? (
+        <p role="alert" className="text-ui-xs text-destructive">
+          {openAutomationTerminal.failure}
+        </p>
+      ) : null}
       <SettingsApplyFailure
         operation={applyingOperation}
         name={summary.displayName}

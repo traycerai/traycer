@@ -3,13 +3,17 @@ import type {
   SandboxPod,
 } from "@traycer/protocol/host/sandbox-control";
 
-/** Personal uses no body; a team opens its existing pod by ordinal when known. */
+/** A named team pod waits for its ordinal; only an unstarted team picks any pod. */
 export function automationTerminalTarget(
   sandboxId: string | null,
   teamEnvironmentId: string | null,
   pods: readonly SandboxPod[],
-): SandboxAutomationOpenTarget | null {
+): SandboxAutomationOpenTarget | null | undefined {
   if (teamEnvironmentId === null) return null;
+  if (sandboxId === null)
+    return { environmentId: teamEnvironmentId, ordinal: null };
   const pod = pods.find((candidate) => candidate.sandbox.id === sandboxId);
-  return { environmentId: teamEnvironmentId, ordinal: pod?.ordinal ?? null };
+  return pod === undefined
+    ? undefined
+    : { environmentId: teamEnvironmentId, ordinal: pod.ordinal };
 }

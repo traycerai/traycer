@@ -360,21 +360,23 @@ export function sandboxShapeAndCostLine(
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
   const shape = sandboxShapeLine(summary);
-  if (summary.priceMcPerHour === null) return shape;
   const creator = agentCreatorClause(summary);
-  if (creator !== null) {
-    return `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake · ${creator}`;
+  const teamNonPayer =
+    configuration.kind === "team" && summary.wakePayer?.userId !== viewerUserId;
+  const resting = summary.state === "suspended" || summary.state === "stopped";
+  const wakeWarning =
+    teamNonPayer && resting ? "waking it makes you the payer" : null;
+  if (summary.priceMcPerHour === null) {
+    return joinParts(shape, wakeWarning, wakeWarning === null ? null : creator);
   }
-  const rate = `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
-  if (
-    configuration.kind === "team" &&
-    summary.wakePayer?.userId !== viewerUserId
-  ) {
-    const resting =
-      summary.state === "suspended" || summary.state === "stopped";
-    return resting ? `${rate} · waking it makes you the payer` : rate;
-  }
-  return `${shape} · ${costLine(summary.priceMcPerHour.awakeMc, configurationCopy(configuration))}`;
+  const cost =
+    creator !== null || teamNonPayer
+      ? `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          configurationCopy(configuration),
+        );
+  return joinParts(shape, cost, wakeWarning, creator);
 }
 
 /** `created by Planner for Sandbox setup`, on an agent sandbox. */
