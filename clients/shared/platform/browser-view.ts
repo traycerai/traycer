@@ -697,6 +697,7 @@ export interface BrowserSessionsStreamSend {
  * `never` assertion over every cookie-bearing field.
  */
 export type BrowserSessionsStreamEvent =
+  | { readonly kind: "inventoryCapability"; readonly supported: boolean }
   | {
       readonly kind: "status";
       readonly lifecycle: BrowserSessionsLifecycle;

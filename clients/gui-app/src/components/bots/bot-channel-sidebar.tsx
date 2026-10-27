@@ -1,6 +1,6 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, ExternalLink, Plus } from "lucide-react";
+import { ExternalLink, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
@@ -150,7 +150,6 @@ function SidebarSection(props: {
   readonly onSetUp: (team: TeamBotSetupTarget) => void;
 }): ReactNode {
   const { group, activeBotId, unreadBotIds, onOpenChannel, onSetUp } = props;
-  const [collapsed, setCollapsed] = useState(false);
   const isTeam = group.canCreate && group.ownerKind === "organization";
   const isPersonal = group.canCreate && group.ownerKind === "user";
   const client = useTabHostClient();
@@ -171,13 +170,6 @@ function SidebarSection(props: {
       botCount: group.bots.length,
       opener: event.currentTarget,
     });
-  // A collapsed section still lists the channel in view and the unread ones,
-  // as Slack's does.
-  const shown = collapsed
-    ? group.bots.filter(
-        (bot) => bot.botId === activeBotId || unreadBotIds.has(bot.botId),
-      )
-    : group.bots;
   return (
     <section
       aria-label={group.label}
@@ -186,19 +178,9 @@ function SidebarSection(props: {
       className="flex flex-col gap-0.5"
     >
       <div className="group/section flex min-w-0 items-center gap-0.5">
-        <button
-          type="button"
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
-          className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-1 text-left text-ui-sm font-medium text-muted-foreground transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-        >
-          {collapsed ? (
-            <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
-          ) : (
-            <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
-          )}
-          <span className="truncate">{group.label}</span>
-        </button>
+        <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-ui-sm font-medium text-muted-foreground">
+          {group.label}
+        </span>
         {isTeam || isPersonal ? (
           // Drawn on the header's hover and on keyboard focus, as the
           // section's own control rather than a row of it; always drawn on a
@@ -214,7 +196,7 @@ function SidebarSection(props: {
           </button>
         ) : null}
       </div>
-      {collapsed || !(isTeam || isPersonal) || group.bots.length > 0 ? null : (
+      {!(isTeam || isPersonal) || group.bots.length > 0 ? null : (
         <button
           type="button"
           data-testid="bot-channel-section-set-up"
@@ -226,7 +208,7 @@ function SidebarSection(props: {
         </button>
       )}
       <ul className="flex flex-col gap-0.5">
-        {shown.map((bot) => (
+        {group.bots.map((bot) => (
           <li key={bot.botId}>
             <ChannelRow
               bot={bot}

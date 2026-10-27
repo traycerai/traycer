@@ -884,6 +884,7 @@ import {
   epicListTasksUpgradeV16ToV17,
   epicListTasksUpgradeV17ToV18,
   epicListTasksUpgradeV18ToV19,
+  epicMentionArtifactsV10,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -1045,8 +1046,10 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
+  browserSessionsV23,
 } from "@traycer/protocol/host/browser/contracts";
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
+import { browserCatalogReadV10 } from "@traycer/protocol/host/browser/discovery-contracts";
 import {
   configSimulatorGetV10,
   configSimulatorSetV10,
@@ -6141,6 +6144,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "browser.catalog.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserCatalogReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "browser.savedLoginSites": {
     // Settings > Browser's "Sites with saved logins" list (keychain refactor
     // ticket 10). Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL,
@@ -8656,6 +8672,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: epicMentionReviewsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Added after the released floor was frozen: a host without it lists no
+  // HTML artifacts, canvases or files in the picker, and nothing else changes.
+  "epic.mentionArtifacts": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicMentionArtifactsV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -14853,7 +14884,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: browserSessionsV20,
@@ -14864,6 +14895,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         2: {
           contract: browserSessionsV22,
         },
+        3: { contract: browserSessionsV23 },
       },
     },
   },

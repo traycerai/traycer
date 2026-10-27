@@ -33,13 +33,13 @@ import {
 import { recordProvisioningReceipt } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
   BROWSER_TILE_DND_TYPE,
+  getBrowserTileDragId,
   readEpicCanvasDragSourceData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   BrowsersPanelActions,
   BrowsersPanelBody,
-  BrowsersPanelEmptyState,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import {
@@ -51,6 +51,12 @@ import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/bro
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
 import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
+import { BrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
+import {
+  BROWSER_CATALOG_VERSION,
+  type BrowserCatalogRecord,
+} from "@traycer/protocol/host/browser/catalog-contracts";
+import { useBrowserPanelStore } from "@/stores/epics/browser-panel-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 import {
@@ -78,8 +84,24 @@ const browserHostProviderState = vi.hoisted(() => ({
 
 const browserHostOptionsState = vi.hoisted(() => ({
   hosts: [
-    { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
-    { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
+    {
+      hostId: "host-1",
+      name: "Home Mac",
+      connectable: true,
+      sandbox: null,
+      entry: null,
+      item: null,
+      health: { state: "online" },
+    },
+    {
+      hostId: "host-2",
+      name: "Work Mac",
+      connectable: true,
+      sandbox: null,
+      entry: null,
+      item: null,
+      health: { state: "online" },
+    },
   ],
   isLoading: false,
   listsFailed: false,
@@ -118,9 +140,22 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
     hosts: browserHostOptionsState.hosts,
     activeHostId: "host-1",
     isLoading: browserHostOptionsState.isLoading,
+    listsResolved: true,
     listsFailed: browserHostOptionsState.listsFailed,
     retryLists: browserHostOptionsState.retryLists,
   }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => "host-1",
+}));
+
+const catalogActions = vi.hoisted(() => ({
+  closeTab: vi.fn(),
+  withOwner: vi.fn(),
+}));
+vi.mock("@/hooks/browser/use-browser-catalog-actions", () => ({
+  useBrowserCatalogActions: () => catalogActions,
 }));
 
 vi.mock("@/components/settings/host-scope/host-option-row", () => ({
@@ -216,9 +251,15 @@ const chatsState = vi.hoisted(() => ({
   ],
 }));
 
-vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useBrowserSessionsContext: () => sessionsState.value,
-}));
+vi.mock(
+  "@/components/epic-canvas/renderers/browser-sessions-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-canvas/renderers/browser-sessions-context")
+    >()),
+    useBrowserSessionsContext: () => sessionsState.value,
+  }),
+);
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => chatsState.value,
@@ -317,14 +358,35 @@ describe("BrowsersPanelBody", () => {
     browserHostPinState.setSelection.mockClear();
     browserHostProviderState.hostIds = [];
     browserHostOptionsState.hosts = [
-      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
-      { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
+      {
+        hostId: "host-1",
+        name: "Home Mac",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "online" },
+      },
+      {
+        hostId: "host-2",
+        name: "Work Mac",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "online" },
+      },
     ];
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;
     browserHostOptionsState.retryLists.mockClear();
     closeTab.mockReset();
     closeTab.mockResolvedValue(undefined);
+    catalogActions.withOwner.mockReset();
+    catalogActions.withOwner.mockImplementation(
+      (hostId: string, run: (state: BrowserSessionsState) => Promise<void>) =>
+        run({ ...sessionsState.value, hostId }),
+    );
     openTab.mockReset();
     openTab.mockResolvedValue({
       sessionId: "sess-created",
@@ -479,9 +541,11 @@ describe("BrowsersPanelBody", () => {
       wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />),
     );
     const rowIds = (): string[] =>
-      [...screen.getByTestId("epic-browsers-panel-list").children].map(
-        (row) => row.firstElementChild?.getAttribute("data-testid") ?? "",
-      );
+      [
+        ...screen
+          .getByTestId("epic-browsers-panel-list")
+          .querySelectorAll('[data-testid^="epic-browser-sidebar-row-"]'),
+      ].map((row) => row.getAttribute("data-testid") ?? "");
     const initial = [
       "epic-browser-sidebar-row-tab-live",
       "epic-browser-sidebar-row-tab-dormant",
@@ -519,7 +583,9 @@ describe("BrowsersPanelBody", () => {
     render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
 
     const live = dndState.draggables.find((entry) =>
-      String(entry.id).includes("browser-tile:sess-primary:tab-live"),
+      String(entry.id).includes(
+        getBrowserTileDragId("host-1", "sess-primary", "tab-live"),
+      ),
     );
     expect(live).toBeTruthy();
     expect(readEpicCanvasDragSourceData(live?.data)).toMatchObject({
@@ -552,7 +618,7 @@ describe("BrowsersPanelBody", () => {
     expect(screen.getByText("Checkout")).toBeTruthy();
     expect(screen.queryByText("Live page")).toBeNull();
     expect(screen.queryByText("Dormant page")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("1 browser result.");
+    expect(screen.getByText("1 browser result.")).toBeTruthy();
   });
 
   it("gives every row a unique, title-derived accessible close name", () => {
@@ -998,38 +1064,9 @@ describe("BrowsersPanelBody", () => {
     sessionsState.value = { ...sessionsState.value, items: [] };
     render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
 
-    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
+    expect(screen.getByTestId("browser-list-empty-state")).toBeTruthy();
     expect(screen.getByText("No browsers yet.")).toBeTruthy();
-    expect(screen.getByText("Agents open theirs here too.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add browser" })).toBeTruthy();
-  });
-
-  it("says there are no browsers on this host, not none at all, when the task has browsers on another machine", () => {
-    // "No browsers yet." above a row saying the task has a browser elsewhere
-    // contradicts itself, and "Agents open theirs here too." points at the
-    // wrong machine: the row exists because an agent's browser was placed on
-    // another one. The mobile switcher renders this same component.
-    const onShowHost = vi.fn();
-    render(
-      wrapper(
-        <BrowsersPanelEmptyState
-          onAddBrowser={() => undefined}
-          isAdding={false}
-          elsewhere={[{ hostId: "host-2", tabCount: 1 }]}
-          onShowHost={onShowHost}
-        />,
-      ),
-    );
-
-    expect(screen.getByText("No browsers on this host.")).toBeTruthy();
-    expect(screen.queryByText("No browsers yet.")).toBeNull();
-    expect(screen.queryByText("Agents open theirs here too.")).toBeNull();
-    expect(screen.getByRole("button", { name: "Add browser" })).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "1 browser on Work Mac" }),
-    );
-    expect(onShowHost).toHaveBeenCalledWith("host-2");
+    expect(screen.getByTestId("browser-empty-add")).toBeTruthy();
   });
 
   // B3: closing the last tab leaves the session dormant on the host. The panel
@@ -1060,8 +1097,10 @@ describe("BrowsersPanelBody", () => {
     ]);
     render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
 
-    expect(screen.queryByTestId("epic-browsers-panel-list")).toBeNull();
-    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
+    expect(
+      screen.getByTestId("epic-browsers-panel-list").children,
+    ).toHaveLength(0);
+    expect(screen.getByTestId("browser-list-empty-state")).toBeTruthy();
   });
 
   it("holds settled row identity through navigating and provisioning, and never regresses a document title", () => {
@@ -1539,9 +1578,27 @@ describe("BrowsersPanelActions", () => {
     });
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
+    catalogActions.withOwner.mockReset();
+    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
     browserHostOptionsState.hosts = [
-      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
-      { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
+      {
+        hostId: "host-1",
+        name: "Home Mac",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "online" },
+      },
+      {
+        hostId: "host-2",
+        name: "Work Mac",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "online" },
+      },
     ];
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;
@@ -1583,15 +1640,24 @@ describe("BrowsersPanelActions", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("opens a new browser through the host and places its session pointer", async () => {
+  it("creates the browser on the device chosen in the picker and places its pointer there", async () => {
+    const user = userEvent.setup();
+    catalogActions.withOwner.mockImplementation(
+      (hostId: string, run: (state: BrowserSessionsState) => Promise<void>) =>
+        run({ ...sessionsState.value, hostId }),
+    );
     render(
       wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    await user.click(screen.getByRole("menuitem", { name: /Work Mac/ }));
 
     await waitFor(() => {
-      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+      expect(catalogActions.withOwner).toHaveBeenCalledWith(
+        "host-2",
+        expect.any(Function),
+      );
     });
     await waitFor(() => {
       expect(navigateNested).toHaveBeenCalledWith(
@@ -1600,37 +1666,20 @@ describe("BrowsersPanelActions", () => {
         expect.any(Function),
       );
     });
-    const opened = Object.values(
-      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
-        ?.tilesByInstanceId ?? {},
-    ).find((tile) => tile !== undefined && tile.type === "browser-session");
-    expect(opened).toMatchObject({
-      hostId: "host-1",
-      sessionId: "sess-created",
-      tabId: "tab-created",
-    });
+    expect(browserHostPinState.setSelection).not.toHaveBeenCalled();
   });
 
-  it("opens a new browser on the panel's filtered host", async () => {
-    browserHostPinState.selection = "host-2";
-    sessionsState.value = { ...sessionsState.value, hostId: "host-2" };
+  it("suggests the task's device first in the picker", async () => {
+    const user = userEvent.setup();
     render(
       wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
 
-    await waitFor(() => {
-      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
-    });
-    await waitFor(() => {
-      expect(navigateNested).toHaveBeenCalledOnce();
-    });
-    const opened = Object.values(
-      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
-        ?.tilesByInstanceId ?? {},
-    ).find((tile) => tile !== undefined && tile.type === "browser-session");
-    expect(opened).toMatchObject({ hostId: "host-2" });
+    const first = screen.getAllByRole("menuitem")[0];
+    expect(first.textContent).toContain("Home Mac");
+    expect(first.textContent).toContain("Suggested");
   });
 
   it("opens browser search from the header action", () => {
@@ -1647,46 +1696,69 @@ describe("BrowsersPanelActions", () => {
     ).toBe(true);
   });
 
-  it("opens the host filter as the final header action", async () => {
+  it("turns on offline devices from the filter and shows the active badge", async () => {
     const user = userEvent.setup();
     render(
       wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
     );
 
-    await user.click(
-      screen.getByRole("button", { name: "Filter browsers by host" }),
-    );
-
+    await user.click(screen.getByRole("button", { name: "Filter browsers" }));
     const filterMenu = screen.getByTestId("epic-browsers-panel-filter-menu");
     expect(filterMenu.getAttribute("data-side")).toBe("right");
-    await user.click(screen.getByRole("menuitem", { name: "Host, Home Mac" }));
-    const hostMenu = screen.getByTestId("epic-browsers-panel-host-menu");
-    expect(hostMenu.getAttribute("data-side")).toBe("right");
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Work Mac" }));
-    expect(browserHostPinState.setSelection).toHaveBeenCalledWith("host-2");
+    await user.click(
+      screen.getByRole("menuitemcheckbox", { name: "Show offline devices" }),
+    );
+
+    expect(
+      useBrowserPanelStore.getState().preferences[
+        JSON.stringify([null, "epic-1"])
+      ]?.showOffline,
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Filter browsers, 1 filter active" }),
+    ).toBeTruthy();
   });
 
-  it("shows and clears an active host filter", async () => {
+  it("keeps the simulator device choice separate from browser discovery", async () => {
+    const user = userEvent.setup();
+    render(
+      wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filter browsers" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Simulator device" }),
+    );
+    expect(
+      screen
+        .getByTestId("epic-browsers-panel-filter-menu")
+        .getAttribute("data-side"),
+    ).toBe("right");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Work Mac" }));
+
+    expect(browserHostPinState.setSelection).toHaveBeenCalledWith("host-2");
+    expect(catalogActions.withOwner).not.toHaveBeenCalled();
+  });
+
+  it("clears a pinned simulator device back to the task device", async () => {
     const user = userEvent.setup();
     browserHostPinState.selection = "host-2";
     render(
       wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
     );
 
+    await user.click(screen.getByRole("button", { name: "Filter browsers" }));
     await user.click(
-      screen.getByRole("button", {
-        name: "Filter browsers by host, 1 filter active",
-      }),
+      screen.getByRole("menuitem", { name: "Simulator device" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Host, Work Mac" }));
     fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /Follow task host/ }),
+      screen.getByRole("menuitemradio", { name: /Follow task device/ }),
     );
 
     expect(browserHostPinState.setSelection).toHaveBeenCalledWith(null);
   });
 
-  it("loads host choices progressively in the right-side submenu", async () => {
+  it("loads simulator device choices progressively", async () => {
     const user = userEvent.setup();
     browserHostOptionsState.hosts = [];
     browserHostOptionsState.isLoading = true;
@@ -1694,11 +1766,259 @@ describe("BrowsersPanelActions", () => {
       wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
     );
 
+    await user.click(screen.getByRole("button", { name: "Filter browsers" }));
     await user.click(
-      screen.getByRole("button", { name: "Filter browsers by host" }),
+      screen.getByRole("menuitem", { name: "Simulator device" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Host, Home Mac" }));
 
     expect(screen.getByText("Loading hosts…")).toBeTruthy();
+  });
+});
+
+describe("grouped catalog list", () => {
+  function catalogRecord(
+    hostId: string,
+    sessionId: string,
+    tabs: ReadonlyArray<{ tabId: string; title: string; url: string }>,
+  ): BrowserCatalogRecord {
+    return {
+      epicId: "epic-1",
+      hostId,
+      sessionId,
+      inventoryRevision: 1,
+      lastActivityAt: 1,
+      tabs: [...tabs],
+    };
+  }
+
+  function catalogPanel(): ReactNode {
+    return catalogPanelRevoking([], null);
+  }
+
+  function catalogPanelRevoking(
+    revokedHostIds: readonly string[],
+    header: ReactNode,
+  ): ReactNode {
+    const records = [
+      catalogRecord("host-1", "s1", [
+        { tabId: "t1", title: "Docs", url: "https://docs.example" },
+      ]),
+      catalogRecord("host-2", "s2", [
+        { tabId: "t2", title: "Docs", url: "https://work.example/docs" },
+        { tabId: "t3", title: "Billing", url: "https://billing.example" },
+      ]),
+      catalogRecord("host-3", "s3", [
+        { tabId: "t4", title: "Router", url: "http://192.168.0.1" },
+      ]),
+    ];
+    return wrapper(
+      <BrowserCatalogContext.Provider
+        value={{
+          inventory: {
+            status: "available",
+            records,
+            readiness: ["host-1", "host-2", "host-3"].map((hostId) => ({
+              hostId,
+              state: "complete",
+              indexingRevision: 1,
+              capability: {
+                catalogVersion: BROWSER_CATALOG_VERSION,
+                durableInventoryRevisions: true,
+                revisionedMutationAcks: true,
+              },
+            })),
+            version: 1,
+            pendingCount: 0,
+            revokedHostIds,
+          },
+          hosts: new Map(),
+          refresh: vi.fn(),
+        }}
+      >
+        {header}
+        <BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />
+      </BrowserCatalogContext.Provider>,
+    );
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+    browserHostPinState.selection = null;
+    browserHostOptionsState.isLoading = false;
+    browserHostOptionsState.hosts = [
+      {
+        hostId: "host-1",
+        name: "Home Mac",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "online" },
+      },
+      {
+        hostId: "host-2",
+        name: "Work Mac",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "online" },
+      },
+      {
+        hostId: "host-3",
+        name: "NAS",
+        connectable: true,
+        sandbox: null,
+        entry: null,
+        item: null,
+        health: { state: "offline" },
+      },
+    ];
+    catalogActions.closeTab.mockReset();
+    catalogActions.closeTab.mockResolvedValue(undefined);
+    usePanelHeaderSearchStore.setState(
+      usePanelHeaderSearchStore.getInitialState(),
+      true,
+    );
+    usePanelHeaderMenuStore.setState(
+      usePanelHeaderMenuStore.getInitialState(),
+      true,
+    );
+    seedCanvasTab();
+    replaceSessions([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  it("groups tabs under their device, labels the local one, counts tabs and hides the offline device", () => {
+    render(catalogPanel());
+
+    const home = screen.getByTestId("browser-device-group-host-1");
+    const work = screen.getByTestId("browser-device-group-host-2");
+    expect(home.textContent).toContain("Home Mac");
+    expect(home.textContent).toContain("Local");
+    expect(work.textContent).toContain("Work Mac");
+    expect(work.textContent).not.toContain("Local");
+    expect(screen.getByLabelText("2 tabs")).toBeTruthy();
+    expect(screen.queryByTestId("browser-device-group-host-3")).toBeNull();
+    expect(screen.getAllByText("Docs")).toHaveLength(2);
+  });
+
+  it("remembers a collapsed device across remounts", async () => {
+    const user = userEvent.setup();
+    const first = render(catalogPanel());
+    await user.click(screen.getByRole("button", { name: /Work Mac/ }));
+    expect(
+      screen
+        .getByRole("button", { name: /Work Mac/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    first.unmount();
+    render(catalogPanel());
+
+    expect(
+      screen
+        .getByRole("button", { name: /Work Mac/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: /Home Mac/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("expands a collapsed device for a matching search and restores the collapse when cleared", async () => {
+    const user = userEvent.setup();
+    render(catalogPanel());
+    await user.click(screen.getByRole("button", { name: /Work Mac/ }));
+    const work = (): HTMLElement =>
+      screen.getByRole("button", { name: /Work Mac/ });
+    expect(work().getAttribute("aria-expanded")).toBe("false");
+
+    act(() =>
+      usePanelHeaderSearchStore
+        .getState()
+        .openSearch("view-tab-1", "browsers", "billing"),
+    );
+    expect(work().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Billing")).toBeTruthy();
+
+    act(() =>
+      usePanelHeaderSearchStore
+        .getState()
+        .setSearchQuery("view-tab-1", "browsers", ""),
+    );
+    expect(work().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("offers Include offline devices for a search that only an offline device matches, keeping the query", async () => {
+    const user = userEvent.setup();
+    render(catalogPanel());
+    act(() =>
+      usePanelHeaderSearchStore
+        .getState()
+        .openSearch("view-tab-1", "browsers", "router"),
+    );
+
+    expect(screen.getByText("No matching browsers.")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Include offline devices" }),
+    );
+
+    expect(
+      screen.getByTestId("browser-device-group-host-3").textContent,
+    ).toContain("Offline");
+    expect(screen.getByText("Router")).toBeTruthy();
+    expect(
+      usePanelHeaderSearchStore.getState().queryBySurfaceKey[
+        JSON.stringify(["view-tab-1", "browsers"])
+      ],
+    ).toBe("router");
+  });
+
+  it("closes a catalog tab through its owning device, not the task host's live list", async () => {
+    render(catalogPanel());
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Close Docs/ })[1]);
+
+    await waitFor(() => {
+      expect(catalogActions.closeTab).toHaveBeenCalledWith(
+        { epicId: "epic-1", hostId: "host-2", sessionId: "s2" },
+        "t2",
+      );
+    });
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("omits a revoked device's tabs and its create choice even while the device is online", async () => {
+    const user = userEvent.setup();
+    render(
+      catalogPanelRevoking(
+        ["host-2"],
+        <BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />,
+      ),
+    );
+
+    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
+    expect(screen.getByTestId("browser-device-group-host-1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    expect(screen.queryByRole("menuitem", { name: /Work Mac/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /Home Mac/ })).toBeTruthy();
+  });
+
+  it("drops a device's tabs when it is revoked after the list is showing, while it stays online", () => {
+    const view = render(catalogPanelRevoking([], null));
+    expect(screen.getByTestId("browser-device-group-host-2")).toBeTruthy();
+
+    view.rerender(catalogPanelRevoking(["host-2"], null));
+
+    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
+    expect(screen.getByTestId("browser-device-group-host-1")).toBeTruthy();
   });
 });

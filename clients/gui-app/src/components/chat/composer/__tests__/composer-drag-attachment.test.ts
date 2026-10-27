@@ -75,6 +75,63 @@ describe("mentionAttachmentFromDragSource", () => {
     ).toBeNull();
   });
 
+  it("mentions sidebar canvas and file artifacts", () => {
+    peekOpenEpicMock.mockReturnValue({
+      store: {
+        getState: () => ({
+          epic: { title: "Drag attachments" },
+          tuiAgents: { byId: {} },
+        }),
+      },
+    });
+    const source: EpicCanvasDragSourceData = {
+      kind: SIDEBAR_NODE_DND_TYPE,
+      ...SCOPE,
+      hostId: TARGET_HOST_ID,
+      nodeId: "canvas-1",
+    };
+
+    epicTreeRecordMock.mockReturnValue({
+      id: "canvas-1",
+      parentId: null,
+      name: "Checkout screens",
+      type: "canvas",
+      status: null,
+      hostId: TARGET_HOST_ID,
+    });
+    expect(
+      mentionAttachmentFromDragSource(source, TARGET_HOST_ID),
+    ).toMatchObject({
+      kind: "mention",
+      contextType: "canvas",
+      path: "canvas:epic-1/canvas-1",
+      label: "Checkout screens",
+    });
+
+    epicTreeRecordMock.mockReturnValue({
+      id: "file-1",
+      parentId: null,
+      name: "report.pdf",
+      type: "file",
+      status: null,
+      hostId: TARGET_HOST_ID,
+    });
+    // A file artifact's contextType is distinct from "file", which already
+    // means a workspace file path.
+    expect(
+      mentionAttachmentFromDragSource(
+        { ...source, nodeId: "file-1" },
+        TARGET_HOST_ID,
+      ),
+    ).toMatchObject({
+      kind: "mention",
+      contextType: "file-artifact",
+      artifactType: "file",
+      path: "file-artifact:epic-1/file-1",
+      label: "report.pdf",
+    });
+  });
+
   it("rejects unavailable sidebar sessions and records", () => {
     const source: EpicCanvasDragSourceData = {
       kind: SIDEBAR_NODE_DND_TYPE,
