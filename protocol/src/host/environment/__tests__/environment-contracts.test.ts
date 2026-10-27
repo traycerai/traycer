@@ -1940,6 +1940,49 @@ describe("environment.configuration.skills.import@1.0 and skills.update's fetch_
     ).toBe(false);
   });
 
+  const inspected = (token: string, commitSha: string) => ({
+    outcome: "inspected",
+    token,
+    commitSha,
+    candidates: [],
+  });
+  const install = (token: string) => ({
+    step: "install",
+    environmentId: TEAM.environmentId,
+    token,
+    names: ["release-notes"],
+  });
+
+  it("takes a 128-character token on both ends and refuses 129", () => {
+    const long = "t".repeat(128);
+    expect(
+      importRegistry.responseSchema.parse(inspected(long, "a".repeat(40))),
+    ).toEqual(inspected(long, "a".repeat(40)));
+    expect(importRegistry.requestSchema.parse(install(long))).toEqual(
+      install(long),
+    );
+    const longer = "t".repeat(129);
+    expect(
+      importRegistry.responseSchema.safeParse(inspected(longer, "a".repeat(40)))
+        .success,
+    ).toBe(false);
+    expect(
+      importRegistry.requestSchema.safeParse(install(longer)).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["39 characters", "a".repeat(39)],
+    ["41 characters", "a".repeat(41)],
+    ["uppercase hex", "A".repeat(40)],
+    ["a non-hex character", `${"a".repeat(39)}g`],
+  ])("refuses a commit of %s", (_, commitSha) => {
+    expect(
+      importRegistry.responseSchema.safeParse(inspected("tok", commitSha))
+        .success,
+    ).toBe(false);
+  });
+
   it("parses fetch_failed as an update refusal", () => {
     const answer = { outcome: "refused", reason: "fetch_failed" };
     expect(
