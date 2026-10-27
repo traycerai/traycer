@@ -16,7 +16,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import type { HostNotificationsCloudFeedRowV15 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
@@ -97,7 +97,7 @@ const SANDBOX_ID = "sbx_notice_1";
 function noticeRow(
   entryId: string,
   notice: Record<string, unknown>,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "host-cloud",
@@ -123,7 +123,7 @@ function noticeRow(
   };
 }
 
-function seedCloud(row: HostNotificationsCloudFeedRowV15): void {
+function seedCloud(row: HostNotificationsCloudFeedRowV16): void {
   notificationFeedMode.value = "cloud";
   useCloudNotificationsStore.getState().applySnapshot({
     rows: [row],

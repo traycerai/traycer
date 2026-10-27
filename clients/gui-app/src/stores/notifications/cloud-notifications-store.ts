@@ -5,8 +5,8 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV15,
-  type HostNotificationsCloudFeedRowV15,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV16,
+  type HostNotificationsCloudFeedRowV16,
   type HostNotificationsCloudFeedSummary,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -34,7 +34,7 @@ export interface CloudNotificationsState {
    * activation still asks for it.
    */
   readonly rows: Readonly<
-    Partial<Record<string, HostNotificationsCloudFeedRowV15>>
+    Partial<Record<string, HostNotificationsCloudFeedRowV16>>
   >;
   readonly summary: HostNotificationsCloudFeedSummary | null;
   /** The cloud's per-user change sequence, as of the last snapshot. This is
@@ -69,10 +69,10 @@ export interface CloudNotificationsState {
   >;
   readonly connectionState: CloudNotificationsConnectionState;
   applySnapshot(input: {
-    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>;
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>;
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
-  }): ReadonlyArray<HostNotificationsCloudFeedRowV15> | null;
+  }): ReadonlyArray<HostNotificationsCloudFeedRowV16> | null;
   /**
    * Paints the replica tier's copy of the feed before this session's first
    * snapshot. A no-op once a snapshot landed. It leaves `hasSnapshot` false
@@ -81,7 +81,7 @@ export interface CloudNotificationsState {
    * replaces them wholesale.
    */
   seedFromReplica(input: {
-    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>;
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>;
     readonly summary: HostNotificationsCloudFeedSummary;
   }): void;
   /** The replica no longer admits its page: drop the rows it seeded. A live
@@ -201,12 +201,12 @@ export function cloudNotificationFeedId(entryId: string): string {
 }
 
 function rowKey(
-  row: Pick<HostNotificationsCloudFeedRowV15, "entryId">,
+  row: Pick<HostNotificationsCloudFeedRowV16, "entryId">,
 ): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
-function isUnreadAttention(row: HostNotificationsCloudFeedRowV15): boolean {
+function isUnreadAttention(row: HostNotificationsCloudFeedRowV16): boolean {
   return (
     (row.entry.severity === "needs_action" ||
       row.entry.severity === "failure") &&
@@ -230,9 +230,9 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       // uses accepted snapshots to drive cross-plane completion reconciliation.
       if (currentVersion !== null && input.version < currentVersion)
         return null;
-      const arrivals: HostNotificationsCloudFeedRowV15[] = [];
+      const arrivals: HostNotificationsCloudFeedRowV16[] = [];
       set((state) => {
-        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV15>> =
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV16>> =
           {};
         for (const row of input.rows) {
           const key = rowKey(row);
@@ -254,7 +254,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     seedFromReplica: (input) =>
       set((state) => {
         if (state.hasSnapshot) return state;
-        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV15>> =
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV16>> =
           {};
         for (const row of input.rows) rows[rowKey(row)] = row;
         return { rows, summary: input.summary };
@@ -409,8 +409,8 @@ export function openCloudNotificationsStream(
   onAuthError: (() => void) | null,
   onSnapshot:
     | ((input: {
-        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>;
-        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV15>;
+        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>;
+        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV16>;
       }) => void)
     | null,
 ): () => void {
@@ -453,7 +453,7 @@ export function openCloudNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsCloudFeedSubscribeServerFrameSchemaV15.safeParse(
+        hostNotificationsCloudFeedSubscribeServerFrameSchemaV16.safeParse(
           envelope,
         );
       if (!parsed.success) {
