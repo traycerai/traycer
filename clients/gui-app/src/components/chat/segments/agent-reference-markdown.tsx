@@ -24,7 +24,7 @@ const AGENT_REFERENCE_MARKDOWN_COMPONENTS: Record<
 /**
  * Renders a markdown string through {@link TraycerMarkdown} with the
  * agent-reference plugin set wired in: complete or uniquely-matching UUID
- * prefixes for agents and role claims resolve to live
+ * prefixes for agents and role claims, and complete task ids, resolve to live
  * {@link AgentReferenceChip}s. This is
  * the single renderer shared by assistant text segments and the A2A
  * sent/received message cards so all three surface the same formatted
