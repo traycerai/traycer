@@ -1,5 +1,7 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import {
   sandboxSettingsFailureLine,
@@ -107,6 +109,7 @@ import {
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
+import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   chatOpencodeLine,
@@ -2703,15 +2706,55 @@ function isStopFailure(failure: StagedSandboxFailure | null): boolean {
 function PendingStopLine(props: {
   readonly name: string;
   readonly sandboxId: string;
+  readonly configuration: StageConfiguration;
   readonly costLine: string;
   readonly pending: boolean;
   readonly failed: boolean;
   readonly canWithdraw: boolean;
   readonly stop: () => void;
 }): ReactNode {
+  const operation = useSandboxOperation(props.sandboxId);
+  const failure =
+    operation?.kind === "failed" && operation.verb === "stop" && !props.pending
+      ? operation
+      : null;
   return (
     <div data-testid="sandbox-setup-line" className="flex flex-col gap-2">
       <p className="m-0">{props.costLine}</p>
+      {failure !== null ? (
+        <SandboxOperationFailure
+          sandboxId={props.sandboxId}
+          name={props.name}
+          configuration={props.configuration}
+          operation={failure}
+          busy={props.pending}
+          onRetry={props.canWithdraw ? props.stop : null}
+        />
+      ) : (
+        <PendingStopFallback
+          name={props.name}
+          sandboxId={props.sandboxId}
+          pending={props.pending}
+          failed={props.failed}
+          canWithdraw={props.canWithdraw}
+          stop={props.stop}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A held Stop stays readable while its outcome is pending or no longer cached. */
+function PendingStopFallback(props: {
+  readonly name: string;
+  readonly sandboxId: string;
+  readonly pending: boolean;
+  readonly failed: boolean;
+  readonly canWithdraw: boolean;
+  readonly stop: () => void;
+}): ReactNode {
+  return (
+    <>
       <span>
         {!props.failed || props.pending
           ? stoppingSandboxLine(props.name)
@@ -2741,7 +2784,7 @@ function PendingStopLine(props: {
           </Button>
         ) : null}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -2905,6 +2948,7 @@ function PendingStagedSendItem(props: {
         <PendingStopLine
           name={name}
           sandboxId={sandboxId}
+          configuration={stage.target.configuration}
           costLine={facts.costLine}
           pending={verb.isPending || activeVerbs > 0}
           failed={verb.error !== null || isStopFailure(stage.failure)}

@@ -27,14 +27,14 @@ export interface SandboxOperationFailureProps {
   readonly configuration?: StageConfiguration;
   readonly operation: SandboxRowOperation | null;
   readonly busy: boolean;
-  readonly onRetry: (verb: SandboxRowVerb) => void;
+  readonly onRetry: ((verb: SandboxRowVerb) => void) | null;
 }
 
 /** Capture runtime-dependent remedies before a receipt renders outside its provider. */
 export function useSandboxOperationFailure(
   props: SandboxOperationFailureProps,
 ): ReactNode {
-  const { operation } = props;
+  const { operation, onRetry } = props;
   const hostConfiguration = useSandboxHostConfiguration(props.hostId ?? null);
   const configuration = props.configuration ??
     hostConfiguration ?? { kind: "personal" };
@@ -72,15 +72,17 @@ export function useSandboxOperationFailure(
           {ADD_CREDITS_LINK}
         </Button>
       )}
-      <Button
-        type="button"
-        variant="link"
-        size="inline-xs"
-        disabled={props.busy}
-        onClick={() => props.onRetry(operation.verb)}
-      >
-        {RETRY}
-      </Button>
+      {onRetry === null ? null : (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          disabled={props.busy}
+          onClick={() => onRetry(operation.verb)}
+        >
+          {RETRY}
+        </Button>
+      )}
       <Button
         type="button"
         variant="link"
