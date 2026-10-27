@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 import {
@@ -61,6 +64,14 @@ function FrozenSandboxFooter(props: {
   const { sandbox, configuration } = props.state;
   const viewer = useAuthStore((state) => state.profile?.userId ?? null);
   const verb = useSandboxVerb(sandbox.id);
+  const operation = useSandboxOperation(sandbox.id);
+  const pending = operation?.kind === "pending";
+  const retryVerb =
+    configuration.kind === "team" &&
+    operation?.kind === "failed" &&
+    (operation.verb === "start" || operation.verb === "resume")
+      ? operation.verb
+      : null;
   const billingUrl = useConfigurationBillingUrl(configuration);
   const openLink = useOpenLink();
   return (
@@ -75,11 +86,18 @@ function FrozenSandboxFooter(props: {
           type="button"
           size="sm"
           variant="ghost"
-          disabled={verb.isPending}
+          disabled={pending}
           onClick={() =>
             verb.mutate(sandbox.state === "stopped" ? "start" : "resume")
           }
         >
+          {pending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
           {sandboxRowActionLabel("resume-paying", {
             ...configuration,
             environmentId: sandbox.environmentId,
@@ -95,6 +113,14 @@ function FrozenSandboxFooter(props: {
           Add credits ↗
         </Button>
       )}
+      <SandboxOperationFailure
+        sandboxId={sandbox.id}
+        name={sandbox.displayName}
+        configuration={configuration}
+        operation={retryVerb === null ? null : operation}
+        busy={pending}
+        onRetry={retryVerb === null ? null : () => verb.mutate(retryVerb)}
+      />
     </div>
   );
 }
@@ -104,6 +130,12 @@ function UnreachableSandboxFooter(props: {
 }): ReactNode {
   const { sandbox, lastContactMinutes } = props.state;
   const stop = useSandboxVerb(sandbox.id);
+  const operation = useSandboxOperation(sandbox.id);
+  const pending = operation?.kind === "pending";
+  const retryVerb =
+    operation?.kind === "failed" && operation.verb === "stop"
+      ? operation.verb
+      : null;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
       <p className="min-w-0 flex-1">
@@ -116,9 +148,16 @@ function UnreachableSandboxFooter(props: {
         type="button"
         size="sm"
         variant="ghost"
-        disabled={stop.isPending}
+        disabled={pending}
         onClick={() => stop.mutate("stop")}
       >
+        {pending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
         Stop
       </Button>
       <Button
@@ -129,6 +168,14 @@ function UnreachableSandboxFooter(props: {
       >
         Details
       </Button>
+      <SandboxOperationFailure
+        sandboxId={sandbox.id}
+        name={sandbox.displayName}
+        hostId={sandbox.hostId}
+        operation={retryVerb === null ? null : operation}
+        busy={pending}
+        onRetry={retryVerb === null ? null : () => stop.mutate(retryVerb)}
+      />
     </div>
   );
 }

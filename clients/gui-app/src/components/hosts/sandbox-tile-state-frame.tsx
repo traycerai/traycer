@@ -1,11 +1,5 @@
-import { use, useCallback, useSyncExternalStore, type ReactNode } from "react";
-import {
-  chatServingHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { ReactNode } from "react";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
-import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
-import { cn } from "@/lib/utils";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
@@ -30,8 +24,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 
 /**
- * Wraps a tile's body. On a sandbox host that is frozen, asleep or waking,
- * the last screen stays in place, greyed and inert, under the state's copy:
+ * Wraps a tile's body and carries its team-host disclosure. On a sandbox host
+ * that is frozen, asleep or waking, a non-chat tile's last screen stays in
+ * place, greyed and inert, under the state's copy:
  * the frozen line (with its destroy date when the server sends `frozenAt`),
  * "Suspended, resumes on your next action" with Resume, "Stopped" with Start,
  * or "Resuming" / "Starting" while it comes back.
@@ -43,9 +38,10 @@ import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
  * render of every tile, sandbox or not and overlay or not, so neither the
  * directory's first answer nor toggling `inert` ever remounts the body.
  *
- * Reads the tile's own host (`useTabHostId`). A personal host's tile is never
- * greyed. With no host runtime above the tile at all the children come back
- * unwrapped: there is no directory to read.
+ * Reads the tile's own host (`useTabHostId`). Live chats own their lifecycle
+ * surfaces and stay interactive; their team disclosure still mounts here.
+ * A personal host's tile is never greyed. With no host runtime above the tile
+ * at all the children come back unwrapped: there is no directory to read.
  */
 export function SandboxTileStateFrame(props: {
   /** The chat a chat tile shows; null for every other tile. */
@@ -54,43 +50,11 @@ export function SandboxTileStateFrame(props: {
 }): ReactNode {
   // A tile rendered with no host runtime above it (a shell mounted bare, a
   // tile under test) has no directory to read and no sandbox to frame.
-  if (useHostBinding() === null || props.chat !== null) return props.children;
+  if (useHostBinding() === null) return props.children;
   return (
     <SandboxTileStateFrameInRuntime chat={props.chat}>
       {props.children}
     </SandboxTileStateFrameInRuntime>
-  );
-}
-
-/**
- * Whether the pool serves this tile's chat at rest (the witness says so):
- * the tile's body is then the pool's copy, readable whatever the sandbox's
- * state, so the sandbox's state is a strip above it and never greys it.
- */
-function useServedAtRest(
-  hostId: string,
-  chat: { readonly epicId: string; readonly chatId: string } | null,
-): boolean {
-  const witness = use(ChatServingWitnessContext);
-  const entry = useHostDirectoryEntry(hostId);
-  const subscribe = useCallback(
-    (listener: () => void): (() => void) =>
-      witness === null ? () => undefined : witness.subscribe(listener),
-    [witness],
-  );
-  const verdict = useSyncExternalStore(subscribe, () =>
-    witness === null || chat === null
-      ? null
-      : witness.verdictFor({ hostId, ...chat }),
-  );
-  if (chat === null || verdict === null) return false;
-  return (
-    chatServingHostId(
-      { hostId, ...chat },
-      entry,
-      verdict,
-      readProcessHostRpcTierPlan(),
-    ) !== hostId
   );
 }
 
@@ -100,7 +64,6 @@ function SandboxTileStateFrameInRuntime(props: {
 }): ReactNode {
   const hostId = useTabHostId();
   const entry = useHostDirectoryEntry(hostId);
-  const servedAtRest = useServedAtRest(hostId, props.chat);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
   // The same two wrappers for every tile, from the first render: a restored
@@ -109,21 +72,15 @@ function SandboxTileStateFrameInRuntime(props: {
   // remount it (a browser guest reloads, a terminal session is torn down),
   // awake sandbox or not. Only the overlay and `inert` vary.
   const overlay =
-    facts === null ? null : sandboxTileOverlay(facts.state, facts.frozen);
+    props.chat !== null || facts === null
+      ? null
+      : sandboxTileOverlay(facts.state, facts.frozen);
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
       data-sandbox-tile-state={overlay === null ? "live" : overlay.kind}
     >
-      {overlay === null || !servedAtRest ? null : (
-        <SandboxTileOverlayLayer
-          hostId={hostId}
-          overlay={overlay}
-          teamOwned={facts !== null && facts.ownerTeamName !== null}
-          placement="strip"
-        />
-      )}
-      <div className="contents" inert={overlay !== null && !servedAtRest}>
+      <div className="contents" inert={overlay !== null}>
         {props.children}
       </div>
       {facts === null ||
@@ -135,12 +92,11 @@ function SandboxTileStateFrameInRuntime(props: {
           teamName={facts.ownerTeamName}
         />
       )}
-      {overlay === null || servedAtRest ? null : (
+      {overlay === null ? null : (
         <SandboxTileOverlayLayer
           hostId={hostId}
           overlay={overlay}
           teamOwned={facts !== null && facts.ownerTeamName !== null}
-          placement="cover"
         />
       )}
     </div>
@@ -152,11 +108,6 @@ function SandboxTileOverlayLayer(props: {
   readonly overlay: SandboxTileOverlay;
   /** A team's frozen sandbox says whose bundle is out, not "your credits". */
   readonly teamOwned: boolean;
-  /**
-   * `cover` greys the body under the state; `strip` sits above a body that
-   * stays readable (a chat the pool serves at rest).
-   */
-  readonly placement: "cover" | "strip";
 }): ReactNode {
   const list = useSandboxList();
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
@@ -179,20 +130,11 @@ function SandboxTileOverlayLayer(props: {
     <div
       data-testid="sandbox-tile-overlay"
       data-kind={overlay.kind}
-      data-placement={props.placement}
-      className={cn(
-        props.placement === "cover"
-          ? "absolute inset-0 z-10 flex items-center justify-center bg-background/70 p-4 backdrop-grayscale"
-          : "flex shrink-0 items-center border-b border-border px-4 py-2",
-      )}
+      className="absolute inset-0 z-10 flex items-center justify-center bg-background/70 p-4 backdrop-grayscale"
     >
       <div
         role="status"
-        className={cn(
-          props.placement === "cover"
-            ? "flex max-w-sm flex-col items-center gap-2 text-center text-ui-sm"
-            : "flex min-w-0 flex-1 flex-wrap items-center gap-2 text-ui-sm",
-        )}
+        className="flex max-w-sm flex-col items-center gap-2 text-center text-ui-sm"
       >
         {overlay.kind === "frozen" ? (
           <p className="font-medium text-warning-foreground">

@@ -1,6 +1,12 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  render as renderWithoutQueryClient,
+  screen,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 
@@ -36,6 +42,15 @@ import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const ENDED_AT = Date.UTC(2026, 9, 27, 6, 21);
+
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
+  return renderWithoutQueryClient(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
 
 function resting(
   state: "suspended" | "stopped",
