@@ -496,6 +496,7 @@ export function EnvironmentProviderSkillsTab(props: {
 interface PendingSkillSwitch {
   readonly name: string;
   readonly offFor: readonly string[];
+  readonly revision: string | null;
   readonly accepted: boolean;
 }
 
@@ -514,16 +515,19 @@ function ProviderSkillsList(props: {
     useConfigurationReadClient(),
   );
   const [pending, setPending] = useState<PendingSkillSwitch | null>(null);
-  const observed =
+  // A same-revision read may still lag the accepted write. A moved revision
+  // settles it even if another member removed the skill or switched it again.
+  const settled =
     pending !== null &&
     pending.accepted &&
-    props.skills.some(
-      (skill) =>
-        skill.name === pending.name &&
-        skill.offFor.length === pending.offFor.length &&
-        skill.offFor.every((provider) => pending.offFor.includes(provider)),
-    );
-  if (observed) setPending(null);
+    (props.revision !== pending.revision ||
+      props.skills.some(
+        (skill) =>
+          skill.name === pending.name &&
+          skill.offFor.length === pending.offFor.length &&
+          skill.offFor.every((provider) => pending.offFor.includes(provider)),
+      ));
+  if (settled) setPending(null);
   const switchIssue =
     setProviders.data === undefined
       ? null
@@ -591,6 +595,7 @@ function ProviderSkillsList(props: {
                     const write: PendingSkillSwitch = {
                       name: skill.name,
                       offFor: next ? others : [...others, ...group],
+                      revision: props.revision,
                       accepted: false,
                     };
                     setPending(write);
@@ -599,7 +604,7 @@ function ProviderSkillsList(props: {
                         environmentId: source.environmentId,
                         name: skill.name,
                         offFor: [...write.offFor],
-                        revision: props.revision,
+                        revision: write.revision,
                       },
                       {
                         onError: () => setPending(null),

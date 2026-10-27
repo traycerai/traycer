@@ -1157,6 +1157,103 @@ describe("A provider's skill switch while its own write is in flight", () => {
   });
 
   it.each([
+    { change: "removed", skills: [BUILT_IN] },
+    {
+      change: "switched for different providers",
+      skills: [{ ...REVIEW, offFor: ["codex"] }, BUILT_IN],
+    },
+  ])(
+    "unlocks the provider card when an accepted skill is $change by another member",
+    async ({ skills }) => {
+      negotiateMethods(SWITCHES);
+      const write = gate();
+      let resolveRead: (answer: EnvironmentConfigurationSkillsListResponse) => void =
+        () => undefined;
+      let nextRead = new Promise<EnvironmentConfigurationSkillsListResponse>(
+        (resolve) => {
+          resolveRead = resolve;
+        },
+      );
+      let readingAfterWrite = false;
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+        "environment.configuration.skills.list": () =>
+          readingAfterWrite ? nextRead : listed([REVIEW, BUILT_IN]),
+        "environment.configuration.skills.setProviders": () => {
+          readingAfterWrite = true;
+          return write.promise;
+        },
+      });
+      render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+      click(
+        await screen.findByRole("switch", { name: "review for Claude Code" }),
+      );
+      const otherSwitch = (): HTMLElement =>
+        screen.getByRole("switch", { name: "find-skills for Claude Code" });
+      expect(disabled(otherSwitch())).toBe(true);
+      await act(async () => {
+        write.resolve(SAVED);
+        await write.promise;
+      });
+      await waitFor(() => expect(harness.queryClient.isMutating()).toBe(0));
+      expect(disabled(otherSwitch())).toBe(true);
+
+      // An unchanged-revision read still holds the submitted position.
+      await act(async () => {
+        resolveRead(listed([REVIEW, BUILT_IN]));
+        await nextRead;
+      });
+      const skillList = {
+        predicate: (query: { readonly queryKey: readonly unknown[] }) =>
+          query.queryKey.includes("environment.configuration.skills.list"),
+      };
+      await waitFor(() =>
+        expect(harness.queryClient.isFetching(skillList)).toBe(0),
+      );
+      expect(disabled(otherSwitch())).toBe(true);
+
+      // The accepted write is superseded before its result reaches the list.
+      nextRead = Promise.resolve({
+        outcome: "listed",
+        revision: "rev-3",
+        skills,
+      });
+      await act(async () => harness.queryClient.refetchQueries(skillList));
+      await waitFor(() => expect(disabled(otherSwitch())).toBe(false));
+      if (skills.some((skill) => skill.name === REVIEW.name)) {
+        expect(
+          on(screen.getByRole("switch", { name: "review for Claude Code" })),
+        ).toBe(true);
+      } else {
+        expect(
+          screen.queryByRole("switch", { name: "review for Claude Code" }),
+        ).toBeNull();
+      }
+      click(otherSwitch());
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.setProviders"),
+        ).toEqual([
+          {
+            environmentId: "env-a",
+            name: "review",
+            offFor: ["claude-code"],
+            revision: "rev-1",
+          },
+          {
+            environmentId: "env-a",
+            name: "find-skills",
+            offFor: ["claude-code"],
+            revision: "rev-3",
+          },
+        ]);
+      });
+    },
+  );
+
+  it.each([
     { outcome: "refused" as const, line: "Couldn't save these settings." },
     {
       outcome: "forbidden" as const,
