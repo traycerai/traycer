@@ -1976,6 +1976,7 @@ describe("the chat chip is the composer's picker", () => {
           pendingMillicredits: 0,
           segments: [],
           todayMillicredits: 30,
+          todayAwakeMs: null,
           history: [],
         },
       ],

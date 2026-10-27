@@ -607,6 +607,7 @@ describe("useSandboxStaging sandbox rows' lines", () => {
       pendingMillicredits: 0,
       segments: [],
       todayMillicredits,
+      todayAwakeMs: null,
       history: [],
     };
   }

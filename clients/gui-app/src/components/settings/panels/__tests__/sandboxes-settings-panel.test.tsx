@@ -1245,6 +1245,7 @@ describe("<SandboxesSettingsPanel />", () => {
             pendingMillicredits: 0,
             segments: [],
             todayMillicredits: rowTodayMc,
+            todayAwakeMs: null,
             history: [],
           },
         ],
