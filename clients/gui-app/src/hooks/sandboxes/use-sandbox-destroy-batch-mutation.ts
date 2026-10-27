@@ -103,9 +103,7 @@ export function useSandboxDestroyBatch(): UseMutationResult<
               hostId: target.hostId,
               displayName: target.name,
             },
-            binding,
-            queryClient,
-            runnerHost,
+            { binding, queryClient, runnerHost, feedback: "batch" },
           ),
         );
         try {

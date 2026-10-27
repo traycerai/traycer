@@ -58,6 +58,7 @@ import {
 import { useSandboxDestroyBatch } from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import {
   useSandboxVerb,
@@ -554,8 +555,13 @@ const DESTROYED_SANDBOX = {
 describe("useSandboxDestroyBatch", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
+    state.requestFleetRefresh.mockClear();
+    state.toastFromAuthError.mockClear();
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    signInAs(null);
+  });
 
   it("skips a row another member resumed while the batch destroyed the one before it", async () => {
     const idle = (id: string) =>
@@ -573,7 +579,7 @@ describe("useSandboxDestroyBatch", () => {
           ],
         },
       });
-    const { wrapper } = setup();
+    const { wrapper, invalidate } = setup();
     const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
 
     let outcomes: readonly string[] = [];
@@ -594,9 +600,17 @@ describe("useSandboxDestroyBatch", () => {
       true,
     );
     expect(outcomes).toEqual(["destroyed", "skipped"]);
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
+    expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
+    expect(invalidatedKeys(invalidate)).toEqual([
+      REGISTERED_HOSTS_KEY,
+      COSTS_KEY,
+    ]);
   });
 
-  it("refreshes each destroyed row and the cost view when the batch settles", async () => {
+  it("reports mixed results once and refreshes once while retaining each row's outcome", async () => {
+    signInAs("user-a");
     state.binding?.auth.listSandboxes.mockResolvedValue({
       kind: "ok",
       response: {
@@ -606,24 +620,65 @@ describe("useSandboxDestroyBatch", () => {
             burst: true,
             state: "suspended",
           }),
+          sandboxSummaryFixture({
+            id: "sbx_2",
+            burst: true,
+            state: "stopped",
+          }),
         ],
       },
     });
+    state.binding?.auth.destroySandbox
+      .mockResolvedValueOnce({ kind: "ok", settled: true })
+      .mockResolvedValueOnce(refusal(503, "provider_unavailable"));
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
+    const { result } = renderHook(
+      () => ({
+        batch: useSandboxDestroyBatch(),
+        failedRow: useSandboxOperation("sbx_2"),
+      }),
+      { wrapper },
+    );
 
     await act(async () => {
-      await result.current.mutateAsync({
-        targets: [{ sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" }],
-        startedBy: null,
+      await result.current.batch.mutateAsync({
+        targets: [
+          { sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" },
+          { sandboxId: "sbx_2", hostId: "host-sbx_2", name: "two" },
+        ],
+        startedBy: "user-a",
       });
     });
 
-    expect(invalidatedKeys(invalidate)).toEqual([
-      REGISTERED_HOSTS_KEY,
-      REGISTERED_HOSTS_KEY,
-      COSTS_KEY,
-    ]);
+    await waitFor(() => {
+      expect(
+        result.current.batch.data?.map(({ sandboxId, outcome }) => ({
+          sandboxId,
+          outcome,
+        })),
+      ).toEqual([
+        { sandboxId: "sbx_1", outcome: { kind: "destroyed" } },
+        {
+          sandboxId: "sbx_2",
+          outcome: {
+            kind: "failed",
+            message: "Sandboxes aren't available right now. Try again later.",
+          },
+        },
+      ]);
+      expect(result.current.failedRow).toMatchObject({
+        kind: "failed",
+        verb: "destroy",
+        code: "provider_unavailable",
+        destroyRequest: { idleOnly: true, startedBy: "user-a" },
+      });
+    });
+    expect.soft(state.toastFromAuthError).not.toHaveBeenCalled();
+    expect.soft(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect.soft(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
+    expect
+      .soft(invalidatedKeys(invalidate))
+      .toEqual([REGISTERED_HOSTS_KEY, COSTS_KEY]);
   });
 });
 
@@ -966,6 +1021,8 @@ describe("settling under another account", () => {
 describe("useSandboxDestroyBatch under another account", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
+    state.requestFleetRefresh.mockClear();
+    state.toastFromAuthError.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -995,7 +1052,7 @@ describe("useSandboxDestroyBatch under another account", () => {
         },
       });
     });
-    const { wrapper } = setup();
+    const { wrapper, invalidate } = setup();
     const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
 
     await act(async () => {
@@ -1008,6 +1065,10 @@ describe("useSandboxDestroyBatch under another account", () => {
     });
 
     expect(state.binding?.auth.destroySandbox).not.toHaveBeenCalled();
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
+    expect(state.binding?.directory.refresh).not.toHaveBeenCalled();
+    expect(state.requestFleetRefresh).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("reads and destroys nothing when the account changes between the confirm and the batch's start", async () => {
