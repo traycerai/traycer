@@ -277,6 +277,40 @@ describe("MembersPage members read", () => {
     expect(within(ghost).getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
+  it.each([
+    {
+      displayName: " Alice ",
+      email: "alice@acme.test",
+      legacyName: " Alice ",
+    },
+    {
+      displayName: null,
+      email: " alice@acme.test ",
+      legacyName: "alice@acme.test",
+    },
+  ])(
+    "keeps the gained editing badge for whitespace-padded identities: $legacyName",
+    async ({ displayName, email, legacyName }) => {
+      const harness = mountTeamPage(
+        { kind: "host" },
+        {
+          "environment.list": () => ({ environments: [TEAM] }),
+          "environment.members": () => ({
+            ...membersPage([ADA, { ...PRIYA, displayName, email }]),
+            legacyMembers: [legacyName],
+          }),
+        },
+      );
+      render(<MembersPage environmentId="env-a" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      await screen.findByText("Acme · 2 people");
+      expect(within(rowOf("u-priya")).getByText("gained editing")).toBeTruthy();
+      expect(within(rowOf("u-admin")).queryByText("gained editing")).toBeNull();
+    },
+  );
+
   it("adds the step-down remedy to the last admin's own line", async () => {
     useAuthStore.setState({
       profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
