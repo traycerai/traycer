@@ -24,6 +24,7 @@ import {
   keptByLine,
   paidByLine,
   startedByLine,
+  sandboxVerbPendingLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -101,12 +102,13 @@ export function sandboxRowKind(summary: SandboxSummary): SandboxRowKind {
   return summary.burst ? "agent" : "sandbox";
 }
 
-/** The seven public states, without Destroyed: a destroyed row is not listed. */
+/** The public states, without Destroyed: a destroyed row is not listed. */
 export type SandboxPublicState =
   | "creating"
   | "awake"
   | "suspended"
   | "stopped"
+  | "destroying"
   | "frozen"
   | "failed";
 
@@ -118,6 +120,7 @@ export type SandboxPublicState =
 export function sandboxPublicState(
   summary: SandboxSummary,
 ): SandboxPublicState {
+  if (summary.state === "destroying") return "destroying";
   if (summary.frozen) return "frozen";
   return PUBLIC_STATE[summary.state];
 }
@@ -132,7 +135,7 @@ const PUBLIC_STATE: Record<HostSandboxState, SandboxPublicState> = {
   released: "suspended",
   stopping: "stopped",
   stopped: "stopped",
-  destroying: "stopped",
+  destroying: "destroying",
   destroyed: "stopped",
   failed: "failed",
 };
@@ -142,6 +145,7 @@ export const SANDBOX_PUBLIC_STATE_LABEL: Record<SandboxPublicState, string> = {
   awake: "Awake",
   suspended: "Suspended",
   stopped: "Stopped",
+  destroying: "Destroying",
   frozen: "Frozen",
   failed: "Failed",
 };
@@ -620,14 +624,15 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 
 /**
  * The row's clock line, per state (Flow 6 › The page). A destroy in flight
- * reads `Destroying…` alone: the row's clock and its keep promise no longer
+ * reads `Destroying · pending`: the row's clock and its keep promise no longer
  * hold.
  */
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
-  if (summary.state === "destroying") return "Destroying…";
   const state = sandboxPublicState(summary);
   switch (state) {
+    case "destroying":
+      return sandboxVerbPendingLine("destroy");
     case "frozen":
       return [
         sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
@@ -653,7 +658,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
 
 function awakeClockLine(input: SandboxClockInput): string {
   const { summary, now } = input;
-  if (input.reachability.unreachable) {
+  if (summary.state === "awake" && input.reachability.unreachable) {
     const contact = sandboxReportedAt(input.reachability.lastContactAt);
     return contact === null
       ? "Running, but Traycer can't connect"
@@ -1006,9 +1011,8 @@ function matrixRowActions(input: {
           "destroy",
         ],
       };
-    case "creating":
-      return NO_ROW_ACTIONS;
   }
+  return NO_ROW_ACTIONS;
 }
 
 export function sandboxRowActionLabel(
