@@ -1,6 +1,7 @@
-// Pins the contract of the pull-request gate: a team PR into `main` starts no
-// CI job but the CodeQL scan (the merge to `main` runs everything once), and a
-// fork PR, a bot PR or a PR into any other branch runs every check. The
+// Pins the contract of the pull-request gate: a team PR into `main`, an
+// `integration/*` branch or a `land/*` branch starts no CI job but the CodeQL
+// scan (the merge to `main` runs everything once), and a fork PR, a bot PR or
+// a PR into any other branch runs every check. The
 // workflows are PARSED, never pattern-matched, so a reformat of the YAML
 // cannot hide a job that lost its gate. It also pins what keeps a merge run
 // honest: no push run can be cancelled by a later one, every push run narrows
@@ -19,7 +20,7 @@ const WORKFLOWS_DIR = join(REPO_ROOT, ".github", "workflows");
 // The single source of truth. Every job in a workflow that triggers on
 // `pull_request` carries this text in its `if`, verbatim.
 const GATE =
-  "github.event_name != 'pull_request' || github.base_ref != 'main' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot'";
+  "github.event_name != 'pull_request' || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/')) || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot'";
 
 // What a concurrency group may contain: the pull-request branch of the
 // expression, and nothing else that names a ref. On a push the expression is
@@ -154,8 +155,9 @@ const concurrencyBlocks = (workflow) => {
 };
 
 // The gate evaluated on the contexts GitHub gives it, so the expression is
-// pinned by what it decides, not by the words in it. It is a flat `||` of
-// `<context> == 'x'` / `<context> != <context | 'x'>` terms.
+// pinned by what it decides, not by the words in it. It is an `||` of terms,
+// each a `<context> == 'x'` / `<context> != <context | 'x'>` comparison or a
+// parenthesised `&&` of those and `!startsWith(<context>, 'x')`.
 const gateRuns = (context) => {
   const lookup = {
     "github.event_name": context.event_name,
@@ -164,14 +166,39 @@ const gateRuns = (context) => {
     "github.repository": "traycerai/traycer",
     "github.event.pull_request.user.type": context.user_type,
   };
+  // GitHub ignores case when it compares strings and when `startsWith`
+  // matches a prefix.
+  const fold = (value) =>
+    typeof value === "string" ? value.toLowerCase() : value;
   const operand = (text) =>
-    text.startsWith("'") ? text.slice(1, -1) : lookup[text];
-  return GATE.split(" || ").some((term) => {
-    const [left, operator, right] = term.split(" ");
+    fold(text.startsWith("'") ? text.slice(1, -1) : lookup[text]);
+  const term = (text) => {
+    const prefix = /^!startsWith\(([\w.]+), ('[^']*')\)$/.exec(text);
+    if (prefix) {
+      return !String(operand(prefix[1]) ?? "").startsWith(operand(prefix[2]));
+    }
+    const [left, operator, right] = text.split(" ");
     if (operator === "==") return operand(left) === operand(right);
     if (operator === "!=") return operand(left) !== operand(right);
-    throw new Error(`unsupported term in the gate: ${term}`);
-  });
+    throw new Error(`unsupported term in the gate: ${text}`);
+  };
+  const alternatives = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < GATE.length; index += 1) {
+    if (GATE[index] === "(") depth += 1;
+    if (GATE[index] === ")") depth -= 1;
+    if (depth === 0 && GATE.startsWith(" || ", index)) {
+      alternatives.push(GATE.slice(start, index));
+      start = index + " || ".length;
+    }
+  }
+  alternatives.push(GATE.slice(start));
+  return alternatives.some((alternative) =>
+    alternative.startsWith("(") && alternative.endsWith(")")
+      ? alternative.slice(1, -1).split(" && ").every(term)
+      : term(alternative),
+  );
 };
 
 describe("the gate expression", () => {
@@ -186,8 +213,38 @@ describe("the gate expression", () => {
     expect(gateRuns(team)).toBe(false);
   });
 
-  it("runs a PR into any other branch", () => {
+  it("skips a team PR into an integration or land branch", () => {
+    expect(gateRuns({ ...team, base_ref: "integration/sandboxes" })).toBe(
+      false,
+    );
+    expect(gateRuns({ ...team, base_ref: "land/round-3" })).toBe(false);
+  });
+
+  it("matches the base the way GitHub does, ignoring case", () => {
+    expect(gateRuns({ ...team, base_ref: "Main" })).toBe(false);
+    expect(gateRuns({ ...team, base_ref: "Integration/sandboxes" })).toBe(
+      false,
+    );
+    expect(gateRuns({ ...team, base_ref: "LAND/round-3" })).toBe(false);
+  });
+
+  it("runs a PR into any other branch, including one that only contains integration/ or land/", () => {
     expect(gateRuns({ ...team, base_ref: "release/1.4" })).toBe(true);
+    expect(gateRuns({ ...team, base_ref: "fix/integration/x" })).toBe(true);
+    expect(gateRuns({ ...team, base_ref: "integration" })).toBe(true);
+  });
+
+  it("runs a fork or bot PR into an integration or land branch", () => {
+    expect(
+      gateRuns({
+        ...team,
+        base_ref: "integration/sandboxes",
+        head_repo: "someone/traycer",
+      }),
+    ).toBe(true);
+    expect(
+      gateRuns({ ...team, base_ref: "land/round-3", user_type: "Bot" }),
+    ).toBe(true);
   });
 
   it("runs a fork PR, and a PR whose head repository no longer exists", () => {
@@ -268,7 +325,7 @@ describe("protocol-compat.yml / guarded-files-tripwire", () => {
     expect(Object.keys(workflow.jobs)).toContain(TRIPWIRE.jobId);
   });
 
-  it("runs only on a pull request, and only where CI runs on one: no team PR into main", () => {
+  it("runs only on a pull request, and only where CI runs on one: no team PR into main, integration/* or land/*", () => {
     expect(normalize(workflow.jobs[TRIPWIRE.jobId].if)).toBe(
       `${PR_ONLY} && (${GATE})`,
     );

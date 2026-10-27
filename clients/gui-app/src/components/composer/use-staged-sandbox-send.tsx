@@ -1,13 +1,13 @@
+import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
   useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
@@ -18,11 +18,22 @@ import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
-import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import {
+  useSandboxRepairGuestConfigurationOnHost,
+  useSandboxSettingsOperation,
+  useSandboxRetryApplyingSupported,
+  useSandboxGuestSetupRepairSupported,
+  useSandboxRepairGuestSetupOnHost,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
   priceClause,
   stageBalanceMc,
@@ -54,9 +65,8 @@ import {
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 
-/** A sandbox's name when the shape sheet set none: the message's first words. */
+/** A fallback label for older sends without a named stage. */
 const FALLBACK_NAME_WORDS = 4;
-const FALLBACK_NAME = "sandbox";
 /** The create's longest `displayName`. */
 const FALLBACK_NAME_MAX_LENGTH = 191;
 
@@ -69,7 +79,7 @@ export function stagedSandboxFallbackName(text: string): string {
     .join("-")
     .slice(0, FALLBACK_NAME_MAX_LENGTH)
     .replace(/-+$/, "");
-  return slug.length === 0 ? FALLBACK_NAME : slug;
+  return slug.length === 0 ? "New sandbox" : slug;
 }
 
 export interface StagedSandboxSend {
@@ -139,10 +149,40 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             directory: binding.directory,
             queryClient,
             userId,
+            readSettings: async (hostId: string) => {
+              const requestSettings = async () => {
+                const client = resolveNamedHostClient(binding, hostId);
+                if (client === null) throw new Error("Host unavailable");
+                return client.request("environment.status", {});
+              };
+              return queryClient
+                .fetchQuery(
+                  queryOptions({
+                    // A staged wake must not join a status read begun before it.
+                    queryKey: [
+                      ...hostQueryKeys.method<
+                        HostRpcRegistry,
+                        "environment.status"
+                      >(hostId, "environment.status", {}),
+                      "sandbox-settings",
+                      uuidv4(),
+                    ],
+                    queryFn: requestSettings,
+                    staleTime: 0,
+                    gcTime: 0,
+                    retry: false,
+                  }),
+                )
+                .catch((error: unknown) =>
+                  error instanceof HostRpcError &&
+                  error.code === "E_HOST_UNSUPPORTED" &&
+                  error.method === "environment.status"
+                    ? ("unsupported" as const)
+                    : null,
+                );
+            },
             wake: (hostId: string, gesture: SandboxVerbGesture) =>
-              startSandboxWake(queryClient, binding, hostId, gesture).then(
-                (outcome) => outcome !== null && outcome.kind === "awake",
-              ),
+              startSandboxWake(queryClient, binding, hostId, gesture),
             now: Date.now,
             sleep: (ms: number) =>
               new Promise<void>((resolve) => {
@@ -205,7 +245,6 @@ export function openLandingStagedTerminal(
 ): StagedTerminalAsk {
   const ask = startStagedTerminal(surfaceKey, (fresh) =>
     runner(surfaceKey, fresh, {
-      fallbackName: stagedSandboxFallbackName(""),
       taskId: null,
       resume: false,
     }),
@@ -259,16 +298,12 @@ export function useStagedSandboxSend(input: {
   const { surfaceKey, terminal, taskId, ownerId, claimsSend } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
-  const messageTextRef = useRef("");
-  // The name the create falls back to, for the line to show meanwhile.
-  const [fallbackName, setFallbackName] = useState(FALLBACK_NAME);
   const runner = useStagedSandboxRunner();
 
   const run = useCallback(
     (fresh: boolean): void => {
       if (surfaceKey === null) return;
       runner(surfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(messageTextRef.current),
         taskId,
         resume: false,
       });
@@ -319,7 +354,7 @@ export function useStagedSandboxSend(input: {
 
   const intercept = useCallback(
     (
-      messageText: string,
+      _messageText: string,
       terminalLaunch: TerminalAgentLaunch | null,
     ): boolean => {
       if (surfaceKey === null) return false;
@@ -339,8 +374,6 @@ export function useStagedSandboxSend(input: {
       // it is busy. A boot with no send (a terminal ask started it, or the
       // draft that sent is gone) is handed off with this one.
       if (current.phase === "staged" || current.failure !== null) {
-        messageTextRef.current = messageText;
-        setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore
           .getState()
           .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
@@ -356,34 +389,53 @@ export function useStagedSandboxSend(input: {
   );
 
   const facts = useSetupLineFacts(stage);
+  const providersOpener = useConfigurationProvidersOpener(
+    stage?.target.configuration.kind === "team",
+  );
+
+  const stop = useCallback((): void => {
+    if (surfaceKey === null || stage === null) return;
+    const clearCurrentStage = (): void => {
+      if (
+        readStagedSandbox(surfaceKey)?.clientRequestId === stage.clientRequestId
+      )
+        useStagedSandboxStore.getState().clear(surfaceKey);
+    };
+    if (stage.createdSandboxId === null) clearCurrentStage();
+    else verb.mutate("stop", { onSuccess: clearCurrentStage });
+  }, [stage, surfaceKey, verb]);
 
   const line =
     surfaceKey === null || stage === null || facts === null ? null : (
-      <SandboxSetupLine
-        stage={stage}
-        name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
-        facts={facts}
-        actions={{
-          onKeepWaiting: () => runFromLine(false),
-          onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
-          onChooseAnotherHost: () =>
-            useStagedSandboxStore.getState().clear(surfaceKey),
-          onRetryCreation: () => runFromLine(true),
-          onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
-          onSendAgain,
-          onChangeShape: () => {
-            useStagedSandboxStore.getState().cancel(surfaceKey);
-            openStagedShapeSheet(surfaceKey);
-          },
-          onRetryApplying: newHost.onRetryApplying,
-          onStop: () => {
-            if (stage.createdSandboxId !== null) verb.mutate("stop");
-            useStagedSandboxStore.getState().clear(surfaceKey);
-          },
-          onOpenTerminal: newHost.onOpenTerminal,
-          onOpenProviders: null,
-        }}
-      />
+      <>
+        <SandboxSetupLine
+          stage={stage}
+          name={stage.target.name}
+          facts={facts}
+          actions={{
+            onKeepWaiting: () => runFromLine(false),
+            onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
+            onChooseAnotherHost: () =>
+              useStagedSandboxStore.getState().clear(surfaceKey),
+            onRetryCreation: () => runFromLine(true),
+            onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
+            onSendAgain,
+            onChangeShape: () => {
+              useStagedSandboxStore.getState().cancel(surfaceKey);
+              openStagedShapeSheet(surfaceKey);
+            },
+            onRetryApplying: newHost.onRetryApplying,
+            onRepairSetup: newHost.onRepairSetup,
+            repairSetupPending: newHost.repairSetupPending,
+            applyingPending: newHost.applyingPending,
+            applyingError: newHost.applyingError,
+            onStop: stop,
+            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenProviders: providersOpener(stage.target.configuration),
+          }}
+        />
+        <StagedStopFailure stage={stage} onRetry={stop} />
+      </>
     );
 
   return { intercept, line };
@@ -638,38 +690,66 @@ export function useNewHostActions(
   terminal: StagedSandboxTerminal | null,
   run: (fresh: boolean) => void,
 ): {
-  readonly onRetryApplying: () => void;
+  readonly onRetryApplying: (() => void) | null;
+  readonly onRepairSetup: (() => void) | null;
+  readonly repairSetupPending: boolean;
+  readonly applyingPending: boolean;
+  readonly applyingError: boolean;
   readonly onOpenTerminal: (() => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
+  const operation = useSandboxSettingsOperation(createdHostId ?? "");
+  const retrySupported = useSandboxRetryApplyingSupported(createdHostId ?? "");
+  const guestRepairSupported = useSandboxGuestSetupRepairSupported(
+    createdHostId ?? "",
+  );
+  const guestRepair = useSandboxRepairGuestSetupOnHost(createdHostId ?? "");
+  const row = useSandboxList().data?.sandboxes.find(
+    (sandbox) => sandbox.hostId === createdHostId,
+  );
   const terminalTarget = useFolderlessTerminalTarget(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
   );
   return {
-    onRetryApplying: () => {
-      if (surfaceKey === null || createdHostId === null) return;
-      const origin = readStagedSandbox(surfaceKey);
-      if (origin === null) return;
-      repair.mutate(
-        {},
-        {
-          // The wait resumes only for the stage the repair was for: another
-          // pick made meanwhile is created by its own send, never by this.
-          onSuccess: () => {
-            const current = readStagedSandbox(surfaceKey);
-            if (
-              current === null ||
-              current.clientRequestId !== origin.clientRequestId ||
-              current.createdHostId !== createdHostId
-            ) {
-              return;
-            }
-            run(false);
-          },
-        },
-      );
-    },
+    applyingPending: operation === "pending",
+    applyingError: operation === "failed",
+    onRepairSetup:
+      guestRepairSupported && row?.guestConfigured === false
+        ? () => guestRepair.mutate({})
+        : null,
+    repairSetupPending: guestRepair.isPending,
+    onRetryApplying: retrySupported
+      ? () => {
+          if (
+            surfaceKey === null ||
+            createdHostId === null ||
+            operation === "pending"
+          )
+            return;
+          const origin = readStagedSandbox(surfaceKey);
+          if (origin === null) return;
+          repair.mutate(
+            {},
+            {
+              // The wait resumes only for the stage the repair was for: another
+              // pick made meanwhile is created by its own send, never by this.
+              onSuccess: (outcome) => {
+                if (!outcome.settingsApplied) return;
+                const current = readStagedSandbox(surfaceKey);
+                if (
+                  current === null ||
+                  current.clientRequestId !== origin.clientRequestId ||
+                  current.createdHostId !== createdHostId
+                ) {
+                  return;
+                }
+                run(false);
+              },
+            },
+          );
+        }
+      : null,
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null

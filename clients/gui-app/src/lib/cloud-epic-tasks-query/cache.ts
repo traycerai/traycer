@@ -21,6 +21,8 @@ import {
   isEpicTaskContextsQueryKey,
   queryKeys,
 } from "@/lib/query-keys";
+import { taskReferenceLookupTaskId } from "@/lib/query-keys/host-query-keys";
+import { recordTaskLoss } from "@/stores/epics/task-loss-register-store";
 import {
   removeDeletedEpicsFromCloudTasksResponse,
   setEpicLocalHomeInCloudTasksResponse,
@@ -91,6 +93,113 @@ export function removeDeletedEpicsFromCloudTaskCaches(
     if (next === response) continue;
     queryClient.setQueryData<ListTasksResponse>(queryKey, next);
   }
+  // Title lookups name the same tasks: the tombstone outlives every cached
+  // answer, so neither one read before the delete nor one still in flight
+  // keeps a deleted task resolvable.
+  recordTaskLoss(scope, epicIds, "gone");
+  void queryClient.cancelQueries({
+    predicate: (query) =>
+      taskReferenceLookupReadsAny(query, scope, deletedEpicIds),
+  });
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) =>
+      replaceTaskContexts(response, deletedEpicIds, {
+        status: "confirmed-absent",
+      }),
+  );
+}
+
+/**
+ * A signal that the person may have lost a task (an open task's session
+ * losing access, which a moved room or a failed sign-in also raise): every
+ * cached title lookup in `scope` forgets what it said about `taskIds` and is
+ * read again, and a task chip asks afresh even where a title is held. Only
+ * that answer settles whether the task is still reachable.
+ */
+export function recheckTaskContextAnswers(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  taskIds: ReadonlyArray<string>,
+): void {
+  if (taskIds.length === 0) return;
+  const lost = new Set(taskIds);
+  recordTaskLoss(scope, taskIds, "recheck");
+  const holding = (query: Query): boolean =>
+    epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
+    taskIds.some((taskId) =>
+      Object.hasOwn(
+        queryClient.getQueryData<GetTaskContextsResponse>(query.queryKey)
+          ?.tasks ?? {},
+        taskId,
+      ),
+    );
+  // A chip's lookup still waiting for its first answer holds nothing yet:
+  // it is cancelled and read again too, so the answer that counts is sent
+  // after the signal (invalidating alone keeps a first read in flight).
+  const ownLookups = queryClient.getQueryCache().findAll({
+    predicate: (query) => taskReferenceLookupReadsAny(query, scope, lost),
+  });
+  const affected = [
+    ...queryClient.getQueryCache().findAll({ predicate: holding }),
+    ...ownLookups,
+  ];
+  patchMatchingQueries(
+    queryClient,
+    holding,
+    (response: GetTaskContextsResponse) =>
+      replaceTaskContexts(response, lost, null),
+  );
+  void (async (): Promise<void> => {
+    await queryClient.cancelQueries({
+      predicate: (query) => ownLookups.includes(query),
+    });
+    await queryClient.invalidateQueries({
+      predicate: (query) => affected.includes(query),
+    });
+  })();
+}
+
+/**
+ * `response` with each of `taskIds` it holds answered `outcome`, or left out
+ * when `outcome` is `null`.
+ */
+function replaceTaskContexts(
+  response: GetTaskContextsResponse,
+  taskIds: ReadonlySet<string>,
+  outcome: TaskContextResult | null,
+): GetTaskContextsResponse {
+  const held = Object.keys(response.tasks).filter((taskId) =>
+    taskIds.has(taskId),
+  );
+  if (held.length === 0) return response;
+  if (outcome === null) {
+    return {
+      ...response,
+      tasks: Object.fromEntries(
+        Object.entries(response.tasks).filter(
+          ([taskId]) => !taskIds.has(taskId),
+        ),
+      ),
+    };
+  }
+  const tasks = { ...response.tasks };
+  for (const taskId of held) tasks[taskId] = outcome;
+  return { ...response, tasks };
+}
+
+function taskReferenceLookupReadsAny(
+  query: Query,
+  scope: CloudEpicTasksCacheScope,
+  taskIds: ReadonlySet<string>,
+): boolean {
+  const taskId = taskReferenceLookupTaskId(query.queryKey);
+  return (
+    taskId !== null &&
+    taskIds.has(taskId) &&
+    epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope)
+  );
 }
 
 /**

@@ -2,7 +2,10 @@ import { use, useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { QueryClientContext } from "@tanstack/react-query";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  recheckTaskContextAnswers,
+  removeDeletedEpicsFromCloudTaskCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import { epicAccessToast } from "@/lib/toast/channels";
 import {
   subscribeDeletedEpicNotifications,
@@ -217,6 +220,18 @@ export function EpicAccessCoordinator() {
         return;
       const wasActive = activeEpicIdRef.current === epicId;
       announceEpicLoss(epicId, reason);
+      // A title read before the loss must not keep the task reachable, whatever
+      // the reason: an unavailable room can be a revoke or a delete seen on
+      // open. No reason alone says the person lost it (a moved room or a
+      // failed sign-in raise one too), so the lookups that named it read again.
+      const viewerUserId = useAuthStore.getState().profile?.userId ?? null;
+      if (queryClient !== undefined && viewerUserId !== null) {
+        recheckTaskContextAnswers(
+          queryClient,
+          { hostId: null, userId: viewerUserId },
+          [epicId],
+        );
+      }
       // A session's own deleted signal is the epic's deletion as its host
       // reports it, which has always cleared the epic on every host.
       if (reason.kind === "deleted") {

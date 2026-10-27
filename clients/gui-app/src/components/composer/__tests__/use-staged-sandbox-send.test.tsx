@@ -1,3 +1,7 @@
+import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
+import { sandboxMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   afterEach,
   beforeEach,
@@ -8,7 +12,11 @@ import {
   vi,
 } from "vitest";
 import { useEffect } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -26,6 +34,9 @@ import {
   type SandboxSummary,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
@@ -35,11 +46,11 @@ import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/san
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   openLandingStagedTerminal,
-  stagedSandboxFallbackName,
   startStagedTerminal,
   useStagedSandboxHandoff,
   useStagedSandboxRunner,
   useStagedSandboxSend,
+  stagedSandboxFallbackName,
   type StagedResubmit,
   type StagedSandboxRunner,
   type StagedSandboxSend,
@@ -65,8 +76,15 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const mocks = vi.hoisted(() => ({
+  runVerb: vi.fn<(verb: SandboxLifecycleVerb) => Promise<SandboxVerbOutcome>>(),
+  /** The named host's environment.status answer, as its client throws or returns it. */
+  environmentStatus: vi.fn<() => Promise<unknown>>(),
   /** The viewer and the catalogue the setup line's facts are read from. */
   user: null as AuthenticatedUser | null,
   catalogue: null as SandboxCatalogue | null,
@@ -90,9 +108,21 @@ const mocks = vi.hoisted(() => ({
   /** The account's host directory, which names the new host once it dials. */
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   repairHostIds: [] as string[],
+  retrySupported: true,
+  legacySupported: false,
+  legacyHostIds: [] as string[],
+  legacyMutate: vi.fn(),
   repairMutate: vi.fn(
-    (_variables: object, options: { readonly onSuccess: () => void }) => {
-      options.onSuccess();
+    (
+      _variables: object,
+      options: {
+        readonly onSuccess: (outcome: {
+          readonly guestConfigured: boolean;
+          readonly settingsApplied: boolean;
+        }) => void;
+      },
+    ) => {
+      options.onSuccess({ guestConfigured: true, settingsApplied: true });
     },
   ),
   startSandboxWake: vi.fn<
@@ -105,6 +135,15 @@ const mocks = vi.hoisted(() => ({
   >(() => Promise.resolve({ kind: "failed", detail: "Test wake stopped" })),
 }));
 
+vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
+  resolveNamedHostClient: () => ({
+    request: (method: string) =>
+      method === "environment.status"
+        ? mocks.environmentStatus()
+        : Promise.reject(new Error(`unexpected ${method}`)),
+  }),
+}));
 vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/sandboxes/staged-sandbox-run")
@@ -122,6 +161,13 @@ vi.mock(
       mocks.repairHostIds.push(hostId);
       return { mutate: mocks.repairMutate };
     },
+    useSandboxRetryApplyingSupported: () => mocks.retrySupported,
+    useSandboxGuestSetupRepairSupported: () => mocks.legacySupported,
+    useSandboxRepairGuestSetupOnHost: (hostId: string) => {
+      mocks.legacyHostIds.push(hostId);
+      return { mutate: mocks.legacyMutate };
+    },
+    useSandboxSettingsOperation: () => null,
   }),
 );
 // The new host answers with its default cwd as soon as it is named.
@@ -163,7 +209,17 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
-  useSandboxVerb: () => ({ mutate: vi.fn() }),
+  useSandboxVerb: (sandboxId: string) =>
+    useMutation({
+      mutationKey: sandboxMutationKeys.verb(sandboxId),
+      mutationFn: mocks.runVerb,
+      onMutate: () => ({
+        userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+      }),
+    }),
+}));
+vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
+  useConfigurationProvidersOpener: () => () => undefined,
 }));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
@@ -284,7 +340,28 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
   );
 }
 
+function unsupportedEnvironmentStatus(): HostRpcError {
+  return new HostRpcError({
+    code: "E_HOST_UNSUPPORTED",
+    message: "Unsupported.",
+    requestId: "request-1",
+    method: "environment.status",
+    fatalDetails: null,
+  });
+}
+
 beforeEach(() => {
+  mocks.runVerb.mockReset();
+  mocks.runVerb.mockResolvedValue({ kind: "settled", state: "stopped" });
+  // The host named by the run answers environment.status as an older build does.
+  mocks.environmentStatus.mockReset();
+  mocks.environmentStatus.mockRejectedValue(unsupportedEnvironmentStatus());
+  // The new host is a known older build with no environment.status; an unrecorded
+  // manifest would hold a real staged run's handoff.
+  resetNegotiatedManifests();
+  recordNegotiatedHostManifest(NEW_HOST, {
+    "epic.createChat": { major: 1, minor: 2 },
+  });
   mocks.user = null;
   mocks.catalogue = null;
   mocks.sandboxes = null;
@@ -298,6 +375,10 @@ beforeEach(() => {
   mocks.findById.mockReset();
   mocks.repairMutate.mockClear();
   mocks.repairHostIds.length = 0;
+  mocks.retrySupported = true;
+  mocks.legacySupported = false;
+  mocks.legacyHostIds.length = 0;
+  mocks.legacyMutate.mockReset();
   mocks.startSandboxWake.mockReset();
   mocks.startSandboxWake.mockResolvedValue({
     kind: "failed",
@@ -342,11 +423,149 @@ describe("useStagedSandboxSend's setup line", () => {
     );
   });
 
+  describe("the run's settings read", () => {
+    function runDeps(): StagedSandboxRunDeps {
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+      fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
+      const deps = mocks.runStagedSandbox.mock.calls.at(0)?.[3];
+      if (deps === undefined) throw new Error("no run started");
+      return deps;
+    }
+
+    it("never releases the send on a network failure, even with the method absent from a stale manifest", async () => {
+      const deps = runDeps();
+      mocks.environmentStatus.mockRejectedValue(new Error("socket closed"));
+
+      expect(await deps.readSettings(NEW_HOST)).toBeNull();
+    });
+
+    it("does not join a status read begun on the normal key before the wake", async () => {
+      const deps = runDeps();
+      let releaseOld: (value: string) => void = () => undefined;
+      const old = new Promise<string>((resolve) => {
+        releaseOld = resolve;
+      });
+      const oldRead = deps.queryClient.fetchQuery({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "environment.status">(
+          NEW_HOST,
+          "environment.status",
+          {},
+        ),
+        queryFn: () => old,
+        staleTime: 0,
+      });
+      mocks.environmentStatus.mockClear();
+      mocks.environmentStatus.mockRejectedValue(unsupportedEnvironmentStatus());
+
+      // The held pre-wake read does not answer for this wake's.
+      expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
+      expect(mocks.environmentStatus).toHaveBeenCalledTimes(1);
+
+      releaseOld("old");
+      await oldRead;
+    });
+
+    it("reads a typed unsupported-method answer as an older host, and a fresh read each time", async () => {
+      const deps = runDeps();
+
+      expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
+      expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
+      expect(mocks.environmentStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not resume the wait when the guest is configured but the settings did not apply", () => {
+    stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    mocks.repairMutate.mockImplementationOnce((_variables, options) => {
+      options.onSuccess({ guestConfigured: true, settingsApplied: false });
+    });
+    mount(vi.fn());
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
+
+    expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
+  });
+
+  it("offers no Retry applying on a host that did not negotiate the combined retry", () => {
+    mocks.retrySupported = false;
+    stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    mount(vi.fn());
+
+    expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+  });
+
+  describe("on a host that negotiated only the guest-only repair", () => {
+    function mountLegacy(guestConfigured: boolean | null): void {
+      mocks.retrySupported = false;
+      mocks.legacySupported = true;
+      mocks.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-1",
+          hostId: NEW_HOST,
+          guestConfigured,
+        }),
+      ];
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+    }
+
+    it("offers Repair setup for a guest that really failed, on that host, and never resumes the wait", () => {
+      mountLegacy(false);
+
+      expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+      fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
+
+      expect(mocks.legacyHostIds).toContain(NEW_HOST);
+      expect(mocks.legacyMutate).toHaveBeenCalledTimes(1);
+      expect(mocks.repairMutate).not.toHaveBeenCalled();
+      expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a configured guest", true],
+      ["an unknown guest", null],
+    ])(
+      "offers neither Repair setup nor Retry applying for %s",
+      (_name, guestConfigured) => {
+        mountLegacy(guestConfigured);
+
+        expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
+        expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+      },
+    );
+
+    it("offers no Repair setup when the failure is a settings stage but the summary is not loaded", () => {
+      mocks.retrySupported = false;
+      mocks.legacySupported = true;
+      mocks.sandboxes = null;
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+
+      expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
+    });
+
+    it("never offers Repair setup beside Retry applying on a host that negotiated the combined retry", () => {
+      mocks.retrySupported = true;
+      mocks.legacySupported = false;
+      mocks.sandboxes = [
+        sandboxSummaryFixture({ hostId: NEW_HOST, guestConfigured: false }),
+      ];
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+
+      expect(screen.getByTestId("sandbox-setup-retry-applying")).toBeTruthy();
+      expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
+    });
+  });
+
   it("starts nothing when another sandbox was picked while the repair ran", () => {
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     let finishRepair: () => void = () => undefined;
     mocks.repairMutate.mockImplementationOnce((_variables, options) => {
-      finishRepair = options.onSuccess;
+      finishRepair = () =>
+        options.onSuccess({ guestConfigured: true, settingsApplied: true });
     });
     mount(vi.fn());
 
@@ -386,6 +605,22 @@ describe("useStagedSandboxSend's setup line", () => {
     );
   });
 
+  it("keeps the staged sandbox and visible remedies when its standalone Stop fails", async () => {
+    stageCreated("booting", null);
+    mocks.runVerb.mockRejectedValueOnce(new Error("Stop refused"));
+    mount(vi.fn());
+    fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toContain("Couldn't stop api-refactor");
+    expect(
+      within(failure).getByRole("button", { name: "Retry" }),
+    ).toBeDefined();
+    expect(
+      within(failure).getByRole("button", { name: "Details" }),
+    ).toBeDefined();
+    expect(readStagedSandbox(SURFACE)).not.toBeNull();
+  });
+
   it("names the sandbox the send creates and counts as a stopwatch", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, {
@@ -400,7 +635,7 @@ describe("useStagedSandboxSend's setup line", () => {
         idleMinutes: 30,
         destroyAfterRestingMinutes: 10_080,
       },
-      name: "",
+      name: "sandbox-ab12",
       wakeString: null,
     });
     mount(vi.fn());
@@ -412,7 +647,7 @@ describe("useStagedSandboxSend's setup line", () => {
 
     expect(
       screen.getByTestId("sandbox-setup-line-toggle").textContent,
-    ).toContain("Starting sandbox·fix-the-login-bug·0:08");
+    ).toContain("Starting sandbox·sandbox-ab12·0:08");
   });
 
   it("starts each send under its own idempotency key", () => {
@@ -469,7 +704,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
         .map((button) => button.textContent);
     }
 
-    it("offers exactly Add credits and Choose another host at a zero balance", () => {
+    it("offers Add credits, host choice and Cancel at a zero balance", () => {
       mocks.catalogue = LADDER;
       mocks.user = viewerWithCredits(0);
       stageRefused({ kind: "credits", shortfallMc: 120 });
@@ -478,6 +713,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
       expect(refusalButtons()).toEqual([
         "Add credits ↗",
         "Choose another host",
+        "Cancel the message",
       ]);
     });
 
@@ -490,10 +726,35 @@ describe("useStagedSandboxSend's line after a refusal", () => {
 
       expect(refusalButtons()).toEqual([
         "Add credits ↗",
-        "Choose another host",
         "Choose a smaller shape",
+        "Choose another host",
+        "Cancel the message",
       ]);
     });
+  });
+
+  it("keeps an unknown credit source generic on a team staged refusal", () => {
+    stageRefused({ kind: "credits", creditSource: null, shortfallMc: null });
+    const current = readStagedSandbox(SURFACE);
+    if (current === null) throw new Error("Expected the refused stage");
+    useStagedSandboxStore.setState({
+      bySurface: {
+        [SURFACE]: {
+          ...current,
+          target: {
+            ...current.target,
+            configuration: { kind: "team", teamId: "team-1", teamName: "Acme" },
+          },
+        },
+      },
+    });
+    mount(vi.fn());
+    expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
+      "Not enough credits to start this sandbox for an hour.",
+    );
+    expect(
+      screen.getByTestId("sandbox-refusal-line").textContent,
+    ).not.toContain("allowance");
   });
 
   it("retries a create whose answer never came under its own key", () => {
@@ -961,7 +1222,7 @@ describe("useStagedSandboxSend on a boot a terminal ask started", () => {
 });
 
 describe("useStagedSandboxSend's refused resubmit", () => {
-  it("keeps the stage, the sandbox and the draft when the new host refuses, and says why", () => {
+  it("keeps the stage, the sandbox and the draft when the new host cannot run Traycer Inference, and says why", () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
       kind: "existing",
       hostId: NEW_HOST,
@@ -1015,7 +1276,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
       failure: { kind: "no-provider" },
     });
     expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
-      "Sign in to a coding agent to run agents on Personal.",
+      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
     );
     expect(screen.getByTestId("sandbox-refusal-details")).toBeDefined();
 
@@ -1282,7 +1543,6 @@ describe("openLandingStagedTerminal", () => {
 
     expect(runner).toHaveBeenCalledTimes(1);
     expect(runner).toHaveBeenCalledWith(SURFACE, true, {
-      fallbackName: stagedSandboxFallbackName(""),
       taskId: null,
       resume: false,
     });

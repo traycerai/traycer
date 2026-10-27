@@ -248,7 +248,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
 }));
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => () => null,
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
 }));
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
@@ -1035,12 +1038,14 @@ describe("NewConversationModalBody mirror line", () => {
           label: null,
           principal: { kind: "user", id: VIEWER_ID },
           reach: "same_principal",
+          sandboxEnd: null,
         },
         {
           hostId: "host-sandbox",
           label: "Acme sandbox",
           principal: TEAM,
           reach: "other_principal",
+          sandboxEnd: null,
         },
       ],
     };

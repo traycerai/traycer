@@ -429,11 +429,11 @@ export type HostNotificationEntryV23 = z.infer<
 >;
 
 /**
- * The environments redesign's kinds, informational with nothing to resolve:
+ * The environments redesign's kinds:
  * a computer's move stalled, a host could not apply an item, the reader's
  * team role changed, a computer went back from a team, a secret was removed.
- * `failure`/`errored` for the two failures, `completed` otherwise; every fact
- * the row shows is in the payload.
+ * `errored` for stalled moves and failed applies, `completed` otherwise.
+ * An actionable failed apply can be resolved independently of reading it.
  */
 const environmentMoveStalledEntryArm = lazySchema(() =>
   z.object({
@@ -448,6 +448,7 @@ const environmentApplyFailedEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
     kind: z.literal("environment.apply.failed"),
+    resolvedAt: z.number().int().nonnegative().nullable().optional(),
     outcome: z.literal("errored"),
     payload: hostNotificationPayloadSchema,
   }),
@@ -519,12 +520,15 @@ export type HostNotificationEntryV24 = z.infer<
  * resting or frozen clock is about to destroy the sandbox (or has), it froze,
  * its create failed, the provider lost it, or a member destroyed, suspended
  * or stopped it. Every fact the row shows is in the payload
- * (`sandbox_notice`); nothing to resolve.
+ * (`sandbox_notice`). An actionable notice stays pending until resolved.
  */
 const sandboxNoticeEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
     kind: z.literal("sandbox.notice"),
+    // Additive within cloudFeed @1.5: older relays omit the marker and older
+    // readers strip it. Read acknowledgement is independent of retirement.
+    resolvedAt: z.number().int().nonnegative().nullable().optional(),
     outcome: z.literal("completed"),
     payload: hostNotificationPayloadSchema,
   }),

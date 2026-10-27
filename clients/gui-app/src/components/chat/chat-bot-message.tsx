@@ -19,10 +19,7 @@ import {
   BotAvatar,
   MemberAvatar,
 } from "@/components/bots/bot-avatars";
-import {
-  BotIdentityTrigger,
-  BotOwnerLine,
-} from "@/components/bots/bot-identity-popover";
+import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -44,8 +41,7 @@ import { TextSegment } from "./segments/text-segment";
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A bot that answers posts
- * itself (reply mode `direct`) replies in the channel, its row naming the
- * post it answers.
+ * itself (reply mode `direct`) replies in the channel, as a plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
  * Slack offers it on every message: a member's post and a question or
@@ -175,7 +171,6 @@ function BotRow(props: {
 }): ReactElement {
   const { message, presentation, sentAt, body, hoverActions } = props;
   const announcement = message.announcement ?? null;
-  const repliesTo = message.repliesTo ?? null;
   const { replyInThread, threadLine } = botRowThread(message, presentation);
   return (
     <BotMessageFrame
@@ -189,9 +184,6 @@ function BotRow(props: {
       replyInThread={replyInThread}
       failed={null}
     >
-      {repliesTo === null ? null : (
-        <RepliedPostLine postId={repliesTo} presentation={presentation} />
-      )}
       {announcement === null ? (
         body
       ) : (
@@ -249,12 +241,12 @@ function botRowThread(
 /**
  * Slack's message frame: picture on the left, name and time on the first
  * line, and whatever the row carries under it. On a bot's row the picture
- * and the name open the bot's card, and "managed by" names its owner.
+ * and the name open the bot's card.
  */
 function BotMessageFrame(props: {
   readonly avatar: ReactNode;
   readonly name: string;
-  /** A bot's row: its card and its owner. */
+  /** A bot's row: its picture and name open its card. */
   readonly bot: boolean;
   readonly sentAt: number;
   /** Names the time stamp for the layout editor; a message id. */
@@ -308,7 +300,6 @@ function BotMessageFrame(props: {
           ) : (
             <span className={nameClassName}>{props.name}</span>
           )}
-          {carded ? <BotOwnerLine /> : null}
           <ChatMessageTimestamp
             timestamp={props.sentAt}
             separated={false}
@@ -636,43 +627,6 @@ function AnnouncementLink(props: { readonly link: string }): ReactNode {
     >
       {props.link}
     </Button>
-  );
-}
-
-/**
- * The post a bot's direct reply answers, above the reply: who wrote it and
- * its first line, a jump back to it. Nothing while the post is not in the
- * list the channel has read.
- */
-function RepliedPostLine(props: {
-  readonly postId: string;
-  readonly presentation: ChatBotPresentation;
-}): ReactNode {
-  const { postId, presentation } = props;
-  const post = presentation.repliedPost?.(postId) ?? null;
-  const scrollToMessage = presentation.scrollToMessage;
-  if (post === null) return null;
-  const label = (
-    <>
-      <span className="font-medium">{post.senderLabel}</span>
-      <span className="truncate">{post.excerpt}</span>
-    </>
-  );
-  const className =
-    "flex w-fit max-w-full min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground";
-  return scrollToMessage === null ? (
-    <div className={className} data-testid="bot-replied-post">
-      {label}
-    </div>
-  ) : (
-    <button
-      type="button"
-      className={cn(className, "rounded-sm hover:text-foreground")}
-      data-testid="bot-replied-post"
-      onClick={() => scrollToMessage(postId)}
-    >
-      {label}
-    </button>
   );
 }
 

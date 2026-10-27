@@ -82,7 +82,7 @@ describe("sandboxFailureMessage", () => {
         }),
       ),
     ).toBe(
-      "Your credits don't cover an hour of this sandbox. Add 7.00 credits and try again.",
+      "Your credits don't cover an hour of this sandbox. Add $7.00 and try again.",
     );
     expect(
       sandboxFailureMessage(
@@ -100,7 +100,7 @@ describe("sandboxFailureMessage", () => {
         }),
       ),
     ).toBe(
-      "Your credits don't cover an hour of this sandbox. Add 11 credits and try again.",
+      "Your credits don't cover an hour of this sandbox. Add $11 and try again.",
     );
   });
 

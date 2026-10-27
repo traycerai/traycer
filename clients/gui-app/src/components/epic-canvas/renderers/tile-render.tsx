@@ -231,10 +231,10 @@ function tileRenderer<K extends TileKindId>(
  * It is a no-op when the tile is on the canvas host, and coordinators are
  * refcounted, so N tiles on one host share one stream.
  *
- * On a sandbox host the body sits in `<SandboxTileStateFrame>`, which greys
- * the last screen under the sandbox's state while it is frozen, asleep or
- * waking - except a chat the pool serves at rest, whose body stays readable
- * under a strip; a personal host's body is not wrapped.
+ * `<SandboxTileStateFrame>` carries the bound host's team disclosure. On a
+ * sandbox host it greys a non-chat tile's last screen under the sandbox's
+ * state while frozen, asleep or waking. Live chat tiles own their lifecycle
+ * surfaces and stay interactive; personal hosts have no lifecycle overlay.
  *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
  * mounted - a lazy one would not be live at click time, so the first link

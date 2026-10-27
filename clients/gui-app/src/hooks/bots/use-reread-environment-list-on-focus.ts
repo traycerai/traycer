@@ -15,13 +15,6 @@ const ENVIRONMENT_LIST_METHOD = "environment.list";
  */
 const rereadFocus = new WeakMap<QueryClient, Event>();
 
-function isEnvironmentList(query: Query): boolean {
-  return hostQueryKeys.matchesMethodOnAnyHost(
-    query.queryKey,
-    ENVIRONMENT_LIST_METHOD,
-  );
-}
-
 /**
  * Re-reads the environment list when the window gains focus, for the bot
  * surfaces that list environments as sections (the channel sidebar, Home's
@@ -41,7 +34,13 @@ export function useRereadEnvironmentListOnFocus(enabled: boolean): void {
     const listener = (event: Event): void => {
       if (rereadFocus.get(queryClient) === event) return;
       rereadFocus.set(queryClient, event);
-      const filters = { predicate: isEnvironmentList };
+      const filters = {
+        predicate: (query: Query) =>
+          hostQueryKeys.matchesMethodOnAnyHost(
+            query.queryKey,
+            ENVIRONMENT_LIST_METHOD,
+          ),
+      };
       // An invalidation cancels a running read only once the list has data;
       // a first read still running would be joined, so it is cancelled here.
       void queryClient.cancelQueries(filters);

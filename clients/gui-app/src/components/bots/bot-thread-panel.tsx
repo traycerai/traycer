@@ -282,7 +282,6 @@ function originPresentation(
     botTitle,
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,

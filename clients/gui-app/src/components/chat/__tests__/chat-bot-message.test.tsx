@@ -88,7 +88,6 @@ function channelPresentation(
     botTitle: "Release Bot",
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine,
     openThread,
     openAnnouncementThread: null,
@@ -419,7 +418,6 @@ describe("<ChatMessage /> in a bot thread", () => {
         chooseOption: null,
         failedRequest: null,
         replyFollowsPost: null,
-        repliedPost: null,
       },
     );
 
@@ -627,40 +625,6 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(retry).toHaveBeenCalledWith("Please review the release");
   });
 
-  it("asks the presentation about the message's request and its writer", () => {
-    const asked: Array<{
-      readonly requestId: string;
-      readonly senderUserId: string | null;
-    }> = [];
-    renderRow(
-      { ...memberPost(OPEN_REQUEST), senderUserId: "user-teammate" },
-      {
-        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
-        failedRequest: (requestId, senderUserId) => {
-          asked.push({ requestId, senderUserId });
-          return null;
-        },
-      },
-    );
-
-    expect(asked).toContainEqual({
-      requestId: OPEN_REQUEST.requestId,
-      senderUserId: "user-teammate",
-    });
-  });
-
-  it("holds Retry while a retry is being sent, and leaves Edit", () => {
-    renderRow(memberPost(OPEN_REQUEST), failing(vi.fn(), true, vi.fn()));
-
-    const actions = within(screen.getByTestId("bot-message-actions"));
-    expect(
-      actions.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      actions.getByRole("button", { name: "Edit" }).hasAttribute("disabled"),
-    ).toBe(false);
-  });
-
   it("offers neither on a message the session did not fail on, and none on the bot's own row", () => {
     renderRow(
       memberPost({ ...OPEN_REQUEST, requestId: "req-answered" }),
@@ -701,7 +665,6 @@ describe("<ChatMessage /> bot rows", () => {
     botTitle: "Release Bot",
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
@@ -821,7 +784,6 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       botTitle: "Release Bot",
       scrollToMessage: null,
       replyFollowsPost: null,
-      repliedPost: null,
       threadLine: input.threadLine,
       openThread: null,
       openAnnouncementThread: input.openAnnouncementThread,
@@ -991,7 +953,6 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     botTitle: "Release Bot",
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine: NO_THREAD_LINE,
     openThread: null,
     openAnnouncementThread: null,
@@ -1088,62 +1049,6 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     });
 
     expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
-  });
-
-  it("names the post a reply answers above the reply, and lands the list on it when clicked", async () => {
-    const user = userEvent.setup();
-    const scrollToMessage = vi.fn<(messageId: string) => void>();
-    const repliedPost = vi.fn<
-      (messageId: string) => { senderLabel: string; excerpt: string } | null
-    >(() => ({ senderLabel: "Tess Teammate", excerpt: "Please review" }));
-    renderRow(
-      { ...botRow(undefined), repliesTo: POST_ID },
-      { ...CHANNEL, scrollToMessage, repliedPost },
-    );
-
-    const line = screen.getByTestId("bot-replied-post");
-    expect(within(line).getByText("Tess Teammate")).toBeTruthy();
-    expect(within(line).getByText("Please review")).toBeTruthy();
-    expect(repliedPost).toHaveBeenCalledWith(POST_ID);
-    expect(scrollToMessage).not.toHaveBeenCalled();
-
-    await user.click(line);
-
-    expect(scrollToMessage).toHaveBeenCalledTimes(1);
-    expect(scrollToMessage).toHaveBeenCalledWith(POST_ID);
-  });
-
-  it("names the replied post without a jump where the list cannot scroll", () => {
-    renderRow(
-      { ...botRow(undefined), repliesTo: POST_ID },
-      {
-        ...CHANNEL,
-        repliedPost: () => ({ senderLabel: "Tess Teammate", excerpt: "Hi" }),
-      },
-    );
-
-    const line = screen.getByTestId("bot-replied-post");
-    expect(line.tagName).toBe("DIV");
-    expect(within(line).getByText("Tess Teammate")).toBeTruthy();
-  });
-
-  it("draws no replied-post line while the post it answers is not in the list", () => {
-    renderRow(
-      { ...botRow(undefined), repliesTo: POST_ID },
-      { ...CHANNEL, repliedPost: () => null },
-    );
-
-    expect(screen.getByTestId("bot-reply-row")).toBeTruthy();
-    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
-  });
-
-  it("draws no replied-post line on a bot row that answers no post", () => {
-    renderRow(botRow(undefined), {
-      ...CHANNEL,
-      repliedPost: () => ({ senderLabel: "Tess Teammate", excerpt: "Hi" }),
-    });
-
-    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
   });
 
   it("opens the thread under the post a direct reply answers from the reply's hover action, with no thread line of its own", async () => {
@@ -1495,7 +1400,6 @@ describe("<ChatEmptyState /> in a bot channel", () => {
       botTitle: "Release Bot",
       scrollToMessage: vi.fn(),
       replyFollowsPost: null,
-      repliedPost: null,
       threadLine: null,
       openThread: null,
       openAnnouncementThread: null,

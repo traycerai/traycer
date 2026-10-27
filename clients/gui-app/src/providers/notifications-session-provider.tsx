@@ -396,9 +396,9 @@ function NotificationsSessionBody(
   const replicaFeed = props.replicaFeed;
   useEffect(() => {
     const store = useCloudNotificationsStore.getState();
-    if (replicaFeed === null) store.revokeReplicaSeed();
-    else store.seedFromReplica(replicaFeed);
-  }, [replicaFeed, cloudSessionEpoch]);
+    if (replicaFeed === null || userId === null) store.revokeReplicaSeed();
+    else store.seedFromReplica({ ...replicaFeed, accountId: userId });
+  }, [replicaFeed, cloudSessionEpoch, userId]);
   const disposerRef = useRef<(() => void) | null>(null);
   const activityDisposerRef = useRef<(() => void) | null>(null);
   /** The host whose lane `activityDisposerRef` holds - the slice a verdict loss clears. */
@@ -1240,9 +1240,12 @@ function NotificationsSessionBody(
       // a cloud-lane problem left this machine's own notification lane shut
       // for the rest of the session. Machine notifications do not depend on
       // cloud access and must survive a cloud lane that cannot open.
+      const openedAccountId =
+        useAuthStore.getState().contextMetadata?.userId ?? null;
       if (
         settledFeedMode === "cloud" &&
         cloudAuthorized &&
+        openedAccountId !== null &&
         cloudFeedStreamClient !== null
       ) {
         // The cloud feed owns host/agent rows only. Collaboration events are
@@ -1259,22 +1262,17 @@ function NotificationsSessionBody(
         // projects a new user straight over this one, and this stream is
         // torn down only by the effect that render runs: a frame delivered
         // before then belongs to the account that left.
-        const openedAccountId =
-          useAuthStore.getState().contextMetadata?.userId ?? null;
         cloudDisposerRef.current = openCloudNotificationsStream(
           reconnect,
           cloudFeedStreamClient,
+          openedAccountId,
           onAuthError,
           ({ rows, arrivals }) => {
             const accountId =
               useAuthStore.getState().contextMetadata?.userId ?? null;
             if (accountId !== openedAccountId) return;
             const accepted = useCloudNotificationsStore.getState();
-            if (
-              accountId !== null &&
-              accepted.summary !== null &&
-              accepted.version !== null
-            ) {
+            if (accepted.summary !== null && accepted.version !== null) {
               rememberNotificationFeed({
                 accountId,
                 servingHostId,

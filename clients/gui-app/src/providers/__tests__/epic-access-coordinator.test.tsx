@@ -10,6 +10,8 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import type {
+  GetTaskContextsResponse,
+  ListTaskLight,
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -39,6 +41,10 @@ import {
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  taskLossFor,
+  useTaskLossRegister,
+} from "@/stores/epics/task-loss-register-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
@@ -259,6 +265,7 @@ describe("EpicAccessCoordinator", () => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useAuthStore.getState().setSignedOut();
     useComposerRunSettingsStore.getState().resetForTests();
+    useTaskLossRegister.setState({ byUserId: {} });
     __getOpenEpicRegistryForTests().disposeAll();
     clearSessionCreatedEpics();
     toastInfo.mockClear();
@@ -337,6 +344,46 @@ describe("EpicAccessCoordinator", () => {
       expect.stringContaining("no longer have access"),
       { id: "epic-access:epic-1", cancel: null },
     );
+  });
+
+  it("has the title lookups that named a task whose session lost access read it again, settling nothing", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    const handle = registerSession("epic-1");
+    seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
+    const { queryClient } = renderCoordinatorAt("/epics/epic-1/tab-1");
+    const lookupKey = hostQueryKeys.taskReferenceLookup(
+      TEST_HOST_ID,
+      "user-1",
+      "epic-1",
+    );
+    queryClient.setQueryData<GetTaskContextsResponse>(lookupKey, {
+      tasks: {
+        "epic-1": { status: "found", task: listTaskLight("epic-1") },
+      },
+    });
+
+    // A moved room or a failed sign-in raises this as a revoke does.
+    handle.store.setState({ accessLost: true });
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(lookupKey)?.isInvalidated).toBe(true),
+    );
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(lookupKey)?.tasks,
+    ).toEqual({});
+    expect(
+      taskLossFor(useTaskLossRegister.getState(), "user-1", null, "epic-1")
+        ?.loss,
+    ).toBe("recheck");
   });
 
   it("silently closes a deleted background tab without leaving the active epic", async () => {
@@ -821,9 +868,19 @@ describe("EpicAccessCoordinator", () => {
     }
   });
 
-  it("ejects a created-this-session epic once every grace retry is spent and 'unavailable' lands again", async () => {
+  it("ejects a created-this-session epic once every grace retry is spent and 'unavailable' lands again, and has the title lookups that named it read again", async () => {
     vi.useFakeTimers();
     try {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-1",
+          userName: "Test User",
+          email: "test@example.com",
+          avatarUrl: null,
+        },
+        { userId: "user-1", username: "test-user" },
+        [],
+      );
       markEpicCreatedThisSession("epic-1", "host-x");
       const handle = registerSession("epic-1");
       seedTabs(
@@ -837,7 +894,19 @@ describe("EpicAccessCoordinator", () => {
         upgradeGuidance: null,
       };
 
-      const { router } = renderCoordinatorAt("/epics/epic-1/tab-1");
+      const { router, queryClient } = renderCoordinatorAt(
+        "/epics/epic-1/tab-1",
+      );
+      const lookupKey = hostQueryKeys.taskReferenceLookup(
+        TEST_HOST_ID,
+        "user-1",
+        "epic-1",
+      );
+      queryClient.setQueryData<GetTaskContextsResponse>(lookupKey, {
+        tasks: {
+          "epic-1": { status: "found", task: listTaskLight("epic-1") },
+        },
+      });
       await act(async () => {
         await Promise.resolve();
       });
@@ -903,6 +972,19 @@ describe("EpicAccessCoordinator", () => {
       expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(
         CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS.length,
       );
+      // An unavailable room can be a revoke or a delete seen on open: a title
+      // read before it no longer stands.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(queryClient.getQueryState(lookupKey)?.isInvalidated).toBe(true);
+      expect(
+        queryClient.getQueryData<GetTaskContextsResponse>(lookupKey)?.tasks,
+      ).toEqual({});
+      expect(
+        taskLossFor(useTaskLossRegister.getState(), "user-1", null, "epic-1")
+          ?.loss,
+      ).toBe("recheck");
     } finally {
       vi.useRealTimers();
     }
@@ -1328,5 +1410,31 @@ function taskLight(id: string, title: string, repo: string): TaskLight {
       workspaces: [],
       roomInfo: null,
     },
+  };
+}
+
+function listTaskLight(epicId: string): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: "Epic One",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "draft",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "user-1",
+        version: "1.0.0",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    pinned: false,
   };
 }

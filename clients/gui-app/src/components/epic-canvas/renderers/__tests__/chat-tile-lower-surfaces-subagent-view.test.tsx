@@ -111,7 +111,12 @@ function props(
     chatId: "chat-1",
     hostId: "host-1",
     runtime: { snapshotLoaded: true },
-    access: { isViewer: false, canAct, readOnlyNotice: null },
+    access: {
+      isViewer: false,
+      isCopy: false,
+      canAct,
+      readOnlyNotice: null,
+    },
     turn: {
       activeTurnStatus: null,
       steerCapable: false,
@@ -446,7 +451,12 @@ describe("subagent view lower surface", () => {
     render(
       <ChatLowerInteractionSurfaces
         {...base}
-        access={{ isViewer: true, canAct: false, readOnlyNotice: null }}
+        access={{
+          isViewer: true,
+          isCopy: false,
+          canAct: false,
+          readOnlyNotice: null,
+        }}
       />,
     );
 

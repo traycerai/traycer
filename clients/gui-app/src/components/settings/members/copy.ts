@@ -529,14 +529,6 @@ export function moveStalledBody(
   return `${hostName} has not finished moving. ${String(remaining)} remaining. ${reason}`;
 }
 
-export function applyFailedBody(
-  hostName: string,
-  itemKey: string,
-  reason: string,
-): string {
-  return `${itemKey} was not applied on ${hostName}. ${reason}`;
-}
-
 export function openHostOverviewLabel(): string {
   return "Open Overview";
 }

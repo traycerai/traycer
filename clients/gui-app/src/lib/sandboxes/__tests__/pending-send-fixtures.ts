@@ -53,8 +53,8 @@ export function harnessRow(
 
 /**
  * One provider row of a host's `providers.list`. `candidates: []` is the
- * load-bearing default: nothing to fall back on, so a pack that is not
- * installed is a provider that cannot run.
+ * load-bearing default: nothing to fall back on when a managed pack reports
+ * a download or failure. Legacy hosts rely on the harness's availability.
  */
 export function providerRow(
   providerId: ProviderCliState["providerId"],
@@ -85,6 +85,31 @@ export function providerRow(
       skills: null,
       modelProviders: null,
     },
+  };
+}
+
+/** OpenCode 1 is installed while the new chat's Managed 2 pack sets up. */
+export function opencodeProviderRow(
+  lineTwoState: ProviderManagedInstallState | null,
+  overrides: Partial<ProviderCliState>,
+): ProviderCliState {
+  return {
+    ...providerRow("opencode", { status: "installed" }),
+    managedLines: ([1, 2] as const).map((line) => ({
+      line,
+      candidate: {
+        kind: "bundled",
+        path: `/managed/opencode-${line}`,
+        version: `${line}.0.0`,
+        available: line === 1 || lineTwoState?.status === "installed",
+        versionPending: false,
+      },
+      packId: `opencode-${line}`,
+      managedInstallState: line === 1 ? { status: "installed" } : lineTwoState,
+      managedVersions: null,
+      managedVersionsUnavailable: null,
+    })),
+    ...overrides,
   };
 }
 

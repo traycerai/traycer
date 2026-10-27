@@ -5,20 +5,24 @@ follows are in the root `AGENTS.md`, "When CI runs".
 
 ## The pull-request gate
 
-A team pull request into `main` (a branch in this repository) runs no job but
-the CodeQL scan. The rule is one expression, copied into the `if:` of every
-job but `analyze` in the nine workflows that trigger on `pull_request`
-(`test`, `pre-commit`, `protocol-compat`, `browser-regressions`,
-`real-supervisor`, `codeql`, `secret-scan`, `dco`, `gradle-wrapper`), and
-pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
+A team pull request (a branch in this repository) into `main`, an
+`integration/*` branch or a `land/*` branch runs no job but the CodeQL scan.
+The rule is one expression, copied into the `if:` of every job but `analyze`
+in the nine workflows that trigger on `pull_request` (`test`, `pre-commit`,
+`protocol-compat`, `browser-regressions`, `real-supervisor`, `codeql`,
+`secret-scan`, `dco`, `gradle-wrapper`), and pinned by
+`scripts/__tests__/ci-pull-request-gate.test.mjs`:
 
 ```
 github.event_name != 'pull_request'
-  || github.base_ref != 'main'
+  || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
   || github.event.pull_request.head.repo.full_name != github.repository
   || github.event.pull_request.user.type == 'Bot'
 ```
 
+- `integration/*` and `land/*` branches have no push run. Their work reaches
+  `main` through a pull request, so the merge run on `main` tests it once,
+  the same as any other team change.
 - The gate asks "is the head repository this repository", not "is it a
   fork": a deleted fork reports no head repository, and that answer must fail
   toward running CI.

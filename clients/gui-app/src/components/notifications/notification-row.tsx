@@ -368,7 +368,7 @@ function NotificationRowWithSecrets(props: {
         resolved={props.row.resolvedAt !== null}
       />
       {environmentDetail === null ? null : (
-        <EnvironmentNotificationExtra detail={environmentDetail} />
+        <EnvironmentNoticeExtra row={props.row} detail={environmentDetail} />
       )}
       {sandboxNotice === null ? null : (
         <SandboxNoticeExtra
@@ -378,6 +378,19 @@ function NotificationRowWithSecrets(props: {
         />
       )}
     </div>
+  );
+}
+
+function EnvironmentNoticeExtra(props: {
+  readonly row: MergedNotificationRow;
+  readonly detail: NonNullable<MergedNotificationRow["environmentDetail"]>;
+}): ReactNode {
+  const actions = useMergedNotificationsActions();
+  return (
+    <EnvironmentNotificationExtra
+      detail={props.detail}
+      onSettingsApplied={() => actions.resolveNotice(props.row)}
+    />
   );
 }
 
@@ -393,7 +406,8 @@ function SandboxNoticeExtra(props: {
       notice={props.notice}
       onDetails={() => props.onActivate(props.row)}
       onDismiss={() => actions.clear(props.row)}
-      onExtended={() => actions.markAsRead(props.row)}
+      active={props.row.resolvedAt === null}
+      onExtended={() => actions.resolveNotice(props.row)}
     />
   );
 }

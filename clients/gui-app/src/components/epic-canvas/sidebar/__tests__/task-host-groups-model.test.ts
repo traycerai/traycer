@@ -21,7 +21,7 @@ function hostRow(
   principal: TaskHostPrincipal,
   reach: AgentReach,
 ): TaskHostRow {
-  return { hostId, label, principal, reach };
+  return { hostId, label, principal, reach, sandboxEnd: null };
 }
 
 function ownRow(hostId: string, label: string | null): TaskHostRow {

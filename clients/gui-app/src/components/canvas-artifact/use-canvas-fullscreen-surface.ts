@@ -1,11 +1,6 @@
 import { useEffectEvent, useLayoutEffect } from "react";
 import { isCanvasTextInput } from "./canvas-model";
 
-function stepDirection(code: string): -1 | 1 | null {
-  if (code === "ArrowLeft") return -1;
-  if (code === "ArrowRight") return 1;
-  return null;
-}
 /**
  * Fullscreen is scoped to the canvas tile: the existing canvas DOM is promoted
  * in place (moving an iframe into a dialog reloads it), the rest of the window
@@ -31,7 +26,9 @@ export function useCanvasFullscreenSurface(
       onClose();
       return;
     }
-    const direction = stepDirection(event.code);
+    let direction: -1 | 1 | null = null;
+    if (event.code === "ArrowLeft") direction = -1;
+    else if (event.code === "ArrowRight") direction = 1;
     if (
       direction === null ||
       event.ctrlKey ||

@@ -14,5 +14,5 @@ export function openHistoryItemInBackground(
     });
     return;
   }
-  openEpicInBackground(item.epicId, item.title);
+  openEpicInBackground(item.epicId, item.title, "direct_ui");
 }

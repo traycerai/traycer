@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Mock } from "vitest";
+import type { Mock, MockInstance } from "vitest";
 import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -859,59 +859,75 @@ describe("<UserMessageBody /> agent messages", () => {
     });
   });
 
-  // T4: a real file paste on the edit composer now goes through
-  // `useComposerHashPaste`/`hashImageAttrsFromFiles` - the same content-
-  // addressed store every other chat surface uses - so the submitted node is
-  // HASH-ONLY with its bytes in the local store, not inline base64. A test
-  // named "submits base64 nodes" asserting the opposite was the old truth;
-  // keeping that name while flipping the assertion is exactly the trap T3's
-  // review caught once already.
   it("reveals an edited row that overflows its scroller with an absolute scroll target", async () => {
-    const view = render(
-      <div data-testid="scroller" style={{ overflowY: "auto" }}>
-        <InlineEditAttachmentHarness onSubmit={vi.fn()} />
-      </div>,
-    );
-    const scroller = screen.getByTestId("scroller");
-    // Mount focuses the editor over four animation frames, restoring the
-    // scroller's mount-time offset after each; let them finish before the
-    // offset is replaced so a late restore neither throws nor overwrites it.
-    await screen.findByRole("textbox", { name: "Edit message" });
-    for (let frame = 0; frame < 4; frame += 1) {
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
+    // The page's frames are driven by the test: mount focus restoration and
+    // the reveal's visibility check both run when the test drains them.
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrameId = 1;
+    const rafSpy = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        const id = nextFrameId;
+        nextFrameId += 1;
+        frames.set(id, callback);
+        return id;
       });
-    }
-    Object.defineProperty(scroller, "scrollTop", {
-      configurable: true,
-      writable: true,
-      value: 300,
-    });
-    const scrollTo = vi.fn();
-    scroller.scrollTo = scrollTo;
-    // The scroller's viewport ends at 500; the edited row ends 120px below it.
-    // iOS WebKit lands a relative `scrollBy` twice, so the reveal must write
-    // the absolute target: the current offset plus the overflow and padding.
-    const rectSpy = vi
-      .spyOn(Element.prototype, "getBoundingClientRect")
-      .mockImplementation(function (this: Element) {
-        const bottom = this === scroller ? 500 : 620;
-        return {
-          x: 0,
-          y: bottom - 100,
-          width: 400,
-          height: 100,
-          top: bottom - 100,
-          right: 400,
-          bottom,
-          left: 0,
-          toJSON: () => ({}),
-        };
+    const cancelSpy = vi
+      .spyOn(globalThis, "cancelAnimationFrame")
+      .mockImplementation((id) => {
+        frames.delete(id);
       });
+    const drainFrames = (): void => {
+      while (frames.size > 0) {
+        for (const [id, callback] of [...frames]) {
+          if (!frames.has(id)) continue;
+          frames.delete(id);
+          callback(0);
+        }
+      }
+    };
+    let rectSpy: MockInstance<Element["getBoundingClientRect"]> | null = null;
     try {
+      render(
+        <div data-testid="scroller" style={{ overflowY: "auto" }}>
+          <InlineEditAttachmentHarness onSubmit={vi.fn()} />
+        </div>,
+      );
+      const scroller = screen.getByTestId("scroller");
+      const scrollTo = vi.fn();
+      scroller.scrollTo = scrollTo;
       const editor = await screen.findByRole("textbox", {
         name: "Edit message",
       });
+      // Mount focus restores the scroller's mount-time offset on every frame
+      // it asks for; run them all before the offset is replaced so a late
+      // restore neither throws nor overwrites it.
+      drainFrames();
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        writable: true,
+        value: 300,
+      });
+      // The scroller's viewport ends at 500; the edited row ends 120px below
+      // it. iOS WebKit lands a relative `scrollBy` twice, so the reveal must
+      // write the absolute target: the current offset plus the overflow and
+      // padding.
+      rectSpy = vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+          const bottom = this === scroller ? 500 : 620;
+          return {
+            x: 0,
+            y: bottom - 100,
+            width: 400,
+            height: 100,
+            top: bottom - 100,
+            right: 400,
+            bottom,
+            left: 0,
+            toJSON: () => ({}),
+          };
+        });
       fireEvent.paste(editor, {
         clipboardData: {
           files: [],
@@ -921,20 +937,26 @@ describe("<UserMessageBody /> agent messages", () => {
         },
       });
       await waitFor(() => {
-        expect(scrollTo).toHaveBeenCalledWith({
-          top: 300 + (620 - 500) + 16,
-          behavior: "auto",
-        });
+        drainFrames();
+        expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );
     } finally {
-      rectSpy.mockRestore();
-      view.unmount();
+      try {
+        cleanup();
+      } finally {
+        frames.clear();
+        rectSpy?.mockRestore();
+        cancelSpy.mockRestore();
+        rafSpy.mockRestore();
+      }
     }
   });
 
+  // A pasted image file is stored by content hash, so the submitted node is
+  // hash-only with its bytes in the local store, never inline base64.
   it("adds multiple pasted images to the edit strip and submits hash-only nodes", async () => {
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);

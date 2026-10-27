@@ -99,7 +99,12 @@ function props(
     chatId: "chat-1",
     hostId: "host-1",
     runtime: { snapshotLoaded: true },
-    access: { isViewer: false, canAct, readOnlyNotice: null },
+    access: {
+      isViewer: false,
+      isCopy: false,
+      canAct,
+      readOnlyNotice: null,
+    },
     turn: {
       activeTurnStatus: null,
       steerCapable: false,

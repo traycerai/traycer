@@ -12,9 +12,14 @@
  * the shortcut dead after the overlay closes. See `useRegisterActiveModelPicker`
  * for the React entry point.
  */
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+
 export interface ActiveModelPickerController {
   /** Open the picker if closed, close it if open. */
   readonly toggle: () => void;
+  /** Open on a harness's models without changing the composer's selection. */
+  readonly openForHarness?: (harnessId: GuiHarnessId) => void;
+  readonly getSurfaceKey?: () => string | null;
   /** Short current-selection summary for palette copy, or null when unknown. */
   readonly getSelectionSummary: () => string | null;
 }
@@ -69,6 +74,21 @@ export function toggleActiveModelPicker(): boolean {
   const controller = top();
   if (controller === null) return false;
   controller.toggle();
+  return true;
+}
+
+/** Browse a harness in the active composer's picker, preserving its current pick. */
+export function openActiveModelPickerForHarness(
+  harnessId: GuiHarnessId,
+  surfaceKey: string | null,
+): boolean {
+  const controller =
+    surfaceKey === null
+      ? top()
+      : stack.findLast((entry) => entry.getSurfaceKey?.() === surfaceKey);
+  const open = controller?.openForHarness;
+  if (open === undefined) return false;
+  open(harnessId);
   return true;
 }
 

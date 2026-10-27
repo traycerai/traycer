@@ -9,7 +9,15 @@ import {
 } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -75,6 +83,11 @@ async function openImportDialog(user: UserEvent): Promise<HTMLElement> {
 }
 
 describe("theme import flow", () => {
+  // The gallery lazy-loads the import dialog. Load its module once up front
+  // so the first test's dialog query measures the flow, not a cold transform.
+  beforeAll(async () => {
+    await import("@/components/settings/themes/theme-import-dialog");
+  });
   beforeEach(() => {
     resetThemeStores();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

@@ -89,7 +89,11 @@ describe("notification feed replica", () => {
     expect(page?.cloudFeedVersion).toEqual({ major: 1, minor: 2 });
     if (page === null) throw new Error("Expected a cached feed");
 
-    useCloudNotificationsStore.getState().seedFromReplica(page);
+    useCloudNotificationsStore.getState().seedFromReplica({
+      accountId: ACCOUNT,
+      rows: page.rows,
+      summary: page.summary,
+    });
 
     expect(seededKeys()).toEqual(
       [
@@ -110,6 +114,7 @@ describe("notification feed replica", () => {
     });
 
     useCloudNotificationsStore.getState().seedFromReplica({
+      accountId: ACCOUNT,
       rows: [feedRow("cached-1")],
       summary: FEED_SUMMARY,
     });
@@ -119,6 +124,7 @@ describe("notification feed replica", () => {
 
   it("replaces the seeded rows wholesale with the first live snapshot", () => {
     useCloudNotificationsStore.getState().seedFromReplica({
+      accountId: ACCOUNT,
       rows: [feedRow("cached-1"), feedRow("cached-2")],
       summary: FEED_SUMMARY,
     });
@@ -137,8 +143,26 @@ describe("notification feed replica", () => {
     );
   });
 
+  it("does not seed another account's replica page over the session's owner", () => {
+    useCloudNotificationsStore.getState().seedFromReplica({
+      accountId: ACCOUNT,
+      rows: [feedRow("cached-1")],
+      summary: FEED_SUMMARY,
+    });
+
+    useCloudNotificationsStore.getState().seedFromReplica({
+      accountId: "another-account",
+      rows: [feedRow("other-1")],
+      summary: FEED_SUMMARY,
+    });
+
+    expect(seededKeys()).toEqual([cloudNotificationFeedId("cached-1")]);
+    expect(useCloudNotificationsStore.getState().accountId).toBe(ACCOUNT);
+  });
+
   it("revokes the rows a replica page seeded, and the summary, when the replica stops admitting it", () => {
     useCloudNotificationsStore.getState().seedFromReplica({
+      accountId: ACCOUNT,
       rows: [feedRow("cached-1")],
       summary: FEED_SUMMARY,
     });

@@ -7,8 +7,6 @@ import {
   ownsDesktopHorizontalWheel,
 } from "./desktop-history-gesture-ownership";
 
-export { ownsDesktopHorizontalWheel } from "./desktop-history-gesture-ownership";
-
 export type DesktopHistoryDirection = "back" | "forward";
 
 export interface DesktopHistoryGestureView {

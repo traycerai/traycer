@@ -21,22 +21,11 @@ interface TrackpadScrollAddon {
   stop(): void;
 }
 
-// `build:native` drops the universal binary beside the main bundle. Inside a
-// packaged app that directory is asar-unpacked (`asarUnpack` in package.json)
-// because a `.node` file cannot be dlopen'ed out of an archive.
-function addonPath(): string {
-  return path
-    .join(__dirname, "native", "trackpad_scroll_phase.node")
-    .replace("app.asar", "app.asar.unpacked");
-}
-
 const addonRequire = createRequire(__filename);
 
 /**
  * Forwards the macOS trackpad scroll stream to `emit`. Returns the teardown.
- * A no-op off macOS or when the addon is missing: the gesture that depends on
- * it simply stays unavailable, which the renderer reads from the preload
- * surface, not from here.
+ * Off macOS or when the addon cannot load, no scroll events are forwarded.
  */
 export function installTrackpadScrollPhaseMonitor(
   emit: (event: TrackpadScrollEvent) => void,
@@ -44,7 +33,13 @@ export function installTrackpadScrollPhaseMonitor(
   if (process.platform !== "darwin") return () => {};
   let addon: TrackpadScrollAddon;
   try {
-    addon = addonRequire(addonPath()) as TrackpadScrollAddon;
+    // The native binary sits beside the main bundle, unpacked from the asar
+    // because a `.node` file cannot be dlopen'ed out of an archive.
+    addon = addonRequire(
+      path
+        .join(__dirname, "native", "trackpad_scroll_phase.node")
+        .replace("app.asar", "app.asar.unpacked"),
+    ) as TrackpadScrollAddon;
   } catch (error) {
     log.warn("[trackpad-scroll-phase] addon unavailable; swipe gesture off", {
       packaged: app.isPackaged,

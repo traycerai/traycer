@@ -332,6 +332,10 @@ function applyCloudSnapshot(
   version: number,
 ): void {
   act(() => {
+    // The session this snapshot belongs to was opened for the signed-in
+    // account; a snapshot applied straight to the store stands in for the
+    // stream frame, so it carries that owner the way an opened stream does.
+    useCloudNotificationsStore.setState({ accountId: "user-a" });
     useCloudNotificationsStore.getState().applySnapshot({
       rows,
       version,

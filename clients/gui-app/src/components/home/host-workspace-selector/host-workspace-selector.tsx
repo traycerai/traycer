@@ -771,6 +771,7 @@ function SandboxStagingExtras(props: {
           input={props.staging.consequences}
           onMoveFirst={null}
           onOpenTerminalInstead={props.staging.openTerminalInstead}
+          onChooseAnotherHost={props.staging.chooseAnotherHost}
         />
       )}
       {props.staging.sheet}
