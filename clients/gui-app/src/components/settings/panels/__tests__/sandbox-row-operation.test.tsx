@@ -17,7 +17,6 @@ import { SandboxCard } from "@/components/hosts/sandbox-card";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
-import type { AutomationTerminalOpen } from "@/components/settings/panels/automation-terminal-open-context";
 import {
   createFakeSandboxBinding,
   refusal,
@@ -58,16 +57,6 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxRunner: () => vi.fn(),
   startStagedTerminal: vi.fn(),
-}));
-// Automations' terminal handoff has its own race suite; these rows run lifecycle verbs.
-vi.mock("@/components/settings/panels/use-open-automation-terminal", () => ({
-  useOpenAutomationTerminal: (): AutomationTerminalOpen => ({
-    run: vi.fn(),
-    retry: vi.fn(),
-    starting: false,
-    failed: false,
-    hostId: null,
-  }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
   useSandboxSessionReport: () => ({
