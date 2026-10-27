@@ -1,3 +1,4 @@
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import {
   firstTaskImports,
   firstTaskImportPending,
@@ -13,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection, WorkspaceHostSwitcher } from "./host-section";
@@ -862,7 +863,8 @@ function HomeWorkspaceRows(props: {
   const { announcement: primaryAnnouncement, announcePrimaryChange } =
     usePrimaryChangeAnnouncement();
   const addFolderPending =
-    useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
+    useIsMutatingOf({ mutationKey: workspaceMutationKeys.prepareFolders() }) >
+    0;
   const pickAndAddFolders = usePickAndAddWorkspaceFolders(
     activeHostClient,
     workspaceSource,

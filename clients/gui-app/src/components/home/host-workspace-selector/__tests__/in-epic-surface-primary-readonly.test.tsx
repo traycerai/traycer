@@ -334,9 +334,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/components/home/worktree/worktree-scripts-dialog", () => ({
   WorktreeScriptsDialog: () => null,
 }));
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  useIsMutating: () => 0,
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
 }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: (

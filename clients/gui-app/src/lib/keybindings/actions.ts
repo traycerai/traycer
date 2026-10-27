@@ -45,6 +45,8 @@ export const ACTION_IDS = [
   "group.focus.left",
   "group.focus.right",
   "group.focus-editor",
+  "tile.find.open",
+  "tile.find.next",
   "tile.find.replace",
   "app.sidebar.toggle",
   "app.status-bar.toggle",
@@ -520,6 +522,34 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "groups",
     kind: "chord",
     defaultChord: "mod+l",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  // ⌘F / ⌘G mirror the Edit menu's Find and Find Next. Off macOS the menu
+  // leaves those accelerators unregistered (`menu-builder.ts`) so a focused
+  // terminal keeps Ctrl+F and Ctrl+G, which makes these bindings the only
+  // keyboard path to the find bar there.
+  "tile.find.open": {
+    id: "tile.find.open",
+    label: "Find in active tile",
+    description: "Open the active tile's find bar.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+f",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tile.find.next": {
+    id: "tile.find.next",
+    label: "Find next in active tile",
+    description: "Go to the next match in the active tile.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+g",
     secondaryChord: undefined,
     terminalPolicy: "shell",
     secondaryTerminalPolicy: undefined,

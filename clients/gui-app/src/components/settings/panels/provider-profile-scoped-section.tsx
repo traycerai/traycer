@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
@@ -548,7 +549,7 @@ function OwnLoginSummary(props: {
 }): ReactNode {
   const refreshProviders = useRefreshProviders();
   const refreshing =
-    useIsMutating({ mutationKey: providersMutationKeys.refresh() }) > 0;
+    useIsMutatingOf({ mutationKey: providersMutationKeys.refresh() }) > 0;
   const stateText = ownLoginStateText(props.profile);
   return (
     <div

@@ -119,6 +119,7 @@ import {
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import { withholdUnpaintedRows } from "@/components/chat/chat-special-segment";
+import { foldBackgroundEventRows } from "@/stores/chats/background-event-fold";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type {
@@ -2436,7 +2437,7 @@ function useChatTileSessionViewModel(
       // after the real row has already settled to its "done" footer.
       runStatus: workingRowStatus ?? "idle",
       // The raw value this time, and for the one reader that wants it: a
-      // background-outcome note holds back its ending while the host still
+      // background event's card holds back its ending while the host still
       // counts the chat as working.
       chatWorking: state.runStatus !== "idle",
       // Binding identity for the in-transcript setup card (replaces the old
@@ -2846,9 +2847,18 @@ function useChatTileSessionViewModel(
   // leaves the list here, so `transcriptListRows` omits its ordinal instead of
   // the timeline framing an empty row. `useRenderedMessages` still enumerates
   // it, because that list is held to the host's projection row for row.
-  const paintedMessages = useMemo(
+  const unfoldedPaintedMessages = useMemo(
     () => withholdUnpaintedRows(displayedMessages),
     [displayedMessages],
+  );
+  // The same renderer policy: background events the agent let pass fold into
+  // the newest card from their source, and the rows they leave behind are
+  // omitted the same way. Their neighbours are proven against the window's
+  // ordinals, which only the windowed line has.
+  const foldWindow = windowedTranscript ? state.transcriptWindow : null;
+  const paintedMessages = useMemo(
+    () => foldBackgroundEventRows(unfoldedPaintedMessages, foldWindow),
+    [unfoldedPaintedMessages, foldWindow],
   );
   // On the legacy line the rendered rows are the full history, so the pinned
   // snapshot derives from the same walk that strips the inline segments. On
