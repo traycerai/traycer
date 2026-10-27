@@ -94,6 +94,7 @@ import {
 } from "./landing-strip-rows";
 import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
 import { LandingTerminalTile } from "./landing-terminal-tile";
+import { AutomationTerminalPane } from "./automation-terminal-pane";
 import { LandingBrowserTile } from "./landing-browser-tile";
 import {
   isLandingBrowserHostWatched,
@@ -1777,7 +1778,8 @@ export function LandingTerminalPanel(): ReactNode {
       target.availability === "unsupported") &&
     // Every row, not the active one: the panel is the strip too, and unmounting
     // it takes away rows the verdict does not speak for.
-    landingTargetVerdictGoverns(tabs);
+    landingTargetVerdictGoverns(tabs) &&
+    placeholder?.automation === undefined;
 
   const renamePanelTab = (instanceId: string, name: string): void => {
     const tab = useLandingPanelStore
@@ -2714,6 +2716,7 @@ function LandingTerminalPanelBody(props: {
     props.availability === "unknown" &&
     props.directoryPicker === null &&
     !placeholderActive &&
+    props.placeholder?.automation === undefined &&
     landingTargetVerdictGoverns(activeTab === null ? [] : [activeTab])
   ) {
     return (
@@ -2735,26 +2738,18 @@ function LandingTerminalPanelBody(props: {
           props.directoryPicker !== null && "invisible pointer-events-none",
         )}
       >
-        {placeholderActive ? (
-          <div className="absolute inset-0 min-h-0">
-            <LandingNewTabChooser
-              terminal={{
-                disabledReason: props.createDisabledReason,
-                // The terminal pick has no in-flight window of its own: it
-                // either creates synchronously or raises the directory picker
-                // over this chooser, and the picker IS the wait.
-                pending: false,
-              }}
-              browser={{
-                disabledReason: props.browserDisabledReason,
-                pending: props.browserOpening,
-              }}
-              takeFocus={props.directoryPicker === null}
-              onPick={props.onPickNewTabKind}
-              onDismiss={props.onDismissPlaceholder}
-            />
-          </div>
-        ) : null}
+        {props.placeholder === null ? null : (
+          <LandingPlaceholderBody
+            placeholder={props.placeholder}
+            active={placeholderActive}
+            directoryPickerOpen={props.directoryPicker !== null}
+            createDisabledReason={props.createDisabledReason}
+            browserDisabledReason={props.browserDisabledReason}
+            browserOpening={props.browserOpening}
+            onPick={props.onPickNewTabKind}
+            onDismiss={props.onDismissPlaceholder}
+          />
+        )}
         {props.tabs.length === 0 && props.placeholder === null ? (
           <LandingTerminalEmptyState
             primaryWorkspacePath={props.primaryWorkspacePath}
@@ -2821,6 +2816,53 @@ function LandingTerminalPanelBody(props: {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function LandingPlaceholderBody(props: {
+  readonly placeholder: LandingPanelPlaceholder;
+  readonly active: boolean;
+  readonly directoryPickerOpen: boolean;
+  readonly createDisabledReason: string | null;
+  readonly browserDisabledReason: string | null;
+  readonly browserOpening: boolean;
+  readonly onPick: (kind: LandingNewTabKind) => void;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  const { placeholder } = props;
+  if (placeholder.automation !== undefined) {
+    return (
+      <div
+        className={cn(
+          "absolute inset-0 min-h-0",
+          !props.active && "invisible pointer-events-none",
+        )}
+      >
+        <AutomationTerminalPane
+          key={placeholder.instanceId}
+          request={placeholder.automation}
+          instanceId={placeholder.instanceId}
+        />
+      </div>
+    );
+  }
+  if (!props.active) return null;
+  return (
+    <div className="absolute inset-0 min-h-0">
+      <LandingNewTabChooser
+        terminal={{
+          disabledReason: props.createDisabledReason,
+          pending: false,
+        }}
+        browser={{
+          disabledReason: props.browserDisabledReason,
+          pending: props.browserOpening,
+        }}
+        takeFocus={!props.directoryPickerOpen}
+        onPick={props.onPick}
+        onDismiss={props.onDismiss}
+      />
     </div>
   );
 }
