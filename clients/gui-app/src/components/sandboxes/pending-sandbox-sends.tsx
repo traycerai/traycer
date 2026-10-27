@@ -333,7 +333,6 @@ function executePendingStageRun(
   if (send.request.kind === "terminal" && !stage.openTerminal)
     useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
   runner(surfaceKey, stagedCreateNeedsFreshKey(stage), {
-    fallbackName: stagedSandboxFallbackName(send.text),
     taskId: send.epicId,
     resume: stage.phase === "creating" && stage.failure === null,
   });
@@ -1967,7 +1966,6 @@ function executePendingStageRetry(
   if (action === "retry-creation") fresh = true;
   else if (action === "retry-stage") fresh = stagedCreateNeedsFreshKey(stage);
   runner(pendingSendSurfaceKey(send.id), fresh, {
-    fallbackName: stagedSandboxFallbackName(send.text),
     taskId: send.epicId,
     resume: false,
   });
@@ -2261,7 +2259,6 @@ function PendingStagedSendItem(props: {
     stage?.target.configuration.kind === "team",
   );
   const epicId = send.epicId;
-  const text = send.text;
   const run = useCallback(
     (fresh: boolean): void => {
       const { sends } = usePendingSandboxSendStore.getState();
@@ -2289,12 +2286,11 @@ function PendingStagedSendItem(props: {
         useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
       if (!plan.effects.includes("run-stage")) return;
       runner(surfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(text),
         taskId: epicId,
         resume: false,
       });
     },
-    [epicId, runner, send.id, surfaceKey, text],
+    [epicId, runner, send.id, surfaceKey],
   );
   const terminal = useMemo(
     () => ({
