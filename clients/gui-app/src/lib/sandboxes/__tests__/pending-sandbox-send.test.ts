@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -19,6 +19,7 @@ import {
   handPendingSandboxSend,
   pickedRunSettings,
   requestedAgentReadiness,
+  returnPendingSandboxMessage,
   returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
@@ -35,6 +36,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
@@ -965,6 +967,106 @@ describe("returnPendingSandboxSend", () => {
         Object.defineProperty(navigator, "locks", originalLocks);
       }
     }
+  });
+});
+
+describe("returnPendingSandboxSend for a message to an existing chat", () => {
+  const CHAT_ID = "existing-chat";
+
+  async function ownedMessageSend(): Promise<() => void> {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    usePendingSandboxSendStore.getState().add(
+      pendingSend({
+        id: "send-1",
+        request: { kind: "message", chatId: CHAT_ID },
+      }),
+    );
+    const owner = holdPendingSandboxSendOwnership("send-1");
+    expect(await owner.ready).toBe(true);
+    return owner.release;
+  }
+
+  const EMPTY_DOC = { type: "doc" as const, content: [] };
+  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+
+  beforeEach(() => {
+    // Sibling suites leave a replacement draft in the modal store: this one
+    // asserts the return touches none, so it starts from a clean one.
+    useNewConversationModalStore.getState().resetForTests();
+    useComposerDraftStore.getState().replaceDraft(CHAT_ID, EMPTY_DOC, null);
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (originalLocks === undefined) {
+      Reflect.deleteProperty(navigator, "locks");
+    } else {
+      Object.defineProperty(navigator, "locks", originalLocks);
+    }
+  });
+
+  it("gives the message back to that chat's composer, and opens no new-agent modal and saves no landing draft", async () => {
+    const release = await ownedMessageSend();
+
+    const returned = await returnPendingSandboxMessage("send-1", false);
+
+    expect(returned).toMatchObject({ kind: "chat", chatId: CHAT_ID });
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      MESSAGE_CONTENT,
+    );
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toBeUndefined();
+    release();
+  });
+
+  it("keeps a newer draft in that chat's composer and saves the returned message as a closed landing draft", async () => {
+    const newer = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "keep my newer draft" }],
+        },
+      ],
+    };
+    useComposerDraftStore.getState().replaceDraft(CHAT_ID, newer, null);
+    const release = await ownedMessageSend();
+
+    const returned = await returnPendingSandboxMessage("send-1", false);
+
+    expect(returned.kind).toBe("landing-draft");
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      newer,
+    );
+    const saved = useLandingDraftStore.getState().drafts;
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      settings: PICKED_SETTINGS,
+      closed: true,
+    });
+    // The handoff appends its Unsent qualification, so the original text is
+    // retained rather than the document being equal to it.
+    expect(JSON.stringify(saved[0]?.content)).toContain("fix the login bug");
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    release();
   });
 });
 

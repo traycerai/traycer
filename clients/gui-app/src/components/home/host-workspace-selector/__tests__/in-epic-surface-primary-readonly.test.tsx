@@ -1842,6 +1842,7 @@ describe("the chat chip is the composer's picker", () => {
         label: host.name,
         principal: { kind: "user", id: "u1" },
         reach: "same_principal",
+        sandboxEnd: null,
       })),
       groups: [],
       collaborators: null,
@@ -2002,7 +2003,9 @@ describe("the chat chip is the composer's picker", () => {
     fireEvent.click(screen.getByText("New Personal sandbox"));
 
     expect(onForkOnNewSandbox).toHaveBeenCalledTimes(1);
-    expect(onForkOnNewSandbox).toHaveBeenCalledWith({
+    const [{ name, ...target }] = onForkOnNewSandbox.mock.calls[0];
+    expect(name).toMatch(/^sandbox-[0-9a-z]{4}$/);
+    expect(target).toEqual({
       kind: "new",
       configuration: { kind: "personal" },
       shape: {
@@ -2014,7 +2017,6 @@ describe("the chat chip is the composer's picker", () => {
         idleMinutes: 30,
         destroyAfterRestingMinutes: 10_080,
       },
-      name: "",
       wakeString: "Suspend keeps memory",
     });
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});

@@ -537,7 +537,10 @@ describe("<SandboxCard /> team destroy", () => {
     );
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
+      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+        "sbx_1",
+        false,
+      );
     });
   });
 

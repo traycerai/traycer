@@ -8,6 +8,12 @@
  * `providers` answers, `epic.createChat` and the terminal create.
  */
 import { useSyncExternalStore } from "react";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  createMessageSessionHarness,
+  type MessageSessionHarness,
+} from "./message-session-harness";
 import type { ReactNode } from "react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -48,6 +54,7 @@ import type {
   SandboxCreateRequest,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -110,6 +117,7 @@ import {
   recordMapStoragePrefix,
 } from "@/lib/persist/keys";
 import {
+  PendingSandboxSendForChat,
   PendingSandboxSendStrip,
   PendingSandboxSendsDriver,
   SandboxReadyLineForChat,
@@ -216,6 +224,39 @@ const toastSpies = vi.hoisted(() => ({
   dismiss: vi.fn(),
 }));
 
+// The existing chat's session, handed to the message dispatch driver: a real
+// session store over a fake stream (message-session-harness.ts), or none.
+const sessionBridge = vi.hoisted(
+  (): { handle: ChatSessionStoreHandle | null } => ({ handle: null }),
+);
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
+  useChatSessionHandleForContainer: () => sessionBridge.handle,
+}));
+
+// The unrecorded-prompt handoff, held open on request: the one place a Cancel
+// of a message to an existing chat can stay "returning" long enough to read.
+const handoffHold = vi.hoisted((): { held: Promise<void> | null } => ({
+  held: null,
+}));
+vi.mock("@/lib/drafts/unrecorded-prompt-handoff", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/lib/drafts/unrecorded-prompt-handoff")
+    >();
+  return {
+    ...original,
+    buildUnrecordedPromptHandoff: async (
+      args: Parameters<typeof original.buildUnrecordedPromptHandoff>[0],
+    ) => {
+      if (handoffHold.held !== null) await handoffHold.held;
+      return original.buildUnrecordedPromptHandoff(args);
+    },
+  };
+});
+
 vi.mock("sonner", async (importOriginal) => {
   const original = await importOriginal<typeof import("sonner")>();
   return {
@@ -313,7 +354,7 @@ const mocks = vi.hoisted(() => ({
     (
       hostId: string,
       gesture: SandboxVerbGesture,
-    ) => Promise<{ readonly kind: "awake" } | null>
+    ) => Promise<SandboxWakeOutcome | null>
   >(),
   /** What reached the sandbox's client, in order: puts, then the create. */
   wire: [] as string[],
@@ -908,6 +949,23 @@ function mount() {
     <QueryClientProvider client={client}>
       <PendingSandboxSendsDriver />
       <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+    </QueryClientProvider>,
+  );
+}
+
+/** The driver beside the setup line of the existing chat the message was sent in. */
+function mountInChat() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <PendingSandboxSendsDriver />
+      <PendingSandboxSendForChat
+        epicId="epic-1"
+        chatId="existing-chat"
+        tabId="tab-1"
+      />
     </QueryClientProvider>,
   );
 }
@@ -3217,6 +3275,417 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
     expectSendRecovered("chat");
+  });
+});
+
+describe("a message for an existing chat whose sandbox rests", () => {
+  const FRESH = Date.now() + 60_000;
+  const MESSAGE_REQUEST = { kind: "message", chatId: "existing-chat" } as const;
+
+  function rowIn(state: "suspended" | "stopped" | "awake"): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state,
+    });
+  }
+
+  it.each([
+    ["suspended", RESUME_TARGET],
+    ["stopped", START_TARGET],
+  ] as const)(
+    "wakes a %s sandbox exactly once, then dispatches the one message to the same chat and creates no chat",
+    async (state, target) => {
+      seed({
+        ...SEEDED,
+        target,
+        send: { request: MESSAGE_REQUEST },
+        phase: "handoff",
+        created: true,
+      });
+      mocks.wake.mockResolvedValue({ kind: "awake" });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn(state)];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+
+      await waitFor(() => {
+        expect(mocks.wake).toHaveBeenCalledTimes(1);
+      });
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+      answerSandboxRows([rowIn("awake")], FRESH + 1);
+
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch?.input,
+        ).toMatchObject({ chatId: "existing-chat", hostId: SANDBOX_HOST });
+      });
+      // The message goes through the ordinary send of the chat that exists:
+      // no second chat, no second pending record, no second wake.
+      expect(createChatCalls()).toEqual([]);
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
+        SEND_ID,
+      ]);
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+    },
+  );
+
+  describe("cancelling while its sandbox rests", () => {
+    const OCCUPIED_CHAT_DOC = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "keep my newer draft" }],
+        },
+      ],
+    };
+
+    function seedWaking(): void {
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        send: { request: MESSAGE_REQUEST },
+        phase: "handoff",
+        created: true,
+      });
+      mocks.wake.mockReturnValue(new Promise(() => undefined));
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn("suspended")];
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      // Cancel is an exit of a failed or timed-out wake only (R9): the
+      // failure is on the stage before mount, which also auto-expands it.
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "timed-out", step: "booting" },
+      });
+    }
+
+    afterEach(() => {
+      handoffHold.held = null;
+    });
+
+    it("returns the message to the chat's composer with the exact receipt and never sends", async () => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        seedWaking();
+        mountInChat();
+
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Cancel the message" }),
+        );
+
+        await waitFor(() =>
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+        );
+        expect(
+          screen.getByText(
+            "Your message wasn't sent; it's back in the composer.",
+          ),
+        ).toBeDefined();
+        expect(
+          useComposerDraftStore.getState().drafts["existing-chat"]?.content,
+        ).toEqual(MESSAGE_CONTENT);
+        expect(createChatCalls()).toEqual([]);
+      } finally {
+        restoreLocks();
+      }
+    });
+
+    it("shows a busy, disabled Cancel with 'Returning your message…' while the saved-draft import is held, then the saved-drafts receipt with Open draft", async () => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        useComposerDraftStore
+          .getState()
+          .replaceDraft("existing-chat", OCCUPIED_CHAT_DOC, null);
+        let releaseHold: () => void = () => undefined;
+        handoffHold.held = new Promise<void>((resolve) => {
+          releaseHold = resolve;
+        });
+        seedWaking();
+        mountInChat();
+
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Cancel the message" }),
+        );
+
+        const cancel = await screen.findByRole("button", {
+          name: "Cancel the message",
+        });
+        expect(cancel.getAttribute("aria-busy")).toBe("true");
+        expect(cancel.hasAttribute("disabled")).toBe(true);
+        expect(screen.getByText("Returning your message…")).toBeDefined();
+        // Held: the record is still the message's only copy and nothing woke or sent.
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID],
+        ).toBeDefined();
+        expect(createChatCalls()).toEqual([]);
+
+        releaseHold();
+
+        await waitFor(() =>
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+        );
+        expect(
+          screen.getByText(
+            "Your message wasn't sent; it's saved in your drafts.",
+          ),
+        ).toBeDefined();
+        expect(
+          screen.getByRole("button", { name: "Open draft" }),
+        ).toBeDefined();
+        expect(
+          useComposerDraftStore.getState().drafts["existing-chat"]?.content,
+        ).toEqual(OCCUPIED_CHAT_DOC);
+      } finally {
+        restoreLocks();
+      }
+    });
+
+    it("resumes a return that was requested before a reload: saves the draft, never wakes or sends it", async () => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        seedWaking();
+        usePendingSandboxSendStore.setState((state) => ({
+          sends: {
+            ...state.sends,
+            [SEND_ID]: {
+              ...state.sends[SEND_ID],
+              returnRequested: { saveInDrafts: true },
+            },
+          },
+        }));
+        await reloadPendingSandboxStores();
+        mountInChat();
+
+        await waitFor(() =>
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+        );
+        const saved = useLandingDraftStore.getState().drafts;
+        expect(saved).toHaveLength(1);
+        expect(saved[0]?.closed).toBe(true);
+        // The handoff appends its Unsent qualification, so the original text
+        // is retained rather than the document being equal to it.
+        expect(JSON.stringify(saved[0]?.content)).toContain(
+          "fix the login bug",
+        );
+        expect(mocks.wake).not.toHaveBeenCalled();
+        expect(createChatCalls()).toEqual([]);
+      } finally {
+        restoreLocks();
+      }
+    });
+  });
+
+  describe("once its sandbox is awake", () => {
+    let session: MessageSessionHarness;
+
+    beforeEach(() => {
+      session = createMessageSessionHarness({
+        epicId: "epic-1",
+        chatId: "existing-chat",
+        hostId: SANDBOX_HOST,
+        userId: "user-1",
+        settings: PICKED_SETTINGS,
+      });
+      sessionBridge.handle = session.handle;
+    });
+
+    afterEach(() => {
+      sessionBridge.handle = null;
+    });
+
+    function seedAwakeMessage(): void {
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        send: { request: MESSAGE_REQUEST },
+        phase: "handoff",
+        created: true,
+      });
+      mocks.wake.mockResolvedValue({ kind: "awake" });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn("awake")];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+      answerHost(SANDBOX_HOST, CODEX_READY);
+    }
+
+    function sendFrames() {
+      return session.sent.filter((frame) => frame.kind === "send");
+    }
+
+    /** The one action the session is waiting on. */
+    function onlyPendingActionId(): string {
+      const ids = Object.keys(session.handle.store.getState().pendingActions);
+      expect(ids).toHaveLength(1);
+      return ids.join("");
+    }
+
+    it("sends the one message through the chat's own session and keeps the record until the host accepts it", async () => {
+      seedAwakeMessage();
+      session.openAsOwner();
+      mount();
+
+      await waitFor(() => {
+        expect(sendFrames()).toHaveLength(1);
+      });
+      expect(createChatCalls()).toEqual([]);
+      // Sent is not delivered: the record stays, undelivered, until the ack.
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID].delivery,
+      ).toBeNull();
+
+      session.acknowledgeSend(onlyPendingActionId());
+
+      await waitFor(() => {
+        const { sends } = usePendingSandboxSendStore.getState();
+        expect(
+          Object.hasOwn(sends, SEND_ID) && sends[SEND_ID].delivery === null,
+        ).toBe(false);
+      });
+      expect(sendFrames()).toHaveLength(1);
+    });
+
+    it("owns a rejection of its message: one staged Not sent, no automatic second send, and the composer is not restored behind it", async () => {
+      seedAwakeMessage();
+      session.openAsOwner();
+      mountInChat();
+
+      await waitFor(() => {
+        expect(sendFrames()).toHaveLength(1);
+      });
+      session.rejectSend(onlyPendingActionId(), "the host refused it");
+
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "not-sent",
+        });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // The durable pending message owns the rejection: the generic restore
+      // must not also put it back in the chat's composer, and nothing resends.
+      expect(sendFrames()).toHaveLength(1);
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
+        SEND_ID,
+      ]);
+      expect(
+        useComposerDraftStore.getState().drafts["existing-chat"]?.content ??
+          null,
+      ).not.toEqual(MESSAGE_CONTENT);
+      expect(createChatCalls()).toEqual([]);
+    });
+
+    it("keeps its own rejection when an ordinary send already holds the restoration slot: one Not sent, no retry, the first send's restoration untouched, no duplicate recovery copy", async () => {
+      seedAwakeMessage();
+      session.openAsOwner();
+      const ordinary = session.handle.store.getState().sendMessage({
+        content: MESSAGE_CONTENT,
+        sender: { type: "user", userId: "user-1" },
+        settings: PICKED_SETTINGS,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: { content: MESSAGE_CONTENT, browserAnnotations: [] },
+      });
+      if (ordinary === null) throw new Error("expected the ordinary send");
+      session.rejectSend(ordinary.clientActionId, "the first was refused");
+      expect(
+        session.handle.store.getState().failedSendRestoration?.clientActionId,
+      ).toBe(ordinary.clientActionId);
+
+      mountInChat();
+      await waitFor(() => {
+        expect(sendFrames()).toHaveLength(2);
+      });
+      const boundActionId = onlyPendingActionId();
+      session.rejectSend(boundActionId, "the bound one was refused");
+
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "not-sent",
+        });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const state = session.handle.store.getState();
+      // The durable record keeps the bound message; nothing retried it.
+      expect(sendFrames()).toHaveLength(2);
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
+        SEND_ID,
+      ]);
+      // The ordinary send still owns the slot, unconsumed, and the bound
+      // rejection left no second recovery copy behind.
+      expect(state.failedSendRestoration?.clientActionId).toBe(
+        ordinary.clientActionId,
+      );
+      expect(Object.hasOwn(state.lastCopyPrompts, boundActionId)).toBe(false);
+      expect(
+        state.errorNotices.some(
+          (notice) => notice.clientActionId === boundActionId,
+        ),
+      ).toBe(false);
+      expect(createChatCalls()).toEqual([]);
+    });
+
+    it("keeps the same message and action ids when the driver mounts again before any acknowledgement", async () => {
+      seedAwakeMessage();
+      session.openAsOwner();
+      const first = mount();
+
+      await waitFor(() => {
+        expect(sendFrames()).toHaveLength(1);
+      });
+      first.unmount();
+      mount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const ids = new Set(sendFrames().map((frame) => frame.messageId));
+      expect([...ids]).toHaveLength(1);
+      expect(
+        Object.keys(session.handle.store.getState().pendingActions),
+      ).toHaveLength(1);
+      expect(createChatCalls()).toEqual([]);
+    });
+  });
+
+  it("holds a no-credit wake as one pending message with the credits refusal line, and never wakes or creates twice", async () => {
+    seed({
+      ...SEEDED,
+      target: RESUME_TARGET,
+      send: { request: MESSAGE_REQUEST },
+      phase: "handoff",
+      created: true,
+    });
+    mocks.wake.mockResolvedValue({
+      kind: "credit-gate",
+      shortfallMc: 120,
+      burnMcPerHour: null,
+    });
+    mocks.listReadAt = FRESH;
+    mocks.sandboxes = [rowIn("suspended")];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("suspended")]));
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mountInChat();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+        kind: "credits",
+      });
+    });
+    expect(screen.getByTestId("sandbox-refusal-line")).toBeDefined();
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
+      SEND_ID,
+    ]);
+    expect(createChatCalls()).toEqual([]);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
   });
 });
 

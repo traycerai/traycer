@@ -408,7 +408,7 @@ describe("<SandboxRowActions />", () => {
     expect(runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
       true,
-      { fallbackName: "build-box", taskId: null, resume: false },
+      { taskId: null, resume: false },
       expect.anything(),
     );
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();

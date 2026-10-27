@@ -20,6 +20,13 @@ export function SandboxOperationFailure(props: {
   readonly onRetry: (verb: SandboxRowVerb) => void;
 }): ReactNode {
   const { operation } = props;
+  if (operation?.kind === "skipped") {
+    return (
+      <p role="status" className="w-full text-ui-xs text-muted-foreground">
+        Skipped {props.name} · {operation.message}
+      </p>
+    );
+  }
   if (operation?.kind !== "failed") return null;
   return (
     <div

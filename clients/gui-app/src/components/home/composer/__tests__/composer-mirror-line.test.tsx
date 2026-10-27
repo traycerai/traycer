@@ -135,7 +135,13 @@ function row(
   label: string | null,
   principal: TaskHostPrincipal,
 ): TaskHostRow {
-  return { hostId, label, principal, reach: "same_principal" };
+  return {
+    hostId,
+    label,
+    principal,
+    reach: "same_principal",
+    sandboxEnd: null,
+  };
 }
 
 function registryItem(

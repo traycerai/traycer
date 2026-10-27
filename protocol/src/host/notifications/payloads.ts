@@ -975,6 +975,8 @@ export type HostNotificationSecretRemovedPayload = z.infer<
  * - `create_failed`, `lost`: its create failed for good; the provider no
  *   longer has it.
  * - `destroyed_by_member`: a member destroyed it (`actorName` when known).
+ *   New notices include the confirmed `destroyedAt` and the recipient's own
+ *   `stoppedAgentTaskTitles`, checked against their task access before send.
  * - `manual_rest`: a Suspend or Stop settled, `byYou` when the reader asked
  *   for it.
  */
@@ -1001,6 +1003,8 @@ export const hostNotificationSandboxNoticeSchema = lazySchema(() =>
     z.object({
       kind: z.literal("destroyed_by_member"),
       actorName: z.string().nullable(),
+      destroyedAt: z.number().int().nonnegative().optional(),
+      stoppedAgentTaskTitles: z.array(z.string()).optional(),
     }),
     z.object({
       kind: z.literal("manual_rest"),
@@ -1008,6 +1012,7 @@ export const hostNotificationSandboxNoticeSchema = lazySchema(() =>
       outcome: z.enum(["confirmed", "failed"]),
       byYou: z.boolean(),
       actorName: z.string().nullable(),
+      confirmedAt: z.number().int().nonnegative().optional(),
     }),
   ]),
 );

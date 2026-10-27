@@ -252,7 +252,7 @@ function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
   return runStagedSandbox(
     surfaceKey,
     fresh,
-    { fallbackName: "fallback-box", taskId: null, resume: false },
+    { taskId: null, resume: false },
     deps,
   );
 }
@@ -296,7 +296,7 @@ describe("runStagedSandbox creating", () => {
       createdByAgentId: null,
       environmentId: null,
       destroyAfterRestingMinutes: 4_320,
-      displayName: "fallback-box",
+      displayName: stageOf().target.name,
     });
     expect(request.clientRequestId).not.toBeNull();
     expect(request.clientRequestId).toBe(stageOf().clientRequestId);
@@ -325,7 +325,7 @@ describe("runStagedSandbox creating", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: "epic-1", resume: false },
+      { taskId: "epic-1", resume: false },
       deps,
     );
 
@@ -564,7 +564,7 @@ describe("runStagedSandbox settling", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: null, resume: false },
+      { taskId: null, resume: false },
       deps,
     );
 

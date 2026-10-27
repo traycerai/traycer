@@ -361,7 +361,12 @@ export function SandboxRowActions(props: {
         operation={operation}
         busy={busy}
         onRetry={(pressed) => {
-          if (pressed === "destroy") destroy.mutate(undefined);
+          if (pressed === "destroy")
+            destroy.mutate(
+              operation?.kind === "failed"
+                ? operation.destroyRequest
+                : undefined,
+            );
           else wake(pressed);
         }}
       />
@@ -518,7 +523,6 @@ function useOpenSandboxOnLanding(): (
         // starts the wake unless one is on its way.
         startStagedTerminal(surfaceKey, (fresh) =>
           runStaged(surfaceKey, fresh, {
-            fallbackName: summary.displayName,
             taskId: null,
             resume: false,
           }),

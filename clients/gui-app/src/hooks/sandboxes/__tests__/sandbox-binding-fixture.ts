@@ -33,7 +33,10 @@ type GetSandboxAutomation = (
 type OpenSandboxAutomation = (
   target: SandboxAutomationOpenTarget | null,
 ) => Promise<SandboxAutomationOpenFetchResult>;
-type DestroySandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
+type DestroySandbox = (
+  sandboxId: string,
+  onlyIfIdle: boolean,
+) => Promise<SandboxVerbFetchResult>;
 type PatchSandbox = (
   sandboxId: string,
   request: SandboxPatchRequest,

@@ -557,8 +557,8 @@ describe("sandbox row operations", () => {
       expect(within(row).queryByRole("alert")).toBeNull();
       if (testCase.verb === "destroy") {
         expect(binding.auth.destroySandbox.mock.calls).toEqual([
-          ["sbx-build"],
-          ["sbx-build"],
+          ["sbx-build", false],
+          ["sbx-build", false],
         ]);
       } else {
         expect(

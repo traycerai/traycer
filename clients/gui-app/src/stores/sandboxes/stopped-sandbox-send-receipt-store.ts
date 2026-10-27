@@ -16,6 +16,9 @@ import {
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 
 type RestoredMessage =
+  | (Extract<ReturnedPendingSandboxSend, { readonly kind: "chat" }> & {
+      readonly draftId: null;
+    })
   | Extract<ReturnedPendingSandboxSend, { readonly kind: "landing-draft" }>
   | (Extract<ReturnedPendingSandboxSend, { readonly kind: "task" }> & {
       readonly draftId: string | null;
@@ -34,6 +37,7 @@ export type StoppedSandboxSendReceipt = ReceiptOutcome & {
   readonly id: string;
   readonly userId: string | null;
   readonly epicId: string;
+  readonly chatId?: string;
   readonly returned: RestoredMessage;
   readonly existingSendIds: ReadonlySet<string>;
   readonly picks: Readonly<Record<string, ReceiptPick>>;
@@ -108,22 +112,33 @@ function recordReturnedSandboxSend(
   returned: ReturnedPendingSandboxSend,
   outcome: ReceiptOutcome,
 ): void {
-  if (returned.kind !== "task" && returned.kind !== "landing-draft") return;
+  if (
+    returned.kind !== "task" &&
+    returned.kind !== "landing-draft" &&
+    returned.kind !== "chat"
+  )
+    return;
+  let restored: RestoredMessage;
+  if (returned.kind === "task") {
+    restored = {
+      ...returned,
+      draftId:
+        useNewConversationModalStore.getState().draftPatchesByEpicId[
+          send.epicId
+        ]?.draftId ?? null,
+    };
+  } else if (returned.kind === "chat") {
+    restored = { ...returned, draftId: null };
+  } else {
+    restored = returned;
+  }
   const receipt: StoppedSandboxSendReceipt = {
     ...outcome,
     id: send.id,
     userId: send.userId,
     epicId: send.epicId,
-    returned:
-      returned.kind === "task"
-        ? {
-            ...returned,
-            draftId:
-              useNewConversationModalStore.getState().draftPatchesByEpicId[
-                send.epicId
-              ]?.draftId ?? null,
-          }
-        : returned,
+    ...(send.request.kind === "message" ? { chatId: send.request.chatId } : {}),
+    returned: restored,
     existingSendIds: new Set(
       Object.keys(usePendingSandboxSendStore.getState().sends),
     ),
