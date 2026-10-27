@@ -50,6 +50,12 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsEvidence,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
@@ -80,6 +86,7 @@ import {
   sandboxTeamUsageUrl,
   sortSandboxRows,
   unstartedAutomationsMatches,
+  type SandboxSessionReport,
   type SandboxKindFilter,
   type SandboxPageConfiguration,
   type SandboxPublicState,
@@ -425,7 +432,9 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   const { filter, setFilter, highlighted, reveals } = useRevealedSandboxFilter(
     props.revealSandboxId,
   );
-  const [destroyAllOpen, setDestroyAllOpen] = useState(false);
+  const [destroyAllTargets, setDestroyAllTargets] = useState<
+    readonly SandboxSummary[] | null
+  >(null);
 
   const allRows = list.data?.sandboxes ?? null;
   // The configuration's Automations host before its first shell creates it:
@@ -484,11 +493,25 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
       configuration={configuration}
     />
   );
+  const destroyDialog = (
+    <SandboxDestroyAllIdleDialog
+      targets={destroyAllTargets ?? []}
+      open={destroyAllTargets !== null}
+      onOpenChange={(open) => {
+        if (!open) setDestroyAllTargets(null);
+      }}
+    />
+  );
   if (
     configurationRows === null ||
     (configurationRows.length === 0 && !unstartedAutomations)
   ) {
-    return gate;
+    return (
+      <>
+        {gate}
+        {destroyDialog}
+      </>
+    );
   }
   const figures = todayFigures({
     configuration,
@@ -502,9 +525,8 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
     shown.length + (unstartedShown ? 1 : 0),
     configurationRows.length + (unstartedAutomations ? 1 : 0),
   );
-  const destroyAllTargets = sandboxDestroyAllIdleOffered(filter)
-    ? shown.map((row) => ({ sandboxId: row.id, name: row.displayName }))
-    : [];
+  const destroyAllOffered = sandboxDestroyAllIdleOffered(filter);
+  const idleTargets = shown.filter((row) => row.kind !== "automation");
   return (
     <section aria-label="Sandboxes" data-testid="sandboxes-list">
       <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -533,13 +555,14 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
             />
           </div>
           <SandboxFilterMenu filter={filter} onChange={setFilter} />
-          {destroyAllTargets.length === 0 ? null : (
+          {!destroyAllOffered ? null : (
             <Button
               type="button"
               variant="destructive"
               size="sm"
               data-testid="sandboxes-destroy-all-idle"
-              onClick={() => setDestroyAllOpen(true)}
+              disabled={idleTargets.length === 0}
+              onClick={() => setDestroyAllTargets(idleTargets)}
             >
               Destroy all idle
             </Button>
@@ -568,11 +591,7 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
           />
         ) : null}
       </ul>
-      <SandboxDestroyAllIdleDialog
-        targets={destroyAllTargets}
-        open={destroyAllOpen}
-        onOpenChange={setDestroyAllOpen}
-      />
+      {destroyDialog}
     </section>
   );
 }
@@ -972,7 +991,11 @@ function SandboxListRow(props: {
   readonly viewerUserId: string | null;
   readonly highlighted: boolean;
 }): ReactNode {
-  const { summary, configuration, viewerUserId } = props;
+  const { configuration, viewerUserId } = props;
+  const settings = useSandboxSettingsStatus(props.summary);
+  const summary = sandboxSettingsFailed(settings.data?.items ?? [])
+    ? { ...props.summary, guestConfigured: false }
+    : props.summary;
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
   const sessions = useSandboxSessionReport(summary.hostId, awake);
@@ -1043,26 +1066,21 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
+          {awake && summary.guestConfigured === false ? (
+            <div className="text-ui-xs text-muted-foreground">
+              <p>Compute is charged while it is awake.</p>
+              <p>
+                {sandboxSettingsStepsLine(
+                  sandboxSettingsEvidence(
+                    settings.data?.items ?? [],
+                    props.summary.guestConfigured,
+                  ),
+                )}
+              </p>
+            </div>
+          ) : null}
           {awake && !unreachable ? (
-            <p
-              className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
-              data-testid="sandboxes-row-sessions"
-            >
-              {sessions.report.kind === "live" && sessions.report.busy ? (
-                <span
-                  aria-hidden
-                  className="size-1.5 shrink-0 rounded-full bg-success"
-                />
-              ) : null}
-              {sandboxSessionsLine(sessions.report, now)}
-              {sandboxSessionPills(sessions.report).map((pill) => (
-                <SandboxSessionPillBadge
-                  key={pill.key}
-                  pill={pill}
-                  testId="sandboxes-row-session-pill"
-                />
-              ))}
-            </p>
+            <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>
       </div>
@@ -1077,5 +1095,32 @@ function SandboxListRow(props: {
         )}
       />
     </li>
+  );
+}
+
+function SandboxRowSessions(props: {
+  readonly report: SandboxSessionReport;
+  readonly now: number;
+}): ReactNode {
+  return (
+    <p
+      className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
+      data-testid="sandboxes-row-sessions"
+    >
+      {props.report.kind === "live" && props.report.busy ? (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full bg-success"
+        />
+      ) : null}
+      {sandboxSessionsLine(props.report, props.now)}
+      {sandboxSessionPills(props.report).map((pill) => (
+        <SandboxSessionPillBadge
+          key={pill.key}
+          pill={pill}
+          testId="sandboxes-row-session-pill"
+        />
+      ))}
+    </p>
   );
 }

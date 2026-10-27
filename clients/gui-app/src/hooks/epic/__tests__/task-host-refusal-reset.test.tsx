@@ -36,6 +36,7 @@ function hostsOf(principalId: string): ListTaskHostsResponse {
         label: null,
         principal: { kind: "user", id: principalId },
         reach: "same_principal",
+        sandboxEnd: null,
       },
     ],
   };

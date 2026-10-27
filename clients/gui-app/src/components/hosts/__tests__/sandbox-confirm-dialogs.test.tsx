@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render as renderWithProviders,
@@ -40,9 +41,15 @@ const mocks = vi.hoisted(() => ({
   routeNotification: vi.fn<(navigate: unknown, target: unknown) => boolean>(),
   destroyMutate: vi.fn<(variables: undefined, options: object) => void>(),
   batch: {
-    data: undefined as readonly SandboxBatchResult[] | undefined,
     isPending: false,
-    mutate: vi.fn<(request: SandboxDestroyBatchRequest) => void>(),
+    mutate: vi.fn<
+      (
+        request: SandboxDestroyBatchRequest,
+        options: {
+          readonly onSuccess: (results: readonly SandboxBatchResult[]) => void;
+        },
+      ) => void
+    >(),
     reset: vi.fn(),
   },
 }));
@@ -133,7 +140,6 @@ describe("sandbox confirm dialogs", () => {
     mocks.openTile.mockReset();
     mocks.routeNotification.mockReset();
     mocks.destroyMutate.mockReset();
-    mocks.batch.data = undefined;
     mocks.batch.mutate.mockReset();
   });
   afterEach(() => {
@@ -684,35 +690,53 @@ describe("sandbox confirm dialogs", () => {
 
   it("keeps the confirmed set in Destroy all idle once the list drops the destroyed rows", () => {
     const targets = [
-      { sandboxId: "sbx-a", name: "box-a" },
-      { sandboxId: "sbx-b", name: "box-b" },
+      sandboxSummaryFixture({
+        id: "sbx-a",
+        hostId: "host-a",
+        displayName: "box-a",
+        state: "suspended",
+      }),
+      sandboxSummaryFixture({
+        id: "sbx-b",
+        hostId: "host-b",
+        displayName: "box-b",
+        state: "stopped",
+      }),
     ];
+    const requestTargets = targets.map((target) => ({
+      sandboxId: target.id,
+      hostId: target.hostId,
+      name: target.displayName,
+    }));
     const dialog = (live: typeof targets) => (
       <SandboxDestroyAllIdleDialog targets={live} open onOpenChange={vi.fn()} />
     );
     const { rerender } = render(dialog(targets));
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(mocks.batch.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ targets }),
+      expect.objectContaining({ targets: requestTargets }),
+      expect.any(Object),
     );
 
-    // While the batch runs the list refetches without the destroyed row.
     rerender(dialog([targets[1]]));
-    const card = screen.getByTestId("confirm-destructive-dialog").textContent;
-    expect(card).toContain("Destroy 2 idle agent sandboxes?");
-    expect(card).toContain("box-a");
-
-    mocks.batch.data = [
-      { ...targets[0], outcome: { kind: "destroyed" } },
-      { ...targets[1], outcome: { kind: "failed", message: "busy" } },
-    ];
+    expect(screen.getByRole("heading").textContent).toBe(
+      "Destroy 2 idle sandboxes?",
+    );
+    const callback = mocks.batch.mutate.mock.calls[0][1];
+    act(() =>
+      callback.onSuccess([
+        { ...requestTargets[0], outcome: { kind: "destroyed" } },
+        { ...requestTargets[1], outcome: { kind: "failed", message: "busy" } },
+      ]),
+    );
     rerender(dialog([]));
-    expect(
-      screen.getByTestId("confirm-destructive-dialog").textContent,
-    ).toContain("Destroy 2 idle agent sandboxes?");
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(screen.getByRole("heading").textContent).toBe(
+      "Destroy 2 idle sandboxes?",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(mocks.batch.mutate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ targets }),
+      expect.objectContaining({ targets: [requestTargets[1]] }),
+      expect.any(Object),
     );
   });
 });

@@ -11,6 +11,8 @@ import {
   createEpicSessionTestHarness,
   type TestEpicHarness,
 } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
@@ -136,6 +138,15 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
+// The chat's sandbox state, stubbed at its own seam: the hook's reads are
+// covered on their own, and this file is about what the container does with it.
+const sandboxState = vi.hoisted((): { current: ChatSandboxState } => ({
+  current: { kind: "none" },
+}));
+vi.mock("@/hooks/sandboxes/use-chat-sandbox-state", () => ({
+  useChatSandboxState: () => sandboxState.current,
+}));
+
 vi.mock("@/components/report-issue/report-issue-action", () => ({
   ReportIssueAction: () => null,
 }));
@@ -258,6 +269,7 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   environments.pool = false;
   environments.list = undefined;
+  sandboxState.current = { kind: "none" };
   resetHostConnectionRegistryForTest();
 });
 
@@ -405,4 +417,72 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     expect(text).toContain("This chat's sandbox isn't available");
     expect(text).not.toContain("belongs to another collaborator");
   });
+});
+
+describe("ChatDeadTileBannerContainer - the sandbox's own state", () => {
+  const ROW = sandboxSummaryFixture({
+    id: "sbx-c",
+    hostId: "owner-host-1",
+    displayName: "e2e-sbx-stop3",
+  });
+
+  async function mountOffline() {
+    renderContainer({
+      ownerUserId: VIEWER_USER_ID,
+      providedOwnerUserId: undefined,
+      permissionRole: "editor",
+      showsPublishedCopy: true,
+    });
+    await settleEpicSession();
+  }
+
+  it("says the sandbox was destroyed, by its projected name and never its raw host id, and offers Continue on another host", async () => {
+    sandboxState.current = {
+      kind: "destroyed",
+      ended: {
+        name: "e2e-sbx-stop3",
+        end: {
+          state: "destroyed",
+          destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
+          cause: "resting",
+          actor: null,
+        },
+      },
+    };
+    await mountOffline();
+
+    const banner = screen.getByTestId("banner-under-test");
+    expect(banner.getAttribute("data-reason")).toBe("sandbox-destroyed");
+    expect(banner.textContent).toContain("e2e-sbx-stop3");
+    expect(banner.textContent).not.toContain("owner-host-1");
+    expect(banner.textContent).not.toContain("offline");
+    expect(
+      screen.getByRole("button", { name: "Continue on another host" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "resting",
+      {
+        kind: "resting",
+        sandbox: ROW,
+        configuration: { kind: "personal" },
+        wakeChangesPayer: false,
+      },
+    ],
+    [
+      "unreachable",
+      { kind: "unreachable", sandbox: ROW, lastContactMinutes: 3 },
+    ],
+  ] as const)(
+    "shows no generic offline banner for a %s sandbox: its footer owns the line",
+    async (_name, state) => {
+      sandboxState.current = state;
+      await mountOffline();
+
+      expect(screen.queryByTestId("banner-under-test")).toBeNull();
+    },
+  );
 });

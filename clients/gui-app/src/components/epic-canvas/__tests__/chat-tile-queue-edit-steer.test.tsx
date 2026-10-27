@@ -100,6 +100,7 @@ const MOCK_HOST_DIRECTORY = {
 // useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
+  useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),

@@ -45,12 +45,14 @@ const HOSTS: readonly TaskHostRow[] = [
     label: "laptop",
     principal: { kind: "user", id: "u-viewer" },
     reach: "same_principal",
+    sandboxEnd: null,
   },
   {
     hostId: "h-2",
     label: null,
     principal: { kind: "team", id: "team-1" },
     reach: "other_principal",
+    sandboxEnd: null,
   },
 ];
 

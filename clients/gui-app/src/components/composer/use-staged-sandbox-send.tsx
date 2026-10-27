@@ -4,10 +4,9 @@ import {
   useMemo,
   useReducer,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
@@ -18,12 +17,19 @@ import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
-import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import {
+  useSandboxRepairGuestConfigurationOnHost,
+  useSandboxSettingsOperation,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
   priceClause,
   stageBalanceMc,
@@ -55,9 +61,8 @@ import {
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 
-/** A sandbox's name when the shape sheet set none: the message's first words. */
+/** A fallback label for older sends without a named stage. */
 const FALLBACK_NAME_WORDS = 4;
-const FALLBACK_NAME = "sandbox";
 /** The create's longest `displayName`. */
 const FALLBACK_NAME_MAX_LENGTH = 191;
 
@@ -70,7 +75,7 @@ export function stagedSandboxFallbackName(text: string): string {
     .join("-")
     .slice(0, FALLBACK_NAME_MAX_LENGTH)
     .replace(/-+$/, "");
-  return slug.length === 0 ? FALLBACK_NAME : slug;
+  return slug.length === 0 ? "New sandbox" : slug;
 }
 
 export interface StagedSandboxSend {
@@ -140,10 +145,40 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             directory: binding.directory,
             queryClient,
             userId,
+            readSettings: async (hostId: string) => {
+              const requestSettings = async () => {
+                const client = resolveNamedHostClient(binding, hostId);
+                if (client === null) throw new Error("Host unavailable");
+                return client.request("environment.status", {});
+              };
+              return queryClient
+                .fetchQuery(
+                  queryOptions({
+                    // A staged wake must not join a status read begun before it.
+                    queryKey: [
+                      ...hostQueryKeys.method<
+                        HostRpcRegistry,
+                        "environment.status"
+                      >(hostId, "environment.status", {}),
+                      "sandbox-settings",
+                      uuidv4(),
+                    ],
+                    queryFn: requestSettings,
+                    staleTime: 0,
+                    gcTime: 0,
+                    retry: false,
+                  }),
+                )
+                .catch((error: unknown) =>
+                  error instanceof HostRpcError &&
+                  error.code === "E_HOST_UNSUPPORTED" &&
+                  error.method === "environment.status"
+                    ? ("unsupported" as const)
+                    : null,
+                );
+            },
             wake: (hostId: string, gesture: SandboxVerbGesture) =>
-              startSandboxWake(queryClient, binding, hostId, gesture).then(
-                (outcome) => outcome !== null && outcome.kind === "awake",
-              ),
+              startSandboxWake(queryClient, binding, hostId, gesture),
             now: Date.now,
             sleep: (ms: number) =>
               new Promise<void>((resolve) => {
@@ -206,7 +241,6 @@ export function openLandingStagedTerminal(
 ): StagedTerminalAsk {
   const ask = startStagedTerminal(surfaceKey, (fresh) =>
     runner(surfaceKey, fresh, {
-      fallbackName: stagedSandboxFallbackName(""),
       taskId: null,
       resume: false,
     }),
@@ -260,16 +294,12 @@ export function useStagedSandboxSend(input: {
   const { surfaceKey, terminal, taskId, ownerId, claimsSend } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
-  const messageTextRef = useRef("");
-  // The name the create falls back to, for the line to show meanwhile.
-  const [fallbackName, setFallbackName] = useState(FALLBACK_NAME);
   const runner = useStagedSandboxRunner();
 
   const run = useCallback(
     (fresh: boolean): void => {
       if (surfaceKey === null) return;
       runner(surfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(messageTextRef.current),
         taskId,
         resume: false,
       });
@@ -320,7 +350,7 @@ export function useStagedSandboxSend(input: {
 
   const intercept = useCallback(
     (
-      messageText: string,
+      _messageText: string,
       terminalLaunch: TerminalAgentLaunch | null,
     ): boolean => {
       if (surfaceKey === null) return false;
@@ -340,8 +370,6 @@ export function useStagedSandboxSend(input: {
       // it is busy. A boot with no send (a terminal ask started it, or the
       // draft that sent is gone) is handed off with this one.
       if (current.phase === "staged" || current.failure !== null) {
-        messageTextRef.current = messageText;
-        setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore
           .getState()
           .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
@@ -365,7 +393,7 @@ export function useStagedSandboxSend(input: {
     surfaceKey === null || stage === null || facts === null ? null : (
       <SandboxSetupLine
         stage={stage}
-        name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
+        name={stage.target.name}
         facts={facts}
         actions={{
           onKeepWaiting: () => runFromLine(false),
@@ -380,6 +408,8 @@ export function useStagedSandboxSend(input: {
             openStagedShapeSheet(surfaceKey);
           },
           onRetryApplying: newHost.onRetryApplying,
+          applyingPending: newHost.applyingPending,
+          applyingError: newHost.applyingError,
           onStop: () => {
             if (stage.createdSandboxId !== null) verb.mutate("stop");
             useStagedSandboxStore.getState().clear(surfaceKey);
@@ -643,16 +673,26 @@ export function useNewHostActions(
   run: (fresh: boolean) => void,
 ): {
   readonly onRetryApplying: () => void;
+  readonly applyingPending: boolean;
+  readonly applyingError: boolean;
   readonly onOpenTerminal: (() => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
+  const operation = useSandboxSettingsOperation(createdHostId ?? "");
   const terminalTarget = useFolderlessTerminalTarget(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
   );
   return {
+    applyingPending: operation === "pending",
+    applyingError: operation === "failed",
     onRetryApplying: () => {
-      if (surfaceKey === null || createdHostId === null) return;
+      if (
+        surfaceKey === null ||
+        createdHostId === null ||
+        operation === "pending"
+      )
+        return;
       const origin = readStagedSandbox(surfaceKey);
       if (origin === null) return;
       repair.mutate(

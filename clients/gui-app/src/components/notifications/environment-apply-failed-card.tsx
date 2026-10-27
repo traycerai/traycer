@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { applyFailedBody } from "@/components/settings/members/copy";
 
 /**
  * Extra content for `environment.apply.failed`. Details is the chip drawer
@@ -7,8 +6,6 @@ import { applyFailedBody } from "@/components/settings/members/copy";
  */
 export function EnvironmentApplyFailedCard(props: {
   readonly hostName: string;
-  readonly itemKey: string;
-  readonly reason: string;
   readonly details: ReactNode;
 }): ReactNode {
   return (
@@ -17,7 +14,7 @@ export function EnvironmentApplyFailedCard(props: {
       data-testid="environment-apply-failed-card"
     >
       <p data-testid="environment-apply-failed-body">
-        {applyFailedBody(props.hostName, props.itemKey, props.reason)}
+        {props.hostName}'s settings didn't apply.
       </p>
       {props.details}
     </div>

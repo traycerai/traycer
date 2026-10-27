@@ -1,4 +1,5 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { sandboxSettingsFailureLine } from "@traycer/protocol/host/sandbox-settings";
 import type {
   HostStatusAgentSession,
   HostStatusSessions,
@@ -277,11 +278,11 @@ export function sortSandboxRows(
   });
 }
 
-/** `Destroy all idle` shows only while the filter is exactly this pair. */
+/** The header action is offered with either idle State filter, for any Kind. */
 export function sandboxDestroyAllIdleOffered(
   filter: SandboxRowFilter,
 ): boolean {
-  return filter.kind === "agent" && filter.state === "suspended";
+  return filter.state === "suspended" || filter.state === "stopped";
 }
 
 // ── Who ─────────────────────────────────────────────────────────────────────
@@ -664,9 +665,10 @@ function awakeClockLine(input: SandboxClockInput): string {
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
   if (summary.guestConfigured === false) {
-    return joinParts(
-      `Awake · ${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
-      sandboxSupportReference(summary.failureCode),
+    return sandboxSettingsFailureLine(
+      summary.displayName,
+      configurationLabel(configurationCopy(input.configuration)),
+      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
     );
   }
   const awakeMs = input.cost?.todayAwakeMs ?? null;

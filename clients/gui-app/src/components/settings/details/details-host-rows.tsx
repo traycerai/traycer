@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import type {
   DetailsHostStatus,
   DetailsRecovery,
@@ -38,44 +39,69 @@ export function DetailsHostRows(props: {
   readonly onRecover: (recovery: DetailsRecovery) => void;
   readonly pending: boolean;
 }): ReactNode {
+  const occurrences = new Map<string, number>();
   return (
     <ul className="flex flex-col divide-y divide-border/60">
-      {props.hosts.map((host) => (
-        <li
-          key={`${host.hostId}:${host.item ?? ""}:${host.state}:${host.at}`}
-          className="flex flex-wrap items-start justify-between gap-2 py-3"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="break-words font-medium">
-              {host.name}
-              {host.item === null ? null : ` · ${host.item}`}
-            </p>
-            <p className="text-ui-xs text-muted-foreground">
-              {stateLabel(host.state)}
-              {host.at === null ? null : ` · ${detailsTime(host.at)}`}
-              {host.reason === null ? null : ` · ${host.reason}`}
-            </p>
-            {host.lastReportedAt === null ? null : (
-              <p className="text-ui-xs text-muted-foreground">
-                Last reported {detailsTime(host.lastReportedAt)}
+      {props.hosts.map((host) => {
+        const identity = `${host.hostId}:${host.item ?? ""}:${host.state}:${host.at}`;
+        // Different unused settings can share the same agent label.
+        const occurrence = occurrences.get(identity) ?? 0;
+        occurrences.set(identity, occurrence + 1);
+        return (
+          <li
+            key={`${identity}:${occurrence}`}
+            className="flex flex-wrap items-start justify-between gap-2 py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="break-words font-medium">
+                {host.state === "not_used"
+                  ? `${host.item} · not used on sandboxes`
+                  : host.name}
+                {host.item === null || host.state === "not_used"
+                  ? null
+                  : ` · ${host.item}`}
               </p>
-            )}
-          </div>
-          {host.recovery === null ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={props.pending}
-              onClick={() => {
-                if (host.recovery !== null) props.onRecover(host.recovery);
-              }}
-            >
-              {detailsRecoveryLabel(host.recovery, host.name)}
-            </Button>
-          )}
-        </li>
-      ))}
+              <p className="text-ui-xs text-muted-foreground">
+                {host.state === "not_used" ? host.name : stateLabel(host.state)}
+                {host.at === null ? null : ` · ${detailsTime(host.at)}`}
+                {host.reason === null ? null : ` · ${host.reason}`}
+              </p>
+              {host.lastReportedAt === null ? null : (
+                <p className="text-ui-xs text-muted-foreground">
+                  Last reported {detailsTime(host.lastReportedAt)}
+                </p>
+              )}
+            </div>
+            <DetailsHostRecovery
+              host={host}
+              onRecover={props.onRecover}
+              pending={props.pending}
+            />
+          </li>
+        );
+      })}
     </ul>
+  );
+}
+
+function DetailsHostRecovery(props: {
+  readonly host: DetailsHostStatus;
+  readonly onRecover: (recovery: DetailsRecovery) => void;
+  readonly pending: boolean;
+}): ReactNode {
+  const recovery = props.host.recovery;
+  if (recovery === null) return null;
+  if (recovery.kind === "apply")
+    return <SandboxRetryApplyingButton hostId={props.host.hostId} />;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={props.pending}
+      onClick={() => props.onRecover(recovery)}
+    >
+      {detailsRecoveryLabel(recovery, props.host.name)}
+    </Button>
   );
 }

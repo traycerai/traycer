@@ -121,7 +121,10 @@ vi.mock(
 );
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
-  () => ({ useSandboxRepairGuestConfigurationOnHost: () => mutation() }),
+  () => ({
+    useSandboxRepairGuestConfigurationOnHost: () => mutation(),
+    useSandboxSettingsOperation: () => null,
+  }),
 );
 // The run is the network boundary: it creates or wakes the sandbox.
 const runStagedSandbox = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -405,7 +408,7 @@ describe("<SandboxRowActions />", () => {
     expect(runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
       true,
-      { fallbackName: "build-box", taskId: null, resume: false },
+      { taskId: null, resume: false },
       expect.anything(),
     );
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();

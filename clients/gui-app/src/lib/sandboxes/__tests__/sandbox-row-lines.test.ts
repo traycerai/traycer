@@ -267,17 +267,20 @@ describe("sandbox row filters", () => {
     expect(only({ search: "TASK-77" })).toEqual(["a"]);
   });
 
-  it("offers Destroy all idle only for exactly Agent sandboxes + Suspended", () => {
+  it("offers Destroy all idle for both idle states regardless of Kind", () => {
     const filter = { ...SANDBOX_ROW_FILTER_NONE };
     expect(sandboxDestroyAllIdleOffered(filter)).toBe(false);
     expect(sandboxDestroyAllIdleOffered({ ...filter, kind: "agent" })).toBe(
       false,
     );
     expect(
+      sandboxDestroyAllIdleOffered({ ...filter, state: "suspended" }),
+    ).toBe(true);
+    expect(
       sandboxDestroyAllIdleOffered({
         ...filter,
-        kind: "agent",
-        state: "suspended",
+        kind: "sandbox",
+        state: "stopped",
       }),
     ).toBe(true);
   });
@@ -357,6 +360,27 @@ describe("sandboxClockLine", () => {
       ).toBe("Suspended · files kept · the next shell starts it");
     },
   );
+
+  it("reads an awake row whose settings did not apply as the one shared line", () => {
+    expect(
+      sandboxClockLine({
+        summary: sandboxSummaryFixture({
+          state: "awake",
+          displayName: "Build box",
+          guestConfigured: false,
+          failureCode: "envelope-delivery:x",
+        }),
+        configuration: { kind: "personal" },
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now: NOW,
+      }),
+    ).toBe(
+      "Build box is awake, but Personal's settings didn't apply · SBX-0520",
+    );
+  });
 
   describe("a failed row", () => {
     const failedLine = (failureCode: string | null) =>

@@ -243,6 +243,7 @@ export interface DesktopPreloadBridge {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult>;
   patchSandbox(
     bearerToken: string,
@@ -1243,8 +1244,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult> {
-    return this.bridge.destroySandbox(bearerToken, sandboxId);
+    return this.bridge.destroySandbox(bearerToken, sandboxId, onlyIfIdle);
   }
 
   patchSandbox(

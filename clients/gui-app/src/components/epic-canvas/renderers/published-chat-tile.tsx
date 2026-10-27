@@ -1,3 +1,13 @@
+import {
+  restingChatSandbox,
+  type ChatSandboxState,
+} from "@/lib/sandboxes/chat-sandbox-state";
+import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
+import { useEpicPermissionRole } from "@/lib/epic-selectors";
+import { isEditableRole } from "@/lib/epic-permissions";
+import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
+import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
@@ -19,7 +29,6 @@ import {
   useHostReachability,
   resolvedHostLabel,
   type HostReachability,
-  type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
 import {
   useCloudChatTranscript,
@@ -58,9 +67,9 @@ import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-
  * This is not a second chat view. It resolves a `ChatSessionStoreHandle` from
  * the cloud read instead of from a live `chat.subscribe` stream and hands it to
  * the same `ChatTileSessionView` a live tile uses, so messages, blocks,
- * thinking, tools and scroll are literally the same components. The only
- * intentional difference is the composer, which is locked with a reason naming
- * the host, its state, and what the reader is looking at.
+ * thinking, tools and scroll are the same components.
+ * The footer names the host's state and the copy. An owned resting sandbox
+ * accepts a message into the same durable wake-and-send driver as a new chat.
  *
  * ## The copy FOLLOWS the owner's publications, in place
  *
@@ -173,6 +182,7 @@ function ownerHostIsServingHost(
 function useOfflineOwnerRecoveryRead(
   ownerHostId: string,
   ownerReachability: HostReachability,
+  recoveryAllowed: boolean,
 ): UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "host.status">,
   HostRpcError
@@ -184,6 +194,7 @@ function useOfflineOwnerRecoveryRead(
   // on each activation; the session's readiness subscription restores the live
   // tile when it succeeds. Unfocused split panes are still visible.
   const recoverOwner =
+    recoveryAllowed &&
     bodyVisible &&
     ownerReachability.status === "unreachable" &&
     ownerReachability.unavailability === "offline" &&
@@ -197,6 +208,100 @@ function useOfflineOwnerRecoveryRead(
     // second query retry after the transport's own bounded dial attempts.
     options: { staleTime: 0, retry: false },
   });
+}
+
+interface PublishedCopyOwnerFacts {
+  readonly ownerIsReachable: boolean;
+  readonly ownerRefusesStore: boolean;
+  readonly ownerIsThisHost: boolean;
+  readonly ownedByViewer: boolean;
+  readonly environmentOwned: boolean;
+  readonly ownerLabel: string;
+  readonly sandboxEnd: TaskSandboxEnd | null;
+}
+
+interface PublishedChatOwner {
+  readonly reachability: HostReachability;
+  readonly sandboxState: ChatSandboxState;
+  readonly restingSandbox:
+    | Extract<ChatSandboxState, { readonly kind: "resting" }>
+    | undefined;
+  readonly lockFacts: PublishedCopyOwnerFacts;
+}
+
+function usePublishedChatOwner(
+  node: PublishedChatTileRef,
+  epicId: string,
+): PublishedChatOwner {
+  const reachability = useHostReachability(node.ownerHostId);
+  const sandboxState = useChatSandboxState(
+    epicId,
+    node.ownerHostId,
+    reachability.status === "reachable",
+  );
+  useOfflineOwnerRecoveryRead(
+    node.ownerHostId,
+    reachability,
+    sandboxState.kind === "none" || sandboxState.kind === "unreachable",
+  );
+  const ownership = useChatOwnerCopyFacts(
+    node.ownerUserId,
+    node.ownerHostId,
+    node.chatId,
+  );
+  const role = useEpicPermissionRole();
+  const editable = role === null || isEditableRole(role);
+  const restingSandbox = restingChatSandbox(sandboxState, editable, ownership);
+  const ownerRefusesStore = useHostRefusesEpicStore(
+    node.ownerHostId.length > 0 ? node.ownerHostId : null,
+    node.taskId,
+  );
+  return {
+    reachability,
+    sandboxState,
+    restingSandbox,
+    lockFacts: {
+      ...ownership,
+      ownerIsReachable: reachability.status === "reachable",
+      ownerRefusesStore,
+      ownerIsThisHost: ownerHostIsServingHost(node.ownerHostId, node.hostId),
+      ownerLabel: copyOwnerLabel(
+        sandboxState,
+        node.ownerHostId,
+        reachability.hostLabel,
+      ),
+      sandboxEnd:
+        sandboxState.kind === "destroyed" ? sandboxState.ended.end : null,
+    },
+  };
+}
+
+function copyOwnerLabel(
+  state: ChatSandboxState,
+  hostId: string,
+  label: string,
+): string {
+  if (state.kind === "destroyed") return state.ended.name;
+  if (state.kind !== "none") return state.sandbox.displayName;
+  return publishedCopyOwnerLabel(hostId, label);
+}
+
+function copyReadOnlyNotice(
+  owner: PublishedChatOwner,
+  copyNotice: string,
+): string | null {
+  if (owner.restingSandbox !== undefined) return null;
+  if (owner.sandboxState.kind === "unreachable")
+    return "This chat stays readable while its sandbox reconnects.";
+  return copyNotice;
+}
+
+function PublishedSandboxFooter(props: {
+  readonly owner: PublishedChatOwner;
+}): ReactNode {
+  const state = props.owner.sandboxState;
+  if (state.kind === "none" || state.kind === "destroyed") return null;
+  return <ChatSandboxFooter state={state} />;
 }
 
 export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
@@ -218,8 +323,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // surfaces can never describe one host two ways. This tile is opened
   // precisely because the owner is out of reach, and when that host returns it
   // converts itself into the live tile (`usePublishedChatLiveConversion`).
-  const ownerReachability = useHostReachability(node.ownerHostId);
-  useOfflineOwnerRecoveryRead(node.ownerHostId, ownerReachability);
+  const owner = usePublishedChatOwner(node, props.epicId);
   const identity = useMemo(
     () => ({
       taskId: node.taskId,
@@ -247,55 +351,12 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     () => ({ identity, client }),
     [identity, client],
   );
-  const ownerLabel = publishedCopyOwnerLabel(
-    node.ownerHostId,
-    ownerReachability.hostLabel,
-  );
-  const ownerIsThisHost = ownerHostIsServingHost(node.ownerHostId, node.hostId);
-  // Whether this copy is the viewer's own chat, read off the ref like the
-  // owner-host equality above. A collaborator's chat swaps the lock sentence
-  // (and, in the child banner, the clone copy) for the foreign-owner arm -
-  // the offline/back-soon vocabulary below is about the viewer's own fleet
-  // and cannot be honestly said about a machine this account never sees.
-  // A team sandbox's chat: the lock sentence says its sandbox is out, rather
-  // than naming a collaborator or a machine. While that cannot be told yet,
-  // the owner is not called a collaborator: an unresolved owner stays on the
-  // own-chat sentences, as `useOwnedByViewer` keeps an unresolved one.
-  const { ownedByViewer, environmentOwned } = useChatOwnerCopyFacts(
-    node.ownerUserId,
-    node.ownerHostId,
-    node.chatId,
-  );
-  // Whether this copy is on screen because the owner, though reachable, is a
-  // build too old for the epic's store. Read live rather than off the ref so
-  // the lock sentence follows the host: an update retires the verdict and
-  // the footer stops asking for one.
-  const ownerRefusesStore = useHostRefusesEpicStore(
-    node.ownerHostId.length > 0 ? node.ownerHostId : null,
-    node.taskId,
-  );
-
-  // The same Clone offer the LIVE tile's dead-tile banner makes, on the copy.
-  // Gated (inside the child) on the SAME reachability the lock sentence below
-  // reads, so the banner and the sentence can never describe one host two ways.
-  //
-  // Mounted on EVERY branch below, not only the ones with a transcript: this
-  // tile owns the unreachable-owner banner (the canvas no longer draws one
-  // over it), and a reader stuck on the load state or a refused read still
-  // needs the host sentence and the way out. `showsPublishedCopy` is what
-  // differs per branch - only the transcript branches have a copy on screen
-  // for the foreign-owner sentence to point at.
   const deadTileBanner = (showsPublishedCopy: boolean): ReactNode => (
     <PublishedChatDeadTileBanner
       node={node}
       epicId={props.epicId}
       tabId={props.viewTabId}
-      ownerStatus={ownerReachability.status}
-      hostLabel={
-        node.ownerHostId.length > 0
-          ? chatTileHostLabel(ownerReachability, node.ownerHostId)
-          : ownerLabel
-      }
+      owner={owner}
       showsPublishedCopy={showsPublishedCopy}
     />
   );
@@ -313,9 +374,9 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     epicId: props.epicId,
     viewTabId: props.viewTabId,
     paneId: props.tileId,
-    ownerStatus: ownerReachability.status,
-    ownerRefusesStore,
-    ownerIsThisHost,
+    ownerStatus: owner.reachability.status,
+    ownerRefusesStore: owner.lockFacts.ownerRefusesStore,
+    ownerIsThisHost: owner.lockFacts.ownerIsThisHost,
   });
   const conversion = useMemo(
     () =>
@@ -437,6 +498,11 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
         {deadTileBanner(true)}
+        <PendingSandboxSendForChat
+          epicId={props.epicId}
+          chatId={node.chatId}
+          tabId={props.viewTabId}
+        />
         <ChatTileSessionView
           isLiveSession={false}
           preContent={null}
@@ -450,16 +516,16 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           tileId={props.tileId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
-          readOnlyNotice={replicaChatLockReason({
-            ownerIsReachable: ownerReachability.status === "reachable",
-            ownerRefusesStore,
-            ownerIsThisHost,
-            ownedByViewer,
-            environmentOwned,
-            ownerLabel,
-            unreadableCount: replicaConversion.unreadableCount,
-          })}
+          restingSandbox={owner.restingSandbox}
+          readOnlyNotice={copyReadOnlyNotice(
+            owner,
+            replicaChatLockReason({
+              ...owner.lockFacts,
+              unreadableCount: replicaConversion.unreadableCount,
+            }),
+          )}
         />
+        <PublishedSandboxFooter owner={owner} />
       </div>
     );
   }
@@ -468,7 +534,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     cloudUnpublished,
     replicaQuery,
   );
-
   if (applied === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
@@ -479,7 +544,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
               ? state
               : { kind: "failed", error: replicaFailure }
           }
-          ownerLabel={ownerLabel}
+          ownerLabel={owner.lockFacts.ownerLabel}
           refusal={
             state.kind === "refused"
               ? describeCloudChatRefusal(state.read.outcome)
@@ -493,22 +558,18 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {deadTileBanner(true)}
-      {/* The heavy content this transcript NAMES - file diffs, full plans -
-          is not in the published document; it is content-addressed in the
-          cloud. The blocks that expand it decide their own fetch several
-          layers down and are shared with every live chat, so this is the seam
-          that redirects them without threading a source through renderers that
-          have no business knowing about publication. Absent everywhere else. */}
+      {/* Heavy content named by this copy is fetched through its publication. */}
+      <PendingSandboxSendForChat
+        epicId={props.epicId}
+        chatId={node.chatId}
+        tabId={props.viewTabId}
+      />
       <PublishedChatSourceProvider source={publishedSource}>
         <ChatTileSessionView
           isLiveSession={false}
           preContent={null}
           handle={applied.handle}
           node={{
-            // The CHAT id, not the tile ref's id: inside the surface this is what
-            // per-chat UI state is keyed by, and it should name the same chat the
-            // live tile would. The finer tile key exists to keep the two tiles
-            // apart on the canvas, which is a different question.
             id: node.chatId,
             instanceId: node.instanceId,
             name: node.name,
@@ -517,23 +578,21 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           tileId={props.tileId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
-          readOnlyNotice={publishedChatLockReason({
-            ownerIsReachable: ownerReachability.status === "reachable",
-            ownerRefusesStore,
-            ownerIsThisHost,
-            ownedByViewer,
-            environmentOwned,
-            ownerLabel,
-            unreadableCount: applied.unreadableCount,
-            fidelityNotice: applied.fidelityNotice,
-            // Off the copy that was APPLIED, not the current read: the
-            // reader's question is about the bytes in front of them, and a
-            // re-read in flight has not changed those yet.
-            publishedAt: applied.publishedAt,
-            refresh: publishedCopyRefresh(state),
-          })}
+          restingSandbox={owner.restingSandbox}
+          readOnlyNotice={copyReadOnlyNotice(
+            owner,
+            publishedChatLockReason({
+              ...owner.lockFacts,
+              unreadableCount: applied.unreadableCount,
+              fidelityNotice: applied.fidelityNotice,
+              // A refresh has not changed the copy currently on screen.
+              publishedAt: applied.publishedAt,
+              refresh: publishedCopyRefresh(state),
+            }),
+          )}
         />
       </PublishedChatSourceProvider>
+      <PublishedSandboxFooter owner={owner} />
     </div>
   );
 }
@@ -694,26 +753,25 @@ function PublishedChatDeadTileBanner(props: {
   readonly node: PublishedChatTileRef;
   readonly epicId: string;
   readonly tabId: string;
-  readonly ownerStatus: HostReachabilityStatus;
-  /**
-   * The owner as the banner names it: `chatTileHostLabel`, so a host the
-   * directory has no name for reads as no name rather than as its raw id.
-   */
-  readonly hostLabel: string | null;
-  /** See `ChatDeadTileBannerProps.showsPublishedCopy`. */
+  readonly owner: PublishedChatOwner;
   readonly showsPublishedCopy: boolean;
 }): ReactNode {
-  if (props.ownerStatus !== "unreachable") {
+  const { sandboxState, reachability } = props.owner;
+  if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
     return null;
-  }
+  const destroyed = sandboxState.kind === "destroyed";
+  if (!destroyed && reachability.status !== "unreachable") return null;
+  const hostLabel = destroyed
+    ? sandboxState.ended.name
+    : chatTileHostLabel(reachability, props.node.ownerHostId);
   return (
     <ChatDeadTileBannerContainer
       epicId={props.epicId}
       tabId={props.tabId}
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
-      hostLabel={props.hostLabel}
-      reason="host-offline"
+      hostLabel={hostLabel}
+      reason={destroyed ? "sandbox-destroyed" : "host-offline"}
       showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}

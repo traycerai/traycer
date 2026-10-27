@@ -1,3 +1,4 @@
+import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { create } from "zustand";
@@ -81,7 +82,11 @@ export type StagedSandboxFailure =
       readonly step: StagedSandboxStep;
     }
   /** Awake, but the configuration's settings did not apply. */
-  | { readonly kind: "settings"; readonly code: string }
+  | {
+      readonly kind: "settings";
+      readonly code: string;
+      readonly steps?: SandboxSettingsSteps | null;
+    }
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
   /**

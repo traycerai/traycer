@@ -265,7 +265,7 @@ describe("<SandboxTileStateFrame /> a chat the pool may serve", () => {
     return { kind: "serving", hasBinaryPayload: false, serving };
   }
 
-  it("moves the sandbox's state from a strip to a cover when a later frame says the chat is live", () => {
+  it("lays no strip or cover over the chat, whatever the pool says it serves; its own footer owns the sandbox state", () => {
     setEntry({
       state: "suspended",
       frozen: false,
@@ -297,9 +297,7 @@ describe("<SandboxTileStateFrame /> a chat the pool may serve", () => {
         null,
       );
     });
-    expect(
-      screen.getByTestId("sandbox-tile-overlay").getAttribute("data-placement"),
-    ).toBe("strip");
+    expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
 
     act(() => {
       client.sessions[0]?.emit(
@@ -311,9 +309,10 @@ describe("<SandboxTileStateFrame /> a chat the pool may serve", () => {
         null,
       );
     });
+    expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
     expect(
-      screen.getByTestId("sandbox-tile-overlay").getAttribute("data-placement"),
-    ).toBe("cover");
+      screen.getByTestId("tile-body").parentElement?.hasAttribute("inert"),
+    ).toBe(false);
 
     release();
     witness.dispose();
