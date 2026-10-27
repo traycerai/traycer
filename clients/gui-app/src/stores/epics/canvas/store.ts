@@ -2838,6 +2838,24 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           publishedInstanceId,
           liveRef,
         ) => {
+          // The dedup path of `replaceTab` CLOSES the copy rather than
+          // swapping it; if the copy was its pane's only tab, that pane goes
+          // and can dissolve its parent group, remounting a sibling's painted
+          // chat. Predict it before `set()`, as `closeCanvasTab` does.
+          const before = canvasForExistingTab(get(), tabId);
+          const pane =
+            before === null ? null : findPaneById(before.root, paneId);
+          if (
+            before !== null &&
+            pane !== null &&
+            pane.tabInstanceIds.length === 1 &&
+            pane.tabInstanceIds[0] === publishedInstanceId &&
+            findPaneTabForRef(before, liveRef) !== null
+          ) {
+            flushChatTabViewportHandoff(
+              paneRemovalDissolveHandoffTargets(before.root, paneId),
+            );
+          }
           set((state) => {
             const updated = updateTabCanvas(state, tabId, (canvas) =>
               replaceTab(canvas, paneId, publishedInstanceId, liveRef),
