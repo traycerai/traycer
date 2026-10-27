@@ -566,23 +566,36 @@ export type HostNotificationEntryV25 = z.infer<
 >;
 
 /** Removal notices contain no removed configuration or hook identities. */
-const notificationHooksRemovedEntryArm = lazySchema(() => z.object({
-  ...hostNotificationEntryBaseFields,
-  kind: z.literal("notification.hooks.removed"), outcome: z.literal("completed"),
-  payload: hostNotificationPayloadSchema,
-}));
+const notificationHooksRemovedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("notification.hooks.removed"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
 
 /** Latest origin-store entry union; sandbox notices remain cloud-only. */
 export const hostNotificationEntrySchemaV26 = lazySchema(() =>
-  z.discriminatedUnion("kind", [...hostNotificationEntrySchemaV24.options, notificationHooksRemovedEntryArm]),
+  z.discriminatedUnion("kind", [
+    ...hostNotificationEntrySchemaV24.options,
+    notificationHooksRemovedEntryArm,
+  ]),
 );
-export type HostNotificationEntryV26 = z.infer<typeof hostNotificationEntrySchemaV26>;
+export type HostNotificationEntryV26 = z.infer<
+  typeof hostNotificationEntrySchemaV26
+>;
 
 /** Latest cloud entry union, also accepting control-plane sandbox notices. */
 export const hostNotificationCloudEntrySchemaV26 = lazySchema(() =>
-  z.discriminatedUnion("kind", [...hostNotificationEntrySchemaV25.options, notificationHooksRemovedEntryArm]),
+  z.discriminatedUnion("kind", [
+    ...hostNotificationEntrySchemaV25.options,
+    notificationHooksRemovedEntryArm,
+  ]),
 );
-export type HostNotificationCloudEntryV26 = z.infer<typeof hostNotificationCloudEntrySchemaV26>;
+export type HostNotificationCloudEntryV26 = z.infer<
+  typeof hostNotificationCloudEntrySchemaV26
+>;
 
 /**
  * Narrows a widest-union entry to the released union. Derived from
@@ -694,11 +707,13 @@ export const V24_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
 
 /** Frozen cloudFeed @1.5 vocabulary. */
 export const V25_CLOUD_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
-  ...V24_HOST_NOTIFICATION_KINDS, "sandbox.notice",
+  ...V24_HOST_NOTIFICATION_KINDS,
+  "sandbox.notice",
 ];
 /** Origin-store vocabulary from list @2.5 / feed @1.7 onward. */
 export const V26_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
-  ...V24_HOST_NOTIFICATION_KINDS, "notification.hooks.removed",
+  ...V24_HOST_NOTIFICATION_KINDS,
+  "notification.hooks.removed",
 ];
 /** Every kind this build can carry, on the newest version of each surface. */
 export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
@@ -3387,78 +3402,150 @@ export const hostNotificationHooksSaveDowngradeV20ToV10 = defineDowngradePath<
 
 /** Unknown fields on upgraded responses mean the peer predates local evidence. */
 export const notificationHookStatusEntrySchema = lazySchema(() =>
-  notificationHookStatusEntrySchemaV10.extend({ localOnly: z.boolean().nullable() }).strict(),
+  notificationHookStatusEntrySchemaV10
+    .extend({ localOnly: z.boolean().nullable() })
+    .strict(),
 );
-export type NotificationHookStatusEntry = z.infer<typeof notificationHookStatusEntrySchema>;
+export type NotificationHookStatusEntry = z.infer<
+  typeof notificationHookStatusEntrySchema
+>;
 
 export const notificationHooksRemovalNoticeSchema = lazySchema(() =>
-  z.object({
-    id: z.string().min(1), hostId: z.string().min(1), hostName: z.string(),
-    count: z.number().int().positive(), occurredAt: z.number().int().nonnegative(),
-  }).strict(),
+  z
+    .object({
+      id: z.string().min(1),
+      hostId: z.string().min(1),
+      hostName: z.string(),
+      count: z.number().int().positive(),
+      occurredAt: z.number().int().nonnegative(),
+    })
+    .strict(),
 );
-export type NotificationHooksRemovalNotice = z.infer<typeof notificationHooksRemovalNoticeSchema>;
+export type NotificationHooksRemovalNotice = z.infer<
+  typeof notificationHooksRemovalNoticeSchema
+>;
 
 export const notificationHooksStatusResponseSchema = lazySchema(() =>
-  z.object({
-    configPath: z.string().min(1), configError: z.string().nullable(),
-    hooks: z.array(notificationHookStatusEntrySchema),
-    configurationRevision: z.string().min(1).nullable(),
-    pendingRemovalNotices: z.array(notificationHooksRemovalNoticeSchema),
-  }).strict(),
+  z
+    .object({
+      configPath: z.string().min(1),
+      configError: z.string().nullable(),
+      hooks: z.array(notificationHookStatusEntrySchema),
+      configurationRevision: z.string().min(1).nullable(),
+      pendingRemovalNotices: z.array(notificationHooksRemovalNoticeSchema),
+    })
+    .strict(),
 );
-export type NotificationHooksStatusResponse = z.infer<typeof notificationHooksStatusResponseSchema>;
+export type NotificationHooksStatusResponse = z.infer<
+  typeof notificationHooksStatusResponseSchema
+>;
 
 export const notificationHooksSaveRequestSchema = lazySchema(() =>
-  notificationHooksSaveRequestSchemaV20.extend({
-    // Null represents a released caller's absent revision, never a fresh read.
-    // The host rejects null from a direct @3 caller using ctx.schemaVersion.
-    configurationRevision: z.string().min(1).nullable(),
-  }).strict(),
+  notificationHooksSaveRequestSchemaV20
+    .extend({
+      // Null represents a released caller's absent revision, never a fresh read.
+      // The host rejects null from a direct @3 caller using ctx.schemaVersion.
+      configurationRevision: z.string().min(1).nullable(),
+    })
+    .strict(),
 );
-export type NotificationHooksSaveRequest = z.infer<typeof notificationHooksSaveRequestSchema>;
+export type NotificationHooksSaveRequest = z.infer<
+  typeof notificationHooksSaveRequestSchema
+>;
 
-function upgradeHooksStatus(response: NotificationHooksStatusResponseV10): NotificationHooksStatusResponse {
-  return { ...response, hooks: response.hooks.map((hook) => ({ ...hook, localOnly: null })),
-    configurationRevision: null, pendingRemovalNotices: [] };
+function upgradeHooksStatus(
+  response: NotificationHooksStatusResponseV10,
+): NotificationHooksStatusResponse {
+  return {
+    ...response,
+    hooks: response.hooks.map((hook) => ({ ...hook, localOnly: null })),
+    configurationRevision: null,
+    pendingRemovalNotices: [],
+  };
 }
-function downgradeHooksStatus(response: NotificationHooksStatusResponse): NotificationHooksStatusResponseV10 {
-  return { configPath: response.configPath, configError: response.configError,
-    hooks: response.hooks.map(({ localOnly: _localOnly, ...hook }) => hook) };
+function downgradeHooksStatus(
+  response: NotificationHooksStatusResponse,
+): NotificationHooksStatusResponseV10 {
+  return {
+    configPath: response.configPath,
+    configError: response.configError,
+    hooks: response.hooks.map(({ localOnly: _localOnly, ...hook }) => hook),
+  };
 }
 
 export const hostNotificationHooksStatusV20 = defineRpcContract({
-  method: "host.notificationHooks.status", schemaVersion: { major: 2, minor: 0 } as const,
-  requestSchema: notificationHooksStatusRequestSchema, responseSchema: notificationHooksStatusResponseSchema,
+  method: "host.notificationHooks.status",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: notificationHooksStatusRequestSchema,
+  responseSchema: notificationHooksStatusResponseSchema,
 });
 export const hostNotificationHooksStatusUpgradeV1ToV2 = defineUpgradePath<
-  typeof hostNotificationHooksStatus, typeof hostNotificationHooksStatusV20
->({ from: { major: 1, minor: 0 }, to: { major: 2, minor: 0 },
-  upgradeRequest: (request) => request, upgradeResponse: upgradeHooksStatus });
+  typeof hostNotificationHooksStatus,
+  typeof hostNotificationHooksStatusV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: upgradeHooksStatus,
+});
 export const hostNotificationHooksStatusDowngradeV20ToV10 = defineDowngradePath<
-  typeof hostNotificationHooksStatusV20, typeof hostNotificationHooksStatus
->({ from: { major: 2, minor: 0 }, to: { major: 1, minor: 0 },
+  typeof hostNotificationHooksStatusV20,
+  typeof hostNotificationHooksStatus
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  downgradeResponse: (response) => ({ ok: true, value: downgradeHooksStatus(response) }) });
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeHooksStatus(response),
+  }),
+});
 
 export const hostNotificationHooksSaveV30 = defineRpcContract({
-  method: "host.notificationHooks.save", schemaVersion: { major: 3, minor: 0 } as const,
-  requestSchema: notificationHooksSaveRequestSchema, responseSchema: notificationHooksStatusResponseSchema,
+  method: "host.notificationHooks.save",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: notificationHooksSaveRequestSchema,
+  responseSchema: notificationHooksStatusResponseSchema,
 });
 export const hostNotificationHooksSaveUpgradeV2ToV3 = defineUpgradePath<
-  typeof hostNotificationHooksSaveV20, typeof hostNotificationHooksSaveV30
->({ from: { major: 2, minor: 0 }, to: { major: 3, minor: 0 },
+  typeof hostNotificationHooksSaveV20,
+  typeof hostNotificationHooksSaveV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
   upgradeRequest: (request) => ({ ...request, configurationRevision: null }),
-  upgradeResponse: upgradeHooksStatus });
+  upgradeResponse: upgradeHooksStatus,
+});
 export const hostNotificationHooksSaveDowngradeV30ToV20 = defineDowngradePath<
-  typeof hostNotificationHooksSaveV30, typeof hostNotificationHooksSaveV20
->({ from: { major: 3, minor: 0 }, to: { major: 2, minor: 0 },
-  downgradeRequest: (request) => ({ ok: true, value: {
-    hooks: request.hooks, executableWriteGrant: request.executableWriteGrant,
-  } }),
-  downgradeResponse: (response) => ({ ok: true, value: downgradeHooksStatus(response) }) });
+  typeof hostNotificationHooksSaveV30,
+  typeof hostNotificationHooksSaveV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: {
+      hooks: request.hooks,
+      executableWriteGrant: request.executableWriteGrant,
+    },
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeHooksStatus(response),
+  }),
+});
 export const hostNotificationHooksSaveDowngradeV30ToV10 = defineDowngradePath<
-  typeof hostNotificationHooksSaveV30, typeof hostNotificationHooksSave
->({ from: { major: 3, minor: 0 }, to: { major: 1, minor: 0 },
-  downgradeRequest: (request) => ({ ok: true, value: { hooks: request.hooks } }),
-  downgradeResponse: (response) => ({ ok: true, value: downgradeHooksStatus(response) }) });
+  typeof hostNotificationHooksSaveV30,
+  typeof hostNotificationHooksSave
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: { hooks: request.hooks },
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeHooksStatus(response),
+  }),
+});

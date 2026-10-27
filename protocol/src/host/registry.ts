@@ -7283,9 +7283,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
     2: {
       latestMinor: 0,
-      versions: { 0: { contract: hostNotificationHooksStatusV20,
-        upgradeFromPreviousVersion: hostNotificationHooksStatusUpgradeV1ToV2 } },
-      downgradePathsFromLatest: { 1: hostNotificationHooksStatusDowngradeV20ToV10 },
+      versions: {
+        0: {
+          contract: hostNotificationHooksStatusV20,
+          upgradeFromPreviousVersion: hostNotificationHooksStatusUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksStatusDowngradeV20ToV10,
+      },
     },
   },
   "host.notificationHooks.test": {
@@ -7327,8 +7333,12 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
     3: {
       latestMinor: 0,
-      versions: { 0: { contract: hostNotificationHooksSaveV30,
-        upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV2ToV3 } },
+      versions: {
+        0: {
+          contract: hostNotificationHooksSaveV30,
+          upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV2ToV3,
+        },
+      },
       downgradePathsFromLatest: {
         1: hostNotificationHooksSaveDowngradeV30ToV10,
         2: hostNotificationHooksSaveDowngradeV30ToV20,

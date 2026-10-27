@@ -1020,12 +1020,18 @@ export type HostNotificationSandboxNoticePayload = z.infer<
 
 /** No hook identity, configuration, URL or header may ride a removal notice. */
 export const hostNotificationHooksRemovedPayloadSchema = lazySchema(() =>
-  z.object({
-    kind: z.literal("notification_hooks_removed"),
-    hostId: idSchema, hostName: z.string(), count: z.number().int().positive(),
-  }).strict(),
+  z
+    .object({
+      kind: z.literal("notification_hooks_removed"),
+      hostId: idSchema,
+      hostName: z.string(),
+      count: z.number().int().positive(),
+    })
+    .strict(),
 );
-export type HostNotificationHooksRemovedPayload = z.infer<typeof hostNotificationHooksRemovedPayloadSchema>;
+export type HostNotificationHooksRemovedPayload = z.infer<
+  typeof hostNotificationHooksRemovedPayloadSchema
+>;
 
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [

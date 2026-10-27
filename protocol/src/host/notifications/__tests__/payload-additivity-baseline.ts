@@ -986,4 +986,18 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
     },
     required: ["kind", "sandboxId", "sandboxName", "notice"],
   },
+  notification_hooks_removed: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "notification_hooks_removed" },
+      hostId: { type: "string", minLength: 1 },
+      hostName: { type: "string" },
+      count: {
+        type: "integer",
+        exclusiveMinimum: 0,
+        maximum: 9007199254740991,
+      },
+    },
+    required: ["kind", "hostId", "hostName", "count"],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;
