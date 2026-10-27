@@ -41,6 +41,13 @@ interface IndicatorState {
 
 const mocks = vi.hoisted(() => {
   const chats: Record<string, IndicatorState> = {};
+  // What the host answers a box's accepted send with.
+  const sendResponse: BotConversationSendResponse = {
+    messageId: "post-new",
+    requestId: "request-new",
+    delivery: "written",
+    threadId: "thread-new",
+  };
   return {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
@@ -59,13 +66,7 @@ const mocks = vi.hoisted(() => {
       },
     },
     postIds: [] as string[],
-    // What the host answers a box's accepted send with.
-    sendResponse: {
-      messageId: "post-new",
-      requestId: "request-new",
-      delivery: "written",
-      threadId: "thread-new",
-    },
+    sendResponse,
     threadListCalls: [] as Array<{
       botId: string;
       enabled: boolean;
