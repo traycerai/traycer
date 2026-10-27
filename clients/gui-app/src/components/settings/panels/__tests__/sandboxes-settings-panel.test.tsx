@@ -33,7 +33,21 @@ import {
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
+import type {
+  SandboxVerbFetchResult,
+  SandboxListFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  createFakeSandboxBinding,
+  refusal,
+  type FakeSandboxBinding,
+} from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import type {
   SandboxAutomationResponse,
   SandboxCatalogue,
@@ -112,12 +126,16 @@ const LISTED_CATALOGUE: SandboxCatalogue = {
 };
 
 const mocks = vi.hoisted(() => ({
+  binding: null as FakeSandboxBinding | null,
+  entry: null as HostDirectoryEntry | null,
   sandboxes: [] as readonly SandboxSummary[],
   /** `false` while the list query has not answered. */
   listed: true,
+  realActions: false,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
+  sessionFailed: false,
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
@@ -129,6 +147,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => mocks.binding,
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -144,6 +163,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 /** The router's commit boundary: every navigation the page asks for. */
 const navigations = vi.hoisted(() => [] as object[]);
 vi.mock("@tanstack/react-router", () => ({
+  useRouter: () => null,
   useNavigate: () => (options: object) => {
     navigations.push(options);
     return new Promise<void>(() => undefined);
@@ -169,15 +189,27 @@ vi.mock(
     useSandboxWakeString: () => null,
   }),
 );
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
-  useSandboxList: () => ({
-    data: mocks.listed ? { sandboxes: mocks.sandboxes } : undefined,
-    isError: false,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
-  sandboxListReadSentAt: () => null,
-}));
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...original,
+    useSandboxList: () => {
+      const query = original.useSandboxList();
+      return mocks.binding === null
+        ? {
+            ...query,
+            data: mocks.listed ? { sandboxes: mocks.sandboxes } : undefined,
+            isError: false,
+            isFetching: false,
+            refetch: vi.fn(),
+          }
+        : query;
+    },
+  };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
 }));
@@ -197,13 +229,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: () => mocks.entry,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxSessionReport: () => ({ report: mocks.report, failed: false }),
+  useSandboxSessionReport: () => ({
+    report: mocks.report,
+    failed: mocks.sessionFailed,
+  }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
   useSandboxAutomation: () => ({ data: mocks.automation }),
@@ -219,16 +254,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
   }),
 }));
 
-vi.mock("@/hooks/sandboxes/use-sandbox-destroy-batch-mutation", () => ({
-  useSandboxDestroyBatch: () => ({
-    data: undefined,
-    isPending: false,
-    mutate: vi.fn(),
-    reset: vi.fn(),
-  }),
-}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://platform.example.dev/sign-in" }),
+  useRunnerHostOrNull: () => ({
+    signInUrl: "https://platform.example.dev/sign-in",
+  }),
 }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
@@ -239,30 +269,42 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
     openSettings: vi.fn(),
   }),
 }));
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxRunner: () => vi.fn(),
+  startStagedTerminal: vi.fn(),
+}));
+vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
+
 // The actions have their own verbs and dialogs; the page's contract is which
 // primary action each row offers, so the stub renders the model's own pick.
 vi.mock(
   "@/components/settings/panels/sandbox-row-actions",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/settings/panels/sandbox-row-actions")
-    >()),
-    SandboxRowActions: (props: {
-      summary: SandboxSummary;
-      configuration: SandboxPageConfiguration;
-      unreachable: boolean;
-      frozenNeedsOwnCredits: boolean;
-    }) => {
-      const { primary } = sandboxRowActions(props);
-      return (
-        <span data-testid="row-primary">
-          {primary === null
-            ? ""
-            : sandboxRowActionLabel(primary, props.configuration)}
-        </span>
-      );
-    },
-  }),
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/components/settings/panels/sandbox-row-actions")
+      >();
+    return {
+      ...original,
+      SandboxRowActions: (props: {
+        summary: SandboxSummary;
+        configuration: SandboxPageConfiguration;
+        unreachable: boolean;
+        frozenNeedsOwnCredits: boolean;
+      }) => {
+        if (mocks.realActions) return <original.SandboxRowActions {...props} />;
+        const { primary } = sandboxRowActions(props);
+        return (
+          <span data-testid="row-primary">
+            {primary === null
+              ? ""
+              : sandboxRowActionLabel(primary, props.configuration)}
+          </span>
+        );
+      },
+    };
+  },
 );
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
@@ -433,14 +475,18 @@ function names(): string[] {
 
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
+    mocks.binding = null;
+    mocks.entry = null;
     resetNegotiatedManifests();
     recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
     mocks.listed = true;
+    mocks.realActions = false;
     mocks.configurations = [{ kind: "personal" }];
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
+    mocks.sessionFailed = false;
     mocks.costs = null;
     mocks.automation = null;
     mocks.openAutomation.mockReset();
@@ -1061,28 +1107,364 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(screen.getByTestId("sandboxes-filter-count").textContent).toBe("1");
   });
 
-  it("lists exactly the filtered idle agent sandboxes in Destroy all idle", () => {
-    renderPanel([
-      row("idle-a", { state: "suspended", burst: true }),
-      row("idle-b", { state: "stopped", burst: true }),
-      row("idle-c", { state: "suspended", burst: true }),
-      row("awake-agent", { state: "awake", burst: true }),
-      row("plain-suspended", { state: "suspended", burst: false }),
-    ]);
-    expect(screen.queryByTestId("sandboxes-destroy-all-idle")).toBeNull();
+  describe("Destroy all idle through the Settings list query", () => {
+    function mount(rows: readonly SandboxSummary[]) {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      mocks.realActions = true;
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u1", username: "ada" },
+      });
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: rows },
+      });
+      const page = hostPage();
+      renderUi(<SandboxesSettingsPanel />);
+      return { binding, client: page.queryClient };
+    }
 
-    fireEvent.pointerDown(screen.getByTestId("sandboxes-filter"), {
-      button: 0,
-      ctrlKey: false,
+    async function choose(group: string, value: string): Promise<void> {
+      await userEvent.click(
+        screen.getByRole("button", { name: "Filter sandboxes" }),
+      );
+      await userEvent.click(
+        screen.getByTestId(`sandboxes-filter-${group}-${value}`),
+      );
+      await userEvent.keyboard("{Escape}");
+    }
+
+    async function confirmIdle(): Promise<HTMLElement> {
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Destroy all idle" }),
+      );
+      return screen.getByRole("dialog", { name: /Destroy \d+ idle sandbox/ });
+    }
+
+    const first = row("idle-a", { state: "suspended", burst: true });
+    const second = row("idle-b", { state: "suspended", burst: false });
+    const automation = row("Automations", {
+      state: "suspended",
+      kind: "automation",
     });
-    fireEvent.click(screen.getByTestId("sandboxes-filter-kind-agent"));
-    fireEvent.click(screen.getByTestId("sandboxes-filter-state-suspended"));
 
-    fireEvent.click(screen.getByTestId("sandboxes-destroy-all-idle"));
-    const targets = screen.getByTestId("sandbox-destroy-all-idle-targets");
-    expect(
-      Array.from(targets.querySelectorAll("li")).map((li) => li.textContent),
-    ).toEqual(["idle-a", "idle-c"]);
+    it.each(["all", "awake", "suspended", "stopped", "frozen", "failed"])(
+      "offers the header action only for idle State filters: %s",
+      async (state) => {
+        const idleState = state === "stopped" ? "stopped" : "suspended";
+        mount([
+          { ...first, state: idleState },
+          { ...second, state: idleState },
+          { ...automation, state: idleState },
+        ]);
+        await screen.findByText("idle-a");
+        await choose("state", state);
+        const offered = state === "suspended" || state === "stopped";
+        expect(
+          screen.queryByRole("button", { name: "Destroy all idle" }) !== null,
+        ).toBe(offered);
+        if (offered) {
+          for (const kind of ["sandbox", "agent", "automation", "all"]) {
+            await choose("kind", kind);
+            expect(
+              screen
+                .getByRole("button", { name: "Destroy all idle" })
+                .hasAttribute("disabled"),
+            ).toBe(kind === "automation");
+          }
+        }
+      },
+    );
+
+    it("confirms the enumerated filtered names and count without Automations, then keeps that set", async () => {
+      const { binding, client } = mount([
+        first,
+        second,
+        automation,
+        row("elsewhere", { state: "suspended", environmentId: TEAM_ENV }),
+        row("awake", { state: "awake" }),
+      ]);
+      mocks.configurations.push({
+        kind: "team",
+        teamId: "t1",
+        teamName: "Acme",
+        environmentId: TEAM_ENV,
+      });
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      expect(within(dialog).getByRole("heading").textContent).toBe(
+        "Destroy 2 idle sandboxes?",
+      );
+      expect(
+        within(dialog).getByTestId("sandbox-destroy-all-idle-targets")
+          .textContent,
+      ).toBe("idle-aidle-b");
+      expect(dialog.textContent).toContain(
+        "Files on these sandboxes cannot be recovered; published chats stay readable.",
+      );
+      const expanded = [
+        first,
+        second,
+        automation,
+        row("idle-new", { state: "suspended" }),
+      ];
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: expanded },
+      });
+      await act(async () => {
+        await client.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      });
+      expect(within(dialog).getByRole("heading").textContent).toBe(
+        "Destroy 2 idle sandboxes?",
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 2" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+          [second.id, true],
+        ]),
+      );
+    });
+
+    it("destroys only the kept Stopped row matching Kind, Started by and search", async () => {
+      const kept = row("keep-match", { state: "stopped", burst: false });
+      const { binding } = mount([
+        kept,
+        row("keep-agent", { state: "stopped", burst: true }),
+        row("keep-other", {
+          state: "stopped",
+          createdBy: { userId: "u2", displayName: "Bea" },
+        }),
+        row("other-name", { state: "stopped" }),
+        { ...automation, state: "stopped" },
+      ]);
+      await screen.findByText(kept.displayName);
+      await choose("state", "stopped");
+      await choose("kind", "sandbox");
+      await choose("started", "you");
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Search by name or task" }),
+        { target: { value: "keep" } },
+      );
+      const dialog = await confirmIdle();
+      expect(within(dialog).getByRole("heading").textContent).toBe(
+        "Destroy 1 idle sandbox?",
+      );
+      expect(
+        within(dialog).getByTestId("sandbox-destroy-all-idle-targets")
+          .textContent,
+      ).toBe("keep-match");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [kept.id, true],
+        ]),
+      );
+    });
+
+    it("requires the running target's typed name before destroying any target", async () => {
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({ working: true })], terminals: [] },
+        true,
+      );
+      const { binding } = mount([first]);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      const confirm = within(dialog).getByRole("button", { name: "Destroy 1" });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
+      const input = within(dialog).getByRole("textbox", {
+        name: "Type the name to confirm",
+      });
+      fireEvent.change(input, { target: { value: "wrong" } });
+      fireEvent.click(confirm);
+      expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "idle-a" } });
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+        ]),
+      );
+    });
+
+    it("rechecks each target and skips one that wakes, loses authority, or becomes Automations", async () => {
+      const lost = row("idle-lost", { state: "suspended" });
+      const changed = row("idle-changed", { state: "suspended" });
+      const { binding } = mount([first, second, lost, changed]);
+      const pending = Promise.withResolvers<SandboxVerbFetchResult>();
+      binding.auth.destroySandbox.mockReturnValueOnce(pending.promise);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 4" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox).toHaveBeenCalledWith(
+          first.id,
+          true,
+        ),
+      );
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            { ...second, state: "awake" },
+            { ...changed, kind: "automation" },
+          ],
+        },
+      });
+      await act(async () => {
+        pending.resolve({ kind: "ok", settled: true });
+        await pending.promise;
+      });
+      await waitFor(() =>
+        expect(dialog.textContent).toContain(
+          "idle-lost · no longer available to destroy, left as it is",
+        ),
+      );
+      expect(dialog.textContent).toContain(
+        "idle-b · no longer idle, left as it is",
+      );
+      expect(dialog.textContent).toContain(
+        "idle-changed · no longer available to destroy, left as it is",
+      );
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+      ]);
+    });
+
+    it("shows per-row pending and failure, and retries only failed targets after the list grows", async () => {
+      const { binding, client } = mount([first, second]);
+      const pending = Promise.withResolvers<SandboxVerbFetchResult>();
+      binding.auth.destroySandbox
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(refusal(503, "provider-error"));
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 2" }),
+      );
+      expect(
+        (await within(rowOf(first.id)).findByRole("status", { hidden: true }))
+          .textContent,
+      ).toBe("Destroying · pending");
+      await act(async () => {
+        pending.resolve({ kind: "ok", settled: true });
+        await pending.promise;
+      });
+      const failed = await within(rowOf(second.id)).findByRole("alert", {
+        hidden: true,
+      });
+      expect(failed.textContent).toContain(
+        "Couldn't destroy idle-b · SBX-0413",
+      );
+      expect(
+        within(failed).getByRole("button", { name: "Retry", hidden: true }),
+      ).toBeTruthy();
+      expect(
+        within(failed).getByRole("button", { name: "Details", hidden: true }),
+      ).toBeTruthy();
+      const newcomer = row("idle-new", { state: "suspended" });
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [first, second, newcomer] },
+      });
+      await act(async () => {
+        await client.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+          [second.id, true],
+          [second.id, true],
+        ]),
+      );
+    });
+
+    it.each([
+      {
+        status: 409,
+        code: "sandbox_transition_conflict",
+        message: "no longer idle, left as it is",
+      },
+      {
+        status: 404,
+        code: "sandbox_not_found",
+        message: "no longer available to destroy, left as it is",
+      },
+    ])(
+      "sends the idle precondition and renders $code as that target's skip",
+      async ({ status, code, message }) => {
+        const { binding } = mount([first]);
+        binding.auth.destroySandbox.mockResolvedValueOnce(
+          refusal(status, code),
+        );
+        await screen.findByText("idle-a");
+        await choose("state", "suspended");
+        const dialog = await confirmIdle();
+        fireEvent.click(
+          within(dialog).getByRole("button", { name: "Destroy 1" }),
+        );
+        await waitFor(() =>
+          expect(dialog.textContent).toContain(`idle-a · ${message}`),
+        );
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+        ]);
+        expect(
+          within(dialog)
+            .getByRole("button", { name: "Retry" })
+            .hasAttribute("disabled"),
+        ).toBe(true);
+        expect(
+          within(rowOf(first.id)).queryByRole("alert", { hidden: true }),
+        ).toBeNull();
+      },
+    );
+
+    it("rechecks a row Retry from a failed batch instead of destroying a target that woke", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce(
+        refusal(503, "provider-error"),
+      );
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await within(rowOf(first.id)).findByRole("alert", { hidden: true });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await choose("state", "all");
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [{ ...first, state: "awake" }] },
+      });
+      fireEvent.click(
+        within(rowOf(first.id)).getByRole("button", { name: "Retry" }),
+      );
+      await waitFor(() =>
+        expect(rowOf(first.id).textContent).toContain("Skipped idle-a"),
+      );
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+      ]);
+    });
   });
 
   it("scrolls a revealed row into view once per reveal, not again on each refetch", () => {
@@ -1150,6 +1532,7 @@ describe("<SandboxesSettingsPanel />", () => {
     act(() => open("team-box"));
 
     mocks.listed = true;
+    mocks.realActions = false;
     mocks.sandboxes = [
       row("team-box", {
         environmentId: "env-acme",
@@ -1446,18 +1829,219 @@ describe("<SandboxesSettingsPanel />", () => {
     });
   });
 
-  it("reads a row mid-destroy as Destroying… with no sessions line", () => {
-    mocks.report = liveSessionReport(
-      { agents: [], terminals: [terminalSessionFixture({})] },
-      true,
-    );
-    renderPanel([row("sbx-gone", { state: "destroying" })]);
+  it.each([false, true])(
+    "shows another member's destroy before frozen=%s, then removes the row when the list drops it",
+    (frozen) => {
+      mocks.configurations = [
+        {
+          kind: "team",
+          teamId: "t1",
+          teamName: "Acme",
+          environmentId: TEAM_ENV,
+        },
+      ];
+      mocks.sessionFailed = true;
+      const sandbox = row("sbx-gone", {
+        state: "destroying",
+        frozen,
+        environmentId: TEAM_ENV,
+      });
+      mocks.sandboxes = [sandbox];
+      const panel = renderUi(<SandboxesSettingsPanel />);
+      const destroying = rowOf(sandbox.id);
+      expect(
+        within(destroying).getByTestId("sandboxes-row-state").textContent,
+      ).toBe("Destroying");
+      expect(
+        within(destroying).getByTestId("sandboxes-row-clock").textContent,
+      ).toBe("Destroying · pending");
+      expect(
+        within(destroying).queryByTestId("sandboxes-row-sessions"),
+      ).toBeNull();
 
-    const gone = rowOf("sbx-gone");
-    expect(within(gone).getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Destroying…",
+      // GET /api/sandboxes excludes destroyed rows.
+      mocks.sandboxes = [];
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(screen.queryByTestId("sandboxes-row")).toBeNull();
+    },
+  );
+
+  it.each(["destroying", "awake", "destroyed"] as const)(
+    "checks a stale awake row's lifecycle on host loss before presenting %s",
+    async (nextState) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u-viewer", username: "viewer" },
+      });
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      const sandbox = row("sbx-team", {
+        state: "awake",
+        environmentId: TEAM_ENV,
+      });
+      mocks.configurations = [
+        {
+          kind: "team",
+          teamId: "t1",
+          teamName: "Acme",
+          environmentId: TEAM_ENV,
+        },
+      ];
+      const online = sandboxHostEntry(sandbox.hostId, {
+        id: "t1",
+        name: "Acme",
+      });
+      mocks.entry = online;
+      binding.auth.listSandboxes.mockResolvedValueOnce({
+        kind: "ok",
+        response: { sandboxes: [sandbox] },
+      });
+      const answer = Promise.withResolvers<SandboxListFetchResult>();
+      binding.auth.listSandboxes.mockReturnValue(answer.promise);
+      const page = hostPage();
+      const panel = renderUi(<SandboxesSettingsPanel />);
+      const initialRow = await screen.findByTestId("sandboxes-row");
+      const lifecycle = within(initialRow).getByTestId(
+        "sandboxes-row-clock",
+      ).textContent;
+      expect(page.queryClient.getMutationCache().getAll()).toEqual([]);
+
+      // Both a missing row and an offline registry row must check the server.
+      const gone: RemoteHostDirectoryEntry | null =
+        nextState === "awake"
+          ? {
+              ...online,
+              transportDialability: "not-dialable",
+              remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
+            }
+          : null;
+      mocks.entry = gone;
+      panel.rerender(<SandboxesSettingsPanel />);
+      await waitFor(() =>
+        expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
+      );
+      expect(
+        within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+          .textContent,
+      ).toBe(lifecycle);
+
+      // A flapping directory joins the outstanding read, never cancels/restarts it.
+      mocks.entry = online;
+      panel.rerender(<SandboxesSettingsPanel />);
+      mocks.entry = gone;
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+      expect(
+        within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+          .textContent,
+      ).toBe(lifecycle);
+
+      await act(async () => {
+        answer.resolve({
+          kind: "ok",
+          response: {
+            sandboxes:
+              nextState === "destroyed"
+                ? []
+                : [{ ...sandbox, state: nextState }],
+          },
+        });
+        await answer.promise;
+      });
+      if (nextState === "destroyed") {
+        await waitFor(() =>
+          expect(screen.queryByTestId("sandboxes-row")).toBeNull(),
+        );
+      } else {
+        const expected =
+          nextState === "destroying"
+            ? "Destroying · pending"
+            : "Running, but Traycer can't connect";
+        await waitFor(() =>
+          expect(
+            within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+              .textContent,
+          ).toBe(expected),
+        );
+        panel.rerender(<SandboxesSettingsPanel />);
+        expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+        if (nextState === "destroying") {
+          binding.auth.listSandboxes.mockResolvedValue({
+            kind: "ok",
+            response: { sandboxes: [] },
+          });
+          await act(() =>
+            page.queryClient.invalidateQueries({
+              queryKey: authQueryKeys.registeredHostsAll(),
+            }),
+          );
+          await waitFor(() =>
+            expect(screen.queryByTestId("sandboxes-row")).toBeNull(),
+          );
+        }
+      }
+    },
+  );
+
+  it("keeps lifecycle after a failed status check's list refresh, then uses the next registry read", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-viewer", username: "viewer" },
+    });
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    const sandbox = row("sbx-status", { state: "awake" });
+    mocks.entry = sandboxHostEntry(sandbox.hostId, null);
+    binding.auth.listSandboxes.mockResolvedValueOnce({
+      kind: "ok",
+      response: { sandboxes: [sandbox] },
+    });
+    const answer = Promise.withResolvers<SandboxListFetchResult>();
+    binding.auth.listSandboxes.mockReturnValue(answer.promise);
+    const page = hostPage();
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const initial = await screen.findByTestId("sandboxes-row");
+    const lifecycle = within(initial).getByTestId(
+      "sandboxes-row-clock",
+    ).textContent;
+    mocks.sessionFailed = true;
+    panel.rerender(<SandboxesSettingsPanel />);
+    await waitFor(() =>
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
     );
-    expect(within(gone).queryByTestId("sandboxes-row-sessions")).toBeNull();
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent,
+    ).toBe(lifecycle);
+    await act(async () => {
+      answer.resolve({ kind: "network-error", detail: "offline" });
+      await answer.promise;
+    });
+    await waitFor(() =>
+      expect(
+        page.queryClient.getQueryState(
+          sandboxQueryKeys.list(binding.auth, "u-viewer"),
+        )?.status,
+      ).toBe("error"),
+    );
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent,
+    ).toBe(lifecycle);
+
+    binding.auth.listSandboxes.mockImplementation(() =>
+      Promise.resolve({ kind: "ok", response: { sandboxes: [sandbox] } }),
+    );
+    await act(() =>
+      page.queryClient.invalidateQueries({
+        queryKey: authQueryKeys.registeredHostsAll(),
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+          .textContent,
+      ).toBe("Running, but Traycer can't connect"),
+    );
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3);
   });
 
   describe("an Automations host that is not created yet", () => {

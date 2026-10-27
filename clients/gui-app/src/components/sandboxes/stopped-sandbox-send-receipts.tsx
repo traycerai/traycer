@@ -1,3 +1,4 @@
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { use, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
@@ -38,6 +39,16 @@ const FINISHED_RECEIPT_STATES: ReadonlySet<HostSandboxState> = new Set([
   "released",
 ]);
 
+function receiptScopeKey(
+  userId: string | null,
+  epicId: string,
+  chatId: string | undefined,
+): string {
+  return chatId === undefined
+    ? stoppedReceiptStripKey(userId, epicId)
+    : JSON.stringify([userId, epicId, chatId]);
+}
+
 function dismissReceipt(id: string): void {
   useStoppedSandboxSendReceiptStore.setState((state) => ({
     receipts: Object.fromEntries(
@@ -55,7 +66,9 @@ export function StoppedSandboxSendReceipts(): ReactNode {
       Object.values(state.receipts).filter(
         (receipt) =>
           receipt.userId === userId &&
-          !state.strips[stoppedReceiptStripKey(userId, receipt.epicId)],
+          !state.strips[
+            receiptScopeKey(userId, receipt.epicId, receipt.chatId)
+          ],
       ),
     ),
   );
@@ -78,14 +91,17 @@ export function StoppedSandboxSendReceipts(): ReactNode {
 export function StoppedSandboxSendReceiptStrip(props: {
   readonly epicId: string;
   readonly tabId: string;
+  readonly chatId?: string;
 }): ReactNode {
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
-  const key = stoppedReceiptStripKey(userId, props.epicId);
+  const key = receiptScopeKey(userId, props.epicId, props.chatId);
   const receipts = useStoppedSandboxSendReceiptStore(
     useShallow((state) =>
       Object.values(state.receipts).filter(
         (receipt) =>
-          receipt.userId === userId && receipt.epicId === props.epicId,
+          receipt.userId === userId &&
+          receipt.epicId === props.epicId &&
+          receipt.chatId === props.chatId,
       ),
     ),
   );
@@ -101,8 +117,10 @@ export function StoppedSandboxSendReceiptStrip(props: {
           useStoppedSandboxSendReceiptStore.getState().receipts,
         )) {
           if (
-            stoppedReceiptStripKey(receipt.userId, receipt.epicId) === key &&
-            receipt.returned.kind === "task"
+            receiptScopeKey(receipt.userId, receipt.epicId, receipt.chatId) ===
+              key &&
+            (receipt.returned.kind === "task" ||
+              receipt.returned.kind === "chat")
           )
             dismissReceipt(receipt.id);
         }
@@ -162,7 +180,10 @@ function StoppedReceiptOwner(props: {
     sandboxId: receipt.sandboxId,
     name: receipt.name,
     hostId: row?.hostId,
-    operation: operation?.verb === "start" ? operation : null,
+    operation:
+      operation?.kind === "failed" && operation.verb === "start"
+        ? operation
+        : null,
     busy: pending,
     onRetry: start,
   });
@@ -193,6 +214,11 @@ function ReturnedSendReceipt(props: {
   const taskDraftId = useNewConversationModalStore(
     (state) => state.draftPatchesByEpicId[receipt.epicId]?.draftId ?? null,
   );
+  const chatDraftRevision = useComposerDraftStore((state) =>
+    receipt.returned.kind === "chat"
+      ? (state.drafts[receipt.returned.chatId]?.revision ?? null)
+      : null,
+  );
   const returnedDraftId = receipt.returned.draftId;
   const savedDraftPresent = useLandingDraftStore((state) =>
     state.drafts.some((draft) => draft.id === returnedDraftId),
@@ -206,9 +232,12 @@ function ReturnedSendReceipt(props: {
   );
   const obsolete =
     userId !== receipt.userId ||
-    (receipt.returned.kind === "task"
-      ? taskDraftId !== receipt.returned.draftId
-      : !savedDraftPresent) ||
+    !returnedMessagePresent(
+      receipt.returned,
+      taskDraftId,
+      savedDraftPresent,
+      chatDraftRevision,
+    ) ||
     Object.values(sends).some(
       (send) =>
         send.userId === userId &&
@@ -237,7 +266,7 @@ function ReturnedSendReceipt(props: {
     if (receipt.returned.kind === "landing-draft") {
       useLandingDraftStore.getState().openDraft(receipt.returned.draftId);
       router?.navigateToTabIntent(draftTabIntent(receipt.returned.draftId));
-    } else if (props.tabId !== null) {
+    } else if (receipt.returned.kind === "task" && props.tabId !== null) {
       useNewConversationModalOpenStore.getState().open({
         epicId: receipt.epicId,
         tabId: props.tabId,
@@ -285,14 +314,16 @@ function ReturnedSendReceipt(props: {
               >
                 Start
               </Button>
-              <Button
-                type="button"
-                variant="link"
-                size="inline-xs"
-                onClick={openDraft}
-              >
-                {CHOOSE_ANOTHER_HOST}
-              </Button>
+              {receipt.returned.kind === "chat" ? null : (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="inline-xs"
+                  onClick={openDraft}
+                >
+                  {CHOOSE_ANOTHER_HOST}
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -314,4 +345,15 @@ function ReturnedSendReceipt(props: {
     };
   }, [content, props.tabId, obsolete, receipt.id]);
   return obsolete || props.tabId === null ? null : content;
+}
+
+function returnedMessagePresent(
+  returned: StoppedSandboxSendReceipt["returned"],
+  taskDraftId: string | null,
+  savedDraftPresent: boolean,
+  chatRevision: number | null,
+): boolean {
+  if (returned.kind === "task") return taskDraftId === returned.draftId;
+  if (returned.kind === "chat") return chatRevision === returned.revision;
+  return savedDraftPresent;
 }

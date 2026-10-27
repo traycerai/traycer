@@ -24,7 +24,7 @@ export type PendingSendBlocker =
   | "stop"
   | "wake";
 export interface PendingSendState {
-  readonly kind: "chat" | "fork" | "terminal";
+  readonly kind: "chat" | "message" | "fork" | "terminal";
   readonly phase: PendingSendPhase;
   readonly blocker: PendingSendBlocker;
 }
@@ -409,11 +409,15 @@ function withdraw(
     };
   const next: PendingSendState = {
     ...state,
-    phase: state.kind === "chat" ? "returned" : "cancelled",
+    phase:
+      state.kind === "chat" || state.kind === "message"
+        ? "returned"
+        : "cancelled",
     blocker: "none",
   };
   const effects: PendingSendEffect[] = [];
-  if (state.kind === "chat") effects.push("return-message");
+  if (state.kind === "chat" || state.kind === "message")
+    effects.push("return-message");
   effects.push("remove");
   return result(next, effects, facts);
 }
@@ -499,7 +503,13 @@ function endedTransition(
 ): PendingSendTransition {
   if (event === "recovery-complete")
     return result(
-      { ...state, phase: state.kind === "chat" ? "returned" : "cancelled" },
+      {
+        ...state,
+        phase:
+          state.kind === "chat" || state.kind === "message"
+            ? "returned"
+            : "cancelled",
+      },
       ["remove"],
       facts,
     );

@@ -5,7 +5,6 @@ import {
   useMemo,
   useReducer,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,9 +55,8 @@ import {
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 
-/** A sandbox's name when the shape sheet set none: the message's first words. */
+/** A fallback label for older sends without a named stage. */
 const FALLBACK_NAME_WORDS = 4;
-const FALLBACK_NAME = "sandbox";
 /** The create's longest `displayName`. */
 const FALLBACK_NAME_MAX_LENGTH = 191;
 
@@ -71,7 +69,7 @@ export function stagedSandboxFallbackName(text: string): string {
     .join("-")
     .slice(0, FALLBACK_NAME_MAX_LENGTH)
     .replace(/-+$/, "");
-  return slug.length === 0 ? FALLBACK_NAME : slug;
+  return slug.length === 0 ? "New sandbox" : slug;
 }
 
 export interface StagedSandboxSend {
@@ -142,9 +140,7 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             queryClient,
             userId,
             wake: (hostId: string, gesture: SandboxVerbGesture) =>
-              startSandboxWake(queryClient, binding, hostId, gesture).then(
-                (outcome) => outcome !== null && outcome.kind === "awake",
-              ),
+              startSandboxWake(queryClient, binding, hostId, gesture),
             now: Date.now,
             sleep: (ms: number) =>
               new Promise<void>((resolve) => {
@@ -207,7 +203,6 @@ export function openLandingStagedTerminal(
 ): StagedTerminalAsk {
   const ask = startStagedTerminal(surfaceKey, (fresh) =>
     runner(surfaceKey, fresh, {
-      fallbackName: stagedSandboxFallbackName(""),
       taskId: null,
       resume: false,
     }),
@@ -261,16 +256,12 @@ export function useStagedSandboxSend(input: {
   const { surfaceKey, terminal, taskId, ownerId, claimsSend } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
-  const messageTextRef = useRef("");
-  // The name the create falls back to, for the line to show meanwhile.
-  const [fallbackName, setFallbackName] = useState(FALLBACK_NAME);
   const runner = useStagedSandboxRunner();
 
   const run = useCallback(
     (fresh: boolean): void => {
       if (surfaceKey === null) return;
       runner(surfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(messageTextRef.current),
         taskId,
         resume: false,
       });
@@ -321,7 +312,7 @@ export function useStagedSandboxSend(input: {
 
   const intercept = useCallback(
     (
-      messageText: string,
+      _messageText: string,
       terminalLaunch: TerminalAgentLaunch | null,
     ): boolean => {
       if (surfaceKey === null) return false;
@@ -341,8 +332,6 @@ export function useStagedSandboxSend(input: {
       // it is busy. A boot with no send (a terminal ask started it, or the
       // draft that sent is gone) is handed off with this one.
       if (current.phase === "staged" || current.failure !== null) {
-        messageTextRef.current = messageText;
-        setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore
           .getState()
           .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
@@ -379,7 +368,7 @@ export function useStagedSandboxSend(input: {
       <>
         <SandboxSetupLine
           stage={stage}
-          name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
+          name={stage.target.name}
           facts={facts}
           actions={{
             onKeepWaiting: () => runFromLine(false),
@@ -399,11 +388,7 @@ export function useStagedSandboxSend(input: {
             onOpenProviders: providersOpener(stage.target.configuration),
           }}
         />
-        <StagedStopFailure
-          stage={stage}
-          fallbackName={fallbackName}
-          onRetry={stop}
-        />
+        <StagedStopFailure stage={stage} onRetry={stop} />
       </>
     );
 

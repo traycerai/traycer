@@ -136,6 +136,8 @@ export interface ChatLowerRuntimeState {
 }
 
 export interface ChatLowerAccessState {
+  /** Only the composer can enqueue a message for its resting sandbox. */
+  readonly restingSandbox?: boolean;
   readonly isViewer: boolean;
   readonly canAct: boolean;
   /**
@@ -784,7 +786,7 @@ function ComposerSurface(props: {
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
-  if (model.access.isViewer) {
+  if (model.access.isViewer && model.access.restingSandbox !== true) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -907,13 +909,17 @@ function LiveChatComposer(props: {
 }) {
   const { model } = props;
   const tabHostId = useTabHostId();
+  const restingMessage =
+    model.access.restingSandbox === true && model.queue.editingItem === null;
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
-      sendDisabled={!model.access.canAct}
-      sendDisabledHint={chatSendDisabledHint(model.access)}
+      sendDisabled={!model.access.canAct && !restingMessage}
+      sendDisabledHint={
+        restingMessage ? null : chatSendDisabledHint(model.access)
+      }
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}

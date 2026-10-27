@@ -165,6 +165,20 @@ function renderFrame(withWake: boolean) {
   return { ...view, rerenderFrame: () => view.rerender(tree()) };
 }
 
+/** A chat tile's frame: its own resolver and composer footer own its lifecycle. */
+function renderChatFrame() {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <SandboxTileStateFrame chat={{ epicId: "epic-1", chatId: "chat-1" }}>
+        <textarea data-testid="tile-body" />
+      </SandboxTileStateFrame>
+    </QueryClientProvider>,
+  );
+}
+
 function bodyWrapper(): HTMLElement {
   const wrapper = screen.getByTestId("tile-body").parentElement;
   if (wrapper === null) throw new Error("the tile body has no wrapper");
@@ -187,6 +201,27 @@ beforeEach(() => {
   mocks.unavailableReason = null;
 });
 afterEach(cleanup);
+
+describe("<SandboxTileStateFrame /> around a chat tile", () => {
+  it.each([
+    ["suspended", false],
+    ["stopped", false],
+    ["released", false],
+    ["suspended", true],
+    ["awake", true],
+  ] as const)(
+    "never overlays or inerts a chat's body on a %s sandbox (frozen: %s)",
+    (state, frozen) => {
+      setSandboxEntry(state, frozen);
+      renderChatFrame();
+
+      expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+      expect(
+        screen.getByTestId("tile-body").parentElement?.hasAttribute("inert"),
+      ).toBe(false);
+    },
+  );
+});
 
 describe("<SandboxTileStateFrame />", () => {
   it.each<{ label: string; failure: SandboxLifecycleVerbFetchResult }>([

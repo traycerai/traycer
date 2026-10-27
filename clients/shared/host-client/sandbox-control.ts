@@ -499,17 +499,22 @@ export async function createSandboxViaHttp(
 /**
  * `DELETE /api/sandboxes/:id`: `200` destroyed, `202` still destroying (both
  * `ok`; the list shows the rest), `404 sandbox_not_found` when it is already
- * gone, which the caller decides how to read.
+ * gone, which the caller decides how to read. `onlyIfIdle` asks the server
+ * to refuse unless its state CAS still starts from suspended or stopped.
  */
 export async function destroySandboxViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   proxyToken: string | null,
   sandboxId: string,
+  onlyIfIdle: boolean,
 ): Promise<SandboxVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
-    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
+    sandboxesUrl(
+      serverBaseUrl,
+      `/${sandboxId}${onlyIfIdle ? "?onlyIfIdle=true" : ""}`,
+    ),
     {
       method: "DELETE",
       body: null,

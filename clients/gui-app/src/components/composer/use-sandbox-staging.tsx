@@ -39,6 +39,7 @@ import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-que
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { useSampledNow } from "@/lib/relative-time";
+import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
@@ -88,6 +89,7 @@ import {
   useSandboxShapeMemoryStore,
 } from "@/stores/composer/sandbox-shape-memory-store";
 import {
+  readStagedSandbox,
   useStagedSandbox,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -344,10 +346,11 @@ export function useSandboxStaging(input: {
   // A New target goes to the chat's fork, else it is staged on the surface.
   const placeNew = useCallback(
     (target: NewStagedSandboxTarget): void => {
+      const namedTarget = { ...target, name: stagedSandboxName(target.name) };
       if (forkOnNew === null) {
-        useStagedSandboxStore.getState().stage(surfaceKey, target);
+        useStagedSandboxStore.getState().stage(surfaceKey, namedTarget);
       } else {
-        forkOnNew(target);
+        forkOnNew(namedTarget);
       }
     },
     [forkOnNew, surfaceKey],
@@ -356,6 +359,15 @@ export function useSandboxStaging(input: {
   const stageNew = useCallback(
     (facts: NewRowFacts): void => {
       if (facts.shape === null || catalogue === null) return;
+      const current = readStagedSandbox(surfaceKey);
+      // Reselecting the picked row keeps the name and shape already edited.
+      if (
+        forkOnNew === null &&
+        current?.target.kind === "new" &&
+        stageConfigurationKey(current.target.configuration) ===
+          stageConfigurationKey(facts.configuration)
+      )
+        return;
       const provider = stageProviderFor(catalogue, facts.shape.os);
       placeNew({
         kind: "new",
@@ -372,7 +384,7 @@ export function useSandboxStaging(input: {
           stageConfigurationKey(facts.configuration),
         );
     },
-    [catalogue, memoryHostId, placeNew],
+    [catalogue, forkOnNew, memoryHostId, placeNew, surfaceKey],
   );
 
   // In this task: every host the task already uses, and every agent sandbox

@@ -1,3 +1,4 @@
+import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import { useId, useState, type ReactNode } from "react";
 import type {
   SandboxCatalogue,
@@ -368,13 +369,10 @@ function ShapeSheetForm(props: {
   const user = useAuthUser().data ?? null;
   const [form, setForm] = useState<ShapeForm>(() => {
     const provider = stageProviderFor(props.catalogue, props.initialShape.os);
+    const name = stagedSandboxName(props.initialName);
     return provider === null
-      ? formOf(
-          props.initialShape,
-          props.initialName,
-          props.catalogue.providers[0],
-        )
-      : formOf(props.initialShape, props.initialName, provider);
+      ? formOf(props.initialShape, name, props.catalogue.providers[0])
+      : formOf(props.initialShape, name, provider);
   });
   const [periodsOpen, setPeriodsOpen] = useState(false);
   const provider = stageProviderFor(props.catalogue, form.os);
@@ -409,7 +407,7 @@ function ShapeSheetForm(props: {
       onSubmit={(event) => {
         event.preventDefault();
         if (shape === null) return;
-        props.onUseShape(shape, form.name.trim(), wake);
+        props.onUseShape(shape, stagedSandboxName(form.name), wake);
       }}
     >
       <div className="flex flex-col gap-1.5">
@@ -418,7 +416,6 @@ function ShapeSheetForm(props: {
           id={`${ids}-name`}
           value={form.name}
           maxLength={NAME_MAX_LENGTH}
-          placeholder="Named from your message"
           data-testid="sandbox-shape-sheet-name"
           onChange={(event) => setForm({ ...form, name: event.target.value })}
         />

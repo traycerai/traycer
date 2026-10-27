@@ -204,9 +204,9 @@ export interface SandboxSummary {
    */
   readonly createdBy: SandboxMember | null;
   /**
-   * The member paying for the current or last wake of a team sandbox, including
-   * storage at rest; `null` on a personal sandbox (its owner pays), before the
-   * first wake, and from a server that does not report it.
+   * The member paying for the current wake and its resting storage on a team
+   * sandbox; `null` on a personal sandbox (its owner pays), before any wake,
+   * and from a server before it.
    */
   readonly wakePayer: SandboxMember | null;
   /**

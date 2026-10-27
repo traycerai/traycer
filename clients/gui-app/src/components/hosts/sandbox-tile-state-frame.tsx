@@ -54,7 +54,7 @@ export function SandboxTileStateFrame(props: {
 }): ReactNode {
   // A tile rendered with no host runtime above it (a shell mounted bare, a
   // tile under test) has no directory to read and no sandbox to frame.
-  if (useHostBinding() === null) return props.children;
+  if (useHostBinding() === null || props.chat !== null) return props.children;
   return (
     <SandboxTileStateFrameInRuntime chat={props.chat}>
       {props.children}
@@ -304,7 +304,11 @@ function SandboxTileWakeButton(props: {
         sandboxId={props.summary.id}
         hostId={props.summary.hostId}
         name={props.summary.displayName}
-        operation={operation?.verb === "destroy" ? null : operation}
+        operation={
+          operation?.kind === "failed" && operation.verb !== "destroy"
+            ? operation
+            : null
+        }
         busy={pending}
         onRetry={(pressed) => {
           if (pressed !== "destroy") verb.mutate(pressed);

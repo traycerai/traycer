@@ -1,3 +1,24 @@
+import {
+  appendPromptQualification,
+  buildUnrecordedPromptHandoff,
+} from "@/lib/drafts/unrecorded-prompt-handoff";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import {
+  deadSendAccountClauses,
+  worktreeSweepFor,
+} from "@/stores/chats/chat-queue-reconciler";
+import {
+  partitionSweptIntent,
+  stagedWorktreeIntentDiffersFrom,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import { recordCancelledSandboxSend } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import {
+  useComposerDraftStore,
+  type DraftState,
+} from "@/stores/composer/composer-draft-store";
+import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
@@ -43,6 +64,7 @@ import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
 import {
   reservePendingSandboxSendOwnership,
+  ownsPendingSandboxSend,
   holdPendingSandboxSendOwnership,
   markPendingSandboxSendHanded,
   forgetPendingSandboxSendHanded,
@@ -201,6 +223,18 @@ export function handPendingSandboxSend(
   return id;
 }
 
+/** The durable pending record retains a rejected bound send until its line returns it. */
+export function pendingSandboxMessageOwnsAction(
+  clientActionId: string,
+): boolean {
+  return Object.values(usePendingSandboxSendStore.getState().sends).some(
+    (send) =>
+      send.request.kind === "message" &&
+      send.delivery === null &&
+      send.dispatch?.input.initialMessage?.clientActionId === clientActionId,
+  );
+}
+
 /** Confirms the task only while owning its send, so withdrawal cannot race it. */
 export function confirmPendingSandboxSendEpic(id: string): void {
   const { sends } = usePendingSandboxSendStore.getState();
@@ -333,6 +367,12 @@ export type ReturnedPendingSandboxSend =
   | { readonly kind: "none" }
   /** A put-away start-task draft holds it, preserving any occupied task draft. */
   | { readonly kind: "landing-draft"; readonly draftId: string }
+  /** The bound chat's composer holds it; the revision fences its receipt. */
+  | {
+      readonly kind: "chat";
+      readonly chatId: string;
+      readonly revision: number;
+    }
   /** Its task's new-agent composer holds it now, for the pane it named. */
   | {
       readonly kind: "task";
@@ -382,11 +422,184 @@ function returnPendingMessage(
   if (plan.outcome === "denied-claim") return { kind: "dispatching" };
   if (!plan.effects.includes("remove")) return { kind: "none" };
   const { request } = send;
-  const returned =
-    request.kind === "chat"
-      ? restorePendingMessage(send, request, saveInDrafts)
-      : { kind: "none" as const };
+  let returned: ReturnedPendingSandboxSend = { kind: "none" };
+  if (request.kind === "chat") {
+    returned = restorePendingMessage(send, request, saveInDrafts);
+  } else if (request.kind === "message") {
+    void returnPendingSandboxMessage(id, saveInDrafts).catch(() => undefined);
+    return { kind: "dispatching" };
+  }
   endPendingSandboxSend(id);
+  return returned;
+}
+
+const messageReturnsInFlight = new Map<
+  string,
+  Promise<ReturnedPendingSandboxSend>
+>();
+
+/** One async hand-back owns the source until the replacement and its reads settle. */
+export function returnPendingSandboxMessage(
+  id: string,
+  saveInDrafts: boolean,
+): Promise<ReturnedPendingSandboxSend> {
+  const existing = messageReturnsInFlight.get(id);
+  if (existing !== undefined) return existing;
+  const ownership = holdPendingSandboxSendOwnership(id);
+  const returning = ownsPendingSandboxSend(id)
+    ? returnBoundMessage(id, saveInDrafts)
+    : ownership.ready.then(
+        (
+          granted,
+        ): Promise<ReturnedPendingSandboxSend> | ReturnedPendingSandboxSend =>
+          granted
+            ? returnBoundMessage(id, saveInDrafts)
+            : { kind: "dispatching" },
+      );
+  messageReturnsInFlight.set(id, returning);
+  void returning
+    .finally(() => {
+      if (messageReturnsInFlight.get(id) === returning)
+        messageReturnsInFlight.delete(id);
+      ownership.release();
+    })
+    .catch(() => undefined);
+  return returning;
+}
+
+function boundMessageHostId(send: PendingSandboxSend): string | null {
+  if (send.request.kind !== "message") return null;
+  const stage =
+    readStagedSandbox(pendingSendSurfaceKey(send.id)) ?? send.stopStage;
+  return (
+    send.request.hostId ??
+    send.dispatch?.input.hostId ??
+    stage?.createdHostId ??
+    (stage?.target.kind === "existing" ? stage.target.hostId : null)
+  );
+}
+
+function boundReturnCurrent(send: PendingSandboxSend): boolean {
+  const facts = pendingSandboxSendFacts(send.id, UNKNOWN_PENDING_SEND_FACTS);
+  return facts.current && facts.accountActive && facts.owns;
+}
+
+function boundMessageReturnReason(
+  send: PendingSandboxSend,
+  request: Extract<PendingSandboxSendRequest, { readonly kind: "message" }>,
+): string {
+  const intent = request.worktreeIntent ?? null;
+  const key: WorktreeStagingKey = {
+    surface: "owner",
+    hostId: boundMessageHostId(send),
+    epicId: send.epicId,
+    ownerKind: "chat",
+    ownerId: request.chatId,
+  };
+  const worktree =
+    send.ended === true
+      ? { survivors: null, swept: intent, superseded: false }
+      : worktreeSweepFor(
+          intent,
+          (value) => partitionSweptIntent(key, value),
+          intent !== null && stagedWorktreeIntentDiffersFrom(key, intent),
+        );
+  return (
+    "Your message wasn't sent." +
+    deadSendAccountClauses(
+      {
+        worktree: { ...worktree, nameWorkspaces: true },
+        sentSettings: send.settings,
+        currentSettings: null,
+        sentAccountContext: null,
+        currentAccountContext: null,
+        sentDeliveryPolicy: request.deliveryPolicy ?? null,
+      },
+      false,
+    )
+  );
+}
+
+/** A saved draft remains accessible when the chat or its composer cannot take it. */
+function boundMessageNeedsSavedDraft(
+  send: PendingSandboxSend,
+  chatId: string,
+  saveInDrafts: boolean,
+): boolean {
+  const current = useComposerDraftStore.getState().drafts[chatId];
+  return (
+    send.ended === true ||
+    send.returnRequested?.saveInDrafts === true ||
+    saveInDrafts ||
+    (current !== undefined &&
+      (contentIsSubmittable(current.content) ||
+        current.browserAnnotations.length > 0)) ||
+    useLandingDraftStore
+      .getState()
+      .drafts.some(
+        (draft) => draft.id === pendingSandboxRecoveryDraftId(send.id),
+      )
+  );
+}
+
+async function returnBoundMessage(
+  id: string,
+  saveInDrafts: boolean,
+): Promise<ReturnedPendingSandboxSend> {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return { kind: "none" };
+  const send = sends[id];
+  const request = send.request;
+  if (request.kind !== "message") return { kind: "none" };
+  const drafts = useComposerDraftStore.getState();
+  const toDraft = boundMessageNeedsSavedDraft(
+    send,
+    request.chatId,
+    saveInDrafts,
+  );
+  if (!usePendingSandboxSendStore.getState().beginReturn(id, toDraft))
+    return { kind: "dispatching" };
+  const reason = boundMessageReturnReason(send, request);
+  let returned: ReturnedPendingSandboxSend;
+  if (toDraft) {
+    const recoveryId = pendingSandboxRecoveryDraftId(id);
+    const target = draftImageByteTargetForHost(boundMessageHostId(send));
+    const outcome = await buildUnrecordedPromptHandoff({
+      recovery: { draftId: recoveryId, settings: send.settings },
+      content: send.content,
+      browserAnnotations: request.browserAnnotations ?? [],
+      reason,
+      readHashImage: (hash) => resolveDraftImageBytes(hash, target),
+      stillCurrent: () => boundReturnCurrent(send),
+    });
+    await outcome.readsSettled;
+    if (outcome.draftId === null || !boundReturnCurrent(send))
+      return { kind: "none" };
+    returned = { kind: "landing-draft", draftId: outcome.draftId };
+  } else {
+    const qualified =
+      reason === "Your message wasn't sent."
+        ? send.content
+        : appendPromptQualification(send.content, `Unsent — ${reason}`);
+    drafts.replaceDraft(request.chatId, qualified, null);
+    drafts.restoreBrowserAnnotations(
+      request.chatId,
+      request.browserAnnotations ?? [],
+    );
+    const restoredDrafts: Readonly<Partial<Record<string, DraftState>>> =
+      useComposerDraftStore.getState().drafts;
+    const restored = restoredDrafts[request.chatId];
+    if (restored === undefined) return { kind: "none" };
+    returned = {
+      kind: "chat",
+      chatId: request.chatId,
+      revision: restored.revision,
+    };
+  }
+  endPendingSandboxSend(id);
+  if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
+    return { kind: "none" };
+  recordCancelledSandboxSend(send, returned);
   return returned;
 }
 

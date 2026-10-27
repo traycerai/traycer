@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { Bot, Clock, ListFilter, Search, Server, Workflow } from "lucide-react";
 import type {
   SandboxAutomationResponse,
   SandboxCatalogue,
+  SandboxListResponse,
   SandboxCost,
   SandboxSummary,
   UserSandboxCost,
@@ -48,6 +50,7 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
 import {
@@ -422,7 +425,9 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   const { filter, setFilter, highlighted, reveals } = useRevealedSandboxFilter(
     props.revealSandboxId,
   );
-  const [destroyAllOpen, setDestroyAllOpen] = useState(false);
+  const [destroyAllTargets, setDestroyAllTargets] = useState<
+    readonly SandboxSummary[] | null
+  >(null);
 
   const allRows = list.data?.sandboxes ?? null;
   // The configuration's Automations host before its first shell creates it:
@@ -481,11 +486,25 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
       configuration={configuration}
     />
   );
+  const destroyDialog = (
+    <SandboxDestroyAllIdleDialog
+      targets={destroyAllTargets ?? []}
+      open={destroyAllTargets !== null}
+      onOpenChange={(open) => {
+        if (!open) setDestroyAllTargets(null);
+      }}
+    />
+  );
   if (
     configurationRows === null ||
     (configurationRows.length === 0 && !unstartedAutomations)
   ) {
-    return gate;
+    return (
+      <>
+        {gate}
+        {destroyDialog}
+      </>
+    );
   }
   const figures = todayFigures({
     configuration,
@@ -499,9 +518,8 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
     shown.length + (unstartedShown ? 1 : 0),
     configurationRows.length + (unstartedAutomations ? 1 : 0),
   );
-  const destroyAllTargets = sandboxDestroyAllIdleOffered(filter)
-    ? shown.map((row) => ({ sandboxId: row.id, name: row.displayName }))
-    : [];
+  const destroyAllOffered = sandboxDestroyAllIdleOffered(filter);
+  const idleTargets = shown.filter((row) => row.kind !== "automation");
   return (
     <section aria-label="Sandboxes" data-testid="sandboxes-list">
       <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -530,13 +548,14 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
             />
           </div>
           <SandboxFilterMenu filter={filter} onChange={setFilter} />
-          {destroyAllTargets.length === 0 ? null : (
+          {!destroyAllOffered ? null : (
             <Button
               type="button"
               variant="destructive"
               size="sm"
               data-testid="sandboxes-destroy-all-idle"
-              onClick={() => setDestroyAllOpen(true)}
+              disabled={idleTargets.length === 0}
+              onClick={() => setDestroyAllTargets(idleTargets)}
             >
               Destroy all idle
             </Button>
@@ -548,6 +567,7 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
           <SandboxListRow
             key={row.id}
             summary={row}
+            list={list}
             configuration={configuration}
             cost={
               costs.data?.sandboxes.find((cost) => cost.sandboxId === row.id) ??
@@ -564,11 +584,7 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
           />
         ) : null}
       </ul>
-      <SandboxDestroyAllIdleDialog
-        targets={destroyAllTargets}
-        open={destroyAllOpen}
-        onOpenChange={setDestroyAllOpen}
-      />
+      {destroyDialog}
     </section>
   );
 }
@@ -873,6 +889,7 @@ const STATE_BADGE: Record<
   awake: "success",
   suspended: "muted",
   stopped: "muted",
+  destroying: "info",
   frozen: "warning",
   failed: "destructive",
 };
@@ -961,6 +978,7 @@ function UnstartedAutomationsRow(props: {
 
 function SandboxListRow(props: {
   readonly summary: SandboxSummary;
+  readonly list: UseQueryResult<SandboxListResponse | null>;
   readonly configuration: SandboxPageConfiguration;
   readonly cost: SandboxCost | null;
   readonly viewerUserId: string | null;
@@ -972,13 +990,11 @@ function SandboxListRow(props: {
   const sessions = useSandboxSessionReport(summary.hostId, awake);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
-  // The control plane says awake and the host does not answer: Stop is the
-  // way to end its meter without the guest.
-  const unreachable =
-    awake &&
-    summary.guestConfigured !== false &&
-    sessions.failed &&
-    sessions.report.kind !== "live";
+  const unreachable = useSandboxRowUnreachable(
+    summary,
+    sessions.failed && sessions.report.kind !== "live",
+    props.list,
+  );
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
