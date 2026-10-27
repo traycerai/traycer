@@ -330,6 +330,7 @@ function AgentMessageDisplayView({
   return (
     <div className="w-full">
       <SegmentCard
+        footer={null}
         open={open}
         onOpenChange={handleOpenChange}
         header={header}

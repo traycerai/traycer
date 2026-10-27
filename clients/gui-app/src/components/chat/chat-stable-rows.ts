@@ -1,4 +1,7 @@
-import type { ChatMessage } from "@/stores/composer/chat-store";
+import type {
+  BackgroundEventEnding,
+  ChatMessage,
+} from "@/stores/composer/chat-store";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 
 /**
@@ -122,6 +125,12 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
     b.turnHasOnlyAutonomousResumeSegments,
   autonomousResumeOwed: (a, b) =>
     a.autonomousResumeOwed === b.autonomousResumeOwed,
+  // Rebuilt by every fold pass, so compared by content, like `turnMessageIds`.
+  foldedBackgroundEvents: (a, b) =>
+    sameFoldedBackgroundEvents(
+      a.foldedBackgroundEvents,
+      b.foldedBackgroundEvents,
+    ),
   turnId: (a, b) => a.turnId === b.turnId,
   manualRungAnchorId: (a, b) => a.manualRungAnchorId === b.manualRungAnchorId,
   routingSettledNoticeId: (a, b) =>
@@ -168,6 +177,34 @@ function sameMessageIds(
     return false;
   }
   return a.every((id, index) => id === b[index]);
+}
+
+function sameFoldedBackgroundEvents(
+  a: ChatMessage["foldedBackgroundEvents"],
+  b: ChatMessage["foldedBackgroundEvents"],
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) {
+    return false;
+  }
+  return a.every((event, index) => {
+    const other = b[index];
+    return (
+      event.key === other.key &&
+      event.trigger === other.trigger &&
+      sameBackgroundEventEnding(event.ending, other.ending)
+    );
+  });
+}
+
+function sameBackgroundEventEnding(
+  a: BackgroundEventEnding,
+  b: BackgroundEventEnding,
+): boolean {
+  if (a.kind === "no-reply") {
+    return b.kind === "no-reply" && a.elapsedMs === b.elapsedMs;
+  }
+  return a.kind === b.kind;
 }
 
 /** Shallow field comparison - avoids the cost of a deep equality check. */

@@ -737,6 +737,23 @@ export interface ChatMessageStoppedInfo {
   readonly turnReplySegments: ReadonlyArray<MessageSegment>;
 }
 
+/**
+ * How a finished background-event turn ended when it drew no reply: a provider
+ * turn ran and said nothing (`no-reply`, with its elapsed time), or no turn
+ * picked the event up at all (`not-resumed`).
+ */
+export type BackgroundEventEnding =
+  | { readonly kind: "no-reply"; readonly elapsedMs: number }
+  | { readonly kind: "not-resumed" };
+
+/** One background event whose own row was folded into a later card. */
+export interface FoldedBackgroundEvent {
+  /** Unique per entry: the folded row's id and the trigger's place in it. */
+  readonly key: string;
+  readonly trigger: AutonomousResumeTrigger;
+  readonly ending: BackgroundEventEnding;
+}
+
 export interface ChatMessage {
   readonly workingVerbSeed?: string;
   id: string;
@@ -811,13 +828,20 @@ export interface ChatMessage {
    */
   turnHasOnlyAutonomousResumeSegments?: boolean;
   /**
-   * Set on the transcript's last row when it is a background-outcome note no
+   * Set on the transcript's last row when it is a background event no
    * provider turn has adopted AND the host still reports the chat working:
-   * the outcome may yet be handed to the agent, so the row does not say how
-   * it ended. Absent everywhere else, including on the same row once the chat
-   * goes idle - at which point it reads "Agent not resumed".
+   * the event may yet be handed to the agent, so its card does not say how
+   * the turn ended. Absent everywhere else, including on the same row once
+   * the chat goes idle - at which point the card reads "Agent not resumed".
    */
   autonomousResumeOwed?: boolean;
+  /**
+   * Earlier background events from the same source that the agent let pass,
+   * oldest first, which this row's background card shows in place of their
+   * own rows (`foldBackgroundEventRows`). Absent on every row that folds
+   * nothing in, and on the folded rows themselves, which leave the list.
+   */
+  foldedBackgroundEvents?: ReadonlyArray<FoldedBackgroundEvent>;
   /**
    * The host turn this assistant row belongs to. Absent on user rows, on
    * synthesized event rows, and on records persisted before `turnId` existed.

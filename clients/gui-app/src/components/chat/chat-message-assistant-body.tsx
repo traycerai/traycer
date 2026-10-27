@@ -20,8 +20,10 @@ import type {
   AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  FoldedBackgroundEvent,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import { backgroundEventEnding } from "@/stores/chats/background-event-fold";
 import { Check, Copy, Sparkles, Split, Square, Volume2 } from "lucide-react";
 import { use, useCallback, useMemo, useRef } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -43,7 +45,7 @@ import {
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { resolveAgentReference } from "./agent-reference-resolution";
 import { knownHarnessId } from "@/lib/chat/sender-display";
-import { formatClockDuration } from "@/lib/format-duration";
+import { formatClockDuration, formatWorkedFor } from "@/lib/format-duration";
 import {
   formatMessageTimeWithSeconds,
   useSampledNow,
@@ -56,7 +58,10 @@ import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
 import { CommandSegment } from "./segments/command-segment";
 import { CompactionSegment } from "./segments/compaction-segment";
-import { AutonomousResumeSegment } from "./segments/autonomous-resume-segment";
+import {
+  AutonomousResumeSegment,
+  type BackgroundEventCardEnding,
+} from "./segments/autonomous-resume-segment";
 import { ErrorSegment } from "./segments/error-segment";
 import type { RoutingSettledNotice } from "@/components/chat/fallback/routing-settled-card";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
@@ -106,6 +111,8 @@ interface AssistantBodyProps {
   turnHasOnlyAutonomousResumeSegments: boolean;
   /** See `ChatMessage.autonomousResumeOwed`. */
   autonomousResumeOwed: boolean;
+  /** See `ChatMessage.foldedBackgroundEvents`; absent when nothing folded. */
+  foldedBackgroundEvents: ReadonlyArray<FoldedBackgroundEvent> | undefined;
   /** Whether this terminal row should render its elapsed completion footer. */
   showCompletionFooter: boolean;
   /** User-wait time already accumulated during this assistant turn. */
@@ -252,6 +259,7 @@ export function AssistantMessageBody({
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
   autonomousResumeOwed,
+  foldedBackgroundEvents,
   showCompletionFooter,
   pausedDurationMs,
   pausedSinceMs,
@@ -317,24 +325,26 @@ export function AssistantMessageBody({
     () => collectAssistantReplyText(boundaryReplySegments ?? segments),
     [boundaryReplySegments, segments],
   );
-  // A completed turn whose only visible segment is the autonomous-resume
-  // divider is a note about an earlier call, and it always says how it ended.
-  // Two endings draw no reply and are told apart by the footer flag: a
-  // provider turn that ran and said nothing keeps its elapsed footer
-  // ("Resumed · no response"), and a notification no provider turn adopted
-  // carries no timing to report, so it gets a line of its own instead.
+  // A completed turn that is nothing but a background event drew no reply,
+  // and its card says how it ended - so the row draws no footer of its own.
   const silentAutonomousResume =
     stopped === null && turnHasOnlyAutonomousResumeSegments;
-  const agentNotResumed = isAgentNotResumed({
+  const backgroundCard = backgroundCardContent({
     silentAutonomousResume,
     showCompletionFooter,
     autonomousResumeOwed,
     runState,
     completedAt,
+    elapsedStartedAt,
+    pausedDurationMs,
+    meta,
+    foldedBackgroundEvents,
   });
+  const backgroundCardSegmentId = headBackgroundEventSegmentId(shownSegments);
   const stoppedBeforeResponding = stopped !== null && !stopped.turnHadOutput;
   const showElapsedFooter =
     !stoppedBeforeResponding &&
+    !silentAutonomousResume &&
     showCompletionFooter &&
     shouldShowElapsedFooter(
       runState,
@@ -453,8 +463,8 @@ export function AssistantMessageBody({
               turnId={recovery.turnId}
               settledNotice={recovery.settledNotice}
               settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
-              autonomousResumeVariant={
-                turnHasOnlyAutonomousResumeSegments ? "note" : "card"
+              backgroundCard={
+                item.id === backgroundCardSegmentId ? backgroundCard : null
               }
             />
           </ChatBlockNavigationAnchor>
@@ -473,7 +483,6 @@ export function AssistantMessageBody({
         />
       ) : null}
       {stoppedBeforeResponding ? <StoppedBeforeResponding /> : null}
-      {agentNotResumed ? <AgentNotResumed /> : null}
       {showElapsedFooter ? (
         <AssistantElapsedFooter
           messageId={messageId}
@@ -485,7 +494,6 @@ export function AssistantMessageBody({
           replyText={replyText}
           boundaryReplySegments={boundaryReplySegments}
           forkAction={forkAction}
-          silentAutonomousResume={silentAutonomousResume}
         />
       ) : null}
     </div>
@@ -564,45 +572,100 @@ function StoppedBeforeResponding() {
   );
 }
 
-/**
- * Whether a finished note-only turn ended without the agent being resumed.
- *
- * Held back while the host still owes the outcome to the agent
- * (`autonomousResumeOwed`): until then "not resumed" would be a verdict on
- * something that has not ended.
- */
-function isAgentNotResumed(input: {
+const NO_FOLDED_BACKGROUND_EVENTS: ReadonlyArray<FoldedBackgroundEvent> = [];
+
+/** What the background card heading this row shows in its foot. */
+interface BackgroundCardContent {
+  readonly ending: BackgroundEventCardEnding | null;
+  readonly folded: ReadonlyArray<FoldedBackgroundEvent>;
+}
+
+type BackgroundCardInput = {
   readonly silentAutonomousResume: boolean;
   readonly showCompletionFooter: boolean;
   readonly autonomousResumeOwed: boolean;
   readonly runState: ChatMessageRunState | null;
   readonly completedAt: number | null;
-}): boolean {
-  return (
-    input.silentAutonomousResume &&
-    !input.showCompletionFooter &&
-    !input.autonomousResumeOwed &&
-    input.runState === null &&
-    input.completedAt !== null
-  );
+  readonly elapsedStartedAt: number;
+  readonly pausedDurationMs: number;
+  readonly meta: AssistantTurnMeta | null;
+  readonly foldedBackgroundEvents:
+    | ReadonlyArray<FoldedBackgroundEvent>
+    | undefined;
+};
+
+function backgroundCardContent(
+  input: BackgroundCardInput,
+): BackgroundCardContent {
+  return {
+    ending: silentBackgroundEventEnding(input),
+    folded: input.foldedBackgroundEvents ?? NO_FOLDED_BACKGROUND_EVENTS,
+  };
 }
 
 /**
- * The ending of a background outcome that no provider turn picked up: the CLI
- * had already delivered it, or the host's retries for it ran out. Without this
- * line the note above is the last thing in the transcript and nothing says the
- * agent is finished.
+ * How a finished turn that is nothing but a background event ended, for its
+ * card to say: "No reply · Ns" when a provider turn ran and said nothing, with
+ * the turn's details behind it, or "Agent not resumed" when no turn picked the
+ * event up - the CLI had already delivered it, or the host's retries for it
+ * ran out. Without one, the card is the last thing in the transcript and
+ * nothing says the agent is finished.
+ *
+ * `null` while the turn runs, and while the host still owes the event to the
+ * agent (`autonomousResumeOwed`): until then "not resumed" would be a verdict
+ * on something that has not ended.
  */
-function AgentNotResumed() {
-  return (
-    <div
-      role="status"
-      data-testid="assistant-agent-not-resumed"
-      className="flex w-fit items-center py-0.5 text-ui-sm leading-5 text-muted-foreground/70"
-    >
-      Agent not resumed
-    </div>
-  );
+function silentBackgroundEventEnding(
+  input: BackgroundCardInput,
+): BackgroundEventCardEnding | null {
+  if (
+    !input.silentAutonomousResume ||
+    input.runState !== null ||
+    input.completedAt === null
+  ) {
+    return null;
+  }
+  if (!input.showCompletionFooter && input.autonomousResumeOwed) return null;
+  const value = backgroundEventEnding({
+    showCompletionFooter: input.showCompletionFooter,
+    completedAt: input.completedAt,
+    elapsedStartedAt: input.elapsedStartedAt,
+    pausedDurationMs: input.pausedDurationMs,
+  });
+  return {
+    value,
+    details:
+      value.kind === "no-reply" ? (
+        <AssistantMetaTooltip
+          meta={input.meta}
+          stopped={null}
+          startedAt={input.elapsedStartedAt}
+          completedAt={input.completedAt}
+        />
+      ) : null,
+  };
+}
+
+/**
+ * The background event that started this row's turn: the last of the
+ * turn-start deliveries at its head, which is the card whose foot says how
+ * the turn ended and lists what was folded into it. `null` for a row no
+ * background event started.
+ */
+function headBackgroundEventSegmentId(
+  segments: ReadonlyArray<MessageSegment>,
+): string | null {
+  let id: string | null = null;
+  for (const segment of segments) {
+    if (
+      segment.kind !== "autonomous_resume" ||
+      segment.deliveryPlacement === "in_turn"
+    ) {
+      break;
+    }
+    id = segment.id;
+  }
+  return id;
 }
 
 /**
@@ -635,7 +698,6 @@ function AssistantElapsedFooter({
   replyText,
   boundaryReplySegments,
   forkAction,
-  silentAutonomousResume,
 }: {
   messageId: string;
   createdAt: number;
@@ -647,7 +709,6 @@ function AssistantElapsedFooter({
   /** The turn's reply when this row does not draw it (a stopped boundary). */
   boundaryReplySegments: ReadonlyArray<MessageSegment> | null;
   forkAction: ChatMessageForkAction | null;
-  silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
   // One rule for both endings: a Stop gets no separate truncated-at-click
@@ -659,9 +720,7 @@ function AssistantElapsedFooter({
   // So the stop's wind-down is excluded by the DATA, not by a second formula.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
-  const nonStoppedElapsedLabel = silentAutonomousResume
-    ? `Resumed · no response · ${formatWorkedFor(elapsedMs)}`
-    : `${verb} for ${formatWorkedFor(elapsedMs)}`;
+  const nonStoppedElapsedLabel = `${verb} for ${formatWorkedFor(elapsedMs)}`;
   const elapsedContent = (
     <>
       <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
@@ -1216,26 +1275,6 @@ function pickElapsedVerb(seed: string): string {
   return ELAPSED_VERBS[index] ?? ELAPSED_VERBS[0];
 }
 
-/**
- * Format an elapsed duration for the "Worked for Nm Xs" footer.
- *
- * Named distinctly from the dictation-bar's `formatElapsed` (M:SS stopwatch
- * format) so an unqualified import never picks the wrong formatter.
- *
- * - Non-finite / negative inputs (clock skew, replay anomalies) → "<1s",
- *   visually distinct from a sub-1s real-fast turn (which reads "<1s" too -
- *   acceptable since both convey "negligible duration" without the misleading
- *   "0s" rounding from `Math.round`).
- * - 1ms..999ms → "<1s".
- * - 1s..59s → "Ns".
- * - 1m..59m → "Nm Xs".
- * - 1h+    → "Nh Nm Xs".
- */
-function formatWorkedFor(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 1000) return "<1s";
-  return formatClockDuration(Math.floor(ms / 1000));
-}
-
 function AssistantRunIndicator({
   runState,
   createdAt,
@@ -1351,10 +1390,11 @@ export interface AssistantSegmentProps {
   settledNotice: RoutingSettledNotice | null;
   settledNoticeFindUnitId: string | null;
   /**
-   * How an `autonomous_resume` divider is drawn: `note` when it is all a
-   * finished turn holds, `card` otherwise. Read by no other segment kind.
+   * What the background card that started this turn shows in its foot, on
+   * that one `autonomous_resume` segment; `null` on every other item. Read
+   * by no other segment kind.
    */
-  autonomousResumeVariant: "card" | "note";
+  backgroundCard: BackgroundCardContent | null;
 }
 
 function ApprovalSegmentCard({
@@ -1397,7 +1437,7 @@ export function AssistantSegment({
   turnId,
   settledNotice,
   settledNoticeFindUnitId,
-  autonomousResumeVariant,
+  backgroundCard,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -1593,7 +1633,9 @@ export function AssistantSegment({
       return (
         <AutonomousResumeSegment
           triggers={segment.triggers}
-          variant={autonomousResumeVariant}
+          variant="card"
+          ending={backgroundCard?.ending ?? null}
+          folded={backgroundCard?.folded ?? NO_FOLDED_BACKGROUND_EVENTS}
         />
       );
     case "interview":

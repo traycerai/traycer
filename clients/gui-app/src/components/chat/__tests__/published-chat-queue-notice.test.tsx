@@ -150,6 +150,7 @@ function renderBody(
                 elapsedStartedAt={0}
                 turnHasOnlyAutonomousResumeSegments={false}
                 autonomousResumeOwed={false}
+                foldedBackgroundEvents={undefined}
                 showCompletionFooter={false}
                 pausedDurationMs={0}
                 pausedSinceMs={null}

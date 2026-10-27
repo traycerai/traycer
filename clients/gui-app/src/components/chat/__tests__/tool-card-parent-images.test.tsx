@@ -262,7 +262,7 @@ describe.each([
             turnId={null}
             settledNotice={null}
             settledNoticeFindUnitId={null}
-            autonomousResumeVariant="card"
+            backgroundCard={null}
           />
         </Providers>,
       );
@@ -310,7 +310,7 @@ describe.each([
             turnId={null}
             settledNotice={null}
             settledNoticeFindUnitId={null}
-            autonomousResumeVariant="card"
+            backgroundCard={null}
           />
         </Providers>,
       );
@@ -404,7 +404,7 @@ describe.each([
           turnId={null}
           settledNotice={null}
           settledNoticeFindUnitId={null}
-          autonomousResumeVariant="card"
+          backgroundCard={null}
         />
       </Providers>,
     );
