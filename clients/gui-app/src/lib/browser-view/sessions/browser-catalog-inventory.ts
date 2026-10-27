@@ -244,7 +244,8 @@ export class BrowserCatalogInventoryStore {
   private readonly entries = new Map<string, InventoryEntry>();
   private readonly listeners = new Set<() => void>();
   private generation = 0;
-  private clearing: Promise<void> = Promise.resolve();
+  private clearing: Promise<void> | null = null;
+  private clearRequired = false;
 
   constructor(private readonly backend: BrowserCatalogBackend) {}
 
@@ -283,12 +284,29 @@ export class BrowserCatalogInventoryStore {
     this.listeners.forEach((listener) => listener());
   }
 
+  private flushClear(): Promise<void> {
+    if (this.clearing !== null) return this.clearing;
+    if (!this.clearRequired) return Promise.resolve();
+    const run = Promise.resolve()
+      .then(() => this.backend.clear())
+      .then(() => {
+        this.clearRequired = false;
+      })
+      .finally(() => {
+        // Failed attempts may be retried, but private reads stay fenced until
+        // one succeeds. Discarding the rejection alone would expose old rows.
+        this.clearing = null;
+      });
+    this.clearing = run;
+    return run;
+  }
+
   async load(scope: BrowserCatalogScope): Promise<void> {
     const entry = this.entry(scope);
     if (entry.loaded !== null) return entry.loaded;
     const stamp = this.generation;
     const state = entry.state;
-    entry.loaded = this.clearing
+    entry.loaded = this.flushClear()
       .then(() =>
         this.backend.change(scopeKey(scope), (raw) =>
           parseInventory(raw, scope.epicId),
@@ -312,6 +330,9 @@ export class BrowserCatalogInventoryStore {
   }
 
   async rehydrate(): Promise<void> {
+    const generation = this.generation;
+    await this.flushClear();
+    if (generation !== this.generation) return;
     await Promise.all(
       [...this.entries.keys()].map(async (key) => {
         const entry = this.entries.get(key);
@@ -448,7 +469,7 @@ export class BrowserCatalogInventoryStore {
   ): Promise<void> {
     const entry = this.entry(scope);
     const stamp = this.generation;
-    await this.clearing;
+    await this.flushClear();
     const next = await this.backend.change(scopeKey(scope), (raw) => {
       if (stamp !== this.generation)
         throw new Error("Browser inventory identity changed.");
@@ -486,10 +507,10 @@ export class BrowserCatalogInventoryStore {
 
   async clear(): Promise<void> {
     this.generation += 1;
+    this.clearRequired = true;
     this.entries.clear();
     this.listeners.forEach((listener) => listener());
-    this.clearing = this.clearing.then(() => this.backend.clear());
-    await this.clearing;
+    await this.flushClear();
   }
 }
 

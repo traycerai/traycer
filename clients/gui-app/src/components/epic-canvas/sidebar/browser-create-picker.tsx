@@ -8,7 +8,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { flushSync } from "react-dom";
-import { toast } from "sonner";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,9 @@ import {
 } from "@/hooks/host/use-surface-host-pin";
 import { preparePendingBrowserTile } from "@/lib/browser-view/tiles/pending-browser-tab";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   DEFAULT_BROWSER_TILE_URL,
@@ -136,7 +139,22 @@ export function BrowserCreatePicker(props: {
           throw error;
         }
       }),
-    onError: (error) => toast.error(error.message),
+    onError: (error) => {
+      if (error instanceof HostRpcError) {
+        toastFromHostError(error, "Couldn't add browser.");
+      } else {
+        reportableErrorToast(
+          error.message,
+          undefined,
+          createReportIssueContext({
+            title: "Couldn't add browser",
+            message: null,
+            code: null,
+            source: "Browsers",
+          }),
+        );
+      }
+    },
   });
   const adding = useIsMutating({ mutationKey: key }) > 0;
   const { ordered, suggestedHostId } = creationDeviceChoices({

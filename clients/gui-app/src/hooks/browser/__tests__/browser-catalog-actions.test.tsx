@@ -139,7 +139,7 @@ describe("useBrowserCatalogActions", () => {
     expect(mocks.closeTab).not.toHaveBeenCalled();
   });
 
-  it("runs other owner actions without requiring durable support, and refuses an offline owner the same way", async () => {
+  it("runs other owner actions without requiring durable support, and refuses an offline owner with a rejected promise", async () => {
     const action = vi.fn(() => Promise.resolve("done"));
     await actions().withOwner("host-b", action);
     expect(mocks.runAction).toHaveBeenCalledWith(
@@ -151,7 +151,7 @@ describe("useBrowserCatalogActions", () => {
     );
 
     mocks.unavailability.mockReturnValue("offline");
-    expect(() => actions().withOwner("host-b", action)).toThrow(
+    await expect(actions().withOwner("host-b", action)).rejects.toThrow(
       "This device is offline.",
     );
   });

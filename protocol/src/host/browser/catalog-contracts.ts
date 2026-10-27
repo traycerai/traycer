@@ -187,7 +187,11 @@ export type BrowserCatalogSnapshot = z.infer<
   typeof browserCatalogSnapshotSchema
 >;
 
-/** Successful durable mutation; evidence is journaled before its tile is retired. */
+/**
+ * browser.sessions@2.3 sends this BEFORE the matching successful actionAck on
+ * the same ordered stream. Missing durable evidence permits only a failed
+ * actionAck. The client journals this evidence before retiring the tab's tile.
+ */
 export const browserInventoryMutationAckSchema = lazySchema(() =>
   z.strictObject({
     requestId: identifier,

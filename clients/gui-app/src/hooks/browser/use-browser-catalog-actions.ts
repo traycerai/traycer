@@ -82,7 +82,7 @@ export function useBrowserCatalogActions(epicId: string) {
     [epicId, ownerContext, userId],
   );
   const withOwner = useCallback(
-    <T>(
+    async <T>(
       hostId: string,
       action: (state: BrowserSessionsState) => Promise<T>,
     ): Promise<T> =>

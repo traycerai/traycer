@@ -617,6 +617,87 @@ describe("browser catalog inventory", () => {
       await store.load(scope);
       expect(store.read(scope).records).toEqual([]);
     });
+
+    interface ClearGate {
+      failing: boolean;
+    }
+
+    /** A clear that fails leaves the stored rows exactly where they were. */
+    function gatedClearBackend(
+      stored: Map<string, unknown>,
+      gate: ClearGate,
+    ): BrowserCatalogBackend {
+      const base = memoryBackend(stored, []);
+      return {
+        ...base,
+        clear: () =>
+          gate.failing
+            ? Promise.reject(new Error("clear failed"))
+            : base.clear(),
+      };
+    }
+
+    it("rejects a failed clear, empties memory, and never lets the old stored rows back in while clearing still fails", async () => {
+      const gate: ClearGate = { failing: true };
+      const store = new BrowserCatalogInventoryStore(
+        gatedClearBackend(shared, gate),
+      );
+      await store.load(scope);
+      await store.owner(scope, "B", [liveEvidence("B", "s1", 12)]);
+
+      await expect(store.clear()).rejects.toThrow("clear failed");
+      expect(store.read(scope).records).toEqual([]);
+      expect(shared.size).toBe(1);
+
+      await store.load(scope).catch(() => undefined);
+      expect(store.read(scope).records).toEqual([]);
+      expect(store.read(scope).pendingCount).toBe(0);
+
+      // `read` recreated the entry, so rehydrate walks it: a path distinct from load.
+      await expect(store.rehydrate()).rejects.toThrow("clear failed");
+      expect(store.read(scope).records).toEqual([]);
+
+      // Private writes cannot slip past the required clear either.
+      await expect(
+        store.accept(
+          scope,
+          snapshot(9, {
+            records: [record("A", "s9", 1)],
+            fences: [],
+            revokedHostIds: [],
+          }),
+          store.epoch(scope),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        store.owner(scope, "B", [liveEvidence("B", "s2", 3)]),
+      ).rejects.toThrow();
+      expect(store.read(scope).records).toEqual([]);
+      expect(shared.size).toBe(1);
+
+      gate.failing = false;
+      await store.clear();
+      expect(shared.size).toBe(0);
+      expect(store.read(scope).records).toEqual([]);
+    });
+
+    it("retries the pending clear before the next load once the backend recovers, so the old rows are never read", async () => {
+      const gate: ClearGate = { failing: true };
+      const store = new BrowserCatalogInventoryStore(
+        gatedClearBackend(shared, gate),
+      );
+      await store.load(scope);
+      await store.owner(scope, "B", [liveEvidence("B", "s1", 12)]);
+      await expect(store.clear()).rejects.toThrow("clear failed");
+
+      gate.failing = false;
+      await store.load(scope);
+
+      // The load may persist a fresh empty row; the old private row must be gone.
+      expect(JSON.stringify([...shared.values()])).not.toContain('"s1"');
+      expect(store.read(scope).records).toEqual([]);
+      expect(store.read(scope).pendingCount).toBe(0);
+    });
   });
 });
 

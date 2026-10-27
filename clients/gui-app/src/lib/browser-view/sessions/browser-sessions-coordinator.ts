@@ -1177,6 +1177,8 @@ function createBrowserSessionsCoordinator(args: {
       return false;
     const pending = pendingCloses.get(frame.requestId);
     if (pending === undefined || !durableInventory) return false;
+    // The 2.3 contract sends inventoryMutationAck before a successful actionAck
+    // on this ordered stream. Success without it is an incomplete close.
     const durable = durableAcks.get(frame.requestId);
     durableAcks.delete(frame.requestId);
     if (!frame.ok || durable === undefined)

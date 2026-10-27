@@ -50,7 +50,7 @@ export function BrowserDeviceGroup(props: {
         ) : null}
         <span
           className="shrink-0 tabular-nums"
-          aria-label={`${group.rows.length} tabs`}
+          aria-label={`${group.rows.length} ${group.rows.length === 1 ? "tab" : "tabs"}`}
         >
           {group.rows.length}
         </span>

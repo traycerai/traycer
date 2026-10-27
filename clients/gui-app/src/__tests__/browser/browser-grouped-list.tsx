@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   QueryClient,
   QueryClientProvider,
-  useQueryClient,
+  queryOptions,
+  useQuery,
 } from "@tanstack/react-query";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { LazyMotion, domAnimation } from "motion/react";
@@ -172,27 +173,33 @@ function registryItem(
 }
 
 /**
- * The account registry's answer, seeded into the cache the host pickers read.
- * Without it the device lists never resolve here and every picture carries the
- * "loading devices" notice. Rendering waits for it so no frame shows the gap.
+ * Answer the same registry query the host pickers read before mounting them.
+ * The fixture stays off the network and no frame shows an unresolved registry.
  */
 function RegistrySeed(props: { readonly children: ReactNode }): ReactNode {
   const binding = useHostBinding();
-  const client = useQueryClient();
-  useMemo(() => {
-    if (binding === null) return;
-    client.setQueryData(authQueryKeys.registeredHosts(binding.auth, null), {
-      hosts: [
-        registryItem(
-          WORK_HOST_ID,
-          "Production build runner in the east datacenter",
-          false,
-        ),
-        registryItem(LAB_HOST_ID, "Lab", LAB_OFFLINE),
-      ],
-    });
-  }, [binding, client]);
-  return binding === null ? null : props.children;
+  const registry = useQuery(
+    queryOptions({
+      queryKey:
+        binding === null
+          ? authQueryKeys.registeredHostsMissing()
+          : authQueryKeys.registeredHosts(binding.auth, null),
+      queryFn: () =>
+        Promise.resolve({
+          hosts: [
+            registryItem(
+              WORK_HOST_ID,
+              "Production build runner in the east datacenter",
+              false,
+            ),
+            registryItem(LAB_HOST_ID, "Lab", LAB_OFFLINE),
+          ],
+        }),
+      enabled: binding !== null,
+      staleTime: Infinity,
+    }),
+  );
+  return binding === null || !registry.isSuccess ? null : props.children;
 }
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({

@@ -2,7 +2,9 @@ import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -65,7 +67,10 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
     setSelection: state.setSelection,
   }),
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: vi.fn(),
+}));
 
 function fakeHost(
   hostId: string,
@@ -130,7 +135,8 @@ describe("BrowserCreatePicker", () => {
     state.withOwner.mockReset();
     state.openTab.mockReset();
     state.openTile.mockReset();
-    vi.mocked(toast.error).mockReset();
+    vi.mocked(toastFromHostError).mockReset();
+    vi.mocked(reportableErrorToast).mockReset();
   });
   afterEach(cleanup);
 
@@ -167,22 +173,54 @@ describe("BrowserCreatePicker", () => {
     expect(state.setSelection).not.toHaveBeenCalled();
   });
 
-  it("reports a failed creation, makes no second attempt elsewhere, and offers the picker again", async () => {
+  it("reports a failed creation without exposing detail, makes no second attempt elsewhere, and offers the picker again", async () => {
     state.withOwner.mockRejectedValue(
       new Error("Couldn't connect to this device. Try again."),
     );
     const user = await openPicker();
     await user.click(screen.getByRole("menuitem", { name: /Work Mac/ }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
+      expect(reportableErrorToast).toHaveBeenCalledWith(
         "Couldn't connect to this device. Try again.",
+        undefined,
+        {
+          title: "Couldn't add browser",
+          message: null,
+          code: null,
+          source: "Browsers",
+        },
       ),
     );
+    expect(toastFromHostError).not.toHaveBeenCalled();
     expect(state.withOwner).toHaveBeenCalledTimes(1);
     expect(state.openTile).not.toHaveBeenCalled();
+    expect(state.setSelection).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(screen.getByTestId("add").hasAttribute("disabled")).toBe(false),
     );
+  });
+
+  it("hands a host refusal to the shared host-error toast with the error itself", async () => {
+    const refusal = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "browser.sessions refused",
+      requestId: "req-1",
+      method: "browser.sessions",
+      fatalDetails: null,
+    });
+    state.withOwner.mockRejectedValue(refusal);
+    const user = await openPicker();
+    await user.click(screen.getByRole("menuitem", { name: /Work Mac/ }));
+    await waitFor(() =>
+      expect(toastFromHostError).toHaveBeenCalledWith(
+        refusal,
+        "Couldn't add browser.",
+      ),
+    );
+    expect(reportableErrorToast).not.toHaveBeenCalled();
+    expect(state.withOwner).toHaveBeenCalledTimes(1);
+    expect(state.openTile).not.toHaveBeenCalled();
+    expect(state.setSelection).not.toHaveBeenCalled();
   });
 
   it("offers only the owning device for a local-only task", async () => {
