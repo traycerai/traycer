@@ -259,7 +259,7 @@ export function sandboxRowMatches(
   );
 }
 
-/** Awake first, then by last activity, newest first. */
+/** Awake first, then by last activity, newest first, with id breaking ties. */
 export function sortSandboxRows(
   rows: readonly SandboxSummary[],
 ): readonly SandboxSummary[] {
@@ -269,7 +269,7 @@ export function sortSandboxRows(
     const awakeA = sandboxPublicState(a) === "awake" ? 0 : 1;
     const awakeB = sandboxPublicState(b) === "awake" ? 0 : 1;
     if (awakeA !== awakeB) return awakeA - awakeB;
-    return activity(b) - activity(a);
+    return activity(b) - activity(a) || a.id.localeCompare(b.id);
   });
 }
 
