@@ -993,7 +993,7 @@ describe("<BotTabSurface /> main bot", () => {
       within(header).getByRole("button", { name: "Channel settings" }),
     ).toBe(screen.getByTestId("bot-channel-settings-open"));
     expect(screen.getByTestId("bot-tab-title").nextElementSibling).toBe(
-      within(header).getByRole("img", { name: "Main bot" }),
+      within(header).getByRole("img", { name: "Main bot" }).parentElement,
     );
   });
 

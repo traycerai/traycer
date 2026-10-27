@@ -454,6 +454,8 @@ describe("<HomeBotRow /> main bot", () => {
 
     await user.hover(star);
     expect((await screen.findByRole("tooltip")).textContent).toBe("Main bot");
+    // The tooltip is the star's name, not also its description.
+    expect(star.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("shows no star for any other bot", () => {

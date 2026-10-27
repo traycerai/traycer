@@ -341,7 +341,7 @@ describe("<BotChannelSidebar /> main bot", () => {
     const star = within(row("bot-triage")).getByRole("img", {
       name: "Main bot",
     });
-    expect(row("bot-triage").lastElementChild).toBe(star);
+    expect(row("bot-triage").lastElementChild).toBe(star.parentElement);
     expect(star.getAttribute("class")).toContain("text-muted-foreground");
     expect(
       within(row("bot-release")).queryByRole("img", { name: "Main bot" }),
