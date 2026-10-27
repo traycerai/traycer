@@ -204,7 +204,7 @@ describe("the V24 entry union", () => {
     ).toBe(false);
   });
 
-  it.each(NEW_KINDS)("%s carries no resolvedAt", (kind) => {
+  it.each(NEW_KINDS)("accepts an older %s entry without resolvedAt", (kind) => {
     const parsed = hostNotificationEntrySchemaV24.parse(
       fullEntry(kind, PAYLOADS[kind]),
     );

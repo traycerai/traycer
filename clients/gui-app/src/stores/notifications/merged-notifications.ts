@@ -38,6 +38,7 @@ import {
 } from "@/lib/notifications/notification-category";
 import {
   classifyNotificationLifecycle,
+  isActionableNotice,
   compareFeedIdAscending,
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
@@ -154,8 +155,7 @@ export interface MergedNotificationRow {
   readonly globalEntry: NotificationEntry | null;
   readonly severity: HostNotificationSeverity;
   readonly outcome: HostNotificationOutcome | null;
-  /** Only host approval/interview rows carry a meaningful value; every other
-   * row is `null` and never reads as an unresolved prompt. */
+  /** Resolution of a prompt or actionable notice, independent of reading it. */
   readonly resolvedAt: number | null;
   /** The host entry's `sourceRef` (approval/interview id), part of the
    * dismiss occurrence token `(id, updatedAt, sourceRef)`. `null` for
@@ -203,6 +203,7 @@ function isHostUnsupportedError(error: unknown): boolean {
 
 export interface MergedNotificationsActions {
   readonly markAsRead: (row: MergedNotificationRow | string) => void;
+  readonly resolveNotice: (row: MergedNotificationRow) => void;
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
@@ -422,6 +423,7 @@ export function useBlockingAttentionCount(): number {
       rows.filter((row) => {
         const classification = classifyNotificationLifecycle(row);
         return (
+          !isActionableNotice(row) &&
           classification.section === "attention" &&
           classification.tier === "blocking"
         );
@@ -724,12 +726,29 @@ export function useNotificationBellState(): NotificationBellState {
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
+  const rows = useMergedNotificationRows();
+  // The relay summary counts unread severities. These notices instead stay
+  // actionable after reading and leave attention only when retired. Adjust
+  // their known contribution without discarding any unseen summary rows.
+  const noticeAdjustment = rows.reduce((delta, row) => {
+    if (
+      (row.source !== "cloud" && row.source !== "host") ||
+      !isActionableNotice(row)
+    )
+      return delta;
+    const active = row.resolvedAt === null ? 1 : 0;
+    const countedBySummary = row.readAt === null ? 1 : 0;
+    return delta + active - countedBySummary;
+  }, 0);
   if (feedMode === "cloud") {
     if (hostSummary === null || cloudSummary === null) {
       return { kind: "unknown" };
     }
     const attention =
-      hostSummary.attentionCount + cloudSummary.attentionCount + appLocalUnread;
+      hostSummary.attentionCount +
+      cloudSummary.attentionCount +
+      appLocalUnread +
+      noticeAdjustment;
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
@@ -743,7 +762,8 @@ export function useNotificationBellState(): NotificationBellState {
   }
   if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
-  const attention = hostSummary.attentionCount + appLocalUnread;
+  const attention =
+    hostSummary.attentionCount + appLocalUnread + noticeAdjustment;
   if (attention > 0) return { kind: "attention", count: attention };
   const unread = mergedUnreadCount({
     hostUnread: hostSummary.unreadCount,
@@ -977,6 +997,34 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onSuccess: (data, _variables, context) => {
         if (isCurrentCloudMutation(context)) {
           handleCloudMutationResult(data);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context !== undefined && isCurrentCloudMutation(context)) {
+          markCloudUnavailable();
+        }
+      },
+    },
+  });
+  const cloudResolve = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.cloudFeed.resolve",
+    CloudFeedMutationContext,
+    HostNotificationsCloudFeedEntryRequest
+  >({
+    client,
+    method: "host.notifications.cloudFeed.resolve",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.cloudResolve(),
+      onMutate: captureCloudMutationContext,
+      onSuccess: (data, variables, context) => {
+        if (!isCurrentCloudMutation(context)) return;
+        handleCloudMutationResult(data);
+        if (data.status === "applied") {
+          useCloudNotificationsStore
+            .getState()
+            .resolveNoticeLocally(variables.entryId, Date.now());
         }
       },
       onError: (_error, _variables, context) => {
@@ -1384,6 +1432,21 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 
   return useMemo(
     () => ({
+      resolveNotice: (row) => {
+        if (
+          row.source !== "cloud" ||
+          !isActionableNotice(row) ||
+          feedMode !== "cloud" ||
+          !cloudAuthorizedNow()
+        )
+          return;
+        // The action has already succeeded. Retire immediately even while
+        // an older relay omits resolvedAt or the marker write is unavailable.
+        useCloudNotificationsStore
+          .getState()
+          .resolveNoticeLocally(row.sourceId, Date.now());
+        cloudResolve.mutate({ entryId: row.sourceId });
+      },
       markAsRead: (target) => {
         const feedId = typeof target === "string" ? target : target.feedId;
         const parsed = parseFeedId(feedId);
@@ -1705,6 +1768,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       captureCloudMutationContext,
       isCurrentCloudMutation,
       cloudMarkRead,
+      cloudResolve,
       cloudMarkAllRead,
       cloudClear,
       cloudClearAll,
@@ -1798,7 +1862,7 @@ function rowFromHostEntryForOrigin(
     globalEntry: null,
     severity: entry.severity,
     outcome: entry.outcome,
-    resolvedAt: "resolvedAt" in entry ? entry.resolvedAt : null,
+    resolvedAt: "resolvedAt" in entry ? (entry.resolvedAt ?? null) : null,
     sourceRef: entry.sourceRef,
     originHostId,
     providerPackAttribution,
@@ -1891,7 +1955,8 @@ export function rowFromCloudFeedRow(
     globalEntry: null,
     severity: row.entry.severity,
     outcome: row.entry.outcome,
-    resolvedAt: "resolvedAt" in row.entry ? row.entry.resolvedAt : null,
+    resolvedAt:
+      "resolvedAt" in row.entry ? (row.entry.resolvedAt ?? null) : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
     providerPackAttribution,
