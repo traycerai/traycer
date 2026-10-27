@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 import { handPendingSandboxSend } from "@/lib/sandboxes/pending-sandbox-send";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { readStagedWorktreeIntent } from "@/stores/worktree/worktree-intent-staging-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -19,11 +20,13 @@ export function useBoundSandboxSend(input: {
   return useCallback(
     (submission: ChatComposerSubmitInput): boolean => {
       if (target === null) return false;
+      const userId = useAuthStore.getState().profile?.userId ?? null;
       const held = Object.values(
         usePendingSandboxSendStore.getState().sends,
       ).some(
         (send) =>
           send.epicId === epicId &&
+          send.userId === userId &&
           send.request.kind === "message" &&
           send.request.chatId === chatId &&
           send.delivery === null,

@@ -7,7 +7,9 @@ import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
+  pendingSend,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 
@@ -52,6 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useAuthStore.getState().setSignedOut();
   usePendingSandboxSendStore.setState({ sends: {} });
   useStagedSandboxStore.setState({ bySurface: {} });
 });
@@ -126,5 +129,42 @@ describe("useBoundSandboxSend", () => {
     expect(result.current(INPUT)).toBe(false);
     expect(pendingSends()).toEqual([]);
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("sends for the signed-in account beside another account's undelivered message in the same chat", () => {
+    usePendingSandboxSendStore.setState({
+      sends: {
+        "send-a": pendingSend({
+          id: "send-a",
+          userId: "user-a",
+          epicId: "epic-1",
+          request: { kind: "message", chatId: "chat-1", hostId: "host-r" },
+        }),
+      },
+    });
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-b", userName: "B", email: "b@example.com" },
+        { userId: "user-b", username: "B" },
+        [],
+      );
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: resting("suspended"),
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(true);
+
+    expect(pendingSends().map((send) => send.userId)).toEqual([
+      "user-a",
+      "user-b",
+    ]);
+    expect(usePendingSandboxSendStore.getState().sends["send-a"]).toMatchObject(
+      { userId: "user-a", delivery: null },
+    );
   });
 });
