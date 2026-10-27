@@ -57,7 +57,7 @@ function hydrated(
   ordinal: number,
   message: ChatMessageModel,
 ): TranscriptListRow {
-  return { kind: "hydrated", key, ordinal, model: message };
+  return { kind: "hydrated", key, ordinal, model: message, part: null };
 }
 
 describe("stable transcript list rows", () => {
@@ -223,7 +223,11 @@ describe("stable rows across a send's void", () => {
   it("changes the committed key sequence only by the row the send appended", () => {
     const before = opened(["a", "b", "c"]);
     const held = computeStableTranscriptListRows(
-      transcriptListRows({ window: before, rendered: [] }),
+      transcriptListRows({
+        window: before,
+        rendered: [],
+        splitLongTurns: true,
+      }),
       EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
     );
     const committed = transcriptListKeySequence(held.result);
@@ -236,7 +240,11 @@ describe("stable rows across a send's void", () => {
       changes: [{ type: "reindexed" }],
     });
     const throughVoid = computeStableTranscriptListRows(
-      transcriptListRows({ window: voided, rendered: [] }),
+      transcriptListRows({
+        window: voided,
+        rendered: [],
+        splitLongTurns: true,
+      }),
       held,
     );
     expect(transcriptListKeySequence(throughVoid.result)).toEqual([
@@ -254,6 +262,7 @@ describe("stable rows across a send's void", () => {
 
     const replaced = computeStableTranscriptListRows(
       transcriptListRows({
+        splitLongTurns: true,
         window: skeletonChunk(voided, ["a", "b", "c", "d"]),
         rendered: [],
       }),

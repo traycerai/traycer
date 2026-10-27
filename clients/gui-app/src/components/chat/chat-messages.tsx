@@ -16,6 +16,7 @@ import {
 import {
   acceptExhaustedPersistedRestoreFallback,
   buildRowKeyToIndex,
+  chatTimelineRowKeyForBlock,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineLocationForMessage,
@@ -2085,9 +2086,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // identity mapping over `messages`, so nothing below behaves differently
   // there. Computed before the mount-time restore initializers because they
   // resolve saved anchors against LIST indexes, which are row indexes.
+  // Slack's layout, for a bot's channel or thread. Read here because it also
+  // decides how a long turn is drawn. A bot row draws its text blocks and
+  // nothing else (`ChatBotMessage` -> `BotMessageText`): no activity groups,
+  // no tool cards - so the DOM that makes a long turn expensive to mount does
+  // not exist there, and the layout it does draw is one framed, sender-lined
+  // message per row, which a part cannot be half of.
+  const botChannel = use(ChatBotPresentationContext) !== null;
+
   const listRows = useMemo(
-    () => transcriptListRows({ window: transcriptWindow, rendered: messages }),
-    [transcriptWindow, messages],
+    () =>
+      transcriptListRows({
+        window: transcriptWindow,
+        rendered: messages,
+        splitLongTurns: !botChannel,
+      }),
+    [botChannel, transcriptWindow, messages],
   );
 
   // Restore the persisted reading position once, on mount (ticket 15: tries
@@ -3034,7 +3048,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const minimapShown = useRegionShown("minimap") || minimapGhost;
   // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
   // stays registered so the layout editor still lists it for agent chats.
-  const botChannel = use(ChatBotPresentationContext) !== null;
   const quoteEnabled = quoteReplyEnabled && visible && !systemOverlayActive;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
@@ -3463,7 +3476,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (request: PendingScrollRequestLanding): boolean => {
       const { messageId, blockId, requestId } = request;
       const list = chatTimelineRef.current;
-      const initialIndex = rowIndexByKeyRef.current.get(messageId);
+      // The part that draws the named card - see `chatTimelineRowKeyForBlock`.
+      // Re-resolved on every issue below, because a turn still streaming can
+      // grow a part between them.
+      const rowKey = (): string =>
+        chatTimelineRowKeyForBlock(messagesRef.current, messageId, blockId);
+      const initialIndex = rowIndexByKeyRef.current.get(rowKey());
       if (!list || initialIndex === undefined) return false;
 
       // Superseding an earlier landing of THIS request is a re-issue, not a
@@ -3477,7 +3495,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const scrollNode = list.getScrollableNode();
       const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
       const targetIndex = (): number | null =>
-        rowIndexByKeyRef.current.get(messageId) ?? null;
+        rowIndexByKeyRef.current.get(rowKey()) ?? null;
       const issue = (index: number): Promise<void> => {
         const target = expectedTimelineScrollTop(
           list,
@@ -3892,8 +3910,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ): void => {
       releaseForExplicitNavigation();
       setScrolledActiveUserMessageIdIfChanged(messageId);
+      // The PART that draws the named card, which is the row the reveal below
+      // needs mounted; part 0 - the message's own key - whenever none is named.
       const location = chatTimelineLocationForMessage(
-        messageId,
+        chatTimelineRowKeyForBlock(messagesRef.current, messageId, blockId),
         rowIndexByKeyRef.current,
         animated,
       );

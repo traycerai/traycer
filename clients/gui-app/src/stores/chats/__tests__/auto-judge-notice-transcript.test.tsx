@@ -481,6 +481,7 @@ function drawnRows(
   handle: ChatSessionStoreHandle,
 ): ReadonlyArray<TranscriptListRow> {
   return transcriptListRows({
+    splitLongTurns: true,
     window: handle.store.getState().transcriptWindow,
     rendered: withholdUnpaintedRows(renderedRows(handle)),
   });

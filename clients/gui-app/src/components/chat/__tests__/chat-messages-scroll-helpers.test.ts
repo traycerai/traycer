@@ -44,7 +44,11 @@ function a2aUser(id: string, createdAt: number): ChatMessageModel {
 }
 
 function rowsOf(messages: ReadonlyArray<ChatMessageModel>) {
-  return transcriptListRows({ window: null, rendered: messages });
+  return transcriptListRows({
+    window: null,
+    rendered: messages,
+    splitLongTurns: true,
+  });
 }
 
 function rowOf(message: ChatMessageModel) {

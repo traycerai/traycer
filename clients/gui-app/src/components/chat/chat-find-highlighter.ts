@@ -80,6 +80,28 @@ export function queryMountedChatMessageRoot(
   return null;
 }
 
+/**
+ * Every mounted list item of one message, in document order.
+ *
+ * A long assistant turn is drawn as several list items, and the list mounts
+ * only the ones on screen - so anything searching INSIDE a message (a find
+ * unit, a block to centre) has to look across all of them. The singular form
+ * above answers a different question, "is this message on screen at all", for
+ * which the first item is a complete answer.
+ */
+export function queryMountedChatMessageRoots(
+  scroller: ParentNode,
+  messageId: string,
+): readonly HTMLElement[] {
+  const roots: HTMLElement[] = [];
+  for (const row of scroller.querySelectorAll<HTMLElement>(
+    "[data-message-id]",
+  )) {
+    if (row.dataset.messageId === messageId) roots.push(row);
+  }
+  return roots;
+}
+
 export function queryMountedChatBlock(
   root: ParentNode,
   blockId: string,

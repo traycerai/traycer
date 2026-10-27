@@ -26,6 +26,11 @@ import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-j
 import { genericToolImageCaption } from "@/components/chat/segments/image-result-presentation";
 import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
+import { assistantTurnPartIndexes } from "@/components/chat/chat-turn-parts";
+import {
+  assistantTurnPartCuts,
+  assistantTurnPartKey,
+} from "@/stores/chats/assistant-turn-parts";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
@@ -73,6 +78,15 @@ export interface ChatFindUnit {
   readonly unitId: string;
   readonly text: string;
   readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
+  /**
+   * The LIST ROW that paints this unit, when it is not the message's own row.
+   *
+   * A long assistant turn is drawn as several list items, so the row find has
+   * to scroll to for a match is the part holding the match, not the turn's
+   * first row. Absent for every unit whose row key IS its message id, which is
+   * every unit of every unsplit row.
+   */
+  readonly rowKey?: string;
 }
 
 const BUILT_IN_MARKED_TOKEN_TYPES = [
@@ -260,15 +274,27 @@ function chatFindUnitsForMessage(
       message.segments,
       visibility.queuePauseReasonProtocolSupported,
     );
-    return buildChatActivityTimeline(shown, {
+    const timeline = buildChatActivityTimeline(shown, {
       turnState,
       promotedToolBlockIds,
       hideReasoning: visibility.hideReasoning,
-    }).flatMap((item) =>
+    });
+    const unitsOf = (
+      item: ChatActivityTimelineItem,
+    ): ReadonlyArray<ChatFindUnit> =>
       settled !== null && item.kind === "segment"
         ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
-        : timelineItemSearchUnits(item, tileInstanceId),
-    );
+        : timelineItemSearchUnits(item, tileInstanceId);
+    const cuts = assistantTurnPartCuts(message.segments);
+    if (cuts.length === 0) return timeline.flatMap(unitsOf);
+    // Which part of the turn each item lands in, so a match scrolls to the
+    // list row that actually paints it. The renderer slices its own timeline
+    // the same way; see `chat-turn-parts.ts`.
+    const partIndexes = assistantTurnPartIndexes(timeline, cuts);
+    return timeline.flatMap((item, index) => {
+      const rowKey = assistantTurnPartKey(message.id, cuts, partIndexes[index]);
+      return unitsOf(item).map((unit) => ({ ...unit, rowKey }));
+    });
   }
 
   if (message.role === "user" && message.agentSenderInfo !== null) {

@@ -1,5 +1,9 @@
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import {
+  assistantTurnPartSegmentRange,
+  type TranscriptRowPart,
+} from "@/stores/chats/assistant-turn-parts";
 
 /**
  * Structural-sharing state for the chat timeline: the last row array handed
@@ -159,6 +163,30 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
 
 const CHAT_MESSAGE_FIELD_CHECKS = Object.values(CHAT_MESSAGE_FIELD_UNCHANGED);
 
+/**
+ * The same table for ONE PART of a split assistant turn, minus the two fields
+ * a part cannot answer for by itself.
+ *
+ * `segments` is replaced by the part's own slice (below): the whole array moves
+ * on every token of a streaming turn, and comparing it here would re-render
+ * every part of the turn for a block that only the part at the live edge draws
+ * - which is most of what this split exists to stop.
+ *
+ * `content` is a preview the store derives from the turn's visible blocks, so
+ * it moves on every token too, and no assistant body reads it: `ChatMessage`'s
+ * assistant branch hands `AssistantMessageBody` the segments and the turn's end
+ * fields, never `content`.
+ *
+ * Everything else is compared exactly as a whole row is, so the table stays the
+ * single compile-time-exhaustive list it was written to be - these two are
+ * named, not defaulted past.
+ */
+const CHAT_MESSAGE_PART_FIELD_CHECKS = Object.entries(
+  CHAT_MESSAGE_FIELD_UNCHANGED,
+)
+  .filter(([field]) => field !== "segments" && field !== "content")
+  .map(([, isFieldUnchanged]) => isFieldUnchanged);
+
 function sameMessageIds(
   a: ReadonlyArray<string> | undefined,
   b: ReadonlyArray<string> | undefined,
@@ -236,7 +264,16 @@ function isTranscriptListRowUnchanged(
   if (a.ordinal !== b.ordinal) return false;
   if (a.kind === "hydrated") {
     if (b.kind !== "hydrated") return false;
-    return isChatMessageUnchanged(a.model, b.model);
+    if (a.part === null || b.part === null) {
+      // One side splits and the other does not: the row changed shape, so it
+      // is never unchanged however its fields compare.
+      if (a.part !== b.part) return false;
+      return isChatMessageUnchanged(a.model, b.model);
+    }
+    if (a.part.index !== b.part.index || a.part.count !== b.part.count) {
+      return false;
+    }
+    return isAssistantTurnPartUnchanged(a.model, b.model, a.part);
   }
   if (b.kind !== "placeholder") return false;
   // Skeleton entries arrive whole and are never mutated in place, so reference
@@ -246,6 +283,46 @@ function isTranscriptListRowUnchanged(
   // a carried row: reusing the indexed row would publish a carried one as
   // authoritative.
   return a.entry === b.entry && a.provenance === b.provenance;
+}
+
+/**
+ * Whether ONE PART of a split assistant turn keeps its rendered body.
+ *
+ * The LAST part is compared whole, deliberately. It draws the run indicator,
+ * the stopped notes and the elapsed footer, and that footer's copy and
+ * read-aloud affordances carry the WHOLE turn's reply - so "did anything about
+ * this turn change" is exactly the question it has to ask, and it is the part
+ * the live edge is streaming into anyway.
+ *
+ * Every earlier part is compared on its own slice. That is what the split buys:
+ * a turn appending its fortieth tool call re-renders the part it lands in, not
+ * the thirty-nine above it.
+ *
+ * Segment objects are compared by identity. Where the store rebuilds them
+ * wholesale per token this says "changed" and the part re-renders, which is the
+ * behaviour the whole row had before this existed - never a stale body.
+ */
+function isAssistantTurnPartUnchanged(
+  a: ChatMessage,
+  b: ChatMessage,
+  part: TranscriptRowPart,
+): boolean {
+  if (part.index === part.count - 1) return isChatMessageUnchanged(a, b);
+  if (
+    !CHAT_MESSAGE_PART_FIELD_CHECKS.every((isFieldUnchanged) =>
+      isFieldUnchanged(a, b),
+    )
+  ) {
+    return false;
+  }
+  if (a.segments === b.segments) return true;
+  const range = assistantTurnPartSegmentRange(a.segments, part.index);
+  const other = assistantTurnPartSegmentRange(b.segments, part.index);
+  if (range.from !== other.from || range.to !== other.to) return false;
+  for (let at = range.from; at < range.to; at += 1) {
+    if (a.segments[at] !== b.segments[at]) return false;
+  }
+  return true;
 }
 
 /** {@link computeStableChatTimelineRows} for the windowed row union. */

@@ -17,10 +17,17 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import {
+  assistantTurnPartCuts,
+  assistantTurnPartKey,
+  transcriptRowPart,
+  type TranscriptRowPart,
+} from "@/stores/chats/assistant-turn-parts";
 
 import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 
 const EMPTY_ROW_IDS: ReadonlySet<string> = new Set<string>();
+const NO_PART_CUTS: readonly string[] = [];
 
 /**
  * # The list the transcript draws: hydrated rows and placeholders together
@@ -108,12 +115,24 @@ const EMPTY_ROW_IDS: ReadonlySet<string> = new Set<string>();
  * the same removal the legacy line expresses by the row simply not being in
  * the list. Emitting a placeholder instead would draw a permanent skeleton
  * shimmer at an ordinal the reader is meant to see nothing at.
+ *
+ * ## A long assistant turn is several LIST ITEMS, still one row
+ *
+ * The last pass ({@link expandAssistantTurnParts}) draws a turn with several
+ * text blocks as one item per text-led slice, so the list keeps only the
+ * visible slices mounted INSIDE a turn as well as across turns. Everything
+ * above it reasons about rows, and nothing below it has to: each part repeats
+ * its row's ordinal, so {@link visibleOrdinalRange} - and with it hydration,
+ * the skeleton and the host's own row projection - is untouched.
  */
 
 export type TranscriptListRow =
   | {
       readonly kind: "hydrated";
-      /** Stable React/LegendList key. The row id for a placed row. */
+      /**
+       * Stable React/LegendList key. The row id for a placed row, and for part
+       * 0 of a row drawn as several ({@link expandAssistantTurnParts}).
+       */
       readonly key: string;
       /**
        * Its place in the transcript, or `null` for a row that owns no ordinal -
@@ -122,6 +141,12 @@ export type TranscriptListRow =
        */
       readonly ordinal: number | null;
       readonly model: ChatMessageModel;
+      /**
+       * Which slice of a long assistant turn this item draws, or `null` for a
+       * row drawn whole - which is every user row, every system row and every
+       * assistant turn with at most one text block.
+       */
+      readonly part: TranscriptRowPart | null;
     }
   | {
       readonly kind: "placeholder";
@@ -1015,6 +1040,7 @@ function seatLiveRecords(input: {
 function invalidatedTranscriptListRows(
   window: TranscriptWindow,
   rendered: readonly ChatMessageModel[],
+  splitLongTurns: boolean,
 ): readonly TranscriptListRow[] {
   const isLiveBacked = liveBackingLookup(window, rendered);
   // The rows a retained span DRAWS, not what its records could back. A row
@@ -1056,13 +1082,19 @@ function invalidatedTranscriptListRows(
     rows.push(
       model === undefined
         ? placeholderAt(ordinal)
-        : { kind: "hydrated", key: model.id, ordinal, model },
+        : { kind: "hydrated", key: model.id, ordinal, model, part: null },
     );
   }
   for (const model of unplacedRendered) {
-    rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
+    rows.push({
+      kind: "hydrated",
+      key: model.id,
+      ordinal: null,
+      model,
+      part: null,
+    });
   }
-  return rows;
+  return expandAssistantTurnParts(splitLongTurns, rows);
 }
 
 /**
@@ -1076,20 +1108,32 @@ function invalidatedTranscriptListRows(
 export function transcriptListRows(input: {
   readonly window: TranscriptWindow | null;
   readonly rendered: readonly ChatMessageModel[];
+  /**
+   * Whether a long assistant turn may be drawn as several list items
+   * ({@link expandAssistantTurnParts}). `false` for a bot's channel or thread:
+   * it draws one framed, sender-lined message per row, which a part cannot be
+   * half of - and it draws only text blocks, so the mounted DOM parts exist to
+   * bound is not there to begin with.
+   */
+  readonly splitLongTurns: boolean;
 }): readonly TranscriptListRow[] {
-  const { window, rendered } = input;
+  const { window, rendered, splitLongTurns } = input;
   // The legacy line has no ordinal space at all.
   if (window === null) {
-    return rendered.map((model) => ({
-      kind: "hydrated",
-      key: model.id,
-      ordinal: null,
-      model,
-    }));
+    return expandAssistantTurnParts(
+      splitLongTurns,
+      rendered.map((model) => ({
+        kind: "hydrated",
+        key: model.id,
+        ordinal: null,
+        model,
+        part: null,
+      })),
+    );
   }
 
   if (window.invalidated) {
-    return invalidatedTranscriptListRows(window, rendered);
+    return invalidatedTranscriptListRows(window, rendered, splitLongTurns);
   }
 
   const modelsById = new Map(rendered.map((model) => [model.id, model]));
@@ -1216,7 +1260,13 @@ export function transcriptListRows(input: {
   for (let ordinal = 0; ordinal < window.rowCount; ordinal += 1) {
     const model = modelByOrdinal.get(ordinal);
     if (model !== undefined) {
-      rows.push({ kind: "hydrated", key: model.id, ordinal, model });
+      rows.push({
+        kind: "hydrated",
+        key: model.id,
+        ordinal,
+        model,
+        part: null,
+      });
       continue;
     }
     // Before the placeholder is chosen, so a held split-turn unit wins over
@@ -1225,7 +1275,7 @@ export function transcriptListRows(input: {
     rows.push(placeholderAt(ordinal));
   }
   appendUnplacedRenderedRows(tail, rows);
-  return rows;
+  return expandAssistantTurnParts(splitLongTurns, rows);
 }
 
 /** What {@link unplacedRenderedRows} decided, for the merge after the loop. */
@@ -1337,6 +1387,7 @@ function appendUnplacedRenderedRows(
             // of a tall unit protects and hydrates the surrounding range.
             ordinal: heldOrdinal,
             model,
+            part: null,
           });
         }
         heldIndex += 1;
@@ -1355,8 +1406,59 @@ function appendUnplacedRenderedRows(
     }
   }
   for (const model of tail.unplaced) {
-    rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
+    rows.push({
+      kind: "hydrated",
+      key: model.id,
+      ordinal: null,
+      model,
+      part: null,
+    });
   }
+}
+
+/**
+ * The final pass: a hydrated assistant row the reader would have to mount
+ * whole becomes several list items, one per text-led slice.
+ *
+ * Runs over the FINISHED list, after every seating pass, so nothing above it
+ * has to know parts exist: placement, suppression, the live tail and the
+ * stale-carry tier all reason about rows, and a row is still exactly one
+ * entry in `rowCount`'s space. Each part repeats its row's ordinal, which is
+ * what leaves {@link visibleOrdinalRange} - and with it hydration - unchanged.
+ *
+ * Placeholders and user rows pass through untouched, as does an assistant turn
+ * with nothing to cut at; those are the overwhelming majority, and the array is
+ * returned unchanged (same identity) when no row splits.
+ */
+function expandAssistantTurnParts(
+  splitLongTurns: boolean,
+  rows: readonly TranscriptListRow[],
+): readonly TranscriptListRow[] {
+  if (!splitLongTurns) return rows;
+  let expanded: TranscriptListRow[] | null = null;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const cuts =
+      row.kind === "hydrated" && row.model.role === "assistant"
+        ? assistantTurnPartCuts(row.model.segments)
+        : NO_PART_CUTS;
+    if (row.kind !== "hydrated" || cuts.length === 0) {
+      expanded?.push(row);
+      continue;
+    }
+    if (expanded === null) expanded = rows.slice(0, index);
+    const count = cuts.length + 1;
+    for (let part = 0; part < count; part += 1) {
+      expanded.push({
+        kind: "hydrated",
+        key: assistantTurnPartKey(row.key, cuts, part),
+        ordinal: row.ordinal,
+        model: row.model,
+        part: transcriptRowPart(part, count),
+      });
+    }
+  }
+  return expanded ?? rows;
 }
 
 /**

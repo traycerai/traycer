@@ -111,8 +111,17 @@ const CALIBRATION_MIN_FACTOR = 0.01;
 const CALIBRATION_MAX_FACTOR = 10;
 
 interface RememberedRow {
-  /** The row's last measured height in px. */
+  /**
+   * The row's last measured height in px - the SUM of its parts, because a
+   * long assistant turn is drawn as several list items and the placeholder
+   * that later stands in for its ordinal stands in for all of them at once.
+   */
   height: number;
+  /**
+   * Last measured height per list item, keyed by the item's key. One entry for
+   * a row drawn whole (keyed by the row id, which is part 0's key).
+   */
+  readonly parts: Map<string, number>;
   /**
    * The role bucket this row contributed to, or `null` if it never has.
    *
@@ -210,6 +219,12 @@ export interface ChatTranscriptRowHeightMemory {
    */
   recordMeasuredHeight(input: {
     readonly rowId: string;
+    /**
+     * The LIST ITEM measured. Equal to `rowId` for a row drawn whole; a long
+     * assistant turn reports one of these per part and the row's remembered
+     * height is their sum.
+     */
+    readonly partKey: string;
     readonly ordinal: number | null;
     readonly height: number;
   }): void;
@@ -326,16 +341,20 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       tallestMeasured = 0;
     },
 
-    recordMeasuredHeight({ rowId, ordinal, height }): void {
+    recordMeasuredHeight({ rowId, partKey, ordinal, height }): void {
       // A zero or negative measurement is an unmounted or not-yet-laid-out row,
       // never an observation about how tall the row is.
       if (!Number.isFinite(height) || height <= 0) return;
-      if (height > tallestMeasured) tallestMeasured = height;
       const existing = rows.get(rowId);
       if (existing === undefined) {
-        const remembered: RememberedRow = { height, sampledRole: null };
+        const remembered: RememberedRow = {
+          height,
+          parts: new Map([[partKey, height]]),
+          sampledRole: null,
+        };
         rows.set(rowId, remembered);
         heightTotal += height;
+        if (height > tallestMeasured) tallestMeasured = height;
         evictOldest();
         if (ordinal === null) return;
         const entry = skeleton[ordinal];
@@ -345,9 +364,15 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
           sample(entry, remembered);
         return;
       }
-      const delta = height - existing.height;
+      // The delta this PART moved the row's total by. A part the row has not
+      // reported before adds its whole height: the row grew by a list item,
+      // which is what a streaming turn appending a text block does.
+      const delta = height - (existing.parts.get(partKey) ?? 0);
+      if (delta === 0) return;
+      existing.parts.set(partKey, height);
       heightTotal += delta;
-      existing.height = height;
+      existing.height += delta;
+      if (existing.height > tallestMeasured) tallestMeasured = existing.height;
       // Keep the role bucket in step with the row's CURRENT height, not the
       // first one it ever reported. A streaming assistant row is remeasured
       // continuously, and rows grow again when images and tool output finish

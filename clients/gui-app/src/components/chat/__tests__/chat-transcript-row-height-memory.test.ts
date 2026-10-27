@@ -43,7 +43,12 @@ describe("chat transcript row height memory", () => {
 
     expect(memory.placeholderHeight(row)).toBe(UNCALIBRATED);
 
-    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+    memory.recordMeasuredHeight({
+      rowId: "row-0",
+      partKey: "row-0",
+      ordinal: 0,
+      height: 4100,
+    });
 
     // Not "closer" - exact. This is the evicted-scrollback path, where the row
     // has been drawn before and there is nothing left to estimate.
@@ -64,7 +69,12 @@ describe("chat transcript row height memory", () => {
 
     // Every measured row came in at a quarter of its estimate.
     measured.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 561,
+      });
     });
 
     expect(memory.placeholderHeight(unseen)).toBe(561);
@@ -81,7 +91,12 @@ describe("chat transcript row height memory", () => {
     memory.observeSkeleton([...measured, unseen]);
 
     measured.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 561,
+      });
     });
 
     expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
@@ -93,7 +108,12 @@ describe("chat transcript row height memory", () => {
     const user = entry({ rowId: "user-0", role: "user", byteLength: 8000 });
     memory.observeSkeleton([...measured, user]);
     measured.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 561,
+      });
     });
 
     // An assistant turn's serialized size runs far ahead of what it draws; a
@@ -113,7 +133,12 @@ describe("chat transcript row height memory", () => {
     // The chat's own tail: hydrated from the snapshot and drawn before the
     // first skeleton chunk lands, so there is nothing to match it against yet.
     measured.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 561,
+      });
     });
     expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
 
@@ -134,12 +159,18 @@ describe("chat transcript row height memory", () => {
 
     memory.observeSkeleton([...measured, late, unseen]);
     measured.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 561,
+      });
     });
     // A fresh array - a later skeleton chunk - carrying the same rows.
     memory.observeSkeleton([...measured, late, unseen]);
     memory.recordMeasuredHeight({
       rowId: "late",
+      partKey: "late",
       ordinal: 4,
       height: RAW_8KB,
     });
@@ -163,6 +194,7 @@ describe("chat transcript row height memory", () => {
     rows.forEach((row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: row.rowId,
+        partKey: row.rowId,
         ordinal,
         height: 26_400,
       });
@@ -199,7 +231,12 @@ describe("chat transcript row height memory", () => {
     expect(memory.placeholderHeight(unseen)).toBe(320);
 
     rows.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 8224 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 8224,
+      });
     });
 
     expect(memory.placeholderHeight(unseen)).toBe(8224);
@@ -233,11 +270,17 @@ describe("chat transcript row height memory", () => {
 
     skeleton.forEach((row, ordinal) => {
       if (row.rowId.startsWith("u-") && row.rowId !== "u-next") {
-        memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 212 });
+        memory.recordMeasuredHeight({
+          rowId: row.rowId,
+          partKey: row.rowId,
+          ordinal,
+          height: 212,
+        });
       }
       if (row.rowId.startsWith("a-") && row.rowId !== "a-next") {
         memory.recordMeasuredHeight({
           rowId: row.rowId,
+          partKey: row.rowId,
           ordinal,
           height: 8_224,
         });
@@ -252,16 +295,36 @@ describe("chat transcript row height memory", () => {
     const memory = createChatTranscriptRowHeightMemory();
     expect(memory.placeholderHeight(null)).toBe(120);
 
-    memory.recordMeasuredHeight({ rowId: "a", ordinal: null, height: 100 });
-    memory.recordMeasuredHeight({ rowId: "b", ordinal: null, height: 300 });
+    memory.recordMeasuredHeight({
+      rowId: "a",
+      partKey: "a",
+      ordinal: null,
+      height: 100,
+    });
+    memory.recordMeasuredHeight({
+      rowId: "b",
+      partKey: "b",
+      ordinal: null,
+      height: 300,
+    });
 
     expect(memory.placeholderHeight(null)).toBe(200);
   });
 
   it("replaces a row's height rather than accumulating it", () => {
     const memory = createChatTranscriptRowHeightMemory();
-    memory.recordMeasuredHeight({ rowId: "a", ordinal: null, height: 100 });
-    memory.recordMeasuredHeight({ rowId: "a", ordinal: null, height: 300 });
+    memory.recordMeasuredHeight({
+      rowId: "a",
+      partKey: "a",
+      ordinal: null,
+      height: 100,
+    });
+    memory.recordMeasuredHeight({
+      rowId: "a",
+      partKey: "a",
+      ordinal: null,
+      height: 300,
+    });
 
     // A streaming row remeasures on every token; the average must track one
     // row at its latest height, not one row per measurement.
@@ -282,6 +345,7 @@ describe("chat transcript row height memory", () => {
     for (let index = 0; index < 8; index += 1) {
       memory.recordMeasuredHeight({
         rowId: `live-${index}`,
+        partKey: `live-${index}`,
         ordinal: null,
         height: 40,
       });
@@ -295,9 +359,15 @@ describe("chat transcript row height memory", () => {
     const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
     memory.observeSkeleton([row]);
 
-    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 0 });
     memory.recordMeasuredHeight({
       rowId: "row-0",
+      partKey: "row-0",
+      ordinal: 0,
+      height: 0,
+    });
+    memory.recordMeasuredHeight({
+      rowId: "row-0",
+      partKey: "row-0",
       ordinal: 0,
       height: Number.NaN,
     });
@@ -320,6 +390,7 @@ describe("chat transcript row height memory", () => {
     rows.forEach((_row, ordinal) => {
       memory.recordMeasuredHeight({
         rowId: `stale-${ordinal}`,
+        partKey: `stale-${ordinal}`,
         ordinal,
         height: 561,
       });
@@ -333,6 +404,7 @@ describe("chat transcript row height memory", () => {
     for (let index = 0; index < 4_200; index += 1) {
       memory.recordMeasuredHeight({
         rowId: `row-${index}`,
+        partKey: `row-${index}`,
         ordinal: null,
         height: 200,
       });
@@ -362,7 +434,12 @@ describe("row height memory across a layout width change", () => {
     const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
     memory.observeSkeleton([row]);
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
-    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+    memory.recordMeasuredHeight({
+      rowId: "row-0",
+      partKey: "row-0",
+      ordinal: 0,
+      height: 4100,
+    });
 
     expect(memory.placeholderHeight(row)).toBe(4100);
 
@@ -385,7 +462,12 @@ describe("row height memory across a layout width change", () => {
     memory.observeSkeleton([...measured, unseen]);
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
     measured.forEach((row, ordinal) => {
-      memory.recordMeasuredHeight({ rowId: row.rowId, ordinal, height: 561 });
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partKey: row.rowId,
+        ordinal,
+        height: 561,
+      });
     });
 
     expect(memory.placeholderHeight(unseen)).toBe(561);
@@ -408,7 +490,12 @@ describe("row height memory across a layout width change", () => {
     const memory = createChatTranscriptRowHeightMemory();
     const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
     memory.observeSkeleton([row]);
-    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+    memory.recordMeasuredHeight({
+      rowId: "row-0",
+      partKey: "row-0",
+      ordinal: 0,
+      height: 4100,
+    });
 
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
 
@@ -420,7 +507,12 @@ describe("row height memory across a layout width change", () => {
     const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
     memory.observeSkeleton([row]);
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
-    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+    memory.recordMeasuredHeight({
+      rowId: "row-0",
+      partKey: "row-0",
+      ordinal: 0,
+      height: 4100,
+    });
 
     // A ResizeObserver fires for height changes too, and the transcript's
     // height changes on every hydration.
@@ -434,7 +526,12 @@ describe("row height memory across a layout width change", () => {
     const row = entry({ rowId: "row-0", role: "assistant", byteLength: 8000 });
     memory.observeSkeleton([row]);
     memory.observeLayoutBasis({ width: 600, fontSizePx: 16 });
-    memory.recordMeasuredHeight({ rowId: "row-0", ordinal: 0, height: 4100 });
+    memory.recordMeasuredHeight({
+      rowId: "row-0",
+      partKey: "row-0",
+      ordinal: 0,
+      height: 4100,
+    });
 
     // A hidden tab or an unmounted tile measures 0 wide. Adopting that as the
     // baseline would discard the whole memory, and then discard it again when

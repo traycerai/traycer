@@ -4,6 +4,7 @@ import {
   createChatFindAdapter,
   queryMountedChatFindUnit,
   queryMountedChatMessageRoot,
+  queryMountedChatMessageRoots,
   subagentChatFindRowId,
   type ChatFindAdapter,
   type ChatFindLandingOutcome,
@@ -224,9 +225,9 @@ export function useChatFindController(
   const findOpenedTargetRef = useRef<FindOpenedTargetState | null>(null);
   const mountedHighlightSyncFrameRef = useRef<number | null>(null);
 
-  const scrollToMessageForFindRef = useRef<(messageId: string) => void>(
-    () => undefined,
-  );
+  const scrollToMessageForFindRef = useRef<
+    (messageId: string, rowKey: string) => void
+  >(() => undefined);
   const getMountedFindUnitRootRef = useRef<
     (messageId: string, unitId: string) => HTMLElement | null
   >(() => null);
@@ -275,7 +276,7 @@ export function useChatFindController(
   );
 
   const scrollToMessageForFind = useCallback(
-    (messageId: string): void => {
+    (messageId: string, rowKey: string): void => {
       // The open conversation's one row is always mounted, and the timeline
       // under it is not what the reader is looking at: leave it where it is.
       if (openSubagentIdRef.current !== null) return;
@@ -287,8 +288,11 @@ export function useChatFindController(
       setScrolledActiveUserMessageIdIfChanged(
         selectActiveUserMessageId(messagesRef.current, messageId, false),
       );
+      // By ROW KEY, not by message id: a long turn is drawn as several list
+      // items and the match's unit lives in exactly one of them. For every
+      // other row - and for part 0 - the two are the same string.
       const location = chatTimelineLocationForMessage(
-        messageId,
+        rowKey,
         rowIndexByKeyRef.current,
         false,
       );
@@ -321,11 +325,27 @@ export function useChatFindController(
 
   const getMountedFindUnitRoot = useCallback(
     (messageId: string, unitId: string): HTMLElement | null => {
-      const messageRoot = getMountedMessageRoot(messageId);
-      if (messageRoot === null) return null;
-      return queryMountedChatFindUnit(messageRoot, unitId);
+      // An open subagent conversation is one root by construction, and it is
+      // not in the transcript scroller at all.
+      const scroller =
+        openSubagentIdRef.current === null ? getScroller() : null;
+      if (scroller === null) {
+        const messageRoot = getMountedMessageRoot(messageId);
+        return messageRoot === null
+          ? null
+          : queryMountedChatFindUnit(messageRoot, unitId);
+      }
+      // Across every mounted part of the turn: a long turn is drawn as several
+      // list items and the unit may be in a later one than the first mounted.
+      return queryMountedChatMessageRoots(
+        scroller,
+        messageId,
+      ).reduce<HTMLElement | null>(
+        (found, root) => found ?? queryMountedChatFindUnit(root, unitId),
+        null,
+      );
     },
-    [getMountedMessageRoot],
+    [getMountedMessageRoot, getScroller],
   );
 
   useLayoutEffect(() => {
@@ -435,7 +455,7 @@ export function useChatFindController(
           target.unitId,
         );
         if (unitRoot === null) {
-          scrollToMessageForFindRef.current(target.messageId);
+          scrollToMessageForFindRef.current(target.messageId, target.rowKey);
           const messageRoot = getMountedMessageRootRef.current(
             target.messageId,
           );
@@ -511,7 +531,9 @@ export function useChatFindController(
       findRevealFrameRef.current = window.requestAnimationFrame(() => {
         findRevealFrameRef.current = null;
         if (findRevealGenerationRef.current !== generation) return;
-        if (!sameUnit) scrollToMessageForFind(target.messageId);
+        if (!sameUnit) {
+          scrollToMessageForFind(target.messageId, target.rowKey);
+        }
         scheduleFindRevealStep(generation, sameUnit);
       });
     },
