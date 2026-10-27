@@ -198,9 +198,9 @@ export interface SandboxSummary {
    */
   readonly environmentId: string | null;
   /**
-   * The member who created the sandbox (an agent's create names the member
-   * it ran for); `null` on a pod, and from a server that predates the field.
-   * A server before the staging.145 fixes sent it on team rows only.
+   * The member who created a team agent sandbox (an agent's create names the
+   * member it ran for); `null` on personal sandboxes, pods, and from a server
+   * that predates the field.
    */
   readonly createdBy: SandboxMember | null;
   /**
@@ -325,6 +325,7 @@ const SANDBOX_SUPPORT_REFERENCES: ReadonlyMap<string, string> = new Map([
   ["envelope-delivery", "SBX-0520"],
   ["suspend", "SBX-0601"],
   ["stop", "SBX-0701"],
+  ["destroy", "SBX-0801"],
 ]);
 
 /**
@@ -745,12 +746,15 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
 /** `GET /api/sandboxes/catalogue`. */
 export interface SandboxCatalogue {
   readonly providers: readonly SandboxCatalogueProvider[];
+  /** Agent ids offered by sandbox hosts; absent from older servers. */
+  readonly offeredAgents?: readonly string[];
 }
 
 export const sandboxCatalogueSchema: z.ZodType<SandboxCatalogue> = lazySchema(
   () =>
     z.object({
       providers: z.array(sandboxCatalogueProviderSchema),
+      offeredAgents: z.array(z.string()).optional(),
     }),
 );
 
@@ -991,6 +995,8 @@ export interface SandboxCost {
    * from a server before the field.
    */
   readonly todayMillicredits: number;
+  /** Today's (UTC day) awake-rate duration; null from a server before the field. */
+  readonly todayAwakeMs: number | null;
   /**
    * Details' History: every operation, oldest first, each with what it cost
    * until the next one started. Empty on a team row of the list (its
@@ -1040,6 +1046,7 @@ export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
     pendingMillicredits: z.number().nonnegative(),
     segments: z.array(sandboxCostSegmentSchema),
     todayMillicredits: z.number().nonnegative().default(0),
+    todayAwakeMs: z.number().nonnegative().nullable().default(null),
     // One unreadable entry (a state newer than this build) must not fail
     // the cost, and with it the page's figures.
     history: z.array(sandboxHistoryEntrySchema).default([]).catch([]),

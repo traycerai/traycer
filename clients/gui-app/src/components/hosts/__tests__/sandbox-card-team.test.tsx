@@ -155,6 +155,7 @@ const COST: SandboxCost = {
   pendingMillicredits: 500,
   segments: [],
   todayMillicredits: 0,
+  todayAwakeMs: null,
   history: [],
 };
 

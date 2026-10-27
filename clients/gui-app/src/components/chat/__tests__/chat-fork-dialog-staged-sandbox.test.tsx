@@ -19,6 +19,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
+  type GuiHarnessId,
 } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -26,6 +27,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useImperativeHandle, type RefObject } from "react";
 import type { ChatForkPublicationState } from "../chat-fork-target";
 
 const TAB_HOST_ID = "tab-host-id";
@@ -65,6 +67,8 @@ const dialogMocks = vi.hoisted(() => ({
   seedModel: "claude-opus-4-7",
   /** The harness's sign-in on the dialog's host. */
   authStatus: "authenticated" as "authenticated" | "unauthenticated",
+  offeredAgents: undefined as readonly string[] | undefined,
+  openForHarness: vi.fn<(harnessId: GuiHarnessId) => void>(),
   publication: { kind: "unknown" } as ChatForkPublicationState,
   publicationReads: [] as Array<{
     readonly enabled: boolean;
@@ -75,6 +79,14 @@ const dialogMocks = vi.hoisted(() => ({
     | { readonly kind: "personal" }
     | { readonly kind: "team"; readonly teamName: string },
   openProviders: vi.fn<() => void>(),
+}));
+
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: { providers: [], offeredAgents: dialogMocks.offeredAgents },
+    isFetching: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
@@ -244,11 +256,22 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: () => (
-    <button type="button" aria-label="Harness picker">
-      Claude Opus
-    </button>
-  ),
+  HarnessModelPicker: (props: {
+    readonly openForHarnessRef?: RefObject<
+      ((harnessId: GuiHarnessId) => void) | null
+    >;
+  }) => {
+    useImperativeHandle(
+      props.openForHarnessRef ?? null,
+      () => dialogMocks.openForHarness,
+      [],
+    );
+    return (
+      <button type="button" aria-label="Harness picker">
+        Claude Opus
+      </button>
+    );
+  },
 }));
 
 vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
@@ -504,6 +527,8 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     dialogMocks.catalog = "loaded";
     dialogMocks.seedModel = "claude-opus-4-7";
     dialogMocks.authStatus = "authenticated";
+    dialogMocks.offeredAgents = undefined;
+    dialogMocks.openForHarness.mockReset();
     dialogMocks.publication = { kind: "unknown" };
     dialogMocks.publicationReads.length = 0;
     dialogMocks.principal = { kind: "personal" };
@@ -906,19 +931,19 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     });
   });
 
-  describe("when the agent is signed out on the staged configuration", () => {
-    const SIGNED_OUT_PERSONAL =
-      "Sign in to a coding agent to run agents on Personal.";
+  describe("when the staged agent is not offered on sandboxes", () => {
+    const NOT_OFFERED =
+      "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.";
 
-    it("refuses Fork in the dialog with the Providers link, handing nothing over, attaching nothing and keeping the stage and the title", () => {
-      dialogMocks.authStatus = "unauthenticated";
+    it("refuses an unoffered Fork with its own model picker, handing nothing over and keeping the stage and title", () => {
+      dialogMocks.offeredAgents = ["traycer"];
       renderStaged(NEW_SANDBOX);
       fillTitle();
 
       fireEvent.click(forkButton());
 
       const notice = screen.getByRole("alert");
-      expect(notice.textContent).toContain(SIGNED_OUT_PERSONAL);
+      expect(notice.textContent).toContain(NOT_OFFERED);
       expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
         [],
       );
@@ -933,11 +958,11 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       ).toBe("Sibling fork");
 
       fireEvent.click(screen.getByTestId("composer-host-notice-action"));
-      expect(dialogMocks.openProviders).toHaveBeenCalledTimes(1);
+      expect(dialogMocks.openForHarness).toHaveBeenCalledWith("traycer");
     });
 
-    it("names the team and attaches nothing for a team's staged sandbox", () => {
-      dialogMocks.authStatus = "unauthenticated";
+    it("refuses the same unoffered agent on a team sandbox before attaching", () => {
+      dialogMocks.offeredAgents = ["traycer"];
       dialogMocks.principal = { kind: "team", teamName: "Acme" };
       renderStaged({
         ...NEW_SANDBOX,
@@ -947,16 +972,15 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
 
       fireEvent.click(forkButton());
 
-      expect(screen.getByRole("alert").textContent).toContain(
-        "Sign in to a coding agent to run agents on Acme.",
-      );
+      expect(screen.getByRole("alert").textContent).toContain(NOT_OFFERED);
       expect(dialogMocks.attachCalls).toEqual([]);
       expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
         [],
       );
     });
 
-    it("cannot say for a configuration the dialog's host does not run, and hands the fork over", async () => {
+    it("hands an offered agent over despite desktop sign-out", async () => {
+      dialogMocks.offeredAgents = ["claude"];
       dialogMocks.authStatus = "unauthenticated";
       dialogMocks.principal = { kind: "team", teamName: "Acme" };
       renderStaged(NEW_SANDBOX);
@@ -973,7 +997,8 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
   });
 
   describe("on a sandbox host with nothing staged", () => {
-    const SENTENCE = "Sign in to a coding agent to run agents on Personal.";
+    const SENTENCE =
+      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
 
     beforeEach(() => {
       installHostDirectoryRows([

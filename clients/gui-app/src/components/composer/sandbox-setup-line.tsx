@@ -53,7 +53,8 @@ import {
   readySecondsLabel,
   idleRuleLine,
   SANDBOX_READY,
-  signInToCodingAgentLine,
+  agentNotOfferedOnSandboxesLine,
+  enableSandboxInferenceLine,
   stepApplyingSettings,
   takingLongerDetail,
   teamAllowanceShortLine,
@@ -64,6 +65,8 @@ import type {
   StagedSandboxFailure,
   StagedSandboxStep,
 } from "@/stores/composer/staged-sandbox-store";
+import { sandboxAgentDisplayName } from "@/lib/sandboxes/sandbox-agent-refusal";
+import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 
 /** What the line's buttons do, wired by the surface that owns the stage. */
@@ -90,6 +93,7 @@ export interface SandboxSetupLineActions {
    */
   readonly onOpenTerminal: (() => void) | null;
   readonly onOpenProviders: (() => void) | null;
+  readonly onChooseModel?: (() => void) | null;
 }
 
 /** The facts the line reads beyond the stage. */
@@ -169,6 +173,7 @@ type RefusalFailure = Extract<
       | "unavailable"
       | "refused"
       | "no-provider"
+      | "agent-not-offered"
       | "agent-setup-failed"
       | "not-sent";
   }
@@ -182,6 +187,7 @@ function isRefusal(failure: StagedSandboxFailure): failure is RefusalFailure {
     failure.kind === "unavailable" ||
     failure.kind === "refused" ||
     failure.kind === "no-provider" ||
+    failure.kind === "agent-not-offered" ||
     failure.kind === "agent-setup-failed" ||
     failure.kind === "not-sent"
   );
@@ -278,42 +284,18 @@ function SandboxRefusalLine(props: {
       remedies = chooseAnother;
       break;
     case "no-provider":
+    case "agent-not-offered":
     case "agent-setup-failed": {
-      // Awake and kept, the message pending: the agent asked for cannot run
-      // there. Another agent is never put in its place; a terminal on the
-      // same sandbox needs no agent sign-in.
       const label = configurationLabel(stageConfigurationCopy(configuration));
-      const sandboxId = props.stage.createdSandboxId;
-      sentence =
-        failure.kind === "no-provider"
-          ? signInToCodingAgentLine(label)
-          : failure.detail;
+      sentence = agentRefusalSentence(failure, label);
       remedies = (
-        <>
-          {failure.kind === "no-provider" &&
-          actions.onOpenProviders !== null ? (
-            <LineButton
-              label={openProvidersLabel(label)}
-              testId="sandbox-refusal-open-providers"
-              onClick={actions.onOpenProviders}
-            />
-          ) : null}
-          {actions.onOpenTerminal === null ? null : (
-            <LineButton
-              label={OPEN_TERMINAL_INSTEAD}
-              testId="sandbox-refusal-open-terminal"
-              onClick={actions.onOpenTerminal}
-            />
-          )}
-          {chooseAnother}
-          {sandboxId === null ? null : (
-            <LineButton
-              label={DETAILS}
-              testId="sandbox-refusal-details"
-              onClick={() => openSandboxDetails(sandboxId)}
-            />
-          )}
-        </>
+        <SandboxAgentRefusalRemedies
+          failure={failure}
+          label={label}
+          actions={actions}
+          sandboxId={props.stage.createdSandboxId}
+          chooseAnother={chooseAnother}
+        />
       );
       break;
     }
@@ -342,6 +324,79 @@ function SandboxRefusalLine(props: {
       <span className="text-foreground/85">{sentence}</span>
       {remedies}
     </div>
+  );
+}
+
+type AgentRefusalFailure = Extract<
+  RefusalFailure,
+  {
+    readonly kind: "no-provider" | "agent-not-offered" | "agent-setup-failed";
+  }
+>;
+
+function agentRefusalSentence(
+  failure: AgentRefusalFailure,
+  label: string,
+): string {
+  switch (failure.kind) {
+    case "agent-not-offered":
+      return agentNotOfferedOnSandboxesLine(
+        sandboxAgentDisplayName(failure.harnessId),
+      );
+    case "no-provider":
+      return enableSandboxInferenceLine(label);
+    case "agent-setup-failed":
+      return failure.detail;
+  }
+}
+
+/** Remedies keep the sandbox and preserve the requested agent until the person chooses. */
+function SandboxAgentRefusalRemedies(props: {
+  readonly failure: AgentRefusalFailure;
+  readonly label: string;
+  readonly actions: SandboxSetupLineActions;
+  readonly sandboxId: string | null;
+  readonly chooseAnother: ReactNode;
+}): ReactNode {
+  const { failure, actions, label, sandboxId } = props;
+  return (
+    <>
+      {failure.kind === "agent-not-offered" &&
+      actions.onChooseModel !== null ? (
+        <LineButton
+          label="Choose a model"
+          testId="sandbox-refusal-choose-model"
+          onClick={
+            actions.onChooseModel ??
+            (() => {
+              openActiveModelPickerForHarness("traycer", null);
+            })
+          }
+        />
+      ) : null}
+      {failure.kind === "no-provider" && actions.onOpenProviders !== null ? (
+        <LineButton
+          label={openProvidersLabel(label)}
+          testId="sandbox-refusal-open-providers"
+          onClick={actions.onOpenProviders}
+        />
+      ) : null}
+      {actions.onOpenTerminal === null ? null : (
+        <LineButton
+          label={OPEN_TERMINAL_INSTEAD}
+          testId="sandbox-refusal-open-terminal"
+          onClick={actions.onOpenTerminal}
+        />
+      )}
+      {props.chooseAnother}
+      {sandboxId === null ? null : (
+        <LineButton
+          label={DETAILS}
+          testId="sandbox-refusal-details"
+          onClick={() => openSandboxDetails(sandboxId)}
+        />
+      )}
+    </>
   );
 }
 
@@ -394,6 +449,11 @@ function SandboxProgressLine(props: {
           />
           <ChevronIcon aria-hidden className="size-3 shrink-0" />
         </button>
+        <LineButton
+          label={STOP}
+          testId="sandbox-setup-stop"
+          onClick={props.actions.onStop}
+        />
         <span aria-hidden className="h-px flex-1 bg-border/60" />
       </div>
       {expanded ? (
@@ -589,11 +649,6 @@ function ProgressBranchButtons(props: {
             onClick={actions.onOpenTerminal}
           />
         )}
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
-          onClick={actions.onStop}
-        />
         <LineButton
           label={CHOOSE_ANOTHER_HOST}
           testId="sandbox-setup-choose-another-host"

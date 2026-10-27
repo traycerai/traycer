@@ -221,6 +221,10 @@ import {
 } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
+  openActiveModelPickerForHarness,
+  subscribeActiveModelPicker,
+} from "@/lib/commands/active-model-picker-registry";
+import {
   tileIntent,
   type ExplicitTilePlacement,
 } from "@/lib/canvas/tile-open/intent";
@@ -596,6 +600,9 @@ export function NewConversationModalHost(props: {
                           placement={bodyRequest.placement}
                           parentId={bodyRequest.parentId}
                           hostId={bodyRequest.hostId}
+                          modelPickerHarnessId={
+                            bodyRequest.modelPickerHarnessId
+                          }
                           dismissPickerRef={dismissPickerRef}
                           onSubmitted={onSubmitted}
                         />
@@ -737,6 +744,7 @@ export function NewConversationModalBody(props: {
   readonly parentId: string | null;
   /** Caller-named host to create on; `null` lets this Epic own placement. */
   readonly hostId: string | null;
+  readonly modelPickerHarnessId?: GuiHarnessId;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
 }) {
@@ -750,6 +758,20 @@ export function NewConversationModalBody(props: {
     onSubmitted,
   } = props;
   const isMobile = useIsMobileViewport();
+  useEffect(() => {
+    const harnessId = props.modelPickerHarnessId;
+    if (harnessId === undefined) return;
+    let opened = false;
+    const open = (): void => {
+      if (!opened)
+        opened = openActiveModelPickerForHarness(
+          harnessId,
+          newConversationSurfaceKey(epicId),
+        );
+    };
+    open();
+    return subscribeActiveModelPicker(open);
+  }, [epicId, props.modelPickerHarnessId]);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
@@ -1142,6 +1164,7 @@ export function NewConversationModalBody(props: {
     blocked: agentBlocked,
     refusal: sandboxAgentRefusal,
     stagedSignInCheck,
+    checking: stagedCatalogueNotice,
   } = usePlacementAgentGates({
     client: hostClient,
     hostId: resolvedHostId,
@@ -1149,6 +1172,12 @@ export function NewConversationModalBody(props: {
     pickedHarnessId,
     active: chatComposerActive,
     stagedAhead: workspaceGate.stagedAhead,
+    stagedSurfaceKey: stagingSurfaceKey(sandboxStaging),
+    onOpenTerminalInstead: openTerminalInstead,
+    onChooseAnotherHost: () => {
+      useStagedSandboxStore.getState().clear(newConversationSurfaceKey(epicId));
+      dismissHostNotice();
+    },
   });
   const canSubmit =
     canMutate &&
@@ -1754,7 +1783,7 @@ export function NewConversationModalBody(props: {
     const stagedKey = stagingSurfaceKey(sandboxStaging);
     const staged = stagedKey === null ? null : readStagedSandbox(stagedKey);
     if (stagedKey !== null && staged !== null && staged.phase !== "handoff") {
-      // An agent signed out on the staged configuration is refused here,
+      // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the draft and the chip stay.
       const signedOut = stagedSignInCheck(staged);
       if (signedOut !== null) {
@@ -2284,6 +2313,7 @@ export function NewConversationModalBody(props: {
             {stagedSend.line}
             <ComposerHostNotice
               notice={topNotice.notice}
+              pendingNotice={stagedCatalogueNotice}
               onDismiss={topNotice.dismiss}
             />
           </>
@@ -2533,10 +2563,14 @@ function usePlacementAgentGates(input: {
   readonly pickedHarnessId: GuiHarnessId | null;
   readonly active: boolean;
   readonly stagedAhead: boolean;
+  readonly stagedSurfaceKey: string | null;
+  readonly onOpenTerminalInstead: () => void;
+  readonly onChooseAnotherHost: () => void;
 }): {
   readonly hint: string | null;
   readonly blocked: boolean;
   readonly refusal: ComposerHostNoticeState | null;
+  readonly checking: ComposerHostNoticeState | null;
   readonly stagedSignInCheck: (
     stage: StagedSandbox,
   ) => ComposerHostNoticeState | null;
@@ -2550,19 +2584,32 @@ function usePlacementAgentGates(input: {
     active,
   });
   const stagedSignInCheck = useStagedSendSignInCheck({
-    client,
-    hostId,
     harnessId: input.pickedHarnessId,
     active: active && stagedAhead,
+    onOpenTerminalInstead: input.onOpenTerminalInstead,
+    onChooseAnotherHost: input.onChooseAnotherHost,
   });
+  const stage =
+    input.stagedSurfaceKey === null
+      ? null
+      : readStagedSandbox(input.stagedSurfaceKey);
+  const stagedCheck = stage === null ? null : stagedSignInCheck(stage);
+  const checking = stagedCheck?.pending === true ? stagedCheck : null;
   if (!active || stagedAhead) {
-    return { hint: null, blocked: false, refusal: null, stagedSignInCheck };
+    return {
+      hint: checking?.message ?? null,
+      blocked: checking !== null,
+      refusal: null,
+      stagedSignInCheck,
+      checking,
+    };
   }
   return {
     hint: packGate.hint,
     blocked: packGate.blocked,
     refusal: sandboxAgentGate.notice,
     stagedSignInCheck,
+    checking,
   };
 }
 

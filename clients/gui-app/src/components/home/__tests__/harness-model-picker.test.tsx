@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import { userEvent } from "@testing-library/user-event";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
@@ -1024,6 +1025,9 @@ function installClaudeCatalog(models: ReadonlyArray<ModelOption>): void {
 }
 
 interface RenderPickerInput {
+  readonly openForHarnessRef?: RefObject<
+    ((harnessId: GuiHarnessId) => void) | null
+  >;
   readonly selection?: HarnessModelSelection;
   readonly reasoning?: ReasoningLevel;
   readonly serviceTier?: ServiceTier;
@@ -1116,6 +1120,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          openForHarnessRef={resolvedInput.openForHarnessRef}
           labelDisplay="responsive"
           store={store}
           maxModeContext={resolvedInput.maxModeContext ?? { kind: "none" }}
@@ -1227,6 +1232,49 @@ describe("<HarnessModelPicker />", () => {
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
+  });
+
+  it("opens Traycer models through the sandbox remedy without changing the selected agent", async () => {
+    const traycer: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      id: "traycer",
+      label: "Traycer",
+      modes: ["gui"],
+    };
+    const models = [
+      model({
+        harnessId: "traycer",
+        slug: "traycer-model",
+        label: "Traycer test model",
+      }),
+    ];
+    queryMock.harnesses.push(traycer);
+    queryMock.catalogHarnesses.push(catalogHarness(traycer, models));
+    queryMock.selectedModelsByHarness.set("traycer", models);
+    const selection: HarnessModelSelection = {
+      ...defaultSelection(),
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+    };
+    const openRef: RefObject<((harnessId: GuiHarnessId) => void) | null> = {
+      current: null,
+    };
+    const harness = renderPicker({ selection, openForHarnessRef: openRef });
+
+    act(() => openRef.current?.("traycer"));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Search Traycer models" }),
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByRole("tab", { name: "Traycer" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("option", { name: /Traycer test model/ }),
+    ).not.toBeNull();
+    expect(harness.store.getState().values.selection).toEqual(selection);
   });
 
   it("shows the selected harness, effort, fast mode, profile, and shortcut in the trigger tooltip", async () => {

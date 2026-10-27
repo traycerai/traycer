@@ -6,7 +6,10 @@
  *
  * Amounts are millicredits; a credit is a dollar, so a price reads `$0.12`.
  */
-import type { SandboxOs } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxLifecycleVerb,
+  SandboxOs,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -417,13 +420,14 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
-/**
- * A send to an agent that cannot run on the sandbox's configuration:
- * `Sign in to a coding agent to run agents on Personal.`
- */
-export function signInToCodingAgentLine(configuration: string): string {
-  return `Sign in to a coding agent to run agents on ${configuration}.`;
+export function agentNotOfferedOnSandboxesLine(agent: string): string {
+  return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
+
+export function enableSandboxInferenceLine(configuration: string): string {
+  return `Turn on Traycer Inference in ${configuration}'s Providers to run agents on sandboxes.`;
+}
+
 /**
  * The new sandbox is up but the send handed to it stopped short:
  * `review-box is ready, but nothing was sent.`
@@ -447,6 +451,19 @@ export const OPEN_TERMINAL = "Open terminal";
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
 export const SANDBOX_READY = "Sandbox ready";
+/** The setup line names the sandbox; a row's button passes `null`. */
+export function stoppingSandboxLine(name: string | null): string {
+  return `Stopping${name === null ? "" : ` ${name}`} · pending`;
+}
+export function stoppedSandboxLine(
+  name: string,
+  savedInDrafts: boolean,
+): string {
+  return `Stopped ${name}. Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
+}
+export function couldntStopLine(name: string): string {
+  return `Couldn't stop ${name}`;
+}
 /** The settled line's time to ready: `24 s`. */
 export function readySecondsLabel(seconds: number): string {
   return `${seconds} s`;
@@ -494,6 +511,33 @@ export const CANCEL_THE_MESSAGE = "Cancel the message";
 export const COPY_SUPPORT_REFERENCE = "Copy support reference";
 export const DETAILS = "Details";
 export const START_NEW_WORK_ON_ANOTHER_HOST = "Start new work on another host";
+
+const ROW_VERB_PENDING: Record<
+  Exclude<SandboxLifecycleVerb, "stop"> | "destroy",
+  string
+> = {
+  start: "Starting · pending",
+  resume: "Resuming · pending",
+  suspend: "Suspending · pending",
+  destroy: "Destroying · pending",
+};
+
+export function sandboxVerbPendingLine(
+  verb: SandboxLifecycleVerb | "destroy",
+): string {
+  if (verb === "stop") return stoppingSandboxLine(null);
+  return ROW_VERB_PENDING[verb];
+}
+
+export function sandboxVerbFailureLine(
+  verb: SandboxLifecycleVerb | "destroy",
+  name: string,
+  reference: string,
+): string {
+  const sentence =
+    verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
+  return `${sentence} · ${reference}`;
+}
 
 /** `payments-ledger is awake, but Acme's settings didn't apply`. */
 export function settingsDidntApplyLine(

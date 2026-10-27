@@ -12,6 +12,7 @@ import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
+import { ComposerStagedSurfaceKeyContext } from "@/components/composer/composer-staged-surface-key";
 import {
   nonDefaultServiceTiersForModel,
   selectedServiceTierOption,
@@ -52,6 +53,7 @@ import {
 } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
+  use,
   useCallback,
   useEffect,
   useId,
@@ -222,6 +224,9 @@ export interface HarnessModelPickerEmbedding {
 }
 
 interface HarnessModelPickerProps {
+  readonly openForHarnessRef?: RefObject<
+    ((harnessId: GuiHarnessId) => void) | null
+  >;
   readonly presentation?: boolean;
   readonly maxModeContext: MaxModeContext;
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -433,6 +438,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     selection.profileId,
     disabled,
+  );
+  const openForHarness = useOpenHarnessModels(
+    props.openForHarnessRef,
+    handleOpenChange,
+    setActiveRailEntry,
   );
   useEmbeddingOpenHandle(embedding, handleOpenChange);
   useEmbeddingCloseHandle(embedding, closeOnly);
@@ -1186,16 +1196,25 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // registration hook ref-parks the controller, so per-render identity churn is
   // harmless.
   const modelPickerChord = useBindingForAction("composer.model-picker.toggle");
+  const stagedSurfaceKey = use(ComposerStagedSurfaceKeyContext);
   const activationController = useMemo(
     () => ({
       toggle: () => handleOpenChange(!visibleOpen),
+      getSurfaceKey: () => stagedSurfaceKey,
+      openForHarness,
       getSelectionSummary: () =>
         modelPickerSelectionSummary(
           presentation.label,
           presentation.reasoningLabel,
         ),
     }),
-    [handleOpenChange, visibleOpen, presentation],
+    [
+      handleOpenChange,
+      visibleOpen,
+      presentation,
+      openForHarness,
+      stagedSurfaceKey,
+    ],
   );
   useRegisterActiveModelPicker(
     registerActivation && activityEnabled && !disabled,
@@ -1379,6 +1398,26 @@ function markedModelRowId(
 ): string {
   if (embedding !== null && !embedding.selectionMarked) return "";
   return selectedModelRowId(selection, rows);
+}
+
+/** Opens a harness rail without committing a different composer selection. */
+function useOpenHarnessModels(
+  openRef: RefObject<((harnessId: GuiHarnessId) => void) | null> | undefined,
+  handleOpenChange: (open: boolean) => void,
+  setActiveRailEntry: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void,
+): (harnessId: GuiHarnessId) => void {
+  const open = useCallback(
+    (harnessId: GuiHarnessId): void => {
+      handleOpenChange(true);
+      setActiveRailEntry(harnessId, null);
+    },
+    [handleOpenChange, setActiveRailEntry],
+  );
+  useImperativeHandle(openRef ?? null, () => open, [open]);
+  return open;
 }
 
 /**

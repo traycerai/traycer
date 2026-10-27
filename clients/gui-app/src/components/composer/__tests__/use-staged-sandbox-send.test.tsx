@@ -165,6 +165,9 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ mutate: vi.fn() }),
 }));
+vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
+  useConfigurationProvidersOpener: () => () => undefined,
+}));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
 }));
@@ -961,7 +964,7 @@ describe("useStagedSandboxSend on a boot a terminal ask started", () => {
 });
 
 describe("useStagedSandboxSend's refused resubmit", () => {
-  it("keeps the stage, the sandbox and the draft when the new host refuses, and says why", () => {
+  it("keeps the stage, the sandbox and the draft when the new host cannot run Traycer Inference, and says why", () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
       kind: "existing",
       hostId: NEW_HOST,
@@ -1015,7 +1018,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
       failure: { kind: "no-provider" },
     });
     expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
-      "Sign in to a coding agent to run agents on Personal.",
+      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
     );
     expect(screen.getByTestId("sandbox-refusal-details")).toBeDefined();
 

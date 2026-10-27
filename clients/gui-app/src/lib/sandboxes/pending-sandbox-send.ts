@@ -27,7 +27,10 @@ import {
   type PendingSandboxSendRequest,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  isNewConversationDraftOccupied,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   useLandingDraftStore,
@@ -36,7 +39,6 @@ import { mintDraftId } from "@/lib/drafts/draft-ids";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
-import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
   reservePendingSandboxSendOwnership,
   holdPendingSandboxSendOwnership,
@@ -56,7 +58,9 @@ export type RequestedAgentReadiness =
   /** Its availability is still being probed, or its install is in flight. */
   | { readonly kind: "waiting" }
   | { readonly kind: "ready" }
-  /** It cannot run there: no sign-in on the configuration, or not offered. */
+  /** Sandbox hosts do not offer this agent. */
+  | { readonly kind: "not-offered" }
+  /** Offered, but the sandbox's configuration cannot run it. */
   | { readonly kind: "unusable" }
   /** Its install there failed; `detail` is the host's sentence for it. */
   | { readonly kind: "setup-failed"; readonly detail: string };
@@ -83,6 +87,8 @@ export function requestedAgentReadiness(
   if (harnesses === undefined || providers === undefined) {
     return { kind: "waiting" };
   }
+  const harness = harnesses.find((row) => row.id === harnessId);
+  if (harness === undefined) return { kind: "not-offered" };
   const preparing = providerPackPreparingByHarnessId(providers, null).get(
     harnessId,
   );
@@ -97,8 +103,7 @@ export function requestedAgentReadiness(
       ),
     };
   }
-  const harness = harnesses.find((row) => row.id === harnessId);
-  if (harness === undefined || !harness.enabled) return { kind: "unusable" };
+  if (!harness.enabled) return { kind: "unusable" };
   if (harness.available) return { kind: "ready" };
   return harness.availabilityPending
     ? { kind: "waiting" }
@@ -318,6 +323,20 @@ export type ReturnedPendingSandboxSend =
 export function returnPendingSandboxSend(
   id: string,
 ): ReturnedPendingSandboxSend {
+  return returnPendingMessage(id, false);
+}
+
+/** A background Stop leaves an explicit saved draft for its receipt to open. */
+export function returnPendingSandboxSendToDraft(
+  id: string,
+): ReturnedPendingSandboxSend {
+  return returnPendingMessage(id, true);
+}
+
+function returnPendingMessage(
+  id: string,
+  saveInDrafts: boolean,
+): ReturnedPendingSandboxSend {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
   const send = sends[id];
@@ -333,20 +352,22 @@ export function returnPendingSandboxSend(
   const { request } = send;
   const returned =
     request.kind === "chat"
-      ? restorePendingMessage(send, request)
+      ? restorePendingMessage(send, request, saveInDrafts)
       : { kind: "none" as const };
   endPendingSandboxSend(id);
   return returned;
 }
 
-/** A stable closed draft makes terminal recovery repeatable across fallback windows. */
-function restoreEndedSandboxMessage(
+/** The saved recovery draft remains addressable after its pending record is removed. */
+export function pendingSandboxRecoveryDraftId(id: string): string {
+  return uuidv5(`pending-sandbox-send:${id}:recovered`, uuidv5.URL);
+}
+
+/** A stable closed draft makes background give-back repeatable across fallback windows. */
+function restoreSavedPendingMessage(
   send: PendingSandboxSend,
 ): ReturnedPendingSandboxSend {
-  const draftId = uuidv5(
-    `pending-sandbox-send:${send.id}:recovered`,
-    uuidv5.URL,
-  );
+  const draftId = pendingSandboxRecoveryDraftId(send.id);
   useLandingDraftStore.getState().installLandingDraft({
     id: draftId,
     content: send.content,
@@ -364,21 +385,15 @@ function restoreEndedSandboxMessage(
 function restorePendingMessage(
   send: PendingSandboxSend,
   request: Extract<PendingSandboxSendRequest, { kind: "chat" }>,
+  saveInDrafts: boolean,
 ): ReturnedPendingSandboxSend {
-  if (send.ended === true) return restoreEndedSandboxMessage(send);
+  if (send.ended === true || saveInDrafts)
+    return restoreSavedPendingMessage(send);
   // Write the replacement before removing the image roots in the pending record.
   let returned: ReturnedPendingSandboxSend;
   const modal = useNewConversationModalStore.getState();
   const draft = modal.draftPatchesByEpicId[send.epicId];
-  // Settings, workspace and selection can be a draft even before its first
-  // character. Never replace a person's intervening choice on a give-back.
-  const occupied =
-    draft !== undefined &&
-    ((draft.content !== null && !isEmptyLandingDraftContent(draft.content)) ||
-      draft.settings !== null ||
-      draft.workspace !== null ||
-      draft.composerMode !== null ||
-      draft.selection !== null);
+  const occupied = isNewConversationDraftOccupied(draft);
   if (send.epicConfirmed && !occupied) {
     modal.setContent(send.epicId, send.content);
     modal.setSettings(send.epicId, send.settings);

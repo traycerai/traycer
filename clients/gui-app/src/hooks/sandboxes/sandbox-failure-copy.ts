@@ -20,6 +20,14 @@ import {
   sandboxNotAMemberLine,
 } from "@/components/hosts/sandbox-create-model";
 
+/** Keep the control-plane refusal available to the row and its diagnostics. */
+export class SandboxOperationError extends Error {
+  constructor(readonly failure: SandboxControlFailure) {
+    super(sandboxFailureMessage(failure));
+    this.name = "SandboxOperationError";
+  }
+}
+
 /** `shape_not_offered`'s `reason`, in words. */
 const SHAPE_REASON_COPY: Record<string, string> = {
   "os-not-offered": "That operating system isn't offered yet.",

@@ -98,6 +98,7 @@ describe("sandboxDetailsEntry", () => {
           pendingMillicredits: 0,
           segments: [segment(millicredits)],
           todayMillicredits: 0,
+          todayAwakeMs: null,
           history: [],
         },
         wakeString: null,
@@ -457,6 +458,7 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
       pendingMillicredits: 0,
       segments: [],
       todayMillicredits: 0,
+      todayAwakeMs: null,
       history,
     };
   }

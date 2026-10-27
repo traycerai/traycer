@@ -13,7 +13,7 @@ import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
@@ -84,7 +84,7 @@ export function useSandboxDestroy(
         return true;
       }
       forgetEndedSandboxHost(sandbox.hostId);
-      throw new Error(sandboxFailureMessage(result));
+      throw new SandboxOperationError(result);
     },
     onSuccess: (_data, _variables, context) => {
       if (!settledForStartingAccount(context)) return;

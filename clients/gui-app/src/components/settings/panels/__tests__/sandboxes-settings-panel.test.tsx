@@ -22,6 +22,10 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   configurationItem,
   mountTeamPage,
   poolSource,
@@ -117,6 +121,7 @@ const mocks = vi.hoisted(() => ({
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
+  observeAutomationOpen: false,
   openAutomation: vi.fn<() => Promise<SandboxAutomationOpened>>(),
   openLink: vi.fn<(url: string, kind: string, event: null) => void>(),
   close: vi.fn(),
@@ -172,6 +177,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
     isFetching: false,
     refetch: vi.fn(),
   }),
+  sandboxListReadSentAt: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
@@ -188,6 +194,12 @@ vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "laptop",
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
@@ -201,7 +213,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
   useSandboxAutomationOpen: () => ({
     mutateAsync: mocks.openAutomation,
+    mutate: vi.fn(),
     isPending: false,
+    isError: false,
+    reset: vi.fn(),
   }),
 }));
 
@@ -233,21 +248,52 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/components/settings/panels/sandbox-row-actions")
     >()),
-    SandboxRowActions: (props: {
-      summary: SandboxSummary;
-      configuration: SandboxPageConfiguration;
-      unreachable: boolean;
-      frozenNeedsOwnCredits: boolean;
-    }) => {
-      const { primary } = sandboxRowActions(props);
-      return (
-        <span data-testid="row-primary">
-          {primary === null
-            ? ""
-            : sandboxRowActionLabel(primary, props.configuration)}
-        </span>
-      );
-    },
+    SandboxRowActions: await (async () => {
+      const { useOpenAutomationTerminal } =
+        await import("@/components/settings/panels/use-open-automation-terminal");
+      function ObservedAutomationOpen(props: {
+        readonly summary: SandboxSummary;
+      }) {
+        const opener = useOpenAutomationTerminal({
+          existing: {
+            hostId: props.summary.hostId,
+            sandboxId: props.summary.id,
+            awake: props.summary.state === "awake",
+          },
+          teamEnvironmentId: null,
+        });
+        return (
+          <button
+            type="button"
+            data-testid="automation-row-terminal-state"
+            disabled={opener.starting}
+          >
+            {opener.starting ? "Opening terminal" : "Open terminal"}
+          </button>
+        );
+      }
+      return (props: {
+        summary: SandboxSummary;
+        configuration: SandboxPageConfiguration;
+        unreachable: boolean;
+        frozenNeedsOwnCredits: boolean;
+      }) => {
+        if (
+          mocks.observeAutomationOpen &&
+          props.summary.kind === "automation"
+        ) {
+          return <ObservedAutomationOpen summary={props.summary} />;
+        }
+        const { primary } = sandboxRowActions(props);
+        return (
+          <span data-testid="row-primary">
+            {primary === null
+              ? ""
+              : sandboxRowActionLabel(primary, props.configuration)}
+          </span>
+        );
+      };
+    })(),
   }),
 );
 
@@ -438,6 +484,8 @@ function names(): string[] {
 
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
+    resetNegotiatedManifests();
+    recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
     mocks.listed = true;
@@ -446,6 +494,7 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.report = { kind: "unknown" };
     mocks.costs = null;
     mocks.automation = null;
+    mocks.observeAutomationOpen = false;
     mocks.openAutomation.mockReset();
     mocks.openLink.mockReset();
     mocks.close.mockReset();
@@ -648,6 +697,14 @@ describe("<SandboxesSettingsPanel />", () => {
       renderPanel([]);
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      expect(
+        screen.queryByText(
+          "New sandboxes take these; sandboxes you already have keep theirs.",
+        ),
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Save defaults" }),
+      ).toBeDefined();
       expect(idle).toHaveProperty("value", "45");
       expect(
         screen.getByTestId("sandboxes-defaults-shape-select").textContent,
@@ -820,6 +877,7 @@ describe("<SandboxesSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     resetTeamPageHarness();
   });
@@ -856,6 +914,178 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(
       within(rowOf("agent-1")).getByTestId("row-primary").textContent,
     ).toBe("Keep this sandbox");
+  });
+
+  describe("row ordering", () => {
+    it("holds row positions through activity reports while rendering fresh data", () => {
+      mocks.sandboxes = [
+        row("sleeping", { state: "suspended", lastActivityAt: 300 }),
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older", "sleeping"]);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 500 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older", "sleeping"]);
+
+      mocks.sandboxes = mocks.sandboxes.map((summary) => ({
+        ...summary,
+        displayName: `${summary.id} refreshed`,
+      }));
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({})], terminals: [] },
+        false,
+      );
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual([
+        "newer refreshed",
+        "older refreshed",
+        "sleeping refreshed",
+      ]);
+      expect(
+        within(rowOf("older")).getByTestId("sandboxes-row-sessions")
+          .textContent,
+      ).toContain("1 session");
+    });
+
+    it("reorders from current activity when a public state changes", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 300 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("sleeping", { state: "awake", lastActivityAt: 300 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "sleeping", "newer"]);
+
+      mocks.sandboxes = mocks.sandboxes.map((summary) =>
+        summary.id === "older" ? { ...summary, frozen: true } : summary,
+      );
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["sleeping", "newer", "older"]);
+    });
+
+    it("keeps the order when a transition lands in the same public state", () => {
+      mocks.sandboxes = [
+        row("waking", { state: "resuming", lastActivityAt: 100 }),
+        row("awake", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("waking", { state: "awake", lastActivityAt: 300 }),
+        row("awake", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["awake", "waking"]);
+      expect(
+        within(rowOf("waking")).getByTestId("row-primary").textContent,
+      ).toBe("Suspend");
+    });
+
+    it("places every added row by the rule and counts it immediately", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 400 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        ...mocks.sandboxes,
+        row("middle", { lastActivityAt: 200 }),
+        row("newest", { lastActivityAt: 300 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newest", "middle", "older", "sleeping"]);
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "4 sandboxes",
+      );
+    });
+
+    it("drops a removed row and updates the count", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("removed", { state: "suspended", lastActivityAt: 300 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "newer"]);
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "2 sandboxes",
+      );
+    });
+
+    it("breaks equal activity keys by id in both state groups", () => {
+      renderPanel([
+        row("z-sleeping", { state: "suspended", lastActivityAt: 200 }),
+        row("z-awake", { lastActivityAt: null, lastTransitionAt: 100 }),
+        row("a-sleeping", { state: "suspended", lastActivityAt: 200 }),
+        row("a-awake", { lastActivityAt: 100 }),
+      ]);
+      expect(names()).toEqual([
+        "a-awake",
+        "z-awake",
+        "a-sleeping",
+        "z-sleeping",
+      ]);
+    });
+
+    it("retains positions when a search is cleared after a report", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "older" },
+      });
+      expect(names()).toEqual(["older"]);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 300 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "" },
+      });
+      expect(names()).toEqual(["newer", "older"]);
+    });
+
+    it("sorts from current activity again when the page reopens", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { unmount } = renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older"]);
+      unmount();
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 300 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "newer"]);
+    });
   });
 
   it("narrows the list by the search and by the state filter, with a count badge", () => {
@@ -1187,6 +1417,7 @@ describe("<SandboxesSettingsPanel />", () => {
             pendingMillicredits: 0,
             segments: [],
             todayMillicredits: rowTodayMc,
+            todayAwakeMs: null,
             history: [],
           },
         ],
@@ -1349,7 +1580,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBeNull();
     });
 
-    it("creates and starts it, then opens the terminal on the host it answers with, leaving the composer as it was", async () => {
+    it("does not navigate or close Settings when the first open settles after Settings unmounts", async () => {
       mocks.automation = NOT_CREATED;
       const pendingOpen = deferredAutomationOpen();
       mocks.openAutomation.mockReturnValue(pendingOpen.promise);
@@ -1374,17 +1605,15 @@ describe("<SandboxesSettingsPanel />", () => {
         await pendingOpen.promise;
       });
 
-      await waitFor(() => {
-        expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
-          "auto-host",
-        );
-      });
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
       expect(mocks.openAutomation).toHaveBeenCalledWith(null);
-      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(mocks.close).not.toHaveBeenCalled();
+      expect(navigations).toHaveLength(0);
       expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
     });
 
-    it("does not apply a previous account's start after its Settings panel unmounts", async () => {
+    it("does not apply a previous account's start after the signed-in account changes", async () => {
       mocks.automation = NOT_CREATED;
       const pendingOpen = deferredAutomationOpen();
       mocks.openAutomation.mockReturnValue(pendingOpen.promise);
@@ -1402,16 +1631,22 @@ describe("<SandboxesSettingsPanel />", () => {
       await waitFor(() => {
         expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
       });
-      panel.unmount();
 
       useAuthStore.setState({
         status: "signed-in",
         contextMetadata: { userId: "user-b", username: "Account B" },
       });
-      useLandingPanelStore
-        .getState()
-        .requestTerminal("landing:account-b", "host-account-b");
-      const accountBRequest = useLandingPanelStore.getState().terminalRequest;
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "account-b-terminal",
+        sessionId: "account-b-session",
+        hostId: "host-account-b",
+        cwd: "/account-b",
+        name: "Account B terminal",
+        titleSource: "default",
+        hostAuthorityAcknowledged: true,
+      });
+      const accountBTabs = [...useLandingPanelStore.getState().tabs];
       const navigationsBeforeSettlement = [...navigations];
 
       await act(async () => {
@@ -1419,11 +1654,56 @@ describe("<SandboxesSettingsPanel />", () => {
         await pendingOpen.promise;
       });
 
-      expect(useLandingPanelStore.getState().terminalRequest).toEqual(
-        accountBRequest,
-      );
+      expect(useLandingPanelStore.getState().tabs).toEqual(accountBTabs);
       expect(navigations).toEqual(navigationsBeforeSettlement);
       expect(mocks.close).not.toHaveBeenCalled();
+      panel.unmount();
+    });
+
+    it("keeps the first open alive through the automation result and sandbox-row replacement", async () => {
+      mocks.automation = NOT_CREATED;
+      mocks.observeAutomationOpen = true;
+      const pendingOpen = deferredAutomationOpen();
+      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
+      const panel = renderUi(<SandboxesSettingsPanel />);
+
+      fireEvent.click(
+        within(unstarted()).getByRole("button", { name: "Open terminal" }),
+      );
+      await waitFor(() => {
+        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
+      });
+
+      // The automation endpoint can report enrollment before the list query
+      // includes its new row. The section scope must survive this empty gate.
+      mocks.automation = { available: true, sandbox: OPENED, pods: [] };
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(
+        screen.queryByTestId("sandboxes-row-automations-unstarted"),
+      ).toBeNull();
+
+      mocks.sandboxes = [OPENED];
+      panel.rerender(<SandboxesSettingsPanel />);
+      const rowAction = await screen.findByTestId(
+        "automation-row-terminal-state",
+      );
+      expect(rowAction.hasAttribute("disabled")).toBe(false);
+
+      await act(async () => {
+        pendingOpen.resolve({ sandbox: OPENED, settled: true });
+        await pendingOpen.promise;
+      });
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId("automation-row-terminal-state")
+            .hasAttribute("disabled"),
+        ).toBe(true);
+      });
+      expect(
+        screen.getByTestId("automation-row-terminal-state").textContent,
+      ).toBe("Opening terminal");
+      expect(mocks.openAutomation).toHaveBeenCalledWith(null);
     });
 
     it("files no request and keeps Settings open when the start fails", async () => {
