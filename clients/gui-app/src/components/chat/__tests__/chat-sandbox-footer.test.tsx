@@ -240,7 +240,7 @@ describe("<ChatSandboxFooter /> a destroyed sandbox", () => {
     render(<ChatSandboxFooter state={destroyed} />);
 
     expect(document.body.textContent).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 after its resting period.",
+      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period.",
     );
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),

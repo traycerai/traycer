@@ -884,6 +884,58 @@ describe("returnPendingSandboxSend", () => {
     }
   });
 
+  it("returns a send to the task composer when its only modal patch is a caret", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+    useNewConversationModalStore.getState().resetForTests();
+    try {
+      signInAsPendingSendOwner();
+      useNewConversationModalStore
+        .getState()
+        .setSelection("epic-1", { from: 1, to: 1 });
+      usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+      const owner = holdPendingSandboxSendOwnership("send-1");
+      try {
+        expect(await owner.ready).toBe(true);
+
+        const returned = returnPendingSandboxSend("send-1");
+
+        expect(returned).toMatchObject({ kind: "task", epicId: "epic-1" });
+        expect(
+          useNewConversationModalStore.getState().draftPatchesByEpicId[
+            "epic-1"
+          ],
+        ).toMatchObject({
+          content: MESSAGE_CONTENT,
+          selection: null,
+          settings: PICKED_SETTINGS,
+        });
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      } finally {
+        owner.release();
+      }
+    } finally {
+      useNewConversationModalStore.getState().resetForTests();
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
+  });
+
   it("keeps every exclusively returned message in its own closed landing draft", async () => {
     const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
     Object.defineProperty(navigator, "locks", {
