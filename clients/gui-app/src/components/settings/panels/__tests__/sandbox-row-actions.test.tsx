@@ -120,7 +120,10 @@ vi.mock(
 );
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
-  () => ({ useSandboxRepairGuestConfigurationOnHost: () => mutation() }),
+  () => ({
+    useSandboxRepairGuestConfigurationOnHost: () => mutation(),
+    useSandboxSettingsOperation: () => null,
+  }),
 );
 // The run is the network boundary: it creates or wakes the sandbox.
 const runStagedSandbox = vi.hoisted(() => vi.fn(() => Promise.resolve()));

@@ -47,6 +47,9 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { sandboxQueryKeys } from "@/lib/query-keys";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
@@ -146,7 +149,7 @@ describe("the drawer's reader scopes", () => {
     openDrawer(harness, { kind: "member", key: "u-2" }, "Member");
 
     expect(
-      await screen.findByRole("button", { name: "Repair on dev-box" }),
+      await screen.findByRole("button", { name: "Open dev-box" }),
     ).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Status" })).toBeTruthy();
     expect(
@@ -245,7 +248,7 @@ describe("the drawer's reader scopes", () => {
     expect(document.body.textContent).not.toMatch(/unknown/i);
   });
 
-  it("offers Retry for a failed setup script, and only the reason for a failed setting", async () => {
+  it("offers Retry for a failed setup script, and no raw code for a failed setting", async () => {
     const failedHost = { ...brokenHost, reason: "apply_failed" };
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => history({ hostStates: [failedHost] }),
@@ -253,9 +256,11 @@ describe("the drawer's reader scopes", () => {
     const user = userEvent.setup();
     openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
 
+    // A raw applier code is for Export diagnostics only.
     expect(
-      await screen.findByText(`Not applied · ${formatted(AT)} · apply_failed`),
+      await screen.findByText(`Not applied · ${formatted(AT)}`),
     ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("apply_failed");
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 
     cleanup();
@@ -305,7 +310,7 @@ describe("the subject's own controls", () => {
 
     // The controls show before the status is read; they sit under it once it is.
     const repair = await screen.findByRole("button", {
-      name: "Repair on dev-box",
+      name: "Open dev-box",
     });
     const controls = screen.getByTestId("own-controls");
     expect(
@@ -347,7 +352,7 @@ describe("the subject's own controls", () => {
     });
     openWithControls(harness, null);
 
-    await screen.findByRole("button", { name: "Repair on dev-box" });
+    await screen.findByRole("button", { name: "Open dev-box" });
     expect(screen.queryByTestId("own-controls")).toBeNull();
   });
 });
@@ -705,5 +710,123 @@ describe("the Secrets header's Details", () => {
         harness.paramsOf("environment.secrets.list").length,
       ).toBeGreaterThan(reads);
     });
+  });
+});
+
+describe("a sandbox's unused settings", () => {
+  const HOST_ID = mockLocalHostEntry.hostId;
+  const sandboxHost = {
+    hostId: HOST_ID,
+    hostName: "stale-name",
+    state: "applied",
+    reason: null,
+    at: AT,
+    lastReportedAt: AT,
+  };
+  const status = {
+    principal: { kind: "personal" },
+    reachability: "connected",
+    bindingGeneration: 1,
+    desiredRevision: 5,
+    receivedRevision: 5,
+    appliedRevision: 5,
+    receiptAgeMs: 0,
+    items: [
+      {
+        kind: "env_override",
+        key: "claude:ANTHROPIC_API_KEY",
+        os: "any",
+        desiredRevision: 3,
+        status: "not_used",
+        code: "ok",
+        args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+        brokerEnforced: null,
+        minimumHostVersion: null,
+        appliedAs: null,
+      },
+    ],
+  };
+
+  function mountChip(): TeamPageHarness {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () => history({ hostStates: [sandboxHost] }),
+      "environment.status": () => status,
+    });
+    harness.queryClient.setQueryDefaults(sandboxQueryKeys.listAll(), {
+      gcTime: Number.POSITIVE_INFINITY,
+    });
+    harness.queryClient.setQueryData(sandboxQueryKeys.list({}, "user-me"), {
+      sandboxes: [
+        sandboxSummaryFixture({
+          hostId: HOST_ID,
+          displayName: "Build box",
+          state: "awake",
+        }),
+      ],
+    });
+    return harness;
+  }
+
+  it("lists each unused key as a named row under the sandbox, never printing the variable or a reason", async () => {
+    const harness = mountChip();
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/key · not used on sandboxes/);
+    expect(row.textContent).toMatch(
+      /^Claude Code key · not used on sandboxes$/,
+    );
+    expect(screen.getAllByText(/Build box/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(
+      /ANTHROPIC_API_KEY|permission_denied/,
+    );
+    expect(harness.paramsOf("environment.status")).toHaveLength(1);
+  });
+
+  it("shows only the drawer's no-access state once history is refused, even with the sandbox cached", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.history": () => {
+        throw new Error("Forbidden: no longer a member");
+      },
+      "environment.status": () => status,
+    });
+    harness.queryClient.setQueryDefaults(sandboxQueryKeys.listAll(), {
+      gcTime: Number.POSITIVE_INFINITY,
+    });
+    harness.queryClient.setQueryData(sandboxQueryKeys.list({}, "user-me"), {
+      sandboxes: [
+        sandboxSummaryFixture({
+          hostId: HOST_ID,
+          displayName: "Build box",
+          state: "awake",
+          guestConfigured: false,
+          failureCode: "envelope-delivery:x",
+        }),
+      ],
+    });
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't load details.Retry",
+    );
+    expect(document.body.textContent).not.toMatch(
+      /Build box|Claude Code|ANTHROPIC_API_KEY|SBX-|envelope-delivery|not used/,
+    );
+    expect(harness.paramsOf("environment.status")).toEqual([]);
+  });
+
+  it("keeps the raw item key in the diagnostics export only", async () => {
+    const harness = mountChip();
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    await screen.findByText(/not used on sandboxes/);
+
+    await user.click(
+      await screen.findByRole("tab", { name: "Export diagnostics" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
+    const exported = await savedExport();
+
+    expect(JSON.stringify(exported)).toContain("claude:ANTHROPIC_API_KEY");
+    expect(JSON.stringify(exported)).toContain("not_used");
   });
 });

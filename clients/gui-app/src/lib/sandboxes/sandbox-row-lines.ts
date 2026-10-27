@@ -1,4 +1,5 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { sandboxSettingsFailureLine } from "@traycer/protocol/host/sandbox-settings";
 import type {
   HostStatusAgentSession,
   HostStatusSessions,
@@ -659,9 +660,10 @@ function awakeClockLine(input: SandboxClockInput): string {
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
   if (summary.guestConfigured === false) {
-    return joinParts(
-      `Awake · ${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
-      sandboxSupportReference(summary.failureCode),
+    return sandboxSettingsFailureLine(
+      summary.displayName,
+      configurationLabel(configurationCopy(input.configuration)),
+      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
     );
   }
   const awakeMs = input.cost?.todayAwakeMs ?? null;

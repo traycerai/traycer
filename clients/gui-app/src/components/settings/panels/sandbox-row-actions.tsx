@@ -43,7 +43,10 @@ import {
   type SandboxRowVerb,
 } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
-import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import {
+  useSandboxRepairGuestConfigurationOnHost,
+  useSandboxSettingsOperation,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
@@ -107,9 +110,11 @@ export function SandboxRowActions(props: {
   // accepted instead of making a second sandbox.
   const [retryKey, setRetryKey] = useState(() => uuidv4());
   const repair = useSandboxRepairGuestConfigurationOnHost(summary.hostId);
+  const applyingOperation = useSandboxSettingsOperation(summary.hostId);
   const openLink = useOpenLink();
   const runnerHost = useRunnerHost();
   const openOnLanding = useOpenSandboxOnLanding();
+  const chooseAnother = useChooseAnotherHost();
   const openAutomationTerminal = useOpenAutomationTerminal({
     existing: {
       hostId: summary.hostId,
@@ -132,7 +137,7 @@ export function SandboxRowActions(props: {
     pendingVerb !== null ||
     patch.isPending ||
     create.isPending ||
-    repair.isPending ||
+    applyingOperation === "pending" ||
     openAutomationTerminal.starting;
 
   // A team wake no longer asks first: its payer is said where it is picked.
@@ -190,19 +195,7 @@ export function SandboxRowActions(props: {
               },
             },
           ),
-    "retry-applying": () =>
-      repair.mutate(
-        {},
-        {
-          onSuccess: (result) => {
-            if (!result.guestConfigured) {
-              toast.warning(
-                `${summary.displayName}'s settings still didn't apply`,
-              );
-            }
-          },
-        },
-      ),
+    "retry-applying": () => repair.mutate({}),
     "open-tab": () =>
       openOnLanding(summary, configuration, { terminal: false }),
     "open-terminal": () =>
@@ -222,6 +215,7 @@ export function SandboxRowActions(props: {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2">
+      <SettingsApplyFailure operation={applyingOperation} name={summary.displayName} />
       {summary.kind === "automation" && openAutomationTerminal.failed ? (
         <AutomationTerminalOpenError
           onRetry={openAutomationTerminal.run}
@@ -270,51 +264,92 @@ export function SandboxRowActions(props: {
         dialogOpen={dialog !== null}
         run={run}
       />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      {summary.guestConfigured === false ? (
+        <>
           <Button
             type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`More actions for ${summary.displayName}`}
-            data-testid="sandbox-row-menu"
+            variant="outline"
+            size="sm"
+            onClick={() => run("open-terminal")}
           >
-            <MoreHorizontal className="size-3.5" aria-hidden />
+            Open terminal
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
-          {actions.menu
-            .filter((action) => pendingVerb === null && action !== "destroy")
-            .map((action) => (
-              <DropdownMenuItem
-                key={action}
-                disabled={busy}
-                data-testid={`sandbox-row-menu-${action}`}
-                onSelect={() => run(action)}
-              >
-                {sandboxRowActionLabel(action, configuration)}
-              </DropdownMenuItem>
-            ))}
-          <DropdownMenuItem
-            data-testid="sandbox-row-menu-details"
-            onSelect={() => openSandboxDetails(summary.id)}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => run("stop")}
           >
-            {DETAILS}
-          </DropdownMenuItem>
-          {pendingVerb === null && actions.menu.includes("destroy") ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                data-testid="sandbox-row-menu-destroy"
-                onSelect={() => run("destroy")}
-              >
-                {sandboxRowActionLabel("destroy", configuration)}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            Stop
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={chooseAnother}
+          >
+            Choose another host
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => openSandboxDetails(summary.id)}
+          >
+            Details
+          </Button>
+        </>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`More actions for ${summary.displayName}`}
+              data-testid="sandbox-row-menu"
+            >
+              <MoreHorizontal className="size-3.5" aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            data-testid="sandbox-row-menu-content"
+          >
+            {actions.menu
+              .filter((action) => pendingVerb === null && action !== "destroy")
+              .map((action) => (
+                <DropdownMenuItem
+                  key={action}
+                  disabled={busy}
+                  data-testid={`sandbox-row-menu-${action}`}
+                  onSelect={() => run(action)}
+                >
+                  {sandboxRowActionLabel(action, configuration)}
+                </DropdownMenuItem>
+              ))}
+            <DropdownMenuItem
+              data-testid="sandbox-row-menu-details"
+              onSelect={() => openSandboxDetails(summary.id)}
+            >
+              {DETAILS}
+            </DropdownMenuItem>
+            {pendingVerb === null && actions.menu.includes("destroy") ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  data-testid="sandbox-row-menu-destroy"
+                  onSelect={() => run("destroy")}
+                >
+                  {sandboxRowActionLabel("destroy", configuration)}
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
@@ -403,6 +438,17 @@ function SandboxRowPrimaryAction(props: {
   );
 }
 
+function useChooseAnotherHost(): () => void {
+  const surfaceKey = useComposerSurfaceHostKey();
+  const navigate = useNavigate();
+  const { close } = useSystemTabModalActions();
+  return () => {
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    close();
+    activateTabIntent(navigate, openNewEpicIntent(), undefined);
+  };
+}
+
 /**
  * `Open a tab` and `Open terminal`: points the landing composer (and the
  * terminal panel beside it, which follows the composer's host) at this
@@ -481,4 +527,14 @@ function useOpenSandboxOnLanding(): (
     // A new task's tab, not only its route: Settings may be a tab of its own.
     activateTabIntent(navigate, openNewEpicIntent(), undefined);
   };
+}
+
+function SettingsApplyFailure(props: {
+  readonly operation: "pending" | "failed" | null;
+  readonly name: string;
+}): ReactNode {
+  if (props.operation !== "failed") return null;
+  return <p role="alert" className="text-ui-xs text-destructive">
+    {props.name}'s settings still didn't apply · SBX-0520
+  </p>;
 }

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import type {
   DetailsHostStatus,
   DetailsRecovery,
@@ -47,11 +48,15 @@ export function DetailsHostRows(props: {
         >
           <div className="min-w-0 flex-1">
             <p className="break-words font-medium">
-              {host.name}
-              {host.item === null ? null : ` · ${host.item}`}
+              {host.state === "not_used"
+                ? `${host.item} · not used on sandboxes`
+                : host.name}
+              {host.item === null || host.state === "not_used"
+                ? null
+                : ` · ${host.item}`}
             </p>
             <p className="text-ui-xs text-muted-foreground">
-              {stateLabel(host.state)}
+              {host.state === "not_used" ? host.name : stateLabel(host.state)}
               {host.at === null ? null : ` · ${detailsTime(host.at)}`}
               {host.reason === null ? null : ` · ${host.reason}`}
             </p>
@@ -61,21 +66,16 @@ export function DetailsHostRows(props: {
               </p>
             )}
           </div>
-          {host.recovery === null ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={props.pending}
-              onClick={() => {
-                if (host.recovery !== null) props.onRecover(host.recovery);
-              }}
-            >
-              {detailsRecoveryLabel(host.recovery, host.name)}
-            </Button>
-          )}
+          <DetailsHostRecovery host={host} onRecover={props.onRecover} pending={props.pending} />
         </li>
       ))}
     </ul>
   );
+}
+
+function DetailsHostRecovery(props: {readonly host: DetailsHostStatus; readonly onRecover: (recovery: DetailsRecovery) => void; readonly pending: boolean}): ReactNode {
+  const recovery = props.host.recovery;
+  if (recovery === null) return null;
+  if (recovery.kind === "apply") return <SandboxRetryApplyingButton hostId={props.host.hostId} />;
+  return <Button type="button" variant="outline" size="sm" disabled={props.pending} onClick={() => props.onRecover(recovery)}>{detailsRecoveryLabel(recovery, props.host.name)}</Button>;
 }

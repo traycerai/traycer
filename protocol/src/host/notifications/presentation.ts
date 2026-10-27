@@ -11,7 +11,10 @@ import {
   type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
-import { sandboxSettingsFailureLine, sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
+import {
+  sandboxSettingsFailureLine,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
@@ -269,11 +272,22 @@ function environmentNotificationPresentation(
             : "A computer's move to Personal stopped before it finished",
       };
     case "environment.apply.failed": {
-      const sandbox = known?.kind === "environment_apply_failed" ? known.sandbox : null;
-      if (sandbox !== null && sandbox !== undefined) return {
-        title: sandboxSettingsFailureLine(sandbox.name, sandbox.configurationName, "SBX-0520"),
-        body: ["Compute is charged while it is awake.", sandboxSettingsStepsLine(sandbox)].filter(Boolean).join(" "),
-      };
+      const sandbox =
+        known?.kind === "environment_apply_failed" ? known.sandbox : null;
+      if (sandbox !== null && sandbox !== undefined)
+        return {
+          title: sandboxSettingsFailureLine(
+            sandbox.name,
+            sandbox.configurationName,
+            "SBX-0520",
+          ),
+          body: [
+            "Compute is charged while it is awake.",
+            sandboxSettingsStepsLine(sandbox),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        };
       return {
         title: "Setting not applied",
         body:

@@ -41,6 +41,11 @@ import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsSteps,
+} from "@traycer/protocol/host/sandbox-settings";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -65,6 +70,9 @@ export const STAGED_TAKING_LONGER_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
 
 export interface StagedSandboxRunDeps {
+  readonly readSettings: (
+    hostId: string,
+  ) => Promise<EnvironmentStatusResponseV11 | "unsupported" | null>;
   readonly auth: AuthService;
   readonly directory: HostDirectoryService;
   /**
@@ -601,6 +609,31 @@ async function settleRow(
   if (dialableHostEndpoint(deps.directory.findById(started.hostId)) === null) {
     return "waiting";
   }
+  return settleSettings(input);
+}
+
+/** A connected host must prove configuration delivery before its message is handed off. */
+async function settleSettings(input: SandboxSettlement): Promise<"waiting" | "finished"> {
+  const {surfaceKey, clientRequestId, started, deps} = input;
+  const settings = await deps.readSettings(started.hostId);
+  if (!stillCurrent(surfaceKey, clientRequestId)) return "finished";
+  if (settings === null) return "waiting";
+  if (settings !== "unsupported" && sandboxSettingsFailed(settings.items)) {
+    fail(surfaceKey, {
+      kind: "settings",
+      code: "SBX-0520",
+      steps: sandboxSettingsSteps(settings.items),
+    });
+    return "finished";
+  }
+  if (
+    settings !== "unsupported" &&
+    (settings.receivedRevision === null ||
+      settings.items.some(
+        (item) => item.status === "pending" || item.status === "received",
+      ))
+  )
+    return "waiting";
   report(surfaceKey, "delivering", deps.now());
   handOff(surfaceKey, started.hostId);
   return "finished";
@@ -690,7 +723,11 @@ export function settleVerdict(
       return row.guestConfigured === false
         ? {
             kind: "failure",
-            failure: { kind: "settings", code: row.failureCode ?? "settings" },
+            failure: {
+              kind: "settings",
+              code: row.failureCode ?? "settings",
+              steps: { applied: [], notApplied: ["Sandbox setup"] },
+            },
           }
         : { kind: "awake" };
     default:

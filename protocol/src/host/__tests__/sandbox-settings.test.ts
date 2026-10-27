@@ -19,7 +19,7 @@ describe("sandboxSettingsFailureLine", () => {
 });
 
 describe("sandboxSettingsSteps", () => {
-  it("groups items by their step label and splits applied from not applied", () => {
+  it("groups items into whole steps, a step with any failed item being not applied", () => {
     const steps = sandboxSettingsSteps([
       { kind: "secret", status: "applied" },
       { kind: "secret", status: "applied" },
@@ -29,8 +29,18 @@ describe("sandboxSettingsSteps", () => {
       { kind: "mcp_server", status: "unsupported" },
     ]);
 
-    expect([...steps.applied].sort()).toEqual(["Providers", "Secrets"]);
+    // A step is whole: one failed provider item leaves Providers not applied.
+    expect([...steps.applied].sort()).toEqual(["Secrets"]);
     expect([...steps.notApplied].sort()).toEqual(["MCP servers", "Providers"]);
+  });
+
+  it("labels an unknown failed kind Other settings, never dropping the failure", () => {
+    const steps = sandboxSettingsSteps([
+      { kind: "some_future_kind", status: "failed" },
+    ]);
+
+    expect(steps.notApplied).toEqual(["Other settings"]);
+    expect(steps.applied).toEqual([]);
   });
 
   it("ignores items still pending", () => {

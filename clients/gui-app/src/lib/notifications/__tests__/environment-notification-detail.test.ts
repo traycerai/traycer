@@ -39,6 +39,7 @@ describe("environmentNotificationDetail", () => {
       hostName: "dev-box",
       itemKey: "MCP_URL",
       reason: "Permission denied.",
+      sandbox: null,
     });
   });
 

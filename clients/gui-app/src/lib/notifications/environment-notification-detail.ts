@@ -42,6 +42,13 @@ export type EnvironmentNotificationDetail =
       readonly hostName: string;
       readonly itemKey: string;
       readonly reason: string;
+      readonly sandbox?: {
+        readonly name: string;
+        readonly configurationName: string;
+        readonly attemptId: string;
+        readonly applied: readonly string[];
+        readonly notApplied: readonly string[];
+      } | null;
     }
   | {
       readonly kind: "secret_removed";
@@ -104,6 +111,7 @@ export function environmentNotificationDetail(
       hostName: known.hostName,
       itemKey: known.itemKey,
       reason: known.reason,
+      sandbox: known.sandbox ?? null,
     };
   }
   if (known.kind === "secret_removed") {

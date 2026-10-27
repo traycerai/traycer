@@ -240,7 +240,7 @@ export const sandboxEgressSubscribeV10 = defineStreamRpcContract({
 // ─── `host.sandbox.repairGuestConfiguration@1.0` ────────────────────────────
 
 export const sandboxRepairGuestConfigurationRequestSchema = lazySchema(() =>
-  z.object({operationId: z.string().min(1).max(128).nullable().optional()}),
+  z.object({ operationId: z.string().min(1).max(128).nullable().optional() }),
 );
 export type SandboxRepairGuestConfigurationRequest = z.infer<
   typeof sandboxRepairGuestConfigurationRequestSchema

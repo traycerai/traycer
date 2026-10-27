@@ -4,7 +4,11 @@ export interface SandboxSettingsSteps {
   readonly notApplied: readonly string[];
 }
 
-export function sandboxSettingsFailureLine(name: string, configuration: string, reference: string): string {
+export function sandboxSettingsFailureLine(
+  name: string,
+  configuration: string,
+  reference: string,
+): string {
   return `${name} is awake, but ${configuration}'s settings didn't apply · ${reference}`;
 }
 
@@ -26,18 +30,38 @@ const STEP_LABELS: Readonly<Record<string, string>> = {
   member: "Members",
 };
 
-export function sandboxSettingsSteps(items: readonly {readonly kind: string; readonly status: string}[]): SandboxSettingsSteps {
+export function sandboxSettingsSteps(
+  items: readonly { readonly kind: string; readonly status: string }[],
+): SandboxSettingsSteps {
   const steps = new Map<string, boolean>();
   for (const item of items) {
-    if (item.status === "not_used") continue;
-    const label = STEP_LABELS[item.kind];
-    if (label === undefined) continue;
+    if (
+      item.status === "not_used" ||
+      item.status === "pending" ||
+      item.status === "received"
+    )
+      continue;
+    const label = STEP_LABELS[item.kind] ?? "Other settings";
     steps.set(label, (steps.get(label) ?? true) && item.status === "applied");
   }
   return {
-    applied: [...steps].filter(([, applied]) => applied).map(([label]) => label),
-    notApplied: [...steps].filter(([, applied]) => !applied).map(([label]) => label),
+    applied: [...steps]
+      .filter(([, applied]) => applied)
+      .map(([label]) => label),
+    notApplied: [...steps]
+      .filter(([, applied]) => !applied)
+      .map(([label]) => label),
   };
+}
+
+export function sandboxSettingsEvidence(
+  items: readonly { readonly kind: string; readonly status: string }[],
+  guestConfigured: boolean | null,
+): SandboxSettingsSteps {
+  const steps = sandboxSettingsSteps(items);
+  return guestConfigured === false
+    ? { ...steps, notApplied: ["Sandbox setup", ...steps.notApplied] }
+    : steps;
 }
 
 function stepNames(names: readonly string[]): string {
@@ -48,10 +72,25 @@ function stepNames(names: readonly string[]): string {
 export function sandboxSettingsStepsLine(steps: SandboxSettingsSteps): string {
   const applied = stepNames(steps.applied);
   const notApplied = stepNames(steps.notApplied);
-  if (applied.length === 0) return notApplied.length === 0 ? "" : `${notApplied} did not apply.`;
-  return notApplied.length === 0 ? `${applied} applied.` : `${applied} applied; ${notApplied} did not.`;
+  if (applied.length === 0)
+    return notApplied.length === 0 ? "" : `${notApplied} did not apply.`;
+  return notApplied.length === 0
+    ? `${applied} applied.`
+    : `${applied} applied; ${notApplied} did not.`;
 }
 
-export function sandboxSettingsFailed(items: readonly {readonly status: string}[]): boolean {
-  return items.some((item) => item.status === "failed" || item.status === "unsupported");
+export function sandboxSettingsFailed(
+  items: readonly { readonly status: string }[],
+): boolean {
+  return items.some(
+    (item) => item.status === "failed" || item.status === "unsupported",
+  );
+}
+
+export function sandboxSettingsReady(
+  items: readonly { readonly status: string }[],
+): boolean {
+  return items.every(
+    (item) => item.status === "applied" || item.status === "not_used",
+  );
 }

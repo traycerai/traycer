@@ -586,9 +586,26 @@ vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
+// An old host without environment.status: a known absence is the only reading
+// that does not hold a send (an unknown manifest holds it).
+vi.mock(
+  "@traycer-clients/shared/host-transport/negotiated-manifest-registry",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/negotiated-manifest-registry")
+    >()),
+    getNegotiatedHostMethods: () => new Set<string>(),
+  }),
+);
+// The isolated fixtures read the host's settings as ready; a settings hold is
+// exercised by its own test, not by every send.
+vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
+  useSandboxSettingsStatus: () => ({ ready: true, data: undefined }),
+}));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
   () => ({
+    useSandboxSettingsOperation: () => null,
     // A repair stays out until the test finishes it, as a slow host would.
     useSandboxRepairGuestConfigurationOnHost: () => ({
       mutate: (

@@ -53,6 +53,12 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsEvidence,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
 import {
@@ -82,6 +88,7 @@ import {
   sandboxTeamUsageUrl,
   sortSandboxRows,
   unstartedAutomationsMatches,
+  type SandboxSessionReport,
   type SandboxKindFilter,
   type SandboxPageConfiguration,
   type SandboxPublicState,
@@ -1003,7 +1010,14 @@ function SandboxListRow(props: {
   readonly viewerUserId: string | null;
   readonly highlighted: boolean;
 }): ReactNode {
-  const { summary, configuration, viewerUserId } = props;
+  const { configuration, viewerUserId } = props;
+  const settings = useSandboxSettingsStatus(
+    props.summary.hostId,
+    props.summary.state === "awake",
+  );
+  const summary = sandboxSettingsFailed(settings.data?.items ?? [])
+    ? { ...props.summary, guestConfigured: false }
+    : props.summary;
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
   const sessions = useSandboxSessionReport(summary.hostId, awake);
@@ -1076,26 +1090,21 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
+          {awake && summary.guestConfigured === false ? (
+            <div className="text-ui-xs text-muted-foreground">
+              <p>Compute is charged while it is awake.</p>
+              <p>
+                {sandboxSettingsStepsLine(
+                  sandboxSettingsEvidence(
+                    settings.data?.items ?? [],
+                    props.summary.guestConfigured,
+                  ),
+                )}
+              </p>
+            </div>
+          ) : null}
           {awake && !unreachable ? (
-            <p
-              className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
-              data-testid="sandboxes-row-sessions"
-            >
-              {sessions.report.kind === "live" && sessions.report.busy ? (
-                <span
-                  aria-hidden
-                  className="size-1.5 shrink-0 rounded-full bg-success"
-                />
-              ) : null}
-              {sandboxSessionsLine(sessions.report, now)}
-              {sandboxSessionPills(sessions.report).map((pill) => (
-                <SandboxSessionPillBadge
-                  key={pill.key}
-                  pill={pill}
-                  testId="sandboxes-row-session-pill"
-                />
-              ))}
-            </p>
+            <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>
       </div>
@@ -1110,5 +1119,32 @@ function SandboxListRow(props: {
         )}
       />
     </li>
+  );
+}
+
+function SandboxRowSessions(props: {
+  readonly report: SandboxSessionReport;
+  readonly now: number;
+}): ReactNode {
+  return (
+            <p
+              className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
+              data-testid="sandboxes-row-sessions"
+            >
+              {props.report.kind === "live" && props.report.busy ? (
+                <span
+                  aria-hidden
+                  className="size-1.5 shrink-0 rounded-full bg-success"
+                />
+              ) : null}
+              {sandboxSessionsLine(props.report, props.now)}
+              {sandboxSessionPills(props.report).map((pill) => (
+                <SandboxSessionPillBadge
+                  key={pill.key}
+                  pill={pill}
+                  testId="sandboxes-row-session-pill"
+                />
+              ))}
+            </p>
   );
 }

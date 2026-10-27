@@ -229,6 +229,8 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
     }),
     userId: null,
     wake,
+    // An older host has no environment.status: the baseline fixtures keep their old reading.
+    readSettings: () => Promise.resolve("unsupported"),
     now: () => clock.now,
     sleep: (ms) => {
       clock.now += ms;
@@ -609,9 +611,106 @@ describe("runStagedSandbox settling", () => {
     expect(stageOf().failure).toEqual({
       kind: "settings",
       code: "SETTINGS_SYNC_FAILED",
+      steps: { applied: [], notApplied: ["Sandbox setup"] },
     });
     expect(stageOf().phase).toBe("creating");
     expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+  });
+
+  describe("with the host's environment status", () => {
+    interface StatusItem {
+      readonly kind: string;
+      readonly key: string;
+      readonly os: string;
+      readonly desiredRevision: number;
+      readonly status: string;
+      readonly code: string;
+      readonly args: Readonly<Record<string, null>>;
+      readonly brokerEnforced: null;
+      readonly minimumHostVersion: null;
+      readonly appliedAs: null;
+    }
+    const item = (kind: string, key: string, status: string): StatusItem => ({
+      kind,
+      key,
+      os: "any",
+      desiredRevision: 3,
+      status,
+      code: "ok",
+      args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+      brokerEnforced: null,
+      minimumHostVersion: null,
+      appliedAs: null,
+    });
+    const statusOf = (
+      receivedRevision: number | null,
+      items: readonly StatusItem[],
+    ) => ({
+      principal: { kind: "personal" },
+      reachability: "connected",
+      bindingGeneration: 1,
+      desiredRevision: receivedRevision,
+      receivedRevision,
+      appliedRevision: receivedRevision,
+      receiptAgeMs: 0,
+      items,
+    });
+    const settleWith = async (
+      answer: () => Promise<unknown>,
+    ): Promise<void> => {
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      const { deps } = harness({}, true);
+      await run(false, { ...deps, readSettings: answer });
+    };
+
+    it("fails with the failed step named, never a raw item key, when an MCP server did not apply", async () => {
+      await settleWith(() =>
+        Promise.resolve(
+          statusOf(5, [
+            item("secret", "sec-1", "applied"),
+            item("mcp_server", "github", "failed"),
+          ]),
+        ),
+      );
+
+      expect(stageOf().failure).toMatchObject({
+        kind: "settings",
+        steps: { applied: ["Secrets"], notApplied: ["MCP servers"] },
+      });
+      expect(stageOf().phase).toBe("creating");
+    });
+
+    it("hands off past a key the sandbox does not use: not_used is neither a failure nor a wait", async () => {
+      await settleWith(() =>
+        Promise.resolve(
+          statusOf(5, [
+            item("env_override", "claude:ANTHROPIC_API_KEY", "not_used"),
+            item("variable", "REGION", "applied"),
+          ]),
+        ),
+      );
+
+      expect(stageOf().phase).toBe("handoff");
+      expect(stageOf().failure).toBeNull();
+    });
+
+    it.each([
+      ["a read that failed", () => Promise.resolve(null)],
+      [
+        "a status before the first revision was received",
+        () => Promise.resolve(statusOf(null, [])),
+      ],
+      [
+        "an item still pending",
+        () =>
+          Promise.resolve(statusOf(5, [item("variable", "REGION", "pending")])),
+      ],
+    ])("holds the send on %s, never handing off", async (_name, answer) => {
+      await settleWith(answer);
+
+      expect(stageOf().phase).not.toBe("handoff");
+      expect(stageOf().failure).toMatchObject({ kind: "timed-out" });
+    });
   });
 
   it("fails with the row's code when the sandbox fails after the create was accepted", async () => {
@@ -1306,14 +1405,25 @@ describe("settleVerdict", () => {
       settleVerdict(
         row({ state: "awake", guestConfigured: false, failureCode: "X" }),
       ),
-    ).toEqual({ kind: "failure", failure: { kind: "settings", code: "X" } });
+    ).toEqual({
+      kind: "failure",
+      failure: {
+        kind: "settings",
+        code: "X",
+        steps: { applied: [], notApplied: ["Sandbox setup"] },
+      },
+    });
     expect(
       settleVerdict(
         row({ state: "awake", guestConfigured: false, failureCode: null }),
       ),
     ).toEqual({
       kind: "failure",
-      failure: { kind: "settings", code: "settings" },
+      failure: {
+        kind: "settings",
+        code: "settings",
+        steps: { applied: [], notApplied: ["Sandbox setup"] },
+      },
     });
   });
 

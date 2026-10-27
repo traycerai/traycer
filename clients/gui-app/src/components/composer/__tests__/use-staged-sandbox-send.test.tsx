@@ -122,6 +122,7 @@ vi.mock(
       mocks.repairHostIds.push(hostId);
       return { mutate: mocks.repairMutate };
     },
+    useSandboxSettingsOperation: () => null,
   }),
 );
 // The new host answers with its default cwd as soon as it is named.

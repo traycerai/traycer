@@ -542,13 +542,6 @@ export function sandboxVerbFailureLine(
   return `${sentence} · ${reference}`;
 }
 
-/** `payments-ledger is awake, but Acme's settings didn't apply`. */
-export function settingsDidntApplyLine(
-  name: string,
-  configuration: string,
-): string {
-  return `${name} is awake, but ${configuration}'s settings didn't apply`;
-}
 export const COMPUTE_CHARGED_WHILE_AWAKE =
   "Compute is charged while it is awake.";
 export const RETRY_APPLYING = "Retry applying";
