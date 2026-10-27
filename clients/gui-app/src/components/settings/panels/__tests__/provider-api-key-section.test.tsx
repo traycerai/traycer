@@ -195,6 +195,126 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
   });
 });
 
+describe("ProviderApiKeySection on a key that belongs to another vendor", () => {
+  const ANTHROPIC_KEY = "sk-ant-api03-clearly-fake-test-key-do-not-use";
+  const OPENROUTER_KEY = "sk-or-v1-clearly-fake-test-key-do-not-use";
+  const REFUSAL = "That looks like an Anthropic key. Use your OpenRouter key.";
+
+  it("shows the refusal beside the field, disables Save and sends nothing by click or by Enter", () => {
+    render(
+      <ProviderApiKeySection
+        state={apiKeyState("openrouter")}
+        draft={ANTHROPIC_KEY}
+        onDraftChange={() => undefined}
+      />,
+    );
+
+    const input = screen.getByLabelText("API key");
+    const save = screen.getByRole("button", { name: "Save" });
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(REFUSAL);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(alert.id);
+    expect(save.hasAttribute("disabled")).toBe(true);
+    // The field stays editable so the person can replace the key.
+    expect(input.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(save);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mocks.setApiKeyMutate).not.toHaveBeenCalled();
+  });
+
+  it("control: the vendor's own key and a key of no recognizable shape are saved, with no refusal", () => {
+    for (const draft of [OPENROUTER_KEY, "unrecognized-shape-fake-key"]) {
+      mocks.setApiKeyMutate.mockClear();
+      const { unmount } = render(
+        <ProviderApiKeySection
+          state={apiKeyState("openrouter")}
+          draft={draft}
+          onDraftChange={() => undefined}
+        />,
+      );
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(
+        screen.getByLabelText("API key").getAttribute("aria-invalid"),
+      ).toBe("false");
+      fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
+      expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
+        { providerId: "openrouter", apiKey: draft },
+        expect.anything(),
+      );
+      unmount();
+    }
+  });
+  it("shows the refusal a saved foreign key carries when the draft is empty, and still saves a valid replacement while that warning stands", () => {
+    const savedForeign: ProviderCliState = {
+      ...apiKeyState("openrouter"),
+      apiKey: { supported: true, configured: true, source: "stored" },
+      auth: {
+        status: "unauthenticated",
+        badgeText: null,
+        label: null,
+        detail: REFUSAL,
+      },
+    };
+    const { rerender } = render(
+      <ProviderApiKeySection
+        state={savedForeign}
+        draft=""
+        onDraftChange={() => undefined}
+      />,
+    );
+
+    const input = screen.getByLabelText("API key");
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(REFUSAL);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(alert.id);
+
+    rerender(
+      <ProviderApiKeySection
+        state={savedForeign}
+        draft={OPENROUTER_KEY}
+        onDraftChange={() => undefined}
+      />,
+    );
+
+    // The stored warning stays until the state changes; it does not block Save.
+    expect(screen.getByRole("alert").textContent).toBe(REFUSAL);
+    expect(
+      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+    ).toBe(false);
+    fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
+    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
+      { providerId: "openrouter", apiKey: OPENROUTER_KEY },
+      expect.anything(),
+    );
+  });
+
+  it("control: a saved key that is merely unauthenticated without a refusal shows no alert", () => {
+    render(
+      <ProviderApiKeySection
+        state={{
+          ...apiKeyState("openrouter"),
+          apiKey: { supported: true, configured: true, source: "stored" },
+          auth: {
+            status: "unauthenticated",
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+        }}
+        draft=""
+        onDraftChange={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("ProviderApiKeySection custody sentence", () => {
   const READY: PersonalHostState = {
     kind: "ready",
