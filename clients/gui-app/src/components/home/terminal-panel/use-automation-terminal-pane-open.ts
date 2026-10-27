@@ -136,7 +136,6 @@ export function useAutomationTerminalPaneOpen(
           adoptPlainTerminalUnary(current, terminal, barrier),
         );
         const panel = useLandingPanelStore.getState();
-        panel.clearTerminalRequest();
         panel.fulfillPlaceholder(
           {
             kind: "terminal",
