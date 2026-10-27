@@ -318,6 +318,20 @@ export type ReturnedPendingSandboxSend =
 export function returnPendingSandboxSend(
   id: string,
 ): ReturnedPendingSandboxSend {
+  return returnPendingMessage(id, false);
+}
+
+/** A background Stop leaves an explicit saved draft for its receipt to open. */
+export function returnPendingSandboxSendToDraft(
+  id: string,
+): ReturnedPendingSandboxSend {
+  return returnPendingMessage(id, true);
+}
+
+function returnPendingMessage(
+  id: string,
+  saveInDrafts: boolean,
+): ReturnedPendingSandboxSend {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
   const send = sends[id];
@@ -333,20 +347,22 @@ export function returnPendingSandboxSend(
   const { request } = send;
   const returned =
     request.kind === "chat"
-      ? restorePendingMessage(send, request)
+      ? restorePendingMessage(send, request, saveInDrafts)
       : { kind: "none" as const };
   endPendingSandboxSend(id);
   return returned;
 }
 
-/** A stable closed draft makes terminal recovery repeatable across fallback windows. */
-function restoreEndedSandboxMessage(
+/** The saved recovery draft remains addressable after its pending record is removed. */
+export function pendingSandboxRecoveryDraftId(id: string): string {
+  return uuidv5(`pending-sandbox-send:${id}:recovered`, uuidv5.URL);
+}
+
+/** A stable closed draft makes background give-back repeatable across fallback windows. */
+function restoreSavedPendingMessage(
   send: PendingSandboxSend,
 ): ReturnedPendingSandboxSend {
-  const draftId = uuidv5(
-    `pending-sandbox-send:${send.id}:recovered`,
-    uuidv5.URL,
-  );
+  const draftId = pendingSandboxRecoveryDraftId(send.id);
   useLandingDraftStore.getState().installLandingDraft({
     id: draftId,
     content: send.content,
@@ -364,8 +380,10 @@ function restoreEndedSandboxMessage(
 function restorePendingMessage(
   send: PendingSandboxSend,
   request: Extract<PendingSandboxSendRequest, { kind: "chat" }>,
+  saveInDrafts: boolean,
 ): ReturnedPendingSandboxSend {
-  if (send.ended === true) return restoreEndedSandboxMessage(send);
+  if (send.ended === true || saveInDrafts)
+    return restoreSavedPendingMessage(send);
   // Write the replacement before removing the image roots in the pending record.
   let returned: ReturnedPendingSandboxSend;
   const modal = useNewConversationModalStore.getState();
