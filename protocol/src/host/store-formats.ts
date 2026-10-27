@@ -560,7 +560,7 @@ interface TaskStoreFormatEra {
  * | --------------------------- | ----- |
  * | 1.4.0 ... 1.4.2             | 2     |
  * | 1.5.0-rc.1 ... 1.5.1        | 4     |
- * | 1.5.2 and later             | 5     |
+ * | 1.5.2-rc.1 and later        | 5     |
  *
  * The first row starts at `0.0.0` on purpose: 1.3.x and older have no task
  * store at all, so "2 at most" is true of them and is the answer that warns.
@@ -568,14 +568,17 @@ interface TaskStoreFormatEra {
  * Format 5 adds the positioned byte storage tables - execution positions,
  * their four facts, boundary reservations and operation records - which a
  * format-4 host does not read, and whose durable holds it would therefore
- * fold past. Its row names `1.5.2`, the LOWEST plausible canonical release
- * above the newest stable tag, because of the error ranking above: a wrong
- * pass costs tasks that stay unopened until the next update, a wrong refusal
- * blocks installs including repair installs. Which release actually carries
- * format 5 is a release-cycle fact bound when the change lands, so if 1.5.2
- * ships without it this row moves to the next line before this change
- * merges; `1.5.2` here is the lowest release it could be, never a promise
- * that it is that one.
+ * fold past. Its row names `1.5.2-rc.1`, the LOWEST canonical release that
+ * could carry it: the first release candidate of the first line above the
+ * newest stable tag. The rc, not the stable, for the reason the format-4
+ * row names `1.5.0-rc.1` - a prerelease sorts BELOW its release, so a row
+ * at `1.5.2` would judge every `1.5.2-rc.N` as reading 4 while it in fact
+ * writes 5, and refuse installing an rc over a store its own sibling
+ * wrote. That is the wrong refusal the error ranking above puts second.
+ * Which release actually carries format 5 is a release-cycle fact bound
+ * when the change lands, so if the 1.5.2 line ships without it this row
+ * moves to the next line before this change merges; it is the lowest
+ * release it could be, never a promise that it is that one.
  *
  * Add a row whenever the host's format moves. The host's constant is typed by
  * {@link NewestTaskStoreFormat}, so a bump without a row here fails its
@@ -584,7 +587,7 @@ interface TaskStoreFormatEra {
 const TASK_STORE_FORMAT_ERAS = [
   { from: "0.0.0", taskStore: 2 },
   { from: "1.5.0-rc.1", taskStore: 4 },
-  { from: "1.5.2", taskStore: 5 },
+  { from: "1.5.2-rc.1", taskStore: 5 },
 ] as const satisfies readonly TaskStoreFormatEra[];
 
 type LastTaskStoreFormatEra<Eras extends readonly TaskStoreFormatEra[]> =

@@ -563,7 +563,8 @@ describe("taskStoreFormatReadBy", () => {
     ["1.5.0-rc.2", 4],
     ["1.5.0", 4],
     ["1.5.1", 4],
-    ["1.5.2-rc.1", 4],
+    ["1.5.2-rc.1", 5],
+    ["1.5.2-rc.2", 5],
     ["1.5.2", 5],
     ["1.6.0", 5],
   ])("%s reads task store format %s", (version, reads) => {
@@ -603,7 +604,7 @@ describe("taskStoreFloorBlock", () => {
   });
 
   it("caps the on-disk format at the newest known before comparing", () => {
-    expect(taskStoreFloorBlock("1.5.2", 6)).toBeNull();
+    expect(taskStoreFloorBlock("1.5.2-rc.1", 6)).toBeNull();
     expect(taskStoreFloorBlock("1.4.2", 6)).toEqual({
       targetReads: 2,
       onDisk: 6,
@@ -621,7 +622,7 @@ describe("taskStoreFloorBlock", () => {
       targetReads: 4,
       onDisk: 5,
     });
-    expect(taskStoreFloorBlock("1.5.2", 5)).toBeNull();
+    expect(taskStoreFloorBlock("1.5.2-rc.1", 5)).toBeNull();
   });
 
   it("types the newest format as the table's last row", () => {
