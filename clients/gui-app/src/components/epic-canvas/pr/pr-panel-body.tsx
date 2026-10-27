@@ -24,6 +24,7 @@ import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-p
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { HoverCardGroup } from "@/components/ui/hover-card";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useRecordPrPresence } from "@/hooks/pr/use-pr-presence-probe";
@@ -146,7 +147,8 @@ export function PrPanelBodyContent(props: {
   readonly hasCachedData: boolean;
 }): ReactNode {
   const { openTile } = useEpicTileNavigation();
-  const openOnly = usePrPanelStore((state) => state.openOnly);
+  const stateFilter = usePrPanelStore((state) => state.stateFilter);
+  const setStateFilter = usePrPanelStore((state) => state.setStateFilter);
   // Grouped on the complete list, then filtered: stack membership is decided
   // with every row present, so hiding a merged dependent cannot turn its
   // siblings into a stack they are not in (see `filterPrRepoGroups`).
@@ -155,8 +157,11 @@ export function PrPanelBodyContent(props: {
     [props.items],
   );
   const groups = useMemo(
-    () => (openOnly ? filterPrRepoGroups(allGroups, isOpenPrItem) : allGroups),
-    [allGroups, openOnly],
+    () =>
+      stateFilter === "all"
+        ? allGroups
+        : filterPrRepoGroups(allGroups, (item) => item.state === stateFilter),
+    [allGroups, stateFilter],
   );
   const visibleCount = useMemo(
     () => groups.reduce((count, group) => count + group.items.length, 0),
@@ -274,6 +279,7 @@ export function PrPanelBodyContent(props: {
         icon={GitPullRequest}
         title="No pull requests found for this epic's chats yet"
         description="PRs are discovered from the branches chats worked on."
+        action={null}
         testId="pr-panel-empty"
       />
     );
@@ -309,14 +315,26 @@ export function PrPanelBodyContent(props: {
           testId="pr-panel-error-notice"
         />
       ) : null}
-      {visibleCount === 0 && props.items.length > 0 ? (
-        <p
-          role="status"
-          className="px-3 py-2 text-ui-xs text-muted-foreground"
-          data-testid="pr-panel-all-hidden"
-        >
-          {formatAllHiddenMessage(props.items.length)}
-        </p>
+      {/* Below the banners, so a stale or failed refresh still says so. */}
+      {stateFilter !== "all" && visibleCount === 0 && props.items.length > 0 ? (
+        <SidebarPanelEmptyState
+          icon={GitPullRequest}
+          title={`No ${stateFilter} pull requests`}
+          description={null}
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setStateFilter("all");
+              }}
+            >
+              Show all
+            </Button>
+          }
+          testId="pr-panel-filtered-empty"
+        />
       ) : null}
       {/* One clock for every row's owners card, across repos. */}
       <HoverCardGroup>
@@ -552,16 +570,6 @@ function formatAbsentLayers(count: number): string {
   return count === 1
     ? "1 layer not in this task"
     : `${count} layers not in this task`;
-}
-
-function isOpenPrItem(item: PrLightItem): boolean {
-  return item.state === "open";
-}
-
-function formatAllHiddenMessage(count: number): string {
-  return count === 1
-    ? "The only pull request is merged or closed"
-    : `All ${count} pull requests are merged or closed`;
 }
 
 function formatPrFallbackKey(item: PrLightItem): string {

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -5,6 +6,8 @@ interface SidebarPanelEmptyStateProps {
   readonly icon: LucideIcon;
   readonly title: string;
   readonly description: string | null;
+  /** The way out of the empty state, drawn under the text; `null` for none. */
+  readonly action: ReactNode;
   readonly testId: string | undefined;
 }
 
@@ -27,6 +30,7 @@ export function SidebarPanelEmptyState(props: SidebarPanelEmptyStateProps) {
           </p>
         )}
       </div>
+      {props.action}
     </div>
   );
 }

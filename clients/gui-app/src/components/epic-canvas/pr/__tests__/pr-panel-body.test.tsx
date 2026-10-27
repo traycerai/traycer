@@ -202,7 +202,7 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     canvasHostState.id = "host-a";
-    usePrPanelStore.setState({ openOnly: false });
+    usePrPanelStore.setState({ stateFilter: "all" });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
     resetCanvas();
     useSidebarNodeRevealStore.setState(
@@ -225,7 +225,7 @@ describe("PrPanelBody card list", () => {
 
   afterEach(() => {
     cleanup();
-    usePrPanelStore.setState({ openOnly: false });
+    usePrPanelStore.setState({ stateFilter: "all" });
     resetCanvas();
     useSidebarNodeRevealStore.setState(
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
@@ -564,100 +564,87 @@ describe("PrPanelBody card list", () => {
       { kind: "refresh", hasBinaryPayload: false },
     ]);
   });
-  describe("open-only filter", () => {
-    const stateRows = (): readonly PrLightItem[] => [
-      buildPrItem({ headRefName: "open-head", state: "open" }),
+  describe("state filter", () => {
+    const hiddenByOpen = (): readonly PrLightItem[] => [
       buildPrItem({ headRefName: "merged-head", state: "merged" }),
       buildPrItem({ headRefName: "closed-head", state: "closed" }),
     ];
 
-    it("shows every row while the filter is off", async () => {
-      const epicId = "epic-oo0";
-      renderPanel({ epicId, tabId: "tab-oo0" });
-      await emitSnapshot(epicId, stateRows());
-
-      expect(await screen.findByTestId("mock-pr-card-open-head")).toBeTruthy();
-      expect(screen.getByTestId("mock-pr-card-merged-head")).toBeTruthy();
-      expect(screen.getByTestId("mock-pr-card-closed-head")).toBeTruthy();
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
-    });
-
-    it("keeps open rows and hides merged and closed ones", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo1";
-      renderPanel({ epicId, tabId: "tab-oo1" });
-      await emitSnapshot(epicId, stateRows());
-
-      expect(await screen.findByTestId("mock-pr-card-open-head")).toBeTruthy();
-      expect(screen.queryByTestId("mock-pr-card-merged-head")).toBeNull();
-      expect(screen.queryByTestId("mock-pr-card-closed-head")).toBeNull();
-      // The repo count follows what is shown, and nothing says "all hidden".
-      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
-        "1",
-      );
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
-    });
-
-    it("says every row is merged or closed instead of showing the empty state", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo2";
-      renderPanel({ epicId, tabId: "tab-oo2" });
+    it("lists only the rows in the chosen state", async () => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      const epicId = "epic-sf1";
+      renderPanel({ epicId, tabId: "tab-sf1" });
       await emitSnapshot(epicId, [
-        buildPrItem({ headRefName: "merged-head", state: "merged" }),
-        buildPrItem({ headRefName: "closed-head", state: "closed" }),
-        buildPrItem({ headRefName: "closed-head-2", state: "closed" }),
+        buildPrItem({ headRefName: "open-head", state: "open" }),
+        ...hiddenByOpen(),
       ]);
-
-      const message = await screen.findByTestId("pr-panel-all-hidden");
-      expect(message.textContent).toBe(
-        "All 3 pull requests are merged or closed",
-      );
-      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
-      expect(screen.queryByTestId("pr-repo-group")).toBeNull();
-    });
-
-    it("uses the singular line when the only pull request is merged or closed", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo3";
-      renderPanel({ epicId, tabId: "tab-oo3" });
-      await emitSnapshot(epicId, [
-        buildPrItem({ headRefName: "merged-head", state: "merged" }),
-      ]);
-
-      const message = await screen.findByTestId("pr-panel-all-hidden");
-      expect(message.textContent).toBe(
-        "The only pull request is merged or closed",
-      );
-      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
-    });
-
-    it("still shows the generic empty state when the list itself is empty", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo4";
-      renderPanel({ epicId, tabId: "tab-oo4" });
-      await emitSnapshot(epicId, []);
-
-      expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
-    });
-
-    it("reveals the hidden rows again when the filter is switched off", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo5";
-      renderPanel({ epicId, tabId: "tab-oo5" });
-      await emitSnapshot(epicId, [
-        buildPrItem({ headRefName: "merged-head", state: "merged" }),
-      ]);
-      await screen.findByTestId("pr-panel-all-hidden");
-
-      act(() => {
-        usePrPanelStore.getState().setOpenOnly(false);
-      });
 
       expect(
         await screen.findByTestId("mock-pr-card-merged-head"),
       ).toBeTruthy();
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-open-head")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-closed-head")).toBeNull();
+      // The repo count follows what is shown.
+      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
+        "1",
+      );
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+
+    it("says the filter hid every row and Show all brings them back", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-sf2";
+      renderPanel({ epicId, tabId: "tab-sf2" });
+      await emitSnapshot(epicId, hiddenByOpen());
+
+      const empty = await screen.findByTestId("pr-panel-filtered-empty");
+      expect(empty.textContent).toContain("No open pull requests");
+      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
+      expect(screen.queryByTestId("pr-repo-group")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+
+      expect(usePrPanelStore.getState().stateFilter).toBe("all");
+      expect(
+        await screen.findByTestId("mock-pr-card-merged-head"),
+      ).toBeTruthy();
+      expect(screen.getByTestId("mock-pr-card-closed-head")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+
+    it("keeps a refresh banner above the filtered empty state", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-sf3";
+      renderPanel({ epicId, tabId: "tab-sf3" });
+      await waitFor(() => {
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      });
+      mockWsStreamClient
+        .getSession("pr.subscribeListForEpic", { epicId, mode: "foreground" })
+        ?.emitFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sourceStatus: "gh-unavailable",
+          notice: null,
+          items: [...hiddenByOpen()],
+        });
+
+      const banner = await screen.findByTestId("pr-panel-gh-unavailable");
+      const empty = screen.getByTestId("pr-panel-filtered-empty");
+      expect(
+        banner.compareDocumentPosition(empty) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("still shows the generic empty state when the list itself is empty", async () => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      const epicId = "epic-sf4";
+      renderPanel({ epicId, tabId: "tab-sf4" });
+      await emitSnapshot(epicId, []);
+
+      expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
     });
   });
 
@@ -734,7 +721,7 @@ describe("PrPanelBody card list", () => {
       );
     });
 
-    it("does not invent a stack when Open only hides a fan-in row", async () => {
+    it("does not invent a stack when the Open filter hides a fan-in row", async () => {
       const epicId = "epic-filter-fanin";
       renderPanel({ epicId, tabId: "tab-filter-fanin" });
       await emitSnapshot(epicId, [
@@ -758,7 +745,7 @@ describe("PrPanelBody card list", () => {
       expect(screen.queryByTestId("pr-stack-header")).toBeNull();
 
       act(() => {
-        usePrPanelStore.getState().setOpenOnly(true);
+        usePrPanelStore.getState().setStateFilter("open");
       });
 
       expect(screen.queryByTestId("mock-pr-card-feat-merged")).toBeNull();
@@ -794,7 +781,7 @@ describe("PrPanelBody card list", () => {
       expect(railKinds()).toEqual(["layer-3", "layer-2", "layer-1", "base"]);
 
       act(() => {
-        usePrPanelStore.getState().setOpenOnly(true);
+        usePrPanelStore.getState().setStateFilter("open");
       });
 
       expect(screen.queryByTestId("mock-pr-card-layer-1")).toBeNull();

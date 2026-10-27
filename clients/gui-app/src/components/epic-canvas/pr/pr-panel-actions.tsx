@@ -2,10 +2,21 @@ import { useCallback, type ReactNode } from "react";
 import { ListFilter } from "lucide-react";
 import { RefreshIcon } from "@/components/refresh-icon";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
 import type { PrListSubscriptionResult } from "@/hooks/pr/use-pr-list-subscription";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
+import {
+  PR_STATE_FILTERS,
+  usePrPanelStore,
+  type PrStateFilter,
+} from "@/stores/epics/pr-panel-store";
 
 const PR_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -36,7 +47,7 @@ export function PrPanelActions(props: {
       {notice === null ? null : (
         <PrSourceNoticeHint subject="pull-requests" notice={notice} />
       )}
-      <PrOpenOnlyToggle />
+      <PrStateFilterMenu />
       <Button
         type="button"
         variant="muted"
@@ -52,24 +63,48 @@ export function PrPanelActions(props: {
   );
 }
 
+const PR_STATE_FILTER_LABELS: Readonly<Record<PrStateFilter, string>> = {
+  open: "Open",
+  merged: "Merged",
+  closed: "Closed",
+  all: "All",
+};
+
 /**
- * Hides merged and closed rows. The `muted` variant paints `aria-pressed`
- * as its on state, so the pressed look needs nothing of its own.
+ * Names the listed state on the trigger itself, so the header says what the
+ * list holds while the menu is shut.
  */
-function PrOpenOnlyToggle(): ReactNode {
-  const openOnly = usePrPanelStore((state) => state.openOnly);
-  const toggleOpenOnly = usePrPanelStore((state) => state.toggleOpenOnly);
+function PrStateFilterMenu(): ReactNode {
+  const stateFilter = usePrPanelStore((state) => state.stateFilter);
+  const setStateFilter = usePrPanelStore((state) => state.setStateFilter);
   return (
-    <Button
-      type="button"
-      variant="muted"
-      size="icon-sm"
-      onClick={toggleOpenOnly}
-      aria-pressed={openOnly}
-      aria-label="Show open pull requests only"
-      data-testid="pr-panel-open-only"
-    >
-      <ListFilter aria-hidden />
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="muted"
+          size="sm"
+          data-testid="pr-panel-state-filter"
+        >
+          <ListFilter data-icon="inline-start" aria-hidden />
+          {PR_STATE_FILTER_LABELS[stateFilter]}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup
+          value={stateFilter}
+          onValueChange={(value) => {
+            const next = PR_STATE_FILTERS.find((filter) => filter === value);
+            if (next !== undefined) setStateFilter(next);
+          }}
+        >
+          {PR_STATE_FILTERS.map((filter) => (
+            <DropdownMenuRadioItem key={filter} value={filter}>
+              {PR_STATE_FILTER_LABELS[filter]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
