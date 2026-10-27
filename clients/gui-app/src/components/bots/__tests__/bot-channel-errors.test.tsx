@@ -211,6 +211,7 @@ function mount(openThread: BotOpenThread | null): void {
           <BotChannelView
             botId={BOT_ID}
             hostId={HOST_ID}
+            boundHostId={HOST_ID}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={CHANNEL_ID}

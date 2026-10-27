@@ -516,6 +516,30 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(signIn).toHaveBeenCalledTimes(1);
   });
 
+  it("says why with no Retry or Edit, on the line or on hover, where the message cannot be sent again", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: "Claude is signed out.",
+        signIn: vi.fn(),
+        retry: null,
+        retrying: false,
+        edit: null,
+      }),
+    );
+
+    expect(screen.getByTestId("bot-message-unanswered").textContent).toBe(
+      "Not answered: Claude is signed out. · Sign in",
+    );
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Reply in thread"]);
+  });
+
   it("says a held answer in the warning colour, with Retry alone", () => {
     renderRow(
       memberPost(OPEN_REQUEST),

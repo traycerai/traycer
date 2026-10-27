@@ -148,12 +148,12 @@ function failedActionsOf(
           message.senderUserId ?? null,
         );
   if (failed === null) return null;
-  const { edit } = failed;
+  const { retry, edit } = failed;
   return {
     state: failed.state,
     summary: failed.summary,
     onSignIn: failed.signIn,
-    onRetry: () => failed.retry(message.content),
+    onRetry: retry === null ? null : () => retry(message.content),
     retrying: failed.retrying,
     onEdit: edit === null ? null : () => edit(message.content),
   };
@@ -316,7 +316,8 @@ function BotMessageFrame(props: {
         {props.children}
       </div>
       {!props.hoverActions ||
-      (props.replyInThread === null && props.failed === null) ? null : (
+      (props.replyInThread === null &&
+        (props.failed?.onRetry ?? null) === null) ? null : (
         <MessageActions
           onReplyInThread={props.replyInThread}
           failed={props.failed}
@@ -327,14 +328,15 @@ function BotMessageFrame(props: {
 }
 
 /**
- * A failed message's state, why, and its actions, bound to the row; no Edit
- * on a teammate's, and Sign in only where signing in is the fix.
+ * A failed message's state, why, and its actions, bound to the row; no Retry
+ * or Edit where it cannot be sent again, no Edit on a teammate's, and Sign
+ * in only where signing in is the fix.
  */
 type FailedMessageActions = {
   readonly state: ChatBotFailedRequest["state"];
   readonly summary: string | null;
   readonly onSignIn: (() => void) | null;
-  readonly onRetry: () => void;
+  readonly onRetry: (() => void) | null;
   readonly retrying: boolean;
   readonly onEdit: (() => void) | null;
 };
@@ -356,12 +358,16 @@ function UnansweredLine(props: {
     readonly disabled: boolean;
     readonly onClick: () => void;
   }> = [
-    {
-      label: "Retry",
-      testId: "bot-message-unanswered-retry",
-      disabled: failed.retrying,
-      onClick: failed.onRetry,
-    },
+    ...(failed.onRetry === null
+      ? []
+      : [
+          {
+            label: "Retry",
+            testId: "bot-message-unanswered-retry",
+            disabled: failed.retrying,
+            onClick: failed.onRetry,
+          },
+        ]),
     ...(parked || failed.onEdit === null
       ? []
       : [
@@ -428,7 +434,7 @@ function MessageActions(props: {
       data-testid="bot-message-actions"
       className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
     >
-      {failed === null ? null : (
+      {failed === null || failed.onRetry === null ? null : (
         <>
           <MessageAction
             label="Retry"

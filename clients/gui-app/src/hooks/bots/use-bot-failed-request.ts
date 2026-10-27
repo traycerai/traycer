@@ -20,16 +20,23 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
  * Why the bot did not answer a message of one channel or thread, and Retry,
  * Edit and Sign in for it, while the session that failed or parked on it
  * still holds it (`failedOn`). The reason is the session's, in the words the
- * agent chat's error row gives it. Retry sends the message to the bot again as it is: the
- * same request, re-delivered to the session it went to, with no new row.
- * Edit, on the viewer's own message, hands its text to the box (`onEdit`),
- * whose send replaces it. A retry the host refuses says so where a failed
- * send does (`failure`). Neither is offered by a host that cannot do them
- * (`bot.conversation.send` below 1.1).
+ * agent chat's error row gives it. Retry sends the message to the bot again
+ * as it is: the same request, re-delivered to the session it went to, with
+ * no new row. Edit, on the viewer's own message, hands its text to the box
+ * (`onEdit`), whose send replaces it. A retry the host refuses says so where
+ * a failed send does (`failure`). Retry and Edit are sends, so neither is
+ * offered by a host that cannot do them (`bot.conversation.send` below 1.1)
+ * or before the channel is known; the reason and Sign in are said whatever
+ * the host can send. Sign in opens the providers of the host that runs the
+ * bot (`boundHostId`), which may not be the one serving the tab; with no
+ * such host there is nothing to sign in to.
  */
 export function useBotFailedRequest(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
+  /** The host serving the tab, which takes the sends. */
   readonly hostId: string;
+  /** The host that runs the bot, whose provider signed out; `null` when none does. */
+  readonly boundHostId: string | null;
   readonly botId: string;
   /** The channel; `null` before it is known, when nothing is offered. */
   readonly conversationId: string | null;
@@ -43,8 +50,16 @@ export function useBotFailedRequest(args: {
   requestId: string,
   senderUserId: string | null,
 ) => ChatBotFailedRequest | null {
-  const { client, hostId, botId, conversationId, threadId, failedOn, onEdit } =
-    args;
+  const {
+    client,
+    hostId,
+    boundHostId,
+    botId,
+    conversationId,
+    threadId,
+    failedOn,
+    onEdit,
+  } = args;
   const { fail, clear } = args.failure;
   const sendVersion = useHostMethodSchemaVersion(
     hostId,
@@ -55,7 +70,7 @@ export function useBotFailedRequest(args: {
     sendVersion.major === BOT_CONVERSATION_RETRY_VERSION.major &&
     sendVersion.minor >= BOT_CONVERSATION_RETRY_VERSION.minor;
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
-  const signIn = useProviderSignIn(hostId);
+  const signIn = useProviderSignIn(boundHostId);
   const { mutate, isPending, variables } =
     useBotConversationSendMutation(client);
   const retryingId = isPending
@@ -66,15 +81,15 @@ export function useBotFailedRequest(args: {
       requestId: string,
       senderUserId: string | null,
     ): ChatBotFailedRequest | null => {
-      const session = supported ? failedOn(requestId) : null;
+      const session = failedOn(requestId);
       if (
-        conversationId === null ||
         session === null ||
         (session.state !== "failed" && session.state !== "parked")
       ) {
         return null;
       }
       const reason = session.reason;
+      const channelId = supported ? conversationId : null;
       return {
         state: session.state,
         // A sandbox's refusal in the words the error row gives it, from the
@@ -85,25 +100,32 @@ export function useBotFailedRequest(args: {
             : (sandboxRefusalCopyFor(reason.code, reason.summary)
                 ?.description ?? reason.summary),
         signIn:
-          reason?.action === "sign-in" ? () => signIn(reason.harnessId) : null,
-        retry: (text) => {
-          clear();
-          mutate(
-            {
-              botId,
-              conversationId,
-              text,
-              threadId,
-              announcementId: null,
-              redeliver: { requestId },
-              supersedes: null,
-            },
-            { onError: fail },
-          );
-        },
+          reason?.action === "sign-in" && signIn !== null
+            ? () => signIn(reason.harnessId)
+            : null,
+        retry:
+          channelId === null
+            ? null
+            : (text) => {
+                clear();
+                mutate(
+                  {
+                    botId,
+                    conversationId: channelId,
+                    text,
+                    threadId,
+                    announcementId: null,
+                    redeliver: { requestId },
+                    supersedes: null,
+                  },
+                  { onError: fail },
+                );
+              },
         retrying: retryingId === requestId,
         edit:
-          senderUserId !== null && senderUserId === viewerUserId
+          channelId !== null &&
+          senderUserId !== null &&
+          senderUserId === viewerUserId
             ? (text) => onEdit({ requestId, text })
             : null,
       };
@@ -126,14 +148,18 @@ export function useBotFailedRequest(args: {
 }
 
 /**
- * Settings ▸ Providers on the bot's host, at the harness that signed the
- * person out, where the agent chat sends them for the same error; the
- * section root when the harness is not one this client knows.
+ * Settings ▸ Providers on the host that runs the bot, at the harness that
+ * signed the person out, where the agent chat sends them for the same
+ * error; the section root when the harness is not one this client knows.
+ * `null` when no host runs the bot.
  */
-function useProviderSignIn(hostId: string): (harnessId: string) => void {
+function useProviderSignIn(
+  hostId: string | null,
+): ((harnessId: string) => void) | null {
   const { openSettings } = useSystemTabModalActions();
-  return useCallback(
+  const signIn = useCallback(
     (harnessId: string) => {
+      if (hostId === null) return;
       const harness = guiHarnessIdSchema.safeParse(harnessId);
       const focus = useProvidersFocusStore.getState();
       if (harness.success) {
@@ -152,4 +178,5 @@ function useProviderSignIn(hostId: string): (harnessId: string) => void {
     },
     [openSettings, hostId],
   );
+  return hostId === null ? null : signIn;
 }

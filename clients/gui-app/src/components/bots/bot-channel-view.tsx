@@ -126,7 +126,14 @@ function channelConversation(
  */
 export function BotChannelView(props: {
   readonly botId: string;
+  /** The host serving the tab: the channel is read and sent through it. */
   readonly hostId: string;
+  /**
+   * The host that runs the bot, as its snapshot names it: where a provider
+   * the bot's turn found signed out is signed in again. `null` when no host
+   * runs it, which leaves nothing to sign in to.
+   */
+  readonly boundHostId: string | null;
   readonly botTitle: string;
   /** What the bot does, for the top of a channel nobody has written in. */
   readonly directive: string | null;
@@ -144,6 +151,7 @@ export function BotChannelView(props: {
   const {
     botId,
     hostId,
+    boundHostId,
     botTitle,
     directive,
     appConversationChatId,
@@ -213,6 +221,7 @@ export function BotChannelView(props: {
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
+    boundHostId,
     botId,
     conversationId: channelId,
     threadId: null,
@@ -423,6 +432,7 @@ export function BotChannelView(props: {
               key={openThreadPostId}
               botId={botId}
               hostId={hostId}
+              boundHostId={boundHostId}
               botTitle={botTitle}
               conversationId={channel.conversationId}
               originMessageId={openThreadPostId}

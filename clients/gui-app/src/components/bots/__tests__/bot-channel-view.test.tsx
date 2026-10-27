@@ -343,6 +343,7 @@ function mount(options: MountOptions): {
           <BotChannelView
             botId={BOT_ID}
             hostId={HOST_ID}
+            boundHostId={HOST_ID}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}

@@ -29,13 +29,18 @@ export interface ChatBotFailedRequest {
   readonly summary: string | null;
   /** Opens the provider's sign-in on the bot's host; `null` unless signing in is the fix. */
   readonly signIn: (() => void) | null;
-  /** Sends it again; `text` is the message's own. */
-  readonly retry: (text: string) => void;
+  /**
+   * Sends it again; `text` is the message's own. `null` where it cannot be
+   * sent again: a host that cannot re-deliver, or a message whose text is not
+   * loaded yet.
+   */
+  readonly retry: ((text: string) => void) | null;
   /** `true` while a retry of it is being sent. */
   readonly retrying: boolean;
   /**
    * Puts `text`, the message's own, in the box that replaces it; `null` on
-   * a teammate's message, which only its writer can replace.
+   * a teammate's message, which only its writer can replace, and wherever
+   * Retry is `null`.
    */
   readonly edit: ((text: string) => void) | null;
 }
@@ -102,8 +107,7 @@ export interface ChatBotPresentation {
   /**
    * A member's message the bot failed to answer, by its request id and its
    * writer: why, and its actions, while the session that failed or parked on
-   * it still holds it; `null` for any other request, and where nothing can
-   * retry it.
+   * it still holds it; `null` for any other request.
    */
   readonly failedRequest:
     | ((

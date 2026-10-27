@@ -451,6 +451,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
     <BotChannelView
       botId={BOT_ID}
       hostId={HOST_ID}
+      boundHostId={HOST_ID}
       botTitle="Tracy"
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}

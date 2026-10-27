@@ -14,6 +14,7 @@ import {
   useBotSendFailure,
   type BotSendFailure,
 } from "@/hooks/bots/use-bot-send-failure";
+import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -29,6 +30,7 @@ import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentatio
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
+import { cn } from "@/lib/utils";
 
 /**
  * The open post's thread as the channel's thread list has it: listed; not
@@ -59,7 +61,10 @@ export type BotThreadPanelThread =
  */
 export function BotThreadPanel(props: {
   readonly botId: string;
+  /** The host serving the tab: reads and sends go to it. */
   readonly hostId: string;
+  /** The host that runs the bot, where a signed-out provider is signed in again; `null` when none does. */
+  readonly boundHostId: string | null;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -136,6 +141,7 @@ export function BotThreadPanel(props: {
 type ThreadPanelBodyProps = {
   readonly botId: string;
   readonly hostId: string;
+  readonly boundHostId: string | null;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -151,13 +157,15 @@ type ThreadPanelBodyProps = {
  * nothing on hover: its writer, its time and its text, read from the
  * channel's row (fetched when the channel has not loaded it), and the line
  * under it while the bot failed to answer it, whose Retry posts it again in
- * the channel and whose Edit hands it to the channel's box. Nothing while
- * the post is neither loaded nor listed.
+ * the channel and whose Edit hands it to the channel's box. Until the
+ * channel's row is there its text is not known, so the line says why with no
+ * Retry or Edit. Nothing while the post is neither loaded nor listed.
  */
 function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const {
     botId,
     hostId,
+    boundHostId,
     botTitle,
     conversationId,
     originMessageId,
@@ -175,6 +183,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
+    boundHostId,
     botId,
     conversationId,
     threadId: null,
@@ -182,18 +191,16 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     onEdit: onEditPost,
     failure: sendFailure,
   });
-  const presentation = useMemo<ChatBotPresentation>(
-    () => ({
-      botTitle,
-      scrollToMessage: null,
-      replyFollowsPost: null,
-      repliedPost: null,
-      threadLine: null,
-      openThread: null,
-      openAnnouncementThread: null,
-      chooseOption: null,
-      failedRequest,
-    }),
+  const loadedPresentation = useMemo(
+    () => originPresentation(botTitle, failedRequest),
+    [botTitle, failedRequest],
+  );
+  const unloadedPresentation = useMemo(
+    () =>
+      originPresentation(botTitle, (requestId, senderUserId) => {
+        const failed = failedRequest(requestId, senderUserId);
+        return failed === null ? null : { ...failed, retry: null, edit: null };
+      }),
     [botTitle, failedRequest],
   );
   const anchor =
@@ -211,17 +218,23 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
       fetchCold
     >
       {(post) => {
-        const row = threadOriginRow({
+        const origin = threadOriginRow({
           post,
           anchor,
           senderLabel: anchorSenderLabel,
           senderAvatarUrl,
         });
-        return row === null ? null : (
-          <div className="shrink-0 px-2 pt-2" data-testid="bot-thread-anchor">
+        return origin === null ? null : (
+          <div
+            className="shrink-0 px-2 pt-2"
+            data-testid="bot-thread-anchor"
+            data-loaded={origin.loaded ? "true" : "false"}
+          >
             <ChatBotMessage
-              message={row}
-              presentation={presentation}
+              message={origin.row}
+              presentation={
+                origin.loaded ? loadedPresentation : unloadedPresentation
+              }
               hoverActions={false}
             />
           </div>
@@ -229,6 +242,24 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
       }}
     </ChannelPost>
   );
+}
+
+/** The origin's row: no thread to open, no jump, no options to pick. */
+function originPresentation(
+  botTitle: string,
+  failedRequest: ChatBotPresentation["failedRequest"],
+): ChatBotPresentation {
+  return {
+    botTitle,
+    scrollToMessage: null,
+    replyFollowsPost: null,
+    repliedPost: null,
+    threadLine: null,
+    openThread: null,
+    openAnnouncementThread: null,
+    chooseOption: null,
+    failedRequest,
+  };
 }
 
 /** Under the post: the thread, a box that starts one, or why neither shows. */
@@ -247,7 +278,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       />
     );
   }
-  return <UnlistedThread thread={thread} />;
+  return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
 }
 
 /** A question, proposal or direct post nobody has replied under yet. */
@@ -276,13 +307,26 @@ function UnopenedThread(props: {
 /** A box that never edits: a thread nobody has replied in has nothing to edit. */
 function noEdit(): void {}
 
-/** The rule and reply count, the replies and the box of a listed thread. */
+/**
+ * The rule and reply count, the replies and the box of a listed thread. A
+ * thread with no reply yet draws neither the count nor room for replies, so
+ * its box follows the post; its transcript stays subscribed, and takes the
+ * room once a reply is listed.
+ */
 function ListedThread(
   props: Omit<ThreadPanelBodyProps, "thread"> & {
     readonly thread: BotThreadSummary;
   },
 ): ReactNode {
-  const { botId, hostId, botTitle, thread, resolveMember, sendFailure } = props;
+  const {
+    botId,
+    hostId,
+    boundHostId,
+    botTitle,
+    thread,
+    resolveMember,
+    sendFailure,
+  } = props;
   const client = useTabHostClient();
   const { mutate: send, isPending: sending } =
     useBotConversationSendMutation(client);
@@ -301,6 +345,7 @@ function ListedThread(
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
+    boundHostId,
     botId,
     conversationId,
     threadId,
@@ -344,26 +389,37 @@ function ListedThread(
       threadId,
     ],
   );
+  const hasReplies = thread.replyCount > 0;
   return (
     <>
+      {hasReplies ? (
+        <div
+          className="flex shrink-0 items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
+          data-testid="bot-thread-reply-count"
+        >
+          <span className="shrink-0">
+            {thread.replyCount === 1
+              ? "1 reply"
+              : `${thread.replyCount} replies`}
+          </span>
+          <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+        </div>
+      ) : null}
       <div
-        className="flex shrink-0 items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
-        data-testid="bot-thread-reply-count"
+        className={cn("flex min-h-0 flex-col", hasReplies && "flex-1")}
+        data-testid="bot-thread-replies"
+        data-has-replies={hasReplies ? "true" : "false"}
       >
-        <span className="shrink-0">
-          {thread.replyCount === 1 ? "1 reply" : `${thread.replyCount} replies`}
-        </span>
-        <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+        <BotChatTranscript
+          botId={botId}
+          chatId={thread.threadId}
+          hostId={hostId}
+          title={botTitle}
+          instanceId={`bot-thread:${thread.threadId}`}
+          surface={surface}
+          resolveMember={resolveMember}
+        />
       </div>
-      <BotChatTranscript
-        botId={botId}
-        chatId={thread.threadId}
-        hostId={hostId}
-        title={botTitle}
-        instanceId={`bot-thread:${thread.threadId}`}
-        surface={surface}
-        resolveMember={resolveMember}
-      />
       <BotReplyingStrip
         botTitle={botTitle}
         activity={activity}
@@ -385,32 +441,47 @@ function ListedThread(
   );
 }
 
-/** A thread the list cannot show yet: waited for, or failed to read. */
+/**
+ * A thread the list cannot show yet: waited for, or failed to read. With no
+ * box here, a retry of the post above that the host refuses is said here.
+ */
 function UnlistedThread(props: {
   readonly thread: BotThreadPanelThread;
+  readonly sendFailure: BotSendFailure;
 }): ReactNode {
+  const sendFailed = props.sendFailure.failed ? (
+    <div className="shrink-0 px-4 pt-2">
+      <BotSendFailedNotice testId="bot-thread-send-failed" />
+    </div>
+  ) : null;
   if (props.thread.kind === "failed") {
     return (
-      <div className="p-4">
-        <BotReadFailure
-          message="Couldn't load this thread."
-          onRetry={props.thread.retry}
-          testId="bot-thread-error"
-        />
-      </div>
+      <>
+        {sendFailed}
+        <div className="p-4">
+          <BotReadFailure
+            message="Couldn't load this thread."
+            onRetry={props.thread.retry}
+            testId="bot-thread-error"
+          />
+        </div>
+      </>
     );
   }
   return (
-    <div
-      className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
-      aria-busy="true"
-      data-testid="bot-thread-loading"
-    >
-      <AgentSpinningDots
-        className={undefined}
-        testId={undefined}
-        variant={undefined}
-      />
-    </div>
+    <>
+      {sendFailed}
+      <div
+        className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
+        aria-busy="true"
+        data-testid="bot-thread-loading"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      </div>
+    </>
   );
 }

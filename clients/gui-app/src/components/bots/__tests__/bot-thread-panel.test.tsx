@@ -358,6 +358,7 @@ function mountPanel(
             <BotThreadPanel
               botId={BOT_ID}
               hostId={HOST_ID}
+              boundHostId={HOST_ID}
               botTitle="Release Bot"
               conversationId={CONVERSATION_ID}
               originMessageId={originOf(thread)}
@@ -446,6 +447,33 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
 });
 
 describe("<BotThreadPanel /> a listed thread", () => {
+  it("puts the box right under the post of a listed thread with no reply yet, with no count or rule, and keeps its replies subscribed", () => {
+    const zero = listed("user-teammate");
+    if (zero.kind !== "listed") throw new Error("expected a listed thread");
+    mountPanel(
+      { kind: "listed", thread: { ...zero.thread, replyCount: 0 } },
+      [],
+    );
+
+    expect(screen.queryByTestId("bot-thread-reply-count")).toBeNull();
+    const replies = screen.getByTestId("bot-thread-replies");
+    expect(replies.getAttribute("data-has-replies")).toBe("false");
+    expect(replies.className).not.toContain("flex-1");
+    expect(within(replies).getByTestId("bot-chat-transcript")).toBeTruthy();
+    expect(screen.getByTestId("bot-thread-anchor").nextElementSibling).toBe(
+      replies,
+    );
+    cleanup();
+
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+    const listedReplies = screen.getByTestId("bot-thread-replies");
+    expect(listedReplies.getAttribute("data-has-replies")).toBe("true");
+    expect(listedReplies.className).toContain("flex-1");
+    expect(screen.getByTestId("bot-thread-reply-count").textContent).toBe(
+      "1 reply",
+    );
+  });
+
   it("posts the option a person clicks as their next message in that thread", async () => {
     const user = userEvent.setup();
     mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
@@ -972,7 +1000,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(screen.getByText("Hold for now")).toBeTruthy();
   });
 
-  it("offers neither on the reply nor on the anchor post when the host negotiated bot.conversation.send 1.0", () => {
+  it("says why on the reply and on the anchor post, with neither Retry nor Edit, when the host negotiated bot.conversation.send 1.0", () => {
     negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
     channelMessages = [
       memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
@@ -1001,10 +1029,105 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
 
     expect(screen.getByText("Hold for now")).toBeTruthy();
     expect(screen.getByText("Ship it?")).toBeTruthy();
+    expect(
+      within(replyRow()).getByTestId("bot-message-unanswered").textContent,
+    ).toBe("Not answered");
+    expect(
+      within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+        "bot-message-unanswered",
+      ).textContent,
+    ).toBe("Not answered");
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
-    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered-edit")).toBeNull();
   });
+
+  it("says why on a failed anchor post whose row has not loaded, offering Retry and Edit only once its text is there", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...threadFailedOn(POST_REQUEST).threads[THREAD_ID],
+            reason: {
+              summary: "Claude is signed out.",
+              code: null,
+              harnessId: "claude",
+              action: "sign-in",
+            },
+          },
+        },
+      },
+    });
+    mountPanel(listed(VIEWER_USER_ID), []);
+
+    const bare = screen.getByTestId("bot-thread-anchor");
+    expect(bare.getAttribute("data-loaded")).toBe("false");
+    expect(within(bare).getByTestId("bot-message-unanswered").textContent).toBe(
+      "Not answered: Claude is signed out. · Sign in",
+    );
+    expect(
+      within(bare).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
+    expect(
+      within(bare).queryByTestId("bot-message-unanswered-edit"),
+    ).toBeNull();
+
+    act(() => {
+      mocks.channelHandle?.store.setState({
+        messages: [
+          memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+        ],
+      });
+    });
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(anchor.getAttribute("data-loaded")).toBe("true");
+    expect(
+      within(anchor).getByTestId("bot-message-unanswered").textContent,
+    ).toBe("Not answered: Claude is signed out. · Retry · Edit · Sign in");
+    await user.click(
+      within(anchor).getByTestId("bot-message-unanswered-retry"),
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("Ship it?");
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
+    await user.click(within(anchor).getByTestId("bot-message-unanswered-edit"));
+    expect(onEditPost).toHaveBeenCalledWith({
+      requestId: POST_REQUEST,
+      text: "Ship it?",
+    });
+  });
+
+  it.each([
+    ["not listed yet", { kind: "pending" } as const],
+    ["failed to read", { kind: "failed", retry: () => undefined } as const],
+  ])(
+    "says a refused retry of the anchor post in the panel while the thread is %s",
+    async (_name, thread) => {
+      const user = userEvent.setup();
+      sendAnswer = () => Promise.reject(new Error("host refused the retry"));
+      channelMessages = [
+        memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+      ];
+      activityStore.setState({ activity: threadFailedOn(POST_REQUEST) });
+      mountPanel(thread, []);
+      expect(screen.queryByTestId("bot-thread-send-failed")).toBeNull();
+
+      await user.click(
+        within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+          "bot-message-unanswered-retry",
+        ),
+      );
+
+      expect(sent).toHaveLength(1);
+      expect(
+        (await screen.findByTestId("bot-thread-send-failed")).textContent,
+      ).toBe("Couldn't send. Edit and try again.");
+    },
+  );
 
   it("offers Retry on a reply its thread's session parked on, re-delivered in the thread", async () => {
     const user = userEvent.setup();

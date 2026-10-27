@@ -193,7 +193,8 @@ import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const HOST_ID = "host-bound";
+/** The host serving the tab, which takes the sends. */
+const HOST_ID = "host-tab";
 const CHANNEL_ID = "conversation-channel";
 const THREAD_ID = "thread-1";
 const POST_ID = "post-1";
@@ -201,6 +202,8 @@ const POST_REQUEST = "req-post";
 const POST_TEXT = "Is CI green?";
 
 const TEAMMATE_USER_ID = "user-teammate";
+/** The host that runs the bot: another host than the one serving the tab. */
+const BOUND_HOST_ID = "host-runs-bot";
 
 const resolveMember: BotMemberResolver = (userId) =>
   userId === TEAMMATE_USER_ID
@@ -327,6 +330,8 @@ function createChannelStore(
 }
 
 let sent: ReadonlyArray<BotConversationSendRequest>;
+/** The bound host the view is given; a case may say no host runs the bot. */
+let boundHostId: string | null;
 /** While set, the host holds each send until it settles, then answers `queued`. */
 let heldSends: Promise<void> | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
@@ -387,6 +392,7 @@ function mountChannelWith(
             <BotChannelView
               botId={BOT_ID}
               hostId={HOST_ID}
+              boundHostId={boundHostId}
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}
@@ -410,6 +416,7 @@ function channelBox(): HTMLTextAreaElement {
 
 beforeEach(() => {
   sent = [];
+  boundHostId = BOUND_HOST_ID;
   heldSends = null;
   onOpenThread.mockClear();
   mocks.openSettings.mockClear();
@@ -487,25 +494,51 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
 });
 
 describe("<BotChannelView /> a host that cannot retry or replace", () => {
-  it("offers neither Retry nor Edit on a host that negotiated bot.conversation.send 1.0", () => {
-    negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
-    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
-    mountChannel(null, memberPost(VIEWER_USER_ID));
+  /** The trunk failed on the post with a sign-out, the fix the person can still make. */
+  function signedOut(): BotActivity {
+    return {
+      trunk: {
+        ...failedOn(POST_REQUEST),
+        reason: {
+          summary: "Claude is signed out.",
+          code: null,
+          harnessId: "claude",
+          action: "sign-in",
+        },
+      },
+      threads: {},
+    };
+  }
 
-    expect(screen.getByText(POST_TEXT)).toBeTruthy();
+  /** The post's line says why and offers Sign in, with no Retry or Edit anywhere. */
+  function expectFailureWithoutSends(): void {
+    const line = within(screen.getByTestId("bot-member-row")).getByTestId(
+      "bot-message-unanswered",
+    );
+    expect(line.textContent).toBe(
+      "Not answered: Claude is signed out. · Sign in",
+    );
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered-edit")).toBeNull();
+  }
+
+  it("says why the post was not answered, and offers Sign in but neither Retry nor Edit, on a host that negotiated bot.conversation.send 1.0", () => {
+    negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
+    activityStore.setState({ activity: signedOut() });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expectFailureWithoutSends();
   });
 
-  it("offers neither while no handshake with the host is known", () => {
+  it("says why, and offers neither Retry nor Edit, while no handshake with the host is known", () => {
     resetBotFailedRequestSupport();
     signInViewer(VIEWER_USER_ID);
-    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    activityStore.setState({ activity: signedOut() });
     mountChannel(null, memberPost(VIEWER_USER_ID));
 
-    expect(screen.getByText(POST_TEXT)).toBeTruthy();
-    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
-    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expectFailureWithoutSends();
   });
 
   it("offers both once the host's handshake reaches 1.1, without remounting", () => {
@@ -874,7 +907,7 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
     );
   });
 
-  it("adds Sign in for a sign-out, which opens Settings ▸ Providers on the bot's host at that provider", async () => {
+  it("adds Sign in for a sign-out, which opens Settings ▸ Providers at that provider on the host that runs the bot, not the one serving the tab", async () => {
     const user = userEvent.setup();
     activityStore.setState({
       activity: trunkWithReason("failed", {
@@ -894,12 +927,29 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
 
     const focus = useProvidersFocusStore.getState();
     expect(focus.focusHarnessId).toBe("claude");
-    expect(focus.focusHostId).toBe(HOST_ID);
-    expect(focus.focusTargetHostId).toBe(HOST_ID);
+    expect(focus.focusHostId).toBe(BOUND_HOST_ID);
+    expect(focus.focusTargetHostId).toBe(BOUND_HOST_ID);
     expect(mocks.openSettings).toHaveBeenCalledTimes(1);
     expect(mocks.openSettings.mock.calls[0][0].section).toBe("providers");
-    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(BOUND_HOST_ID);
     expect(sent).toEqual([]);
+  });
+
+  it("offers no Sign in while no host runs the bot, and still says why", () => {
+    boundHostId = null;
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: "Claude is signed out.",
+        code: null,
+        harnessId: "claude",
+        action: "sign-in",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(lineOf(screen.getByTestId("bot-member-row")).textContent).toBe(
+      "Not answered: Claude is signed out. · Retry · Edit",
+    );
   });
 
   it("opens Settings on the bot's host with no earlier focus left armed when the harness is not one this client knows", async () => {
@@ -934,7 +984,7 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       startSignIn: false,
     });
     expect(mocks.openSettings).toHaveBeenCalledTimes(1);
-    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(BOUND_HOST_ID);
   });
 
   it("says a parked post in the warning colour with the parked summary, and offers Retry alone", () => {
