@@ -3,7 +3,10 @@ import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -46,17 +49,21 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-function cloudRow(isOwnedByViewer: boolean): CloudChatSummary {
+function cloudRow(
+  isOwnedByViewer: boolean,
+  ownerHostId: string,
+  title: string,
+): CloudChatSummary {
   return {
     identity: {
       taskId: EPIC_ID,
       chatId: CHAT_ID,
       ownerUserId: isOwnedByViewer ? VIEWER_ID : "collaborator-1",
     },
-    ownerHostId: mockLocalHostEntry.hostId,
+    ownerHostId,
     createdAt: 1,
     visibility: "task",
-    title: CLOUD_TITLE,
+    title,
     isTitleEditedByUser: false,
     parentChatId: null,
     isArchived: false,
@@ -173,7 +180,9 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
   });
 
   it("reads the cloud title for a chat the projection holds no record of", async () => {
-    const fixture = createFixture([cloudRow(true)]);
+    const fixture = createFixture([
+      cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
+    ]);
     fixtures.push(fixture);
     const rendered = renderTitle(fixture);
 
@@ -196,19 +205,38 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     expect(rendered.result.current).toBe("Renamed");
   });
 
+  // The wrong row is listed FIRST in each case below, so a lookup that matched
+  // on the id alone would take it on list order.
   it("ignores a collaborator's row sharing the host-minted id", async () => {
-    const fixture = createFixture([cloudRow(false)]);
+    const fixture = createFixture([
+      cloudRow(false, mockLocalHostEntry.hostId, "Collaborator's chat"),
+      cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
+    ]);
     fixtures.push(fixture);
     const rendered = renderTitle(fixture);
 
     await waitFor(() => {
-      expect(fixture.requests.value).toBe(1);
+      expect(rendered.result.current).toBe(CLOUD_TITLE);
     });
-    expect(rendered.result.current).toBe("Untitled agent");
+  });
+
+  it("ignores the viewer's own row minted on another host under the same id", async () => {
+    const fixture = createFixture([
+      cloudRow(true, mockRemoteHostEntry.hostId, "Other host's chat"),
+      cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
+    ]);
+    fixtures.push(fixture);
+    const rendered = renderTitle(fixture);
+
+    await waitFor(() => {
+      expect(rendered.result.current).toBe(CLOUD_TITLE);
+    });
   });
 
   it("does not consult the cloud list when the projection holds the record untitled", async () => {
-    const fixture = createFixture([cloudRow(true)]);
+    const fixture = createFixture([
+      cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
+    ]);
     fixtures.push(fixture);
     fixture.handle.store.setState({
       chats: { allIds: [CHAT_ID], byId: { [CHAT_ID]: projectedChat("") } },

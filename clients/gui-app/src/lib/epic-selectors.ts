@@ -1951,10 +1951,20 @@ function useCloudChatTitleForAbsentRecord(
   // The OWNER is half the identity, not a refinement of the id: `chatId` is
   // host-minted and the list carries every task-visible row including
   // collaborators'. A local chat tile is the viewer's own by construction, so
-  // an id-only match could label this tab with a collaborator's chat.
+  // an id-only match could label this tab with a collaborator's chat. The
+  // HOST is the other half for the viewer's own rows: two of their hosts can
+  // mint the same id under one task, so a tab bound to a real host takes only
+  // the row that host minted - the same binding the projected-title path
+  // compares. A tab whose binding is still the placeholder has no host to
+  // hold the row to.
+  const boundHostId =
+    node.hostId === UNKNOWN_HOST_PLACEHOLDER ? null : node.hostId;
   const title =
     cloudChats.data?.chats.find(
-      (chat) => chat.identity.chatId === node.id && cloudRowIsViewersOwn(chat),
+      (chat) =>
+        chat.identity.chatId === node.id &&
+        cloudRowIsViewersOwn(chat) &&
+        (boundHostId === null || chat.ownerHostId === boundHostId),
     )?.title ?? null;
   return title !== null && title.length > 0 ? title : null;
 }
