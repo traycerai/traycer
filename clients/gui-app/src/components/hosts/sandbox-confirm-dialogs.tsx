@@ -42,6 +42,7 @@ import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import {
   SANDBOX_SESSIONS_CAPTION,
   sandboxDestroySessionsSentence,
@@ -206,11 +207,13 @@ function VerbConfirmDialog(
   },
 ): ReactNode {
   const verb = useSandboxVerb(props.sandbox.id);
+  const operation = useSandboxOperation(props.sandbox.id);
+  const pending = operation?.kind === "pending";
   const report = useDialogSessions(props.sandbox, props.open);
   return (
     <Dialog
       open={props.open}
-      onOpenChange={verb.isPending ? undefined : props.onOpenChange}
+      onOpenChange={pending ? undefined : props.onOpenChange}
     >
       <DialogContent
         layout="banded"
@@ -237,7 +240,7 @@ function VerbConfirmDialog(
             type="button"
             variant="ghost"
             size="sm"
-            disabled={verb.isPending}
+            disabled={pending}
             onClick={() => props.onOpenChange(false)}
           >
             Cancel
@@ -245,12 +248,12 @@ function VerbConfirmDialog(
           <Button
             type="button"
             size="sm"
-            disabled={verb.isPending}
+            disabled={pending}
             data-testid={`sandbox-confirm-${props.verb}-action`}
             onClick={() => {
+              props.onOpenChange(false);
               verb.mutate(props.verb, {
                 onSuccess: (outcome) => {
-                  props.onOpenChange(false);
                   toastSandboxVerbOutcome(
                     props.verb,
                     outcome,
@@ -260,7 +263,7 @@ function VerbConfirmDialog(
               });
             }}
           >
-            {verb.isPending ? (
+            {pending ? (
               <AgentSpinningDots
                 className={undefined}
                 testId={undefined}
@@ -348,6 +351,7 @@ export function SandboxDestroyDialog(
   const [typed, setTyped] = useState("");
   const inputId = useId();
   const destroy = useSandboxDestroy(props.sandbox);
+  const operation = useSandboxOperation(props.sandbox.id);
   const configuration = useDialogConfiguration(props.sandbox);
   const report = useDialogSessions(props.sandbox, props.open);
   const team = configuration.kind === "team";
@@ -369,13 +373,13 @@ export function SandboxDestroyDialog(
       description={`${sandboxDestroySessionsSentence(report, team, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
       cascadeSummary={null}
       actionLabel="Destroy"
-      isPending={destroy.isPending}
+      isPending={operation?.kind === "pending" && operation.verb === "destroy"}
       onConfirm={() => {
         if (reason !== null) return;
+        setTyped("");
+        props.onOpenChange(false);
         destroy.mutate(undefined, {
           onSuccess: (gone) => {
-            setTyped("");
-            props.onOpenChange(false);
             if (gone) {
               toast.success(`Destroyed ${name}`);
               props.onDestroyed?.();

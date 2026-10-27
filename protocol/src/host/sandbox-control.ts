@@ -325,6 +325,7 @@ const SANDBOX_SUPPORT_REFERENCES: ReadonlyMap<string, string> = new Map([
   ["envelope-delivery", "SBX-0520"],
   ["suspend", "SBX-0601"],
   ["stop", "SBX-0701"],
+  ["destroy", "SBX-0801"],
 ]);
 
 /**

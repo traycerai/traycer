@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderWithProviders,
   screen,
   within,
 } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 import { EMPTY_FOCUS_MODEL } from "@/lib/home-focus/build-focus-model";
@@ -107,6 +109,15 @@ import {
 
 const NAME = "build-box";
 const SANDBOX = sandboxSummaryFixture({ displayName: NAME, state: "awake" });
+
+function render(element: ReactElement) {
+  const client = new QueryClient();
+  return renderWithProviders(element, {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 function sessionsLine(): string {
   return screen.getByTestId("sandbox-confirm-sessions-line").textContent;

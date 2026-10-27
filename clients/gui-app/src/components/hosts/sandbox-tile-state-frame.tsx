@@ -21,6 +21,7 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -277,15 +278,17 @@ function SandboxTileWakeButton(props: {
   readonly label: string;
 }): ReactNode {
   const verb = useSandboxVerb(props.sandboxId);
+  const operation = useSandboxOperation(props.sandboxId);
+  const pending = operation?.kind === "pending";
   return (
     <Button
       type="button"
       size="sm"
-      disabled={verb.isPending}
+      disabled={pending}
       data-testid="sandbox-tile-overlay-wake"
       onClick={() => verb.mutate(props.verb)}
     >
-      {verb.isPending ? (
+      {pending ? (
         <AgentSpinningDots
           className={undefined}
           testId={undefined}

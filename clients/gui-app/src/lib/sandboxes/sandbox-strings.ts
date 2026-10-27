@@ -6,7 +6,10 @@
  *
  * Amounts are millicredits; a credit is a dollar, so a price reads `$0.12`.
  */
-import type { SandboxOs } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxLifecycleVerb,
+  SandboxOs,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -494,6 +497,28 @@ export const CANCEL_THE_MESSAGE = "Cancel the message";
 export const COPY_SUPPORT_REFERENCE = "Copy support reference";
 export const DETAILS = "Details";
 export const START_NEW_WORK_ON_ANOTHER_HOST = "Start new work on another host";
+
+const ROW_VERB_PENDING: Record<SandboxLifecycleVerb | "destroy", string> = {
+  start: "Starting · pending",
+  resume: "Resuming · pending",
+  suspend: "Suspending · pending",
+  stop: "Stopping · pending",
+  destroy: "Destroying · pending",
+};
+
+export function sandboxVerbPendingLine(
+  verb: SandboxLifecycleVerb | "destroy",
+): string {
+  return ROW_VERB_PENDING[verb];
+}
+
+export function sandboxVerbFailureLine(
+  verb: SandboxLifecycleVerb | "destroy",
+  name: string,
+  reference: string,
+): string {
+  return `Couldn't ${verb} ${name} · ${reference}`;
+}
 
 /** `payments-ledger is awake, but Acme's settings didn't apply`. */
 export function settingsDidntApplyLine(
