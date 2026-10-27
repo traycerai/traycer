@@ -98,7 +98,9 @@ export function SubagentConversation(props: SubagentConversationProps) {
                 turnId={null}
                 settledNotice={null}
                 settledNoticeFindUnitId={null}
-                autonomousResumeVariant="card"
+                // A subagent's run has no turns of its own for a background
+                // event to head, so nothing is folded and nothing ends here.
+                backgroundCard={null}
               />
             </ChatBlockNavigationAnchor>
           );

@@ -458,6 +458,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={setOpen}
       header={header}
@@ -895,6 +896,7 @@ function A2ASendToolSegment(
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={handleOpenChange}
       header={header}

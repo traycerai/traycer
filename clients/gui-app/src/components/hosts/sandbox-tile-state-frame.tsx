@@ -3,9 +3,10 @@ import {
   chatServingHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { cn } from "@/lib/utils";
-import { useIsMutating } from "@tanstack/react-query";
+
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -163,7 +164,8 @@ function SandboxTileOverlayLayer(props: {
   // up: say so, rather than offering a second Resume while the directory
   // still reads the state it had before the wake.
   const waking =
-    useIsMutating({ mutationKey: sandboxMutationKeys.wake(props.hostId) }) > 0;
+    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(props.hostId) }) >
+    0;
   const overlay: SandboxTileOverlay =
     waking && props.overlay.kind === "asleep"
       ? {

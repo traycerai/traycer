@@ -172,7 +172,11 @@ function renderTimeline(options: RenderTimelineOptions) {
       }}
     >
       <ChatTimeline
-        rows={transcriptListRows({ window: null, rendered: messages })}
+        rows={transcriptListRows({
+          window: null,
+          rendered: messages,
+          splitLongTurns: true,
+        })}
         taskTitle={options.taskTitle ?? "Test transcript"}
         backgroundToolBlockIds={backgroundToolBlockIds}
         getMessageActions={getMessageActions}
@@ -631,7 +635,11 @@ describe("ChatTimeline", () => {
     return (
       <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
         <ChatTimeline
-          rows={transcriptListRows({ window: null, rendered: messages })}
+          rows={transcriptListRows({
+            window: null,
+            rendered: messages,
+            splitLongTurns: true,
+          })}
           taskTitle="Test transcript"
           backgroundToolBlockIds={new Set<string>()}
           getMessageActions={() => null}

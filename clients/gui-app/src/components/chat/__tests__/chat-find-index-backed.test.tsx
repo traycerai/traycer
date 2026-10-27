@@ -525,6 +525,7 @@ function renderFind(input: {
       [],
     );
     const find = useChatFindController({
+      splitLongTurns: true,
       instanceId: TILE_INSTANCE_ID,
       messages: transcript.messages,
       messagesRef,
@@ -600,6 +601,7 @@ function mountRow(scroller: HTMLElement, message: ChatMessageModel): string {
   const [row] = buildChatFindRows([message], TILE_INSTANCE_ID, EMPTY_PROMOTED, {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: null,
+    splitLongTurns: true,
   });
   const element = document.createElement("div");
   element.dataset.messageId = message.id;
