@@ -1035,12 +1035,14 @@ describe("NewConversationModalBody mirror line", () => {
           label: null,
           principal: { kind: "user", id: VIEWER_ID },
           reach: "same_principal",
+          sandboxEnd: null,
         },
         {
           hostId: "host-sandbox",
           label: "Acme sandbox",
           principal: TEAM,
           reach: "other_principal",
+          sandboxEnd: null,
         },
       ],
     };

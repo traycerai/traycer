@@ -1842,6 +1842,7 @@ describe("the chat chip is the composer's picker", () => {
         label: host.name,
         principal: { kind: "user", id: "u1" },
         reach: "same_principal",
+        sandboxEnd: null,
       })),
       groups: [],
       collaborators: null,

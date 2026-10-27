@@ -35,6 +35,7 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
+import { PICKED_SETTINGS } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 
 /**
  * A sha256-shaped hash. `blobHashesFromContent` filters anything that is not
@@ -415,5 +416,53 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
 
     expect(draftId).toBeNull();
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+  it("installs a pending-send recovery under its stable id and settings, naming the dropped annotation and the unsent account state", async () => {
+    const recovery = {
+      draftId: "recovered-draft-1",
+      settings: PICKED_SETTINGS,
+    };
+    const text = "the message that was never sent";
+
+    const { draftId } = await buildUnrecordedPromptHandoff({
+      recovery,
+      content: textOnlyDoc(text),
+      browserAnnotations: [annotationRecord(sourceHash("crop"))],
+      reason: REASON,
+      readHashImage: () => Promise.resolve(null),
+      stillCurrent: () => true,
+    });
+
+    expect(draftId).toBe("recovered-draft-1");
+    const draft = installed(draftId);
+    expect(draft.settings).toEqual(PICKED_SETTINGS);
+    expect(draft.closed).toBe(true);
+    const rendered = contentText(draft.content);
+    expect(rendered).toContain(text);
+    expect(rendered).toContain("A browser annotation was not saved with it.");
+    expect(rendered).toContain(REASON);
+  });
+
+  it("a second recovery of the same pending send reuses the one draft instead of saving another", async () => {
+    const recovery = {
+      draftId: "recovered-draft-2",
+      settings: PICKED_SETTINGS,
+    };
+    const run = (): Promise<{ draftId: string | null }> =>
+      buildUnrecordedPromptHandoff({
+        recovery,
+        content: textOnlyDoc("same message"),
+        browserAnnotations: [],
+        reason: REASON,
+        readHashImage: () => Promise.resolve(null),
+        stillCurrent: () => true,
+      });
+
+    const first = await run();
+    const second = await run();
+
+    expect(first.draftId).toBe("recovered-draft-2");
+    expect(second.draftId).toBe("recovered-draft-2");
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
   });
 });
