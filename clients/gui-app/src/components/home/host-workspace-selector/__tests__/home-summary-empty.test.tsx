@@ -1,3 +1,4 @@
+import type { StagedRunRequest } from "@/lib/sandboxes/staged-sandbox-run";
 import { useSyncExternalStore, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -15,7 +16,6 @@ import {
   ActiveHostWorkspaceControls,
   HostWorkspaceSelector,
 } from "../host-workspace-selector";
-import { stagedSandboxFallbackName } from "@/components/composer/use-staged-sandbox-send";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -214,11 +214,7 @@ const stagedRuns = vi.hoisted(() => ({
     (
       surfaceKey: string,
       fresh: boolean,
-      request: {
-        readonly fallbackName: string;
-        readonly taskId: string | null;
-        readonly resume: boolean;
-      },
+      request: StagedRunRequest,
     ) => Promise<void>
   >(() => Promise.resolve()),
 }));
@@ -229,11 +225,7 @@ vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
   runStagedSandbox: (
     surfaceKey: string,
     fresh: boolean,
-    request: {
-      readonly fallbackName: string;
-      readonly taskId: string | null;
-      readonly resume: boolean;
-    },
+    request: StagedRunRequest,
   ) => stagedRuns.run(surfaceKey, fresh, request),
 }));
 
@@ -943,7 +935,6 @@ describe("landing workspace summary empty state", () => {
 
     expect(stagedRuns.run).toHaveBeenCalledTimes(1);
     expect(stagedRuns.run).toHaveBeenCalledWith(surfaceKey, true, {
-      fallbackName: stagedSandboxFallbackName(""),
       taskId: null,
       resume: false,
     });

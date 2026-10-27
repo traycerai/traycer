@@ -414,6 +414,7 @@ export function ChatCatchingUpBanner(
  *   created the agent.
  */
 export type ChatDeadTileBannerReason =
+  | "sandbox-destroyed"
   | "host-offline"
   | "chat-not-visible"
   | "chat-not-on-this-host"
@@ -473,6 +474,7 @@ export interface ChatDeadTileBannerProps {
    * reads it.
    */
   readonly continueTargetLabel: string | null;
+  readonly details?: ReactNode;
   readonly onClone: () => void;
   readonly cloning: boolean;
   readonly className: string | undefined;
@@ -521,6 +523,16 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
   ChatDeadTileBannerReason,
   ChatDeadTileBannerCopy
 > = {
+  "sandbox-destroyed": {
+    message: (host) => <>{host} was destroyed. This chat stays readable.</>,
+    messageWithoutClone: (host) => (
+      <>{host} was destroyed. This chat stays readable.</>
+    ),
+    reportTitle: "Agent sandbox was destroyed",
+    reportMessage: "The agent’s sandbox was destroyed.",
+    offersClone: true,
+    actionLabel: () => "Continue on another host",
+  },
   // Leads with what the reader can do, beside the button that does it, and
   // keeps the cause: over a loaded transcript there is no body below to say
   // the host is offline, so this sentence is the only one that does.
@@ -785,6 +797,7 @@ function ownerSwappedCopy(props: ChatDeadTileBannerProps): {
   };
 } | null {
   if (
+    props.reason === "sandbox-destroyed" ||
     props.reason === "chat-no-longer-shared" ||
     props.reason === "sandbox-removed"
   ) {
@@ -847,17 +860,20 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           {copy.actionLabel(target)}
         </Button>
       ) : null}
-      <ReportIssueAction
-        context={createReportIssueContext({
-          title: report.reportTitle,
-          message: report.reportMessage,
-          code: null,
-          source: "Agent",
-        })}
-        presentation="icon"
-        variant="warning-ghost"
-        className="shrink-0"
-      />
+      {props.details}
+      {props.reason !== "sandbox-destroyed" ? (
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: report.reportTitle,
+            message: report.reportMessage,
+            code: null,
+            source: "Agent",
+          })}
+          presentation="icon"
+          variant="warning-ghost"
+          className="shrink-0"
+        />
+      ) : null}
     </div>
   );
 }

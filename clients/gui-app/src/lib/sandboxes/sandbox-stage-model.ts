@@ -17,7 +17,8 @@ import {
   sandboxShapeProblem,
 } from "@/lib/sandboxes/sandbox-pricing";
 import {
-  addCreditsPriceClause,
+  notEnoughCreditsLine,
+  teamAllowanceShortLine,
   audienceClause,
   costLine,
   moveClause,
@@ -463,6 +464,9 @@ export interface ConsequencesInput {
   readonly configuration: StageConfiguration;
   readonly price: StagePrice | null;
   readonly needsCredits: boolean;
+  readonly shortfallMc?: number | null;
+  /** A team sandbox this action wakes, before the viewer takes over payment. */
+  readonly wakingName?: string | null;
   readonly audience: StageAudience;
   /**
    * A host of another configuration the task already holds, named, or
@@ -491,14 +495,23 @@ export interface ConsequenceClause {
 /** The price clause, never collapsed: a price is not a disclosure. */
 export function priceClause(input: ConsequencesInput): ConsequenceClause {
   const copy = stageConfigurationCopy(input.configuration);
-  if (input.price === null) {
-    return { kind: "price", text: unpricedCostLine(copy) };
-  }
   if (input.needsCredits) {
     return {
       kind: "price",
-      text: addCreditsPriceClause(copy, input.price.awakeMcPerHour),
+      text:
+        copy.kind === "team"
+          ? teamAllowanceShortLine(copy.teamName, input.shortfallMc ?? null)
+          : notEnoughCreditsLine(input.shortfallMc ?? null),
     };
+  }
+  if (input.wakingName && copy.kind === "team") {
+    return {
+      kind: "price",
+      text: `Waking ${input.wakingName} uses your ${copy.teamName} allowance and makes you the payer.`,
+    };
+  }
+  if (input.price === null) {
+    return { kind: "price", text: unpricedCostLine(copy) };
   }
   const line = costLine(input.price.awakeMcPerHour, copy);
   return { kind: "price", text: input.price.exact ? line : `from ${line}` };

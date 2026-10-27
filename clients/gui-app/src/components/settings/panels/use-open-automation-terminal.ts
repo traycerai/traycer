@@ -1,100 +1,135 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import type {
-  SandboxAutomationOpenTarget,
-  SandboxPod,
-} from "@traycer/protocol/host/sandbox-control";
-import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { v4 as uuidv4 } from "uuid";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
-import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
+import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
+import { automationTerminalTarget } from "@/lib/sandboxes/automation-terminal-target";
 import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { sandboxMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  useLandingPanelStore,
+  type AutomationTerminalRequest,
+} from "@/stores/home/landing-panel-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
-/**
- * An Automations row's `Open terminal`: a host that is not awake, or not
- * created yet, is started first (`POST /api/sandboxes/automation`, a team's
- * pod by its ordinal), and only once that succeeds is a folderless terminal
- * asked for on the host it answers with, in the start page's terminal panel,
- * and Settings closed onto a new task's tab. A failed start leaves Settings
- * open with the open's error toast. The composer's host and staging are left
- * as they were: Automations takes shells, never an agent's turn. `retry`
- * starts it again and opens nothing: a failed start's Retry.
- */
-export function useOpenAutomationTerminal(input: {
-  /** The row's host and id; `null` for an Automations host not created yet. */
-  readonly existing: {
-    readonly hostId: string;
-    readonly sandboxId: string;
-    readonly awake: boolean;
-  } | null;
-  /** The team's environment for a team pod; `null` for Personal's. */
+interface AutomationRowRetryIdentity {
+  readonly userId: string | null;
+  readonly sandboxId: string | null;
   readonly teamEnvironmentId: string | null;
-}): {
-  readonly run: () => void;
-  readonly retry: () => void;
-  readonly starting: boolean;
-} {
-  const { existing, teamEnvironmentId } = input;
-  const open = useSandboxAutomationOpen();
-  const surfaceKey = useComposerSurfaceHostKey();
+}
+
+/** Reserve the terminal pane synchronously; that pane owns the wake and shell. */
+export function useOpenAutomationTerminal(
+  input: Pick<AutomationTerminalRequest, "existing" | "teamEnvironmentId">,
+) {
   const { close } = useSystemTabModalActions();
   const navigate = useNavigate();
-  const podEnvironmentIds = useMemo(
-    () => (teamEnvironmentId === null ? [] : [teamEnvironmentId]),
-    [teamEnvironmentId],
+  const open = useSandboxAutomationOpen("inline");
+  const automation = useSandboxAutomation(input.teamEnvironmentId);
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const sandboxId = input.existing?.sandboxId ?? null;
+  const { teamEnvironmentId } = input;
+  const identity = useMemo(
+    () => ({ userId, sandboxId, teamEnvironmentId }),
+    [userId, sandboxId, teamEnvironmentId],
   );
-  const pods = useSandboxTeamPods(podEnvironmentIds);
-  const openTerminal = (hostId: string): void => {
-    const panel = useLandingPanelStore.getState();
-    panel.clearTerminalRequest();
-    panel.requestTerminal(surfaceKey, hostId);
+  const currentIdentity = useRef<AutomationRowRetryIdentity | null>(identity);
+  const heldRetry = useRef<AutomationRowRetryIdentity | null>(null);
+  useEffect(() => {
+    currentIdentity.current = identity;
+    return () => {
+      currentIdentity.current = null;
+    };
+  }, [identity]);
+  // One mutation holds the click through lookup and wake, including a cold read.
+  const retryOperation = useMutation({
+    mutationKey: sandboxMutationKeys.automationRetry(
+      userId,
+      teamEnvironmentId,
+      sandboxId,
+    ),
+    mutationFn: async (request: AutomationRowRetryIdentity): Promise<void> => {
+      if (
+        currentIdentity.current !== request ||
+        !settledForStartingAccount(request)
+      )
+        return;
+      const result =
+        request.teamEnvironmentId === null
+          ? null
+          : await automation.refetch({ cancelRefetch: false });
+      if (
+        currentIdentity.current !== request ||
+        !settledForStartingAccount(request)
+      )
+        return;
+      if (result?.isError === true)
+        throw new AutomationRowLookupError("lookup");
+      const target = automationTerminalTarget(
+        request.sandboxId,
+        request.teamEnvironmentId,
+        result?.data?.pods ?? [],
+      );
+      if (target === undefined) throw new AutomationRowLookupError("missing");
+      await open.mutateAsync(target);
+    },
+    onSettled: (_data, _error, request) => {
+      if (heldRetry.current === request) heldRetry.current = null;
+    },
+  });
+  const run = (): void => {
+    const operationId = uuidv4();
+    const accepted = useLandingPanelStore.getState().openAutomationTerminal(
+      {
+        ...input,
+        userId: signedInUserId(),
+        startedAt: Date.now(),
+        terminalId: `landing-term-${operationId}`,
+      },
+      `landing-terminal-${operationId}`,
+    );
+    if (!accepted) return;
     close();
     activateTabIntent(navigate, openNewEpicIntent(), undefined);
   };
-  const target = (): SandboxAutomationOpenTarget | null =>
-    automationOpenTarget(
-      existing === null ? null : existing.sandboxId,
-      teamEnvironmentId,
-      teamEnvironmentId === null ? [] : (pods.get(teamEnvironmentId) ?? []),
-    );
-  const run = (): void => {
-    if (existing !== null && existing.awake) {
-      openTerminal(existing.hostId);
-      return;
-    }
-    const startingAccount = { userId: signedInUserId() };
-    // A failed start is the open's own error toast; Settings stays open.
-    void open.mutateAsync(target()).then(
-      (opened) => {
-        if (!settledForStartingAccount(startingAccount)) return;
-        openTerminal(opened.sandbox.hostId);
-      },
-      () => undefined,
-    );
-  };
+  // The row's Retry wakes a failed sandbox without requesting a shell.
   const retry = (): void => {
-    open.mutate(target());
+    if (heldRetry.current === identity) return;
+    heldRetry.current = identity;
+    retryOperation.mutate(identity);
   };
-  return { run, retry, starting: open.isPending };
+  const currentRetry = retryOperation.variables === identity;
+  return {
+    run,
+    retry,
+    starting: currentRetry && retryOperation.isPending,
+    failure: currentRetry
+      ? automationRowRetryFailure(retryOperation.error)
+      : null,
+  };
 }
 
-/**
- * Personal's Automations opens with no body; a team's pod by its environment
- * and its ordinal, or the pod with headroom while the pod list is unread or
- * the pod is not created yet.
- */
-function automationOpenTarget(
-  sandboxId: string | null,
-  teamEnvironmentId: string | null,
-  pods: readonly SandboxPod[],
-): SandboxAutomationOpenTarget | null {
-  if (teamEnvironmentId === null) return null;
-  const pod = pods.find((candidate) => candidate.sandbox.id === sandboxId);
-  return { environmentId: teamEnvironmentId, ordinal: pod?.ordinal ?? null };
+class AutomationRowLookupError extends Error {
+  constructor(kind: "lookup" | "missing") {
+    super(
+      kind === "missing"
+        ? "This host no longer exists."
+        : "Couldn't look up this host. Try again.",
+    );
+    this.name = "AutomationRowLookupError";
+  }
+}
+
+function automationRowRetryFailure(error: Error | null): string | null {
+  if (error === null) return null;
+  return error instanceof AutomationRowLookupError
+    ? error.message
+    : "Couldn't start Automations. Try again.";
 }

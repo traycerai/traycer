@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -6,6 +6,11 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import type {
+  ProviderCliCandidate,
+  ProviderCliState,
+  ProviderManagedInstallState,
+} from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
@@ -14,6 +19,7 @@ import {
   handPendingSandboxSend,
   pickedRunSettings,
   requestedAgentReadiness,
+  returnPendingSandboxMessage,
   returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
@@ -30,6 +36,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
@@ -39,6 +46,7 @@ import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
   harnessRow,
+  opencodeProviderRow,
   pendingSend,
   providerRow,
 } from "./pending-send-fixtures";
@@ -90,11 +98,299 @@ beforeEach(() => {
 });
 
 describe("requestedAgentReadiness", () => {
+  it.each([
+    [{ status: "downloading", percent: 40 }, "waiting"],
+    [
+      {
+        status: "error",
+        reason: "disk-full",
+        message: "ENOSPC",
+        retryAtMs: null,
+      },
+      "setup-failed",
+    ],
+  ] satisfies ReadonlyArray<readonly [ProviderManagedInstallState, string]>)(
+    "requires Managed 2 for a sibling even when OpenCode's external v2 is runnable: %j",
+    (state, kind) => {
+      const engine = opencodeProviderRow(state, {
+        selected: { kind: "custom", path: "/custom/opencode" },
+        candidates: [
+          {
+            kind: "custom",
+            path: "/custom/opencode",
+            available: true,
+            version: "2.0.0",
+            versionPending: false,
+          },
+        ],
+      });
+      expect(
+        requestedAgentReadiness(
+          "traycer",
+          [harnessRow("traycer", {})],
+          [engine],
+          null,
+        ).kind,
+      ).toBe(kind);
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [engine],
+          null,
+        ),
+      ).toEqual({ kind: "ready", opencodeLine: 2 });
+    },
+  );
+
+  it.each(["traycer", "openrouter", "huggingface", "opencode"] as const)(
+    "waits for the exact engine %s will launch rather than its legacy installed pack",
+    (harnessId) => {
+      expect(
+        requestedAgentReadiness(
+          harnessId,
+          [harnessRow(harnessId, {})],
+          [
+            ...(harnessId === "opencode"
+              ? []
+              : [providerRow(harnessId, { status: "installed" })]),
+            opencodeProviderRow({ status: "downloading", percent: 40 }, {}),
+          ],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
+  it.each([
+    [
+      "availability pending",
+      opencodeProviderRow(
+        { status: "installed" },
+        { availabilityPending: true },
+      ),
+    ],
+    ["null state", opencodeProviderRow(null, {})],
+    ["queued install", opencodeProviderRow({ status: "absent" }, {})],
+    [
+      "absent lines",
+      opencodeProviderRow({ status: "installed" }, { managedLines: undefined }),
+    ],
+    [
+      "empty lines",
+      opencodeProviderRow({ status: "installed" }, { managedLines: [] }),
+    ],
+    ["absent engine provider", undefined],
+  ] as const)("waits for positive engine proof: %s", (_label, engine) => {
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [
+          providerRow("traycer", { status: "installed" }),
+          ...(engine === undefined ? [] : [engine]),
+        ],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it.each(["unavailable candidate", "pending version"] as const)(
+    "waits despite an installed line with an %s",
+    (reason) => {
+      const engine = opencodeProviderRow({ status: "installed" }, {});
+      engine.managedLines = engine.managedLines?.map((entry) => ({
+        ...entry,
+        candidate: {
+          ...entry.candidate,
+          available: reason !== "unavailable candidate",
+          versionPending: reason === "pending version",
+        },
+      }));
+      expect(
+        requestedAgentReadiness(
+          "traycer",
+          [harnessRow("traycer", {})],
+          [engine],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
+  it("uses the destination's explicit line for a new chat and the recorded line for a bound chat", () => {
+    const engine = opencodeProviderRow(
+      { status: "downloading", percent: 40 },
+      { selected: { kind: "bundled", line: 1 } },
+    );
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine],
+        null,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine],
+        2,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it.each(["path", "custom"] as const)(
+    "uses a proven %s engine's version, and waits for its probe",
+    (kind) => {
+      const selected: ProviderCliState["selected"] =
+        kind === "path" ? { kind } : { kind, path: "/custom/opencode" };
+      const candidate: ProviderCliCandidate = {
+        kind,
+        path: "/custom/opencode",
+        available: true,
+        version: "1.5.0",
+        versionPending: false,
+      };
+      const engine = opencodeProviderRow(
+        { status: "downloading", percent: 40 },
+        { selected, candidates: [candidate], managedLines: [] },
+      );
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [engine],
+          null,
+        ),
+      ).toEqual({ kind: "ready", opencodeLine: 1 });
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [{ ...engine, candidates: [{ ...candidate, versionPending: true }] }],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [{ ...engine, candidates: [{ ...candidate, version: null }] }],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
+  it("requires a line-1 sibling's own external proof rather than OpenCode's external candidate", () => {
+    const candidate: ProviderCliCandidate = {
+      kind: "path",
+      path: "/external/opencode",
+      available: true,
+      version: "1.5.0",
+      versionPending: false,
+    };
+    const engine = opencodeProviderRow(null, {
+      selected: { kind: "path" },
+      candidates: [candidate],
+      managedLines: [],
+    });
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+    const sibling: ProviderCliState = {
+      ...providerRow("traycer", null),
+      selected: { kind: "path" },
+      candidates: [candidate],
+    };
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine, sibling],
+        null,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [
+          engine,
+          { ...sibling, candidates: [{ ...candidate, versionPending: true }] },
+        ],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it("holds a bound OpenCode 2 chat on an external v1 selection, while preserving the host's opposite managed fallback", () => {
+    const candidate: ProviderCliCandidate = {
+      kind: "custom",
+      path: "/external/opencode",
+      available: true,
+      version: "1.5.0",
+      versionPending: false,
+    };
+    const engine = opencodeProviderRow(
+      { status: "installed" },
+      {
+        selected: { kind: "custom", path: candidate.path },
+        candidates: [candidate],
+      },
+    );
+    expect(
+      requestedAgentReadiness(
+        "opencode",
+        [harnessRow("opencode", {})],
+        [engine],
+        2,
+      ),
+    ).toEqual({ kind: "waiting" });
+    expect(
+      requestedAgentReadiness(
+        "opencode",
+        [harnessRow("opencode", {})],
+        [engine],
+        null,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+    expect(
+      requestedAgentReadiness(
+        "opencode",
+        [harnessRow("opencode", {})],
+        [{ ...engine, candidates: [{ ...candidate, version: "2.0.0" }] }],
+        1,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+  });
+
+  it("waits on a pending harness probe even when its cached availability is true", () => {
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", { availabilityPending: true })],
+        [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow({ status: "installed" }, {}),
+        ],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
   it("waits until both the catalog and the provider list have answered", () => {
-    expect(requestedAgentReadiness("codex", undefined, [])).toEqual({
+    expect(requestedAgentReadiness("codex", undefined, [], null)).toEqual({
       kind: "waiting",
     });
-    expect(requestedAgentReadiness("codex", [], undefined)).toEqual({
+    expect(requestedAgentReadiness("codex", [], undefined, null)).toEqual({
       kind: "waiting",
     });
   });
@@ -111,6 +407,7 @@ describe("requestedAgentReadiness", () => {
           providerRow("codex", { status: "downloading", percent: 40 }),
           providerRow("claude-code", null),
         ],
+        null,
       ),
     ).toEqual({ kind: "waiting" });
   });
@@ -121,9 +418,68 @@ describe("requestedAgentReadiness", () => {
         "codex",
         [harnessRow("codex", { available: true })],
         [providerRow("codex", { status: "installed" })],
+        null,
       ),
-    ).toEqual({ kind: "ready" });
+    ).toEqual({ kind: "ready", opencodeLine: null });
   });
+
+  it.each([
+    ["pre-registry host", undefined],
+    ["unmanaged provider", null],
+    ["pack not cut over", { status: "absent" }],
+    ["managed download", { status: "downloading", percent: 40 }],
+    [
+      "managed failure",
+      {
+        status: "error",
+        reason: "disk-full",
+        message: "ENOSPC",
+        retryAtMs: null,
+      },
+    ],
+  ] satisfies ReadonlyArray<
+    readonly [string, ProviderManagedInstallState | null | undefined]
+  >)(
+    "uses the non-OpenCode CLI's executable proof while its display version is pending: %s",
+    (_label, state) => {
+      const provider: ProviderCliState = {
+        ...providerRow("claude-code", null),
+        selected: { kind: "path" },
+        candidates: [
+          {
+            kind: "path",
+            path: "/usr/local/bin/claude",
+            available: true,
+            version: null,
+            versionPending: true,
+          },
+        ],
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        managedInstallState: state,
+      };
+      expect(
+        requestedAgentReadiness(
+          "claude",
+          [harnessRow("claude", {})],
+          [provider],
+          null,
+        ),
+      ).toEqual({ kind: "ready", opencodeLine: null });
+      expect(
+        requestedAgentReadiness(
+          "claude",
+          [harnessRow("claude", {})],
+          [{ ...provider, availabilityPending: true }],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
 
   it("waits while the requested agent's availability is still being probed", () => {
     expect(
@@ -131,6 +487,7 @@ describe("requestedAgentReadiness", () => {
         "codex",
         [harnessRow("codex", { available: false, availabilityPending: true })],
         [providerRow("codex", null)],
+        null,
       ),
     ).toEqual({ kind: "waiting" });
   });
@@ -144,23 +501,26 @@ describe("requestedAgentReadiness", () => {
           harnessRow("claude", { available: true }),
         ],
         [providerRow("codex", null), providerRow("claude-code", null)],
+        null,
       ),
     ).toEqual({ kind: "unusable" });
   });
 
-  it("refuses an agent the sandbox does not offer, or has turned off", () => {
+  it("distinguishes an unoffered agent from one the sandbox has turned off", () => {
     expect(
       requestedAgentReadiness(
         "codex",
         [harnessRow("claude", {})],
         [providerRow("codex", null)],
+        null,
       ),
-    ).toEqual({ kind: "unusable" });
+    ).toEqual({ kind: "not-offered" });
     expect(
       requestedAgentReadiness(
         "codex",
         [harnessRow("codex", { enabled: false })],
         [providerRow("codex", null)],
+        null,
       ),
     ).toEqual({ kind: "unusable" });
   });
@@ -177,6 +537,7 @@ describe("requestedAgentReadiness", () => {
           retryAtMs: null,
         }),
       ],
+      null,
     );
 
     expect(readiness.kind).toBe("setup-failed");
@@ -523,6 +884,58 @@ describe("returnPendingSandboxSend", () => {
     }
   });
 
+  it("returns a send to the task composer when its only modal patch is a caret", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+    useNewConversationModalStore.getState().resetForTests();
+    try {
+      signInAsPendingSendOwner();
+      useNewConversationModalStore
+        .getState()
+        .setSelection("epic-1", { from: 1, to: 1 });
+      usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+      const owner = holdPendingSandboxSendOwnership("send-1");
+      try {
+        expect(await owner.ready).toBe(true);
+
+        const returned = returnPendingSandboxSend("send-1");
+
+        expect(returned).toMatchObject({ kind: "task", epicId: "epic-1" });
+        expect(
+          useNewConversationModalStore.getState().draftPatchesByEpicId[
+            "epic-1"
+          ],
+        ).toMatchObject({
+          content: MESSAGE_CONTENT,
+          selection: null,
+          settings: PICKED_SETTINGS,
+        });
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      } finally {
+        owner.release();
+      }
+    } finally {
+      useNewConversationModalStore.getState().resetForTests();
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
+  });
+
   it("keeps every exclusively returned message in its own closed landing draft", async () => {
     const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
     Object.defineProperty(navigator, "locks", {
@@ -606,6 +1019,106 @@ describe("returnPendingSandboxSend", () => {
         Object.defineProperty(navigator, "locks", originalLocks);
       }
     }
+  });
+});
+
+describe("returnPendingSandboxSend for a message to an existing chat", () => {
+  const CHAT_ID = "existing-chat";
+
+  async function ownedMessageSend(): Promise<() => void> {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    usePendingSandboxSendStore.getState().add(
+      pendingSend({
+        id: "send-1",
+        request: { kind: "message", chatId: CHAT_ID },
+      }),
+    );
+    const owner = holdPendingSandboxSendOwnership("send-1");
+    expect(await owner.ready).toBe(true);
+    return owner.release;
+  }
+
+  const EMPTY_DOC = { type: "doc" as const, content: [] };
+  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+
+  beforeEach(() => {
+    // Sibling suites leave a replacement draft in the modal store: this one
+    // asserts the return touches none, so it starts from a clean one.
+    useNewConversationModalStore.getState().resetForTests();
+    useComposerDraftStore.getState().replaceDraft(CHAT_ID, EMPTY_DOC, null);
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (originalLocks === undefined) {
+      Reflect.deleteProperty(navigator, "locks");
+    } else {
+      Object.defineProperty(navigator, "locks", originalLocks);
+    }
+  });
+
+  it("gives the message back to that chat's composer, and opens no new-agent modal and saves no landing draft", async () => {
+    const release = await ownedMessageSend();
+
+    const returned = await returnPendingSandboxMessage("send-1", false);
+
+    expect(returned).toMatchObject({ kind: "chat", chatId: CHAT_ID });
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      MESSAGE_CONTENT,
+    );
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toBeUndefined();
+    release();
+  });
+
+  it("keeps a newer draft in that chat's composer and saves the returned message as a closed landing draft", async () => {
+    const newer = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "keep my newer draft" }],
+        },
+      ],
+    };
+    useComposerDraftStore.getState().replaceDraft(CHAT_ID, newer, null);
+    const release = await ownedMessageSend();
+
+    const returned = await returnPendingSandboxMessage("send-1", false);
+
+    expect(returned.kind).toBe("landing-draft");
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      newer,
+    );
+    const saved = useLandingDraftStore.getState().drafts;
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      settings: PICKED_SETTINGS,
+      closed: true,
+    });
+    // The handoff appends its Unsent qualification, so the original text is
+    // retained rather than the document being equal to it.
+    expect(JSON.stringify(saved[0]?.content)).toContain("fix the login bug");
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    release();
   });
 });
 

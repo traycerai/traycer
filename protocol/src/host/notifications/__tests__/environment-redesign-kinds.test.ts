@@ -204,7 +204,7 @@ describe("the V24 entry union", () => {
     ).toBe(false);
   });
 
-  it.each(NEW_KINDS)("%s carries no resolvedAt", (kind) => {
+  it.each(NEW_KINDS)("accepts an older %s entry without resolvedAt", (kind) => {
     const parsed = hostNotificationEntrySchemaV24.parse(
       fullEntry(kind, PAYLOADS[kind]),
     );
@@ -353,7 +353,7 @@ describe("the five kinds' copy", () => {
       ),
     ).toEqual({
       title: "Setting not applied",
-      body: "studio • variable:API_BASE could not be applied",
+      body: "studio • A setting could not be applied",
     });
   });
 
@@ -431,4 +431,52 @@ describe("the five kinds' copy", () => {
       });
     },
   );
+});
+
+describe("a sandbox's settings notice", () => {
+  const SANDBOX = {
+    name: "Build box",
+    configurationName: "Acme",
+    attemptId: "attempt-1",
+    applied: ["Secrets"],
+    notApplied: ["Providers"],
+  };
+  const withSandbox = {
+    ...PAYLOADS["environment.apply.failed"],
+    itemKey: "claude:ANTHROPIC_API_KEY",
+    sandbox: SANDBOX,
+  };
+
+  it("carries the sandbox context, absent on a legacy payload", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(
+        "environment.apply.failed",
+        withSandbox,
+      ),
+    ).toMatchObject({ sandbox: SANDBOX });
+    const legacy = parseKnownHostNotificationPayloadForKind(
+      "environment.apply.failed",
+      PAYLOADS["environment.apply.failed"],
+    );
+    expect(legacy).toMatchObject(PAYLOADS["environment.apply.failed"]);
+    expect(legacy).not.toBeNull();
+    expect(
+      legacy !== null && "sandbox" in legacy ? legacy.sandbox : undefined,
+    ).toBeUndefined();
+  });
+
+  it("titles with the shared line and says the steps in the body, never a raw key or code", () => {
+    const presentation = presentationOf(
+      "environment.apply.failed",
+      withSandbox,
+    );
+
+    expect(presentation.title).toMatch(
+      /^Build box is awake, but Acme's settings didn't apply · SBX-\d{4}$/,
+    );
+    expect(presentation.body).toContain("Providers");
+    expect(presentation.body).not.toMatch(
+      /permission_denied|ANTHROPIC_API_KEY/,
+    );
+  });
 });

@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
-import { useNeedsYouTaskCount } from "@/stores/notifications/needs-you-task-count-store";
+import { useNotificationsNeedsYouCount } from "@/stores/notifications/needs-you-task-count-store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { isHistoryPath } from "@/stores/tabs/kinds/history";
 import {
@@ -199,7 +199,7 @@ function InboxNavRow(props: {
     popoverProps,
   } = useNotificationCenter();
   // Tasks, as the Needs you header counts them; the drawer lists requests.
-  const needsYouCount = useNeedsYouTaskCount();
+  const needsYouCount = useNotificationsNeedsYouCount();
   const unreadCount = useMergedNotificationUnreadCount();
   // The Activity view's To review lists what else there is, so its pill is
   // the Needs you count alone; the Layered view's says the rest as the bell
@@ -339,7 +339,7 @@ const INBOX_PILL_VARIANT: Readonly<
 
 /**
  * The Notifications row's one count, as the header's bell picks its mark:
- * amber, the Needs you task count, while a task needs the person; else red,
+ * amber, tasks and actionable notices that need the person; else red,
  * what needs attention, failures among it; else muted, the unread total. The
  * Activity view shows the amber count alone. `null` with nothing to count.
  */

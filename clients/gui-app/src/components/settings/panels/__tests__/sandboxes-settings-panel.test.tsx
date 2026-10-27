@@ -22,6 +22,10 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   configurationItem,
   mountTeamPage,
   poolSource,
@@ -29,7 +33,25 @@ import {
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
+import type {
+  SandboxVerbFetchResult,
+  SandboxListFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  createFakeSandboxBinding,
+  refusal,
+  type FakeSandboxBinding,
+} from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  authQueryKeys,
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys";
 import type {
   SandboxAutomationResponse,
   SandboxCatalogue,
@@ -108,12 +130,18 @@ const LISTED_CATALOGUE: SandboxCatalogue = {
 };
 
 const mocks = vi.hoisted(() => ({
+  binding: null as FakeSandboxBinding | null,
+  entry: null as HostDirectoryEntry | null,
   sandboxes: [] as readonly SandboxSummary[],
   /** `false` while the list query has not answered. */
   listed: true,
+  realActions: false,
+  /** The Automations read and open run through their real hooks and query. */
+  realAutomation: false,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
+  sessionFailed: false,
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
@@ -125,6 +153,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => mocks.binding,
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -140,6 +169,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 /** The router's commit boundary: every navigation the page asks for. */
 const navigations = vi.hoisted(() => [] as object[]);
 vi.mock("@tanstack/react-router", () => ({
+  useRouter: () => null,
   useNavigate: () => (options: object) => {
     navigations.push(options);
     return new Promise<void>(() => undefined);
@@ -165,14 +195,27 @@ vi.mock(
     useSandboxWakeString: () => null,
   }),
 );
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
-  useSandboxList: () => ({
-    data: mocks.listed ? { sandboxes: mocks.sandboxes } : undefined,
-    isError: false,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
-}));
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...original,
+    useSandboxList: () => {
+      const query = original.useSandboxList();
+      return mocks.binding === null
+        ? {
+            ...query,
+            data: mocks.listed ? { sandboxes: mocks.sandboxes } : undefined,
+            isError: false,
+            isFetching: false,
+            refetch: vi.fn(),
+          }
+        : query;
+    },
+  };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
 }));
@@ -188,33 +231,71 @@ vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "laptop",
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => mocks.entry,
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxSessionReport: () => ({ report: mocks.report, failed: false }),
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
-  useSandboxAutomation: () => ({ data: mocks.automation }),
-  useSandboxTeamPods: () => new Map(),
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
-  useSandboxAutomationOpen: () => ({
-    mutateAsync: mocks.openAutomation,
-    isPending: false,
+  useSandboxSessionReport: () => ({
+    report: mocks.report,
+    failed: mocks.sessionFailed,
   }),
 }));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-automation-query",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-automation-query")
+      >();
+    return {
+      ...original,
+      useSandboxAutomation: (environmentId: string | null) => {
+        const real = original.useSandboxAutomation(environmentId);
+        return mocks.realAutomation ? real : { data: mocks.automation };
+      },
+      useSandboxTeamPods: (environmentIds: readonly string[]) => {
+        const real = original.useSandboxTeamPods(environmentIds);
+        return mocks.realAutomation ? real : new Map();
+      },
+    };
+  },
+);
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-automation-open-mutation",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-automation-open-mutation")
+      >();
+    return {
+      ...original,
+      useSandboxAutomationOpen: (feedback: "toast" | "inline") => {
+        const real = original.useSandboxAutomationOpen(feedback);
+        return mocks.realAutomation
+          ? real
+          : {
+              mutateAsync: mocks.openAutomation,
+              mutate: vi.fn(),
+              isPending: false,
+              isError: false,
+              reset: vi.fn(),
+            };
+      },
+    };
+  },
+);
 
-vi.mock("@/hooks/sandboxes/use-sandbox-destroy-batch-mutation", () => ({
-  useSandboxDestroyBatch: () => ({
-    data: undefined,
-    isPending: false,
-    mutate: vi.fn(),
-    reset: vi.fn(),
-  }),
-}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://platform.example.dev/sign-in" }),
+  useRunnerHostOrNull: () => ({
+    signInUrl: "https://platform.example.dev/sign-in",
+  }),
 }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
@@ -225,30 +306,43 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
     openSettings: vi.fn(),
   }),
 }));
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxRunner: () => vi.fn(),
+  startStagedTerminal: vi.fn(),
+}));
+vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
+
 // The actions have their own verbs and dialogs; the page's contract is which
 // primary action each row offers, so the stub renders the model's own pick.
 vi.mock(
   "@/components/settings/panels/sandbox-row-actions",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/settings/panels/sandbox-row-actions")
-    >()),
-    SandboxRowActions: (props: {
-      summary: SandboxSummary;
-      configuration: SandboxPageConfiguration;
-      unreachable: boolean;
-      frozenNeedsOwnCredits: boolean;
-    }) => {
-      const { primary } = sandboxRowActions(props);
-      return (
-        <span data-testid="row-primary">
-          {primary === null
-            ? ""
-            : sandboxRowActionLabel(primary, props.configuration)}
-        </span>
-      );
-    },
-  }),
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/components/settings/panels/sandbox-row-actions")
+      >();
+    return {
+      ...original,
+      SandboxRowActions: (props: {
+        summary: SandboxSummary;
+        configuration: SandboxPageConfiguration;
+        unreachable: boolean;
+        frozenNeedsOwnCredits: boolean;
+        settingsFailed: boolean;
+      }) => {
+        if (mocks.realActions) return <original.SandboxRowActions {...props} />;
+        const { primary } = sandboxRowActions(props);
+        return (
+          <span data-testid="row-primary">
+            {primary === null
+              ? ""
+              : sandboxRowActionLabel(primary, props.configuration)}
+          </span>
+        );
+      },
+    };
+  },
 );
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
@@ -403,25 +497,6 @@ function renderPanel(sandboxes: readonly SandboxSummary[]): void {
   renderUi(<SandboxesSettingsPanel />);
 }
 
-function deferredAutomationOpen(): {
-  readonly promise: Promise<SandboxAutomationOpened>;
-  readonly resolve: (value: SandboxAutomationOpened) => void;
-} {
-  let resolvePromise: ((value: SandboxAutomationOpened) => void) | null = null;
-  const promise = new Promise<SandboxAutomationOpened>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return {
-    promise,
-    resolve(value) {
-      if (resolvePromise === null) {
-        throw new Error("the automation open promise has no resolver");
-      }
-      resolvePromise(value);
-    },
-  };
-}
-
 function rowOf(id: string): HTMLElement {
   const found = screen
     .getAllByTestId("sandboxes-row")
@@ -438,14 +513,21 @@ function names(): string[] {
 
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
+    mocks.binding = null;
+    mocks.entry = null;
+    resetNegotiatedManifests();
+    recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
     mocks.listed = true;
+    mocks.realActions = false;
     mocks.configurations = [{ kind: "personal" }];
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
+    mocks.sessionFailed = false;
     mocks.costs = null;
     mocks.automation = null;
+    mocks.realAutomation = false;
     mocks.openAutomation.mockReset();
     mocks.openLink.mockReset();
     mocks.close.mockReset();
@@ -648,6 +730,14 @@ describe("<SandboxesSettingsPanel />", () => {
       renderPanel([]);
 
       const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      expect(
+        screen.queryByText(
+          "New sandboxes take these; sandboxes you already have keep theirs.",
+        ),
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Save defaults" }),
+      ).toBeDefined();
       expect(idle).toHaveProperty("value", "45");
       expect(
         screen.getByTestId("sandboxes-defaults-shape-select").textContent,
@@ -820,6 +910,7 @@ describe("<SandboxesSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     resetTeamPageHarness();
   });
@@ -858,6 +949,178 @@ describe("<SandboxesSettingsPanel />", () => {
     ).toBe("Keep this sandbox");
   });
 
+  describe("row ordering", () => {
+    it("holds row positions through activity reports while rendering fresh data", () => {
+      mocks.sandboxes = [
+        row("sleeping", { state: "suspended", lastActivityAt: 300 }),
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older", "sleeping"]);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 500 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older", "sleeping"]);
+
+      mocks.sandboxes = mocks.sandboxes.map((summary) => ({
+        ...summary,
+        displayName: `${summary.id} refreshed`,
+      }));
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({})], terminals: [] },
+        false,
+      );
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual([
+        "newer refreshed",
+        "older refreshed",
+        "sleeping refreshed",
+      ]);
+      expect(
+        within(rowOf("older")).getByTestId("sandboxes-row-sessions")
+          .textContent,
+      ).toContain("1 session");
+    });
+
+    it("reorders from current activity when a public state changes", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 300 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("sleeping", { state: "awake", lastActivityAt: 300 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "sleeping", "newer"]);
+
+      mocks.sandboxes = mocks.sandboxes.map((summary) =>
+        summary.id === "older" ? { ...summary, frozen: true } : summary,
+      );
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["sleeping", "newer", "older"]);
+    });
+
+    it("keeps the order when a transition lands in the same public state", () => {
+      mocks.sandboxes = [
+        row("waking", { state: "resuming", lastActivityAt: 100 }),
+        row("awake", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("waking", { state: "awake", lastActivityAt: 300 }),
+        row("awake", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["awake", "waking"]);
+      expect(
+        within(rowOf("waking")).getByTestId("row-primary").textContent,
+      ).toBe("Suspend");
+    });
+
+    it("places every added row by the rule and counts it immediately", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 400 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        ...mocks.sandboxes,
+        row("middle", { lastActivityAt: 200 }),
+        row("newest", { lastActivityAt: 300 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newest", "middle", "older", "sleeping"]);
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "4 sandboxes",
+      );
+    });
+
+    it("drops a removed row and updates the count", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("removed", { state: "suspended", lastActivityAt: 300 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "newer"]);
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "2 sandboxes",
+      );
+    });
+
+    it("breaks equal activity keys by id in both state groups", () => {
+      renderPanel([
+        row("z-sleeping", { state: "suspended", lastActivityAt: 200 }),
+        row("z-awake", { lastActivityAt: null, lastTransitionAt: 100 }),
+        row("a-sleeping", { state: "suspended", lastActivityAt: 200 }),
+        row("a-awake", { lastActivityAt: 100 }),
+      ]);
+      expect(names()).toEqual([
+        "a-awake",
+        "z-awake",
+        "a-sleeping",
+        "z-sleeping",
+      ]);
+    });
+
+    it("retains positions when a search is cleared after a report", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "older" },
+      });
+      expect(names()).toEqual(["older"]);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 300 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "" },
+      });
+      expect(names()).toEqual(["newer", "older"]);
+    });
+
+    it("sorts from current activity again when the page reopens", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { unmount } = renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older"]);
+      unmount();
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 300 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "newer"]);
+    });
+  });
+
   it("narrows the list by the search and by the state filter, with a count badge", () => {
     renderPanel([
       row("alpha", { state: "awake" }),
@@ -883,28 +1146,364 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(screen.getByTestId("sandboxes-filter-count").textContent).toBe("1");
   });
 
-  it("lists exactly the filtered idle agent sandboxes in Destroy all idle", () => {
-    renderPanel([
-      row("idle-a", { state: "suspended", burst: true }),
-      row("idle-b", { state: "stopped", burst: true }),
-      row("idle-c", { state: "suspended", burst: true }),
-      row("awake-agent", { state: "awake", burst: true }),
-      row("plain-suspended", { state: "suspended", burst: false }),
-    ]);
-    expect(screen.queryByTestId("sandboxes-destroy-all-idle")).toBeNull();
+  describe("Destroy all idle through the Settings list query", () => {
+    function mount(rows: readonly SandboxSummary[]) {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      mocks.realActions = true;
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u1", username: "ada" },
+      });
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: rows },
+      });
+      const page = hostPage();
+      renderUi(<SandboxesSettingsPanel />);
+      return { binding, client: page.queryClient };
+    }
 
-    fireEvent.pointerDown(screen.getByTestId("sandboxes-filter"), {
-      button: 0,
-      ctrlKey: false,
+    async function choose(group: string, value: string): Promise<void> {
+      await userEvent.click(
+        screen.getByRole("button", { name: "Filter sandboxes" }),
+      );
+      await userEvent.click(
+        screen.getByTestId(`sandboxes-filter-${group}-${value}`),
+      );
+      await userEvent.keyboard("{Escape}");
+    }
+
+    async function confirmIdle(): Promise<HTMLElement> {
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Destroy all idle" }),
+      );
+      return screen.getByRole("dialog", { name: /Destroy \d+ idle sandbox/ });
+    }
+
+    const first = row("idle-a", { state: "suspended", burst: true });
+    const second = row("idle-b", { state: "suspended", burst: false });
+    const automation = row("Automations", {
+      state: "suspended",
+      kind: "automation",
     });
-    fireEvent.click(screen.getByTestId("sandboxes-filter-kind-agent"));
-    fireEvent.click(screen.getByTestId("sandboxes-filter-state-suspended"));
 
-    fireEvent.click(screen.getByTestId("sandboxes-destroy-all-idle"));
-    const targets = screen.getByTestId("sandbox-destroy-all-idle-targets");
-    expect(
-      Array.from(targets.querySelectorAll("li")).map((li) => li.textContent),
-    ).toEqual(["idle-a", "idle-c"]);
+    it.each(["all", "awake", "suspended", "stopped", "frozen", "failed"])(
+      "offers the header action only for idle State filters: %s",
+      async (state) => {
+        const idleState = state === "stopped" ? "stopped" : "suspended";
+        mount([
+          { ...first, state: idleState },
+          { ...second, state: idleState },
+          { ...automation, state: idleState },
+        ]);
+        await screen.findByText("idle-a");
+        await choose("state", state);
+        const offered = state === "suspended" || state === "stopped";
+        expect(
+          screen.queryByRole("button", { name: "Destroy all idle" }) !== null,
+        ).toBe(offered);
+        if (offered) {
+          for (const kind of ["sandbox", "agent", "automation", "all"]) {
+            await choose("kind", kind);
+            expect(
+              screen
+                .getByRole("button", { name: "Destroy all idle" })
+                .hasAttribute("disabled"),
+            ).toBe(kind === "automation");
+          }
+        }
+      },
+    );
+
+    it("confirms the enumerated filtered names and count without Automations, then keeps that set", async () => {
+      const { binding, client } = mount([
+        first,
+        second,
+        automation,
+        row("elsewhere", { state: "suspended", environmentId: TEAM_ENV }),
+        row("awake", { state: "awake" }),
+      ]);
+      mocks.configurations.push({
+        kind: "team",
+        teamId: "t1",
+        teamName: "Acme",
+        environmentId: TEAM_ENV,
+      });
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      expect(within(dialog).getByRole("heading").textContent).toBe(
+        "Destroy 2 idle sandboxes?",
+      );
+      expect(
+        within(dialog).getByTestId("sandbox-destroy-all-idle-targets")
+          .textContent,
+      ).toBe("idle-aidle-b");
+      expect(dialog.textContent).toContain(
+        "Files on these sandboxes cannot be recovered; published chats stay readable.",
+      );
+      const expanded = [
+        first,
+        second,
+        automation,
+        row("idle-new", { state: "suspended" }),
+      ];
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: expanded },
+      });
+      await act(async () => {
+        await client.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      });
+      expect(within(dialog).getByRole("heading").textContent).toBe(
+        "Destroy 2 idle sandboxes?",
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 2" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+          [second.id, true],
+        ]),
+      );
+    });
+
+    it("destroys only the kept Stopped row matching Kind, Started by and search", async () => {
+      const kept = row("keep-match", { state: "stopped", burst: false });
+      const { binding } = mount([
+        kept,
+        row("keep-agent", { state: "stopped", burst: true }),
+        row("keep-other", {
+          state: "stopped",
+          createdBy: { userId: "u2", displayName: "Bea" },
+        }),
+        row("other-name", { state: "stopped" }),
+        { ...automation, state: "stopped" },
+      ]);
+      await screen.findByText(kept.displayName);
+      await choose("state", "stopped");
+      await choose("kind", "sandbox");
+      await choose("started", "you");
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Search by name or task" }),
+        { target: { value: "keep" } },
+      );
+      const dialog = await confirmIdle();
+      expect(within(dialog).getByRole("heading").textContent).toBe(
+        "Destroy 1 idle sandbox?",
+      );
+      expect(
+        within(dialog).getByTestId("sandbox-destroy-all-idle-targets")
+          .textContent,
+      ).toBe("keep-match");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [kept.id, true],
+        ]),
+      );
+    });
+
+    it("requires the running target's typed name before destroying any target", async () => {
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({ working: true })], terminals: [] },
+        true,
+      );
+      const { binding } = mount([first]);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      const confirm = within(dialog).getByRole("button", { name: "Destroy 1" });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
+      const input = within(dialog).getByRole("textbox", {
+        name: "Type the name to confirm",
+      });
+      fireEvent.change(input, { target: { value: "wrong" } });
+      fireEvent.click(confirm);
+      expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "idle-a" } });
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+        ]),
+      );
+    });
+
+    it("rechecks each target and skips one that wakes, loses authority, or becomes Automations", async () => {
+      const lost = row("idle-lost", { state: "suspended" });
+      const changed = row("idle-changed", { state: "suspended" });
+      const { binding } = mount([first, second, lost, changed]);
+      const pending = Promise.withResolvers<SandboxVerbFetchResult>();
+      binding.auth.destroySandbox.mockReturnValueOnce(pending.promise);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 4" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox).toHaveBeenCalledWith(
+          first.id,
+          true,
+        ),
+      );
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            { ...second, state: "awake" },
+            { ...changed, kind: "automation" },
+          ],
+        },
+      });
+      await act(async () => {
+        pending.resolve({ kind: "ok", settled: true });
+        await pending.promise;
+      });
+      await waitFor(() =>
+        expect(dialog.textContent).toContain(
+          "idle-lost · no longer available to destroy, left as it is",
+        ),
+      );
+      expect(dialog.textContent).toContain(
+        "idle-b · no longer idle, left as it is",
+      );
+      expect(dialog.textContent).toContain(
+        "idle-changed · no longer available to destroy, left as it is",
+      );
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+      ]);
+    });
+
+    it("shows per-row pending and failure, and retries only failed targets after the list grows", async () => {
+      const { binding, client } = mount([first, second]);
+      const pending = Promise.withResolvers<SandboxVerbFetchResult>();
+      binding.auth.destroySandbox
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(refusal(503, "provider-error"));
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 2" }),
+      );
+      expect(
+        (await within(rowOf(first.id)).findByRole("status", { hidden: true }))
+          .textContent,
+      ).toBe("Destroying · pending");
+      await act(async () => {
+        pending.resolve({ kind: "ok", settled: true });
+        await pending.promise;
+      });
+      const failed = await within(rowOf(second.id)).findByRole("alert", {
+        hidden: true,
+      });
+      expect(failed.textContent).toContain(
+        "Couldn't destroy idle-b · SBX-0413",
+      );
+      expect(
+        within(failed).getByRole("button", { name: "Retry", hidden: true }),
+      ).toBeTruthy();
+      expect(
+        within(failed).getByRole("button", { name: "Details", hidden: true }),
+      ).toBeTruthy();
+      const newcomer = row("idle-new", { state: "suspended" });
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [first, second, newcomer] },
+      });
+      await act(async () => {
+        await client.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+          [second.id, true],
+          [second.id, true],
+        ]),
+      );
+    });
+
+    it.each([
+      {
+        status: 409,
+        code: "sandbox_transition_conflict",
+        message: "no longer idle, left as it is",
+      },
+      {
+        status: 404,
+        code: "sandbox_not_found",
+        message: "no longer available to destroy, left as it is",
+      },
+    ])(
+      "sends the idle precondition and renders $code as that target's skip",
+      async ({ status, code, message }) => {
+        const { binding } = mount([first]);
+        binding.auth.destroySandbox.mockResolvedValueOnce(
+          refusal(status, code),
+        );
+        await screen.findByText("idle-a");
+        await choose("state", "suspended");
+        const dialog = await confirmIdle();
+        fireEvent.click(
+          within(dialog).getByRole("button", { name: "Destroy 1" }),
+        );
+        await waitFor(() =>
+          expect(dialog.textContent).toContain(`idle-a · ${message}`),
+        );
+        expect(binding.auth.destroySandbox.mock.calls).toEqual([
+          [first.id, true],
+        ]);
+        expect(
+          within(dialog)
+            .getByRole("button", { name: "Retry" })
+            .hasAttribute("disabled"),
+        ).toBe(true);
+        expect(
+          within(rowOf(first.id)).queryByRole("alert", { hidden: true }),
+        ).toBeNull();
+      },
+    );
+
+    it("rechecks a row Retry from a failed batch instead of destroying a target that woke", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce(
+        refusal(503, "provider-error"),
+      );
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await within(rowOf(first.id)).findByRole("alert", { hidden: true });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await choose("state", "all");
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [{ ...first, state: "awake" }] },
+      });
+      fireEvent.click(
+        within(rowOf(first.id)).getByRole("button", { name: "Retry" }),
+      );
+      await waitFor(() =>
+        expect(rowOf(first.id).textContent).toContain("Skipped idle-a"),
+      );
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+      ]);
+    });
   });
 
   it("scrolls a revealed row into view once per reveal, not again on each refetch", () => {
@@ -972,6 +1571,7 @@ describe("<SandboxesSettingsPanel />", () => {
     act(() => open("team-box"));
 
     mocks.listed = true;
+    mocks.realActions = false;
     mocks.sandboxes = [
       row("team-box", {
         environmentId: "env-acme",
@@ -1187,6 +1787,7 @@ describe("<SandboxesSettingsPanel />", () => {
             pendingMillicredits: 0,
             segments: [],
             todayMillicredits: rowTodayMc,
+            todayAwakeMs: null,
             history: [],
           },
         ],
@@ -1267,18 +1868,402 @@ describe("<SandboxesSettingsPanel />", () => {
     });
   });
 
-  it("reads a row mid-destroy as Destroying… with no sessions line", () => {
-    mocks.report = liveSessionReport(
-      { agents: [], terminals: [terminalSessionFixture({})] },
-      true,
-    );
-    renderPanel([row("sbx-gone", { state: "destroying" })]);
+  it.each([false, true])(
+    "shows another member's destroy before frozen=%s, then removes the row when the list drops it",
+    (frozen) => {
+      mocks.configurations = [
+        {
+          kind: "team",
+          teamId: "t1",
+          teamName: "Acme",
+          environmentId: TEAM_ENV,
+        },
+      ];
+      mocks.sessionFailed = true;
+      const sandbox = row("sbx-gone", {
+        state: "destroying",
+        frozen,
+        environmentId: TEAM_ENV,
+      });
+      mocks.sandboxes = [sandbox];
+      const panel = renderUi(<SandboxesSettingsPanel />);
+      const destroying = rowOf(sandbox.id);
+      expect(
+        within(destroying).getByTestId("sandboxes-row-state").textContent,
+      ).toBe("Destroying");
+      expect(
+        within(destroying).getByTestId("sandboxes-row-clock").textContent,
+      ).toBe("Destroying · pending");
+      expect(
+        within(destroying).queryByTestId("sandboxes-row-sessions"),
+      ).toBeNull();
 
-    const gone = rowOf("sbx-gone");
-    expect(within(gone).getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Destroying…",
+      // GET /api/sandboxes excludes destroyed rows.
+      mocks.sandboxes = [];
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(screen.queryByTestId("sandboxes-row")).toBeNull();
+    },
+  );
+
+  it.each(["destroying", "awake", "destroyed"] as const)(
+    "checks a stale awake row's lifecycle on host loss before presenting %s",
+    async (nextState) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u-viewer", username: "viewer" },
+      });
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      const sandbox = row("sbx-team", {
+        state: "awake",
+        environmentId: TEAM_ENV,
+      });
+      mocks.configurations = [
+        {
+          kind: "team",
+          teamId: "t1",
+          teamName: "Acme",
+          environmentId: TEAM_ENV,
+        },
+      ];
+      const online = sandboxHostEntry(sandbox.hostId, {
+        id: "t1",
+        name: "Acme",
+      });
+      mocks.entry = online;
+      binding.auth.listSandboxes.mockResolvedValueOnce({
+        kind: "ok",
+        response: { sandboxes: [sandbox] },
+      });
+      const answer = Promise.withResolvers<SandboxListFetchResult>();
+      binding.auth.listSandboxes.mockReturnValue(answer.promise);
+      const page = hostPage();
+      const panel = renderUi(<SandboxesSettingsPanel />);
+      const initialRow = await screen.findByTestId("sandboxes-row");
+      const lifecycle = within(initialRow).getByTestId(
+        "sandboxes-row-clock",
+      ).textContent;
+      expect(page.queryClient.getMutationCache().getAll()).toEqual([]);
+
+      // Both a missing row and an offline registry row must check the server.
+      const gone: RemoteHostDirectoryEntry | null =
+        nextState === "awake"
+          ? {
+              ...online,
+              transportDialability: "not-dialable",
+              remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
+            }
+          : null;
+      mocks.entry = gone;
+      panel.rerender(<SandboxesSettingsPanel />);
+      await waitFor(() =>
+        expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
+      );
+      expect(
+        within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+          .textContent,
+      ).toBe(lifecycle);
+
+      // A flapping directory joins the outstanding read, never cancels/restarts it.
+      mocks.entry = online;
+      panel.rerender(<SandboxesSettingsPanel />);
+      mocks.entry = gone;
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+      expect(
+        within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+          .textContent,
+      ).toBe(lifecycle);
+
+      await act(async () => {
+        answer.resolve({
+          kind: "ok",
+          response: {
+            sandboxes:
+              nextState === "destroyed"
+                ? []
+                : [{ ...sandbox, state: nextState }],
+          },
+        });
+        await answer.promise;
+      });
+      if (nextState === "destroyed") {
+        await waitFor(() =>
+          expect(screen.queryByTestId("sandboxes-row")).toBeNull(),
+        );
+      } else {
+        const expected =
+          nextState === "destroying"
+            ? "Destroying · pending"
+            : "Running, but Traycer can't connect";
+        await waitFor(() =>
+          expect(
+            within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+              .textContent,
+          ).toBe(expected),
+        );
+        panel.rerender(<SandboxesSettingsPanel />);
+        expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+        if (nextState === "destroying") {
+          binding.auth.listSandboxes.mockResolvedValue({
+            kind: "ok",
+            response: { sandboxes: [] },
+          });
+          await act(() =>
+            page.queryClient.invalidateQueries({
+              queryKey: authQueryKeys.registeredHostsAll(),
+            }),
+          );
+          await waitFor(() =>
+            expect(screen.queryByTestId("sandboxes-row")).toBeNull(),
+          );
+        }
+      }
+    },
+  );
+
+  it("keeps lifecycle after a failed status check's list refresh, then uses the next registry read", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-viewer", username: "viewer" },
+    });
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    const sandbox = row("sbx-status", { state: "awake" });
+    mocks.entry = sandboxHostEntry(sandbox.hostId, null);
+    binding.auth.listSandboxes.mockResolvedValueOnce({
+      kind: "ok",
+      response: { sandboxes: [sandbox] },
+    });
+    const answer = Promise.withResolvers<SandboxListFetchResult>();
+    binding.auth.listSandboxes.mockReturnValue(answer.promise);
+    const page = hostPage();
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const initial = await screen.findByTestId("sandboxes-row");
+    const lifecycle = within(initial).getByTestId(
+      "sandboxes-row-clock",
+    ).textContent;
+    mocks.sessionFailed = true;
+    panel.rerender(<SandboxesSettingsPanel />);
+    await waitFor(() =>
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
     );
-    expect(within(gone).queryByTestId("sandboxes-row-sessions")).toBeNull();
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent,
+    ).toBe(lifecycle);
+    await act(async () => {
+      answer.resolve({ kind: "network-error", detail: "offline" });
+      await answer.promise;
+    });
+    await waitFor(() =>
+      expect(
+        page.queryClient.getQueryState(
+          sandboxQueryKeys.list(binding.auth, "u-viewer"),
+        )?.status,
+      ).toBe("error"),
+    );
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent,
+    ).toBe(lifecycle);
+
+    binding.auth.listSandboxes.mockImplementation(() =>
+      Promise.resolve({ kind: "ok", response: { sandboxes: [sandbox] } }),
+    );
+    await act(() =>
+      page.queryClient.invalidateQueries({
+        queryKey: authQueryKeys.registeredHostsAll(),
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock")
+          .textContent,
+      ).toBe("Running, but Traycer can't connect"),
+    );
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3);
+  });
+
+  describe("a held team pod Retry belongs to its mounted row", () => {
+    const POD_ROW = "sbx-pod";
+    const ACME: SandboxPageConfiguration = {
+      kind: "team",
+      teamId: "t-acme",
+      teamName: "Acme",
+      environmentId: "env-acme",
+    };
+    const BETA: SandboxPageConfiguration = {
+      kind: "team",
+      teamId: "t-beta",
+      teamName: "Beta",
+      environmentId: "env-beta",
+    };
+
+    /** Acme's failed pod in a separate team configuration from Beta. */
+    function mountHeldRetry(): {
+      readonly binding: FakeSandboxBinding;
+      readonly answerLookup: () => void;
+    } {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      mocks.realActions = true;
+      mocks.realAutomation = true;
+      mocks.configurations = [{ kind: "personal" }, ACME, BETA];
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u1", username: "ada" },
+      });
+      const pod = row(POD_ROW, {
+        kind: "automation",
+        state: "failed",
+        environmentId: "env-acme",
+        displayName: "Automations",
+      });
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [pod] },
+      });
+      const lookups: Array<() => void> = [];
+      binding.auth.getSandboxAutomation.mockImplementation((environmentId) => {
+        if (environmentId !== "env-acme") {
+          return Promise.resolve({
+            kind: "ok",
+            automation: { available: true, sandbox: null, pods: [] },
+          });
+        }
+        return new Promise((resolve) => {
+          lookups.push(() =>
+            resolve({
+              kind: "ok",
+              automation: {
+                available: true,
+                sandbox: null,
+                pods: [
+                  {
+                    sandbox: pod,
+                    ordinal: 2,
+                    liveShells: 0,
+                    headroom: 1,
+                  },
+                ],
+              },
+            }),
+          );
+        });
+      });
+      binding.auth.openSandboxAutomation.mockResolvedValue({
+        kind: "ok",
+        sandbox: { ...pod, state: "awake" },
+        settled: true,
+      });
+      useSettingsEnvironmentPickStore
+        .getState()
+        .setPick({ kind: "team", environmentId: "env-acme" });
+      renderUi(<SandboxesSettingsPanel />);
+      return {
+        binding,
+        answerLookup: () => {
+          for (const answer of lookups) answer();
+        },
+      };
+    }
+
+    async function clickRetryHeldInLookup(binding: FakeSandboxBinding) {
+      await userEvent.click(await screen.findByTestId("sandbox-row-retry"));
+      await waitFor(() => {
+        expect(binding.auth.getSandboxAutomation).toHaveBeenCalled();
+      });
+    }
+
+    /** The held Retry's mutation, with any wake it starts, has finished. */
+    async function settleHeldRetry(userId: string): Promise<void> {
+      const client = harness?.queryClient;
+      if (client === undefined) throw new Error("no page is mounted");
+      await waitFor(() => {
+        expect(
+          client.isMutating({
+            mutationKey: sandboxMutationKeys.automationRetry(
+              userId,
+              "env-acme",
+              POD_ROW,
+            ),
+            exact: true,
+          }),
+        ).toBe(0);
+      });
+    }
+
+    it("wakes nothing when the page switches configuration before the lookup answers", async () => {
+      const { binding, answerLookup } = mountHeldRetry();
+      await clickRetryHeldInLookup(binding);
+
+      act(() => {
+        useSettingsEnvironmentPickStore
+          .getState()
+          .setPick({ kind: "team", environmentId: "env-beta" });
+      });
+      expect(screen.queryByTestId("sandbox-row-retry")).toBeNull();
+      answerLookup();
+      await settleHeldRetry("u1");
+
+      expect(binding.auth.openSandboxAutomation).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
+
+    it("wakes nothing when the filter hides the clicked row before the lookup answers", async () => {
+      const { binding, answerLookup } = mountHeldRetry();
+      await clickRetryHeldInLookup(binding);
+
+      await userEvent.type(screen.getByTestId("sandboxes-search"), "zzz");
+      expect(screen.queryByTestId("sandbox-row-retry")).toBeNull();
+      answerLookup();
+      await settleHeldRetry("u1");
+
+      expect(binding.auth.openSandboxAutomation).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+
+      await userEvent.clear(screen.getByTestId("sandboxes-search"));
+      const remountedRetry =
+        await screen.findByTestId<HTMLButtonElement>("sandbox-row-retry");
+      expect(remountedRetry.disabled).toBe(false);
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      await userEvent.click(remountedRetry);
+      answerLookup();
+      await waitFor(() => {
+        expect(binding.auth.openSandboxAutomation).toHaveBeenCalledTimes(1);
+      });
+      expect(binding.auth.openSandboxAutomation).toHaveBeenCalledWith({
+        environmentId: "env-acme",
+        ordinal: 2,
+      });
+      await waitFor(() => {
+        expect(binding.auth.openSandboxAutomation).toHaveResolved();
+      });
+      await settleHeldRetry("u1");
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
+
+    it("wakes nothing when the row unmounts and the account changes before the lookup answers", async () => {
+      const { binding, answerLookup } = mountHeldRetry();
+      await clickRetryHeldInLookup(binding);
+
+      act(() => {
+        useSettingsEnvironmentPickStore
+          .getState()
+          .setPick({ kind: "team", environmentId: "env-beta" });
+      });
+      act(() => {
+        useAuthStore.setState({
+          status: "signed-in",
+          contextMetadata: { userId: "u2", username: "grace" },
+        });
+      });
+      answerLookup();
+      await settleHeldRetry("u1");
+
+      expect(binding.auth.openSandboxAutomation).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
   });
 
   describe("an Automations host that is not created yet", () => {
@@ -1349,98 +2334,50 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBeNull();
     });
 
-    it("creates and starts it, then opens the terminal on the host it answers with, leaving the composer as it was", async () => {
+    it("reserves the first terminal pane and closes Settings before Automations enrollment", () => {
       mocks.automation = NOT_CREATED;
-      const pendingOpen = deferredAutomationOpen();
-      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-a", username: "Account A" },
-      });
-      await withSettingsTabSelected();
-      const panel = renderUi(<SandboxesSettingsPanel />);
-
-      fireEvent.click(
-        within(unstarted()).getByRole("button", { name: "Open terminal" }),
-      );
-
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
-      });
-      panel.unmount();
-
-      await act(async () => {
-        pendingOpen.resolve({ sandbox: OPENED, settled: true });
-        await pendingOpen.promise;
-      });
-
-      await waitFor(() => {
-        expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
-          "auto-host",
-        );
-      });
-      expect(mocks.openAutomation).toHaveBeenCalledWith(null);
-      expect(mocks.close).toHaveBeenCalledTimes(1);
-      expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
-    });
-
-    it("does not apply a previous account's start after its Settings panel unmounts", async () => {
-      mocks.automation = NOT_CREATED;
-      const pendingOpen = deferredAutomationOpen();
-      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-a", username: "Account A" },
-      });
-      await withSettingsTabSelected();
-      const panel = renderUi(<SandboxesSettingsPanel />);
-
-      fireEvent.click(
-        within(unstarted()).getByRole("button", { name: "Open terminal" }),
-      );
-
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
-      });
-      panel.unmount();
-
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-b", username: "Account B" },
-      });
-      useLandingPanelStore
-        .getState()
-        .requestTerminal("landing:account-b", "host-account-b");
-      const accountBRequest = useLandingPanelStore.getState().terminalRequest;
-      const navigationsBeforeSettlement = [...navigations];
-
-      await act(async () => {
-        pendingOpen.resolve({ sandbox: OPENED, settled: true });
-        await pendingOpen.promise;
-      });
-
-      expect(useLandingPanelStore.getState().terminalRequest).toEqual(
-        accountBRequest,
-      );
-      expect(navigations).toEqual(navigationsBeforeSettlement);
-      expect(mocks.close).not.toHaveBeenCalled();
-    });
-
-    it("files no request and keeps Settings open when the start fails", async () => {
-      mocks.automation = NOT_CREATED;
-      mocks.openAutomation.mockRejectedValue(new Error("refused"));
       renderPanel([row("sbx-a", {})]);
+      const button = within(unstarted()).getByRole("button", {
+        name: "Open terminal",
+      });
+      fireEvent.click(button);
+      const pending = useLandingPanelStore.getState().placeholder;
+      expect(pending?.automation).toMatchObject({
+        existing: null,
+        teamEnvironmentId: null,
+      });
+      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(useLandingPanelStore.getState().fallbackLayout).toMatchObject({
+        panelOpen: true,
+        maximized: true,
+      });
+      // Network work belongs to the pane, which this Settings test does not mount.
+      expect(mocks.openAutomation).not.toHaveBeenCalled();
+      fireEvent.click(button);
+      expect(useLandingPanelStore.getState().placeholder).toBe(pending);
+      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByText("Couldn't open a terminal on Automations."),
+      ).toBeNull();
+    });
 
+    it("keeps the pane request through row replacement and Settings unmount", () => {
+      mocks.automation = NOT_CREATED;
+      const panel = renderUi(<SandboxesSettingsPanel />);
       fireEvent.click(
         within(unstarted()).getByRole("button", { name: "Open terminal" }),
       );
-
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
-      });
-      await Promise.resolve();
-      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
-      expect(mocks.close).not.toHaveBeenCalled();
+      const pending = useLandingPanelStore.getState().placeholder;
+      mocks.automation = { available: true, sandbox: OPENED, pods: [] };
+      mocks.sandboxes = [OPENED];
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(
+        screen.queryByTestId("sandboxes-row-automations-unstarted"),
+      ).toBeNull();
+      expect(useLandingPanelStore.getState().placeholder).toBe(pending);
+      panel.unmount();
+      expect(useLandingPanelStore.getState().placeholder).toBe(pending);
+      expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
     });
   });
 

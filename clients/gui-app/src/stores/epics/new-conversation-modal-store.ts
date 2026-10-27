@@ -12,6 +12,7 @@ import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
   notifyDraftLocalDelete,
   notifyDraftLocalEdit,
@@ -78,6 +79,22 @@ export interface NewConversationModalDraftPatch {
    * host client to reach.
    */
   readonly ownerHostId: string | null;
+}
+
+/**
+ * A give-back must preserve text and any intervening settings or workspace choice.
+ * A remembered caret alone can come from autofocus and does not occupy the draft.
+ */
+export function isNewConversationDraftOccupied(
+  draft: NewConversationModalDraftPatch | undefined,
+): boolean {
+  return (
+    draft !== undefined &&
+    ((draft.content !== null && !isEmptyLandingDraftContent(draft.content)) ||
+      draft.settings !== null ||
+      draft.workspace !== null ||
+      draft.composerMode !== null)
+  );
 }
 
 interface NewConversationModalStore {

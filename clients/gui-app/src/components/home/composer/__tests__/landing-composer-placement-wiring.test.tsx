@@ -267,7 +267,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
 }));
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => () => null,
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
 }));
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
@@ -438,6 +441,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
   useStagedSandboxHandoff: () => undefined,
+  useOpenLandingStagedTerminal: () => vi.fn(),
 }));
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,

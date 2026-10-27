@@ -1,4 +1,6 @@
+import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
@@ -67,7 +69,11 @@ export type StagedSandboxStep =
 
 /** Why the first action stopped short, said on the line or above the draft. */
 export type StagedSandboxFailure =
-  | { readonly kind: "credits"; readonly shortfallMc: number | null }
+  | {
+      readonly kind: "credits";
+      readonly shortfallMc: number | null;
+      readonly creditSource?: "personal" | "team-allowance" | "team" | null;
+    }
   | { readonly kind: "unverified" }
   | { readonly kind: "shape" }
   | { readonly kind: "unavailable" }
@@ -80,14 +86,19 @@ export type StagedSandboxFailure =
       readonly step: StagedSandboxStep;
     }
   /** Awake, but the configuration's settings did not apply. */
-  | { readonly kind: "settings"; readonly code: string }
+  | {
+      readonly kind: "settings";
+      readonly code: string;
+      readonly steps?: SandboxSettingsSteps | null;
+    }
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
   /**
-   * The sandbox is up; the requested agent cannot run on it (no sign-in on
-   * the configuration, or not offered there). Never swapped for another.
+   * The sandbox is up; its configuration cannot run the offered agent.
    */
   | { readonly kind: "no-provider" }
+  /** The sandbox is up, but its catalogue does not offer the requested agent. */
+  | { readonly kind: "agent-not-offered"; readonly harnessId: GuiHarnessId }
   /**
    * The sandbox is up; the requested agent's install there failed. `detail`
    * is the host's own sentence for it.
@@ -168,6 +179,7 @@ export function refusedBeforeCreate(
     case "settings":
     case "timed-out":
     case "no-provider":
+    case "agent-not-offered":
     case "agent-setup-failed":
     case "not-sent":
       return false;

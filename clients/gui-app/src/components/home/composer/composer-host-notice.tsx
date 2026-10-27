@@ -24,8 +24,11 @@ import { Button } from "@/components/ui/button";
 export interface ComposerHostNoticeState {
   readonly kind: "refused" | "mirror";
   readonly message: string;
-  /** The one remedy the notice offers, or `null` for none. */
+  /** Waiting on the catalogue; Send becomes available when that read settles. */
+  readonly pending?: boolean;
+  /** The primary remedy the notice offers, or `null` for none. */
   readonly action: ComposerHostNoticeAction | null;
+  readonly secondaryActions?: readonly ComposerHostNoticeAction[];
 }
 
 export interface ComposerHostNoticeAction {
@@ -35,11 +38,12 @@ export interface ComposerHostNoticeAction {
 
 interface ComposerHostNoticeProps {
   readonly notice: ComposerHostNoticeState | null;
+  readonly pendingNotice?: ComposerHostNoticeState | null;
   readonly onDismiss: () => void;
 }
 
 export function ComposerHostNotice(props: ComposerHostNoticeProps): ReactNode {
-  const notice = props.notice;
+  const notice = props.pendingNotice ?? props.notice;
   if (notice === null) return null;
   const refused = notice.kind === "refused";
   const Icon = refused ? AlertTriangle : Info;
@@ -74,16 +78,29 @@ export function ComposerHostNotice(props: ComposerHostNoticeProps): ReactNode {
             {notice.action.label}
           </Button>
         )}
+        {notice.secondaryActions?.map((action) => (
+          <Button
+            key={action.label}
+            type="button"
+            variant="link"
+            size="sm"
+            onClick={action.onAction}
+          >
+            {action.label}
+          </Button>
+        ))}
       </div>
-      <button
-        type="button"
-        aria-label="Dismiss"
-        data-testid="composer-host-notice-dismiss"
-        onClick={props.onDismiss}
-        className="grid size-5 shrink-0 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <X className="size-3.5" />
-      </button>
+      {notice.pending === true ? null : (
+        <button
+          type="button"
+          aria-label="Dismiss"
+          data-testid="composer-host-notice-dismiss"
+          onClick={props.onDismiss}
+          className="grid size-5 shrink-0 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }

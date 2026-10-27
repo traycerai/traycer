@@ -559,6 +559,7 @@ const ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS: Readonly<
 function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
   const runtime: ChatLowerRuntimeState = { snapshotLoaded: true };
   const access: ChatLowerAccessState = {
+    isCopy: false,
     isViewer: true,
     canAct: false,
     readOnlyNotice: null,

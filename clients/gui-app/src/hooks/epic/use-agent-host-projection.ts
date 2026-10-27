@@ -15,6 +15,13 @@ export function useAgentHostProjection(
   const list = useSandboxList();
   const taskHosts = useTaskHostsView(epicId);
   if (hostId === null) return null;
+  const ended =
+    taskHosts.kind === "hosts"
+      ? taskHosts.hosts.find(
+          (row) => row.hostId === hostId && row.sandboxEnd !== null,
+        )
+      : undefined;
+  if (ended !== undefined) return { kind: "task", host: ended };
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
   if (sandbox !== undefined) return { kind: "host", sandbox };
   if (taskHosts.kind !== "hosts") return null;
