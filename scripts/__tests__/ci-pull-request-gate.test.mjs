@@ -166,8 +166,12 @@ const gateRuns = (context) => {
     "github.repository": "traycerai/traycer",
     "github.event.pull_request.user.type": context.user_type,
   };
+  // GitHub ignores case when it compares strings and when `startsWith`
+  // matches a prefix.
+  const fold = (value) =>
+    typeof value === "string" ? value.toLowerCase() : value;
   const operand = (text) =>
-    text.startsWith("'") ? text.slice(1, -1) : lookup[text];
+    fold(text.startsWith("'") ? text.slice(1, -1) : lookup[text]);
   const term = (text) => {
     const prefix = /^!startsWith\(([\w.]+), ('[^']*')\)$/.exec(text);
     if (prefix) {
@@ -214,6 +218,14 @@ describe("the gate expression", () => {
       false,
     );
     expect(gateRuns({ ...team, base_ref: "land/round-3" })).toBe(false);
+  });
+
+  it("matches the base the way GitHub does, ignoring case", () => {
+    expect(gateRuns({ ...team, base_ref: "Main" })).toBe(false);
+    expect(gateRuns({ ...team, base_ref: "Integration/sandboxes" })).toBe(
+      false,
+    );
+    expect(gateRuns({ ...team, base_ref: "LAND/round-3" })).toBe(false);
   });
 
   it("runs a PR into any other branch, including one that only contains integration/ or land/", () => {
