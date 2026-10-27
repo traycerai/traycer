@@ -26,6 +26,8 @@ import {
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { terminalFocusOwnsInstance } from "@/lib/terminals/terminal-focus-registry";
 
 const SURFACE = "landing:window-test";
 
@@ -50,6 +52,35 @@ const automation = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTab: vi.fn(),
   toastFromAuthError: vi.fn(),
+  request: vi.fn(),
+}));
+
+const terminalClient = {
+  getActiveHostId: () => "host-automations",
+  getRequestContextUserId: () => "u1",
+  request: automation.request,
+  requestWithSignal: automation.request,
+};
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => terminalClient,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === null
+      ? null
+      : {
+          hostId,
+          kind: "local",
+          transportDialability: "dialable",
+          websocketUrl: "wss://host.test",
+        },
+}));
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-composer",
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: undefined }),
+  sandboxListReadSentAt: () => null,
 }));
 
 vi.mock("@/lib/auth-error-toast", () => ({
@@ -127,6 +158,54 @@ beforeEach(() => {
   automation.navigate.mockReset();
   automation.activateTab.mockReset();
   automation.toastFromAuthError.mockReset();
+  automation.request.mockReset();
+  automation.request.mockImplementation(
+    (method: string, params: { terminalId: string; cwd: string }) => {
+      if (method === "terminal.list") {
+        return Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            requestId: "legacy-list",
+            method,
+            message: "Unsupported",
+            fatalDetails: null,
+          }),
+        );
+      }
+      if (method === "worktree.listBindingsForEpic")
+        return Promise.resolve({ rows: [], folderlessCwd: "/automation/work" });
+      if (method === "terminal.plain.list")
+        return Promise.resolve({
+          coverage: "complete-local",
+          scope: { kind: "independent" },
+          terminals: [],
+        });
+      if (method === "terminal.plain.create")
+        return Promise.resolve({
+          terminal: {
+            record: {
+              hostId: "host-automations",
+              terminalId: params.terminalId,
+              scope: { kind: "independent" },
+              launch: { cwd: params.cwd },
+              manualTitle: null,
+              revision: 1,
+              createdAt: "2026-10-27T00:00:00Z",
+              updatedAt: "2026-10-27T00:00:00Z",
+            },
+            runtime: {
+              status: "running",
+              sessionId: params.terminalId,
+              currentCwd: params.cwd,
+              activeProcessName: "zsh",
+              cols: 80,
+              rows: 24,
+            },
+          },
+        });
+      return Promise.reject(new Error(`Unexpected RPC ${method}`));
+    },
+  );
   automation.navigate.mockReturnValue(new Promise<void>(() => undefined));
   useAuthStore.setState({
     status: "signed-in",
@@ -530,9 +609,13 @@ describe("<SandboxRowActions />", () => {
     }
 
     function expectTerminalOnAutomationsHost(): void {
-      expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
-        "host-automations",
-      );
+      expect(useLandingPanelStore.getState().tabs).toEqual([
+        expect.objectContaining({
+          kind: "terminal",
+          hostId: "host-automations",
+          cwd: "/automation/work",
+        }),
+      ]);
       expect(automation.close).toHaveBeenCalledTimes(1);
       expect(automation.activateTab).toHaveBeenCalledTimes(1);
       // The composer is left exactly as it was.
@@ -541,6 +624,73 @@ describe("<SandboxRowActions />", () => {
       );
       expect(readStagedSandbox(SURFACE)?.target.kind).toBe("new");
     }
+
+    it("creates and reveals a requested Automations terminal when legacy terminal.list is unsupported", async () => {
+      renderAutomations(
+        new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+        automationsRow("awake", null),
+        { kind: "personal" },
+      );
+      await userEvent.click(screen.getByTestId("sandbox-row-open-terminal"));
+
+      await waitFor(() =>
+        expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
+      );
+      const state = useLandingPanelStore.getState();
+      const tab = state.tabs[0];
+      expect(tab).toMatchObject({
+        kind: "terminal",
+        hostId: "host-automations",
+        cwd: "/automation/work",
+        pendingCreate: false,
+        hostAuthorityAcknowledged: true,
+      });
+      expect(automation.request).toHaveBeenCalledWith(
+        "terminal.plain.create",
+        expect.objectContaining({
+          terminalId: tab.sessionId,
+          cwd: "/automation/work",
+          scope: { kind: "independent" },
+        }),
+      );
+      expect(
+        automation.request.mock.calls.some(
+          ([method]) => method === "terminal.list",
+        ),
+      ).toBe(false);
+      expect(state.activeInstanceId).toBe(tab.instanceId);
+      expect(state.panelReveal).toBe(tab.instanceId);
+      expect(terminalFocusOwnsInstance(tab.instanceId)).toBe(true);
+      expect(automation.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps Settings open with an explicit Retry when the Automations terminal list fails", async () => {
+      const success = automation.request.getMockImplementation();
+      automation.request.mockImplementation(
+        (method: string, ...params: unknown[]): unknown =>
+          method === "terminal.plain.list"
+            ? Promise.reject(new Error("List failed"))
+            : success?.(method, ...params),
+      );
+      renderAutomations(
+        new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+        automationsRow("awake", null),
+        { kind: "personal" },
+      );
+      await userEvent.click(screen.getByTestId("sandbox-row-open-terminal"));
+
+      await screen.findByText("Couldn't open a terminal on Automations.");
+      expectNothingFiledOrClosed();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+      if (success !== undefined) automation.request.mockImplementation(success);
+      await userEvent.click(
+        screen.getByRole("button", { name: "Retry", exact: true }),
+      );
+      await waitFor(() =>
+        expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
+      );
+      expect(automation.close).toHaveBeenCalledTimes(1);
+    });
 
     it("offers Open terminal, and Rename and Details in its menu, with no Destroy or Stop", async () => {
       renderAutomations(new QueryClient(), automationsRow("awake", null), {
@@ -617,7 +767,7 @@ describe("<SandboxRowActions />", () => {
       await userEvent.click(screen.getByTestId("sandbox-row-open-terminal"));
 
       expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
-      expectTerminalOnAutomationsHost();
+      await waitFor(expectTerminalOnAutomationsHost);
     });
     it("files nothing and leaves Settings open when starting a released Automations fails", async () => {
       automation.openSandboxAutomation.mockResolvedValue(
@@ -629,12 +779,8 @@ describe("<SandboxRowActions />", () => {
 
       await userEvent.click(screen.getByTestId("sandbox-row-open-terminal"));
 
-      await waitFor(() => {
-        expect(automation.toastFromAuthError).toHaveBeenCalledTimes(1);
-      });
-      expect(automation.toastFromAuthError.mock.calls[0][1]).toBe(
-        "Couldn't start Automations. Retry it from Settings ▸ Sandboxes.",
-      );
+      await screen.findByText("Couldn't open a terminal on Automations.");
+      expect(automation.toastFromAuthError).not.toHaveBeenCalled();
       expectNothingFiledOrClosed();
     });
 
