@@ -107,7 +107,12 @@ function noticeRow(
   entryId: string,
   notice: HostNotificationSandboxNotice,
   severity: HostNotificationSeverity,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV15 & {
+  readonly entry: Extract<
+    HostNotificationsCloudFeedRowV15["entry"],
+    { kind: "sandbox.notice" }
+  >;
+} {
   return {
     entryId,
     originHostId: "host-cloud",

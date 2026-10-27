@@ -205,7 +205,11 @@ function preserveReadState(
   incoming: HostNotificationFeedEntry,
 ): HostNotificationFeedEntry {
   const readAt = current.readAt;
-  if ("resolvedAt" in current && "resolvedAt" in incoming) {
+  if (
+    "resolvedAt" in current &&
+    current.resolvedAt !== undefined &&
+    "resolvedAt" in incoming
+  ) {
     return { ...incoming, readAt, resolvedAt: current.resolvedAt };
   }
   return { ...incoming, readAt };
