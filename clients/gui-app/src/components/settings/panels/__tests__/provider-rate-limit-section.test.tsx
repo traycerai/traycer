@@ -20,7 +20,7 @@ import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
-import { formatResetFullDateTime } from "@/lib/relative-time";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 
 type TurnRefreshCall = {
@@ -394,7 +394,7 @@ describe("ProviderRateLimitForProvider", () => {
 
     expect(
       screen.getByText(
-        `Resets ${formatResetFullDateTime(CLAUDE_SEVEN_DAY_RESETS_AT)}`,
+        `Resets ${formatSettingsDate(CLAUDE_SEVEN_DAY_RESETS_AT, true)}`,
       ),
     ).toBeTruthy();
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
@@ -627,7 +627,7 @@ describe("ProviderRateLimitForProvider", () => {
     // correctly reads as an absolute calendar date/time, not "Resets in ...".
     expect(
       spendLimitScope.getByText(
-        `Resets ${formatResetFullDateTime(CODEX_SPEND_LIMIT_RESETS_AT)}`,
+        `Resets ${formatSettingsDate(CODEX_SPEND_LIMIT_RESETS_AT, true)}`,
       ),
     ).toBeTruthy();
     expect(spendLimitScope.queryByText(/^Resets in /)).toBeNull();

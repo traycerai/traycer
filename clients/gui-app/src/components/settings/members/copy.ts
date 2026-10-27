@@ -201,15 +201,9 @@ export function acceptSeatAlreadyCounts(teamName: string): string {
   return `Your seat already counts toward ${teamName}'s seats; accepting does not add another.`;
 }
 
-export function acceptSeatAllowanceSentence(): string {
-  return "Available Traycer credits and your assigned allowance determine what you can spend.";
-}
-
 export function acceptSeatCopy(teamName: string, paidPlan: boolean): string {
-  if (paidPlan) {
-    return `${acceptSeatAlreadyCounts(teamName)} ${acceptSeatAllowanceSentence()}`;
-  }
-  return acceptSeatAllowanceSentence();
+  if (paidPlan) return acceptSeatAlreadyCounts(teamName);
+  return `An admin sets how much of ${teamName}'s credits you can spend.`;
 }
 
 /**
@@ -217,7 +211,7 @@ export function acceptSeatCopy(teamName: string, paidPlan: boolean): string {
  * placeholder. Never their user id; `null` when there is nothing to show.
  */
 function memberName(member: MembersListMember): string | null {
-  return member.displayName ?? member.email;
+  return member.displayName?.trim() || member.email;
 }
 
 /** The name dialogs and labels use for a member. */
@@ -235,7 +229,7 @@ export function memberFirstName(member: MembersListMember): string {
 }
 
 /**
- * A row's first line: "<name> · <email>", "<email>" with no name, and
+ * A row's first line: "<name>", "<email>" with no name, and
  * "<name> · you" on the viewer's own row. `null` when an accepted member has
  * neither a name nor an email.
  */
@@ -246,9 +240,6 @@ export function memberRowTitle(
   if (member.inviteState === "pending") return pendingInviteTitle();
   const name = memberName(member);
   if (isSelf) return name === null ? YOU_TAG : `${name} · ${YOU_TAG}`;
-  if (member.displayName !== null && member.email !== null) {
-    return `${member.displayName} · ${member.email}`;
-  }
   return name;
 }
 
@@ -267,11 +258,10 @@ export function memberDetailLine(
     return pendingInviteHiddenAddress(1);
   }
   const parts: string[] = [];
+  if (member.displayName?.trim() && member.email !== null) {
+    parts.push(member.email);
+  }
   if (options.isSelf) {
-    // The title carries the email when there is no name.
-    if (member.displayName !== null && member.email !== null) {
-      parts.push(member.email);
-    }
     if (options.isLastAdmin) parts.push(lastAdminStepDownDetail());
   }
   if (member.linkedPlan) parts.push(LINKED_CLAUDE_PLAN);
@@ -317,9 +307,14 @@ export function demotionWhatKeepsWorking(): string {
 
 export function removePreviewTitle(
   memberName: string,
+  memberEmail: string | null,
   teamName: string,
 ): string {
-  return `Remove ${memberName} from ${teamName}`;
+  const identity =
+    memberEmail !== null && memberEmail !== "" && memberEmail !== memberName
+      ? `${memberName} (${memberEmail})`
+      : memberName;
+  return `Remove ${identity} from ${teamName}`;
 }
 
 export function removePreviewLead(

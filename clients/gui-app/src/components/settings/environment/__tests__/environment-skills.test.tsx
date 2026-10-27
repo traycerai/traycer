@@ -862,10 +862,10 @@ describe("A provider's Skills tab on Personal or a team", () => {
           ),
         ),
     ).toEqual([
-      ["scratch", "all projects"],
-      ["shared-one", "all projects"],
-      ["proj-only", "app"],
-      ["wt-only", "app · feature"],
+      ["scratch", "folder on this computer"],
+      ["shared-one", "folder on this computer"],
+      ["proj-only", "folder on this computer · app"],
+      ["wt-only", "folder on this computer · app · feature"],
     ]);
     const add = (entry: string): HTMLElement => {
       const row = within(card).getByText(entry).closest("li");

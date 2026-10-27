@@ -436,13 +436,12 @@ function teamNotificationPresentation(
           host.credentialClosed === "done" &&
           host.replacementDelivered === "done",
       ).length;
-      const progress =
-        known.hosts.length === 0
-          ? "Removal complete"
-          : `${done} of ${known.hosts.length} hosts done`;
       return {
         title: "Member removed",
-        body: `${known.memberName} • ${known.teamName} • ${progress}`,
+        body:
+          done === known.hosts.length
+            ? `${known.memberName} is no longer in ${known.teamName}.`
+            : `${known.memberName} • ${known.teamName} • ${done} of ${known.hosts.length} hosts done`,
       };
     }
     case "team.member.joined":

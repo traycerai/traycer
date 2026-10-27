@@ -37,13 +37,9 @@ import {
   type StepUpPromptRequest,
 } from "@/lib/auth/step-up-prompt";
 import { useHostBinding } from "@/lib/host";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
-
-const SESSION_ABSOLUTE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 interface SessionMutation {
   readonly isPending: boolean;
@@ -102,7 +98,7 @@ function formatRelativeTime(value: string): string {
   if (days < 30) {
     return days === 1 ? "1 day ago" : `${days} days ago`;
   }
-  return SESSION_ABSOLUTE_TIME_FORMATTER.format(new Date(timestamp));
+  return formatSettingsDate(timestamp, true);
 }
 
 function sessionStatusLine(session: UserSessionListItem): string {
