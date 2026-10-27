@@ -551,6 +551,41 @@ describe("useAddBrowserAction", () => {
       expect(openTabs[LOCAL_HOST_ID]).toHaveBeenCalledOnce();
       expect(openTabs[PINNED_HOST_ID]).not.toHaveBeenCalled();
     });
+
+    function leaseLocalHost(localLease: HostLeaseSnapshot): void {
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [localLease, { hostId: HOST_ID, status: "ready", dead: null }],
+      });
+    }
+
+    it("falls through to the panel's host when this machine's host is dead", async () => {
+      boundary.localHostId = LOCAL_HOST_ID;
+      leaseLocalHost({
+        hostId: LOCAL_HOST_ID,
+        status: "dead",
+        dead: { reason: "offline" },
+      });
+      const { openTabs } = await addOnHosts();
+
+      expect(openBrowserTiles()).toMatchObject([{ hostId: HOST_ID }]);
+      expect(openTabs[HOST_ID]).toHaveBeenCalledOnce();
+      expect(openTabs[LOCAL_HOST_ID]).not.toHaveBeenCalled();
+    });
+
+    it("keeps this machine's host through an expected restart", async () => {
+      boundary.localHostId = LOCAL_HOST_ID;
+      leaseLocalHost({
+        hostId: LOCAL_HOST_ID,
+        status: "restarting-expected",
+        dead: null,
+      });
+      const { openTabs } = await addOnHosts();
+
+      expect(openBrowserTiles()).toMatchObject([{ hostId: LOCAL_HOST_ID }]);
+      expect(openTabs[LOCAL_HOST_ID]).toHaveBeenCalledOnce();
+      expect(openTabs[HOST_ID]).not.toHaveBeenCalled();
+    });
   });
 
   describe("render cost of a real click, flushSync scope included", () => {
