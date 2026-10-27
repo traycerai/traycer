@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import type { BrowserCatalogModel } from "@/hooks/browser/use-browser-catalog-inventory";
 
-/** Task-wide discovery stays outside every owner-specific browser boundary. */
+/** One task query is shared by the sidebar, header and mobile list. */
 export const BrowserCatalogContext = createContext<BrowserCatalogModel | null>(
   null,
 );

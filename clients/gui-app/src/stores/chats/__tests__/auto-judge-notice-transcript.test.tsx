@@ -481,6 +481,7 @@ function drawnRows(
   handle: ChatSessionStoreHandle,
 ): ReadonlyArray<TranscriptListRow> {
   return transcriptListRows({
+    splitLongTurns: true,
     window: handle.store.getState().transcriptWindow,
     rendered: withholdUnpaintedRows(renderedRows(handle)),
   });
@@ -752,6 +753,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
           buildChatFindRows([notice.model], "tile-notice", new Set(), {
             hideReasoning: false,
             queuePauseReasonProtocolSupported: null,
+            splitLongTurns: true,
           })[0]?.units,
         ).toEqual([]);
       }

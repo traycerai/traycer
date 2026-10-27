@@ -14,6 +14,8 @@ interface SegmentCardProps {
   headerAction: ReactNode | null;
   collapsedPreview: ReactNode | null;
   body: ReactNode;
+  /** A line at the card's foot that stays visible open or closed. */
+  footer: ReactNode | null;
   tone: "default" | "destructive" | "primary";
   headerPosition: "normal" | "sticky";
   bodyOverflow: "hidden" | "visible";
@@ -56,6 +58,7 @@ export function SegmentCard(props: SegmentCardProps) {
     header,
     headerAction,
     collapsedPreview,
+    footer,
     tone,
     headerFindUnitId,
     expandable,
@@ -89,10 +92,20 @@ export function SegmentCard(props: SegmentCardProps) {
             {collapsedPreview}
           </div>
         ) : null}
+        <SegmentCardFooter footer={footer} />
       </div>
     );
   }
   return <ExpandableSegmentCard {...props} />;
+}
+
+function SegmentCardFooter(props: { readonly footer: ReactNode | null }) {
+  if (props.footer === null) return null;
+  return (
+    <div className="border-t border-border/25 px-2.5 py-1.5 text-ui-xs text-muted-foreground">
+      {props.footer}
+    </div>
+  );
 }
 
 function ExpandableSegmentCard({ className, ...props }: SegmentCardProps) {
@@ -103,6 +116,7 @@ function ExpandableSegmentCard({ className, ...props }: SegmentCardProps) {
     headerAction,
     collapsedPreview,
     body,
+    footer,
     tone,
     headerPosition,
     bodyOverflow,
@@ -163,6 +177,7 @@ function ExpandableSegmentCard({ className, ...props }: SegmentCardProps) {
           {body}
         </div>
       </CollapsibleContent>
+      <SegmentCardFooter footer={footer} />
     </Collapsible>
   );
 }

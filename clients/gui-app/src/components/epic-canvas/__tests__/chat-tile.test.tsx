@@ -6500,7 +6500,10 @@ describe("<ChatTile />", () => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
 
         const editor = screen.getByTestId("composer-editor");
-        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        const event = createEvent.keyDown(editor, {
+          key: "ArrowRight",
+          code: "ArrowRight",
+        });
         fireEvent(editor, event);
 
         expect(editor.textContent).toBe(SUGGESTION);
@@ -6513,7 +6516,10 @@ describe("<ChatTile />", () => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
 
         const editor = screen.getByTestId("composer-editor");
-        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        const event = createEvent.keyDown(editor, {
+          key: "ArrowRight",
+          code: "ArrowRight",
+        });
         // One act scope: React commits nothing until it exits, so the paste
         // reaches the live editor while the tile still holds the offer, and
         // the key is handled against that stale offer.

@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { BrowserCatalogIdentity } from "@traycer/protocol/host/browser/catalog-contracts";
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
@@ -15,10 +16,16 @@ import {
   runBrowserCatalogOwnerAction,
 } from "@/lib/browser-view/sessions/browser-catalog-owner-action";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
-import { browserCatalogDiscovery } from "@/lib/browser-view/sessions/browser-catalog-discovery";
+import { isBrowserCatalogQueryKey } from "@/lib/query-keys/host-query-keys";
+import {
+  noteClosedBrowserCatalogTab,
+  withoutClosedBrowserCatalogTabs,
+} from "./browser-catalog-closed-tabs";
+import type { BrowserCatalogQueryData } from "./use-browser-catalog-inventory";
 
 /** Resolve the owner at action time; merely mounting a list never dials it. */
 export function useBrowserCatalogActions(epicId: string) {
+  const queryClient = useQueryClient();
   const directory = useHostDirectory();
   const client = useHostClient();
   const userId = useRequestContextUserId(client);
@@ -74,12 +81,35 @@ export function useBrowserCatalogActions(epicId: string) {
           tabId,
           ...ownerContext(identity.hostId),
         });
+        if (userId !== null) {
+          noteClosedBrowserCatalogTab(userId, identity, tabId);
+          queryClient.setQueriesData<BrowserCatalogQueryData>(
+            {
+              predicate: (query) =>
+                isBrowserCatalogQueryKey(query.queryKey, userId, epicId),
+            },
+            (data) =>
+              data === undefined
+                ? undefined
+                : {
+                    ...data,
+                    records: withoutClosedBrowserCatalogTabs(
+                      userId,
+                      epicId,
+                      data.records,
+                    ),
+                  },
+          );
+        }
       } finally {
         if (userId !== null)
-          browserCatalogDiscovery({ userId, epicId }).refresh();
+          void queryClient.invalidateQueries({
+            predicate: (query) =>
+              isBrowserCatalogQueryKey(query.queryKey, userId, epicId),
+          });
       }
     },
-    [epicId, ownerContext, userId],
+    [epicId, ownerContext, queryClient, userId],
   );
   const withOwner = useCallback(
     async <T>(
@@ -89,7 +119,6 @@ export function useBrowserCatalogActions(epicId: string) {
       runBrowserCatalogOwnerAction({
         epicId,
         ...ownerContext(hostId),
-        requireDurable: false,
         action,
       }),
     [epicId, ownerContext],

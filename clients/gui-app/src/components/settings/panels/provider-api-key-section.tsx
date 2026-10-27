@@ -1,3 +1,4 @@
+import { providerApiKeyRefusal } from "@traycer/protocol/host/provider-api-key-issuer";
 import { useId } from "react";
 import { ExternalLink } from "lucide-react";
 import {
@@ -96,6 +97,19 @@ function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {
   return apiKey.source === "stored" ? "Key set" : "From a shell variable";
 }
 
+/** Show the saved refusal until the person enters a replacement draft. */
+function apiKeyRowRefusal(
+  state: ProviderCliState,
+  draft: string,
+  draftRefusal: string | null,
+): string | null {
+  if (draft.trim().length > 0) return draftRefusal;
+  if (state.apiKey.configured && state.auth.status === "unauthenticated") {
+    return state.auth.detail;
+  }
+  return null;
+}
+
 // API-key-authenticated providers (Cursor) render a key field in addition to
 // the binary picker. The raw key never leaves the host; `state.apiKey` only
 // reports whether one is configured and where it came from.
@@ -133,15 +147,16 @@ export function ProviderApiKeySection({
 
   const providerId = state.providerId;
   const dashboardUrl = API_KEY_DASHBOARD_URL[providerId];
+  const keyRefusal = providerApiKeyRefusal(providerId, draft);
+  const displayedRefusal = apiKeyRowRefusal(state, draft, keyRefusal);
+  const saveDisabled =
+    setApiKey.isPending ||
+    draft.trim().length === 0 ||
+    credentialRefusal !== null ||
+    keyRefusal !== null;
   const onSave = (): void => {
+    if (saveDisabled) return;
     const trimmed = draft.trim();
-    if (
-      trimmed.length === 0 ||
-      setApiKey.isPending ||
-      credentialRefusal !== null
-    ) {
-      return;
-    }
     setApiKey.mutate(
       { providerId, apiKey: trimmed },
       { onSuccess: () => onDraftChange("") },
@@ -187,6 +202,10 @@ export function ProviderApiKeySection({
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           disabled={setApiKey.isPending || credentialRefusal !== null}
+          aria-invalid={displayedRefusal !== null}
+          aria-describedby={
+            displayedRefusal === null ? undefined : `${inputId}-refusal`
+          }
           onKeyDown={(e) => {
             if (e.key === "Enter") onSave();
           }}
@@ -197,11 +216,7 @@ export function ProviderApiKeySection({
           size="sm"
           variant="secondary"
           onClick={onSave}
-          disabled={
-            setApiKey.isPending ||
-            draft.trim().length === 0 ||
-            credentialRefusal !== null
-          }
+          disabled={saveDisabled}
         >
           {setApiKey.isPending ? <MutedAgentSpinner /> : null}
           Save
@@ -220,6 +235,14 @@ export function ProviderApiKeySection({
           </Button>
         ) : null}
       </div>
+      <p
+        id={`${inputId}-refusal`}
+        role="alert"
+        hidden={displayedRefusal === null}
+        className="text-ui-xs text-destructive"
+      >
+        {displayedRefusal}
+      </p>
       <CredentialRefusalNote refusal={credentialRefusal} />
       {state.apiKey.source === "env" ? (
         <p className="text-ui-xs text-muted-foreground">

@@ -15,7 +15,7 @@ function signIn(userId: string): void {
 describe("browser panel preferences", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+    useBrowserPanelStore.setState({ preferences: {} });
     signIn("user-a");
   });
 
@@ -23,7 +23,6 @@ describe("browser panel preferences", () => {
     const { result } = renderHook(() => useBrowserPanelPreferences("epic-1"));
     expect(result.current.showOffline).toBe(false);
     expect(result.current.collapsed).toEqual({});
-    expect(result.current.legacyHostId).toBeNull();
   });
 
   it("remembers a collapsed device and the offline toggle per user and task", () => {
@@ -60,23 +59,5 @@ describe("browser panel preferences", () => {
       "host-2": false,
       "host-3": true,
     });
-  });
-
-  it("persists preferences but never an explicit legacy device choice", () => {
-    const { result } = renderHook(() => useBrowserPanelPreferences("epic-1"));
-    act(() => {
-      result.current.setCollapsed("host-2", true);
-      result.current.setLegacyHost("host-9");
-    });
-    expect(result.current.legacyHostId).toBe("host-9");
-
-    const stored = window.localStorage.getItem(
-      Object.keys(window.localStorage).find((key) =>
-        key.includes("browser-panel"),
-      ) ?? "",
-    );
-    expect(stored).not.toBeNull();
-    expect(stored).toContain("host-2");
-    expect(stored).not.toContain("host-9");
   });
 });

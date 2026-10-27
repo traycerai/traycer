@@ -292,6 +292,7 @@ function mountTranscript(
           instanceId="bot-thread:test"
           surface={surface}
           resolveMember={members}
+          showConnecting
         />
       </QueryClientProvider>
     </StrictMode>

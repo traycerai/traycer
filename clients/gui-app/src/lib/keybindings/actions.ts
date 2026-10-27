@@ -45,6 +45,8 @@ export const ACTION_IDS = [
   "group.focus.left",
   "group.focus.right",
   "group.focus-editor",
+  "tile.find.open",
+  "tile.find.next",
   "tile.find.replace",
   "app.sidebar.toggle",
   "app.status-bar.toggle",
@@ -69,6 +71,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
+  "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
   "model.provider.byDigit",
@@ -525,6 +528,34 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
   },
+  // ⌘F / ⌘G mirror the Edit menu's Find and Find Next. Off macOS the menu
+  // leaves those accelerators unregistered (`menu-builder.ts`) so a focused
+  // terminal keeps Ctrl+F and Ctrl+G, which makes these bindings the only
+  // keyboard path to the find bar there.
+  "tile.find.open": {
+    id: "tile.find.open",
+    label: "Find in active tile",
+    description: "Open the active tile's find bar.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+f",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tile.find.next": {
+    id: "tile.find.next",
+    label: "Find next in active tile",
+    description: "Go to the next match in the active tile.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+g",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
   "tile.find.replace": {
     id: "tile.find.replace",
     label: "Find and replace in active tile",
@@ -876,6 +907,25 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // (split group vertically). The desktop global summon shortcut is checked
     // live by conflict detection rather than hand-avoided here.
     defaultChord: "ctrl+shift+m",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "composer.suggestion.accept": {
+    id: "composer.suggestion.accept",
+    label: "Accept suggested reply",
+    description:
+      "Fill the empty composer with the suggested reply it is showing. The message is not sent.",
+    category: "app",
+    kind: "chord",
+    // A bare →, the inline-autosuggestion convention. It is only consulted
+    // over an empty composer with a suggestion showing, where → has nothing
+    // else to do; the composer matches it itself (`isExternallyHandled`), so
+    // the provider never reserves the key for every other field in the app.
+    // Not Tab by default: Tab moves focus out of the composer, and a person
+    // who prefers it opts in here.
+    defaultChord: "arrowright",
     secondaryChord: undefined,
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,

@@ -1,7 +1,9 @@
-import { useSyncExternalStore } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+import { useCallback, useSyncExternalStore } from "react";
+import type { Mutation } from "@tanstack/react-query";
+
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -48,27 +50,31 @@ export function ContinueOnOpencodeTwoTabMenu(
   );
   const client = useHostClientForHostId(hostId);
   const createChat = useEpicCreateChatForHostClient(client);
+  const isContinuation = useCallback(
+    (mutation: Mutation) => {
+      const variables = mutation.state.variables;
+      return (
+        typeof variables === "object" &&
+        variables !== null &&
+        "epicId" in variables &&
+        variables.epicId === epicId &&
+        "hostId" in variables &&
+        variables.hostId === hostId &&
+        "opencodeLine" in variables &&
+        variables.opencodeLine === 2 &&
+        "forkSource" in variables &&
+        typeof variables.forkSource === "object" &&
+        variables.forkSource !== null &&
+        "sourceChatId" in variables.forkSource &&
+        variables.forkSource.sourceChatId === chatId
+      );
+    },
+    [epicId, hostId, chatId],
+  );
   const creatingContinuation =
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: epicMutationKeys.createChat(),
-      predicate: (mutation) => {
-        const variables = mutation.state.variables;
-        return (
-          typeof variables === "object" &&
-          variables !== null &&
-          "epicId" in variables &&
-          variables.epicId === epicId &&
-          "hostId" in variables &&
-          variables.hostId === hostId &&
-          "opencodeLine" in variables &&
-          variables.opencodeLine === 2 &&
-          "forkSource" in variables &&
-          typeof variables.forkSource === "object" &&
-          variables.forkSource !== null &&
-          "sourceChatId" in variables.forkSource &&
-          variables.forkSource.sourceChatId === chatId
-        );
-      },
+      predicate: isContinuation,
     }) > 0;
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const version = useHostMethodSchemaVersion(hostId, "epic.createChat");

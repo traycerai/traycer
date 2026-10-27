@@ -19,12 +19,20 @@ import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattend
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
+import type { TranscriptRowPart } from "@/stores/chats/assistant-turn-parts";
 
 interface ChatMessageProps {
   message: ChatMessageModel;
   actions: ChatMessageActions | null;
   backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
+  /**
+   * Which slice of a long assistant turn this list item draws. Absent for a
+   * row drawn whole, which is every row that is not a split assistant turn,
+   * and every render outside the transcript list. Read only by the assistant
+   * branch - no other role splits.
+   */
+  part?: TranscriptRowPart | null;
 }
 
 /**
@@ -184,7 +192,8 @@ function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
 // Assistant rows no longer carry a provider/model label above the bubble -
 // that moved into the elapsed footer's info tooltip (see AssistantMessageBody).
 function renderAssistantMessage(props: ChatMessageProps): ReactElement {
-  const { actions, backgroundToolBlockIds, message, nextStepActions } = props;
+  const { actions, backgroundToolBlockIds, message, nextStepActions, part } =
+    props;
   const assistantActions = actions?.type === "assistant" ? actions : null;
   return (
     <div
@@ -204,6 +213,7 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
           message.turnHasOnlyAutonomousResumeSegments ?? false
         }
         autonomousResumeOwed={message.autonomousResumeOwed ?? false}
+        foldedBackgroundEvents={message.foldedBackgroundEvents}
         showCompletionFooter={message.showCompletionFooter ?? true}
         pausedDurationMs={message.pausedDurationMs ?? 0}
         pausedSinceMs={message.pausedSinceMs ?? null}
@@ -228,6 +238,7 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         interviewDeliveryRetry={
           assistantActions?.interviewDeliveryRetry ?? null
         }
+        part={part}
       />
     </div>
   );

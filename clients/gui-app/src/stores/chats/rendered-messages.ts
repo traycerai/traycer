@@ -241,7 +241,7 @@ export interface RenderedMessagesInput {
   /**
    * Whether the host reports the chat as anything but idle - the RAW
    * `runStatus` that {@link RenderedMessagesInput.runStatus} deliberately is
-   * not. Read for one thing: a background-outcome note at the transcript's
+   * not. Read for one thing: a background event's card at the transcript's
    * tail does not say "Agent not resumed" while the host is still working
    * toward handing that outcome to the agent (`withOwedAutonomousResume`).
    * Absent means idle, so a caller with no live session draws every ending.
@@ -1837,8 +1837,8 @@ function presentActiveRows(args: {
 }
 
 /**
- * Marks a background-outcome note at the transcript's tail as still owed to
- * the agent while the host reports the chat working.
+ * Marks a background event at the transcript's tail as still owed to the
+ * agent while the host reports the chat working.
  *
  * A notification row no provider turn has adopted is the same row whether the
  * resume is still coming or never will: nothing durable tells the two apart.

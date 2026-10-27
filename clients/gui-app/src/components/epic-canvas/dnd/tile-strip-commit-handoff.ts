@@ -36,6 +36,16 @@ export function syncTileStripItem(input: {
 }
 
 export function armTileStripCommitHandoff(groupId: string): void {
+  if (armedGroupIds.has(groupId)) return;
+  for (const entry of entries.values()) {
+    const node = entry.node;
+    if (
+      node !== null &&
+      node.closest("[data-group-id]")?.getAttribute("data-group-id") === groupId
+    ) {
+      entry.lastBaselineLeft = node.offsetLeft;
+    }
+  }
   armedGroupIds.add(groupId);
 }
 
@@ -44,7 +54,9 @@ export function disarmTileStripCommitHandoff(): void {
 }
 
 export function runTileStripCommitHandoff(groupId: string): void {
-  const armed = armedGroupIds.has(groupId);
+  // Capture at arm time, immediately before the drop mutates the order.
+  // Ordinary selection commits have no displacement to rebase.
+  if (!armedGroupIds.delete(groupId)) return;
   for (const entry of entries.values()) {
     const node = entry.node;
     if (
@@ -56,9 +68,8 @@ export function runTileStripCommitHandoff(groupId: string): void {
     const previous = entry.lastBaselineLeft;
     const next = node.offsetLeft;
     entry.lastBaselineLeft = next;
-    if (!armed || previous === null || previous === next) continue;
+    if (previous === null || previous === next) continue;
     entry.value.jump(previous + entry.value.get() - next);
     animate(entry.value, entry.targetX, entry.transition);
   }
-  if (armed) armedGroupIds.delete(groupId);
 }

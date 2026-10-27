@@ -486,6 +486,7 @@ function renderFind(input: {
       [],
     );
     const find = useChatFindController({
+      splitLongTurns: true,
       instanceId: TILE_INSTANCE_ID,
       messages: transcript.messages,
       messagesRef,
@@ -577,6 +578,7 @@ function mountRow(
   const [row] = buildChatFindRows([message], TILE_INSTANCE_ID, EMPTY_PROMOTED, {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: support,
+    splitLongTurns: true,
   });
   const element = document.createElement("div");
   element.dataset.messageId = message.id;
@@ -2502,7 +2504,11 @@ describe("chat find: census of index text the transcript does not paint", () => 
       [SUBAGENT_NESTED_TOOL_MODEL],
       TILE_INSTANCE_ID,
       EMPTY_PROMOTED,
-      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
+      {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+        splitLongTurns: true,
+      },
     ).flatMap((projectedRow) => projectedRow.units);
     expect(
       units.some((unit) =>
@@ -2523,7 +2529,11 @@ describe("chat find: census of index text the transcript does not paint", () => 
         [row.hydratedModel],
         TILE_INSTANCE_ID,
         EMPTY_PROMOTED,
-        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
+        {
+          hideReasoning: false,
+          queuePauseReasonProtocolSupported: null,
+          splitLongTurns: true,
+        },
       ).flatMap((projectedRow) => projectedRow.units);
       const anyUnitMatches = hydratedUnits.some((unit) =>
         asciiLower(unit.text).includes(asciiLower(row.query)),

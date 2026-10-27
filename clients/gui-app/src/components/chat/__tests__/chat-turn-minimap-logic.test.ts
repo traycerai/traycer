@@ -70,6 +70,7 @@ function listRowsFor(
   assistantContent: string,
 ): ReadonlyArray<TranscriptListRow> {
   return transcriptListRows({
+    splitLongTurns: true,
     window,
     rendered: [assistantModel("r-1", assistantContent)],
   });
@@ -270,6 +271,7 @@ describe("chatTurnMinimapItems caching", () => {
         key: "pending-1",
         ordinal: null,
         model: userModel("pending-1", "a new question"),
+        part: null,
       },
     ];
     const second = chatTurnMinimapItems({ rows: withPending, window });

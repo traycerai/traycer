@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  queryOptions,
-  useMutation,
-  useMutationState,
-  useQuery,
-} from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import { Check, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -84,14 +83,14 @@ function isAbortError(error: unknown): boolean {
  * panel has to be able to find it again.
  */
 function usePendingCuratedId(): string | null {
-  const pending = useMutationState({
-    filters: {
+  const pending = useMutationStateOf(
+    {
       mutationKey: appearanceMutationKeys.applyCuratedWallpaper(),
       status: "pending",
     },
-    select: (mutation) => mutation.state.variables,
-  });
-  // Newest first: `useMutationState` yields matching mutations in invocation
+    selectMutationVariables,
+  );
+  // Newest first: `useMutationStateOf` yields matching mutations in invocation
   // order, so with two applies overlapping the OLDEST would otherwise win the
   // spinner - and the tile that is landing is the one clicked last.
   for (let index = pending.length - 1; index >= 0; index -= 1) {

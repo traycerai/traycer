@@ -1,8 +1,5 @@
 import { useMemo } from "react";
-import {
-  useMutationState,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -10,6 +7,10 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
@@ -48,13 +49,13 @@ export function usePendingRemoveBindingEntryPaths(owner: {
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
 }): ReadonlySet<string> {
-  const pendingVariables = useMutationState({
-    filters: {
+  const pendingVariables = useMutationStateOf(
+    {
       mutationKey: workspaceMutationKeys.removeBindingEntry(),
       status: "pending",
     },
-    select: (mutation) => mutation.state.variables,
-  });
+    selectMutationVariables,
+  );
 
   return useMemo(
     () =>
