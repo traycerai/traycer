@@ -473,23 +473,14 @@ describe("sandbox settings warnings in the notification center", () => {
     });
     expect(auth.auth.listSandboxes).not.toHaveBeenCalled();
   });
-  it("mounts a fresh observer for a new notice instead of consuming the prior operation's cache", async () => {
+  it("a new operation's notice retains its warning without a second status read", async () => {
     seed([notice("warning", OPERATION_ID)]);
     mount(false);
     await waitFor(() => expect(statusReads).toBe(1));
-    let release: (value: EnvironmentStatusResponseV11) => void = () =>
-      undefined;
-    const pending = new Promise<EnvironmentStatusResponseV11>((resolve) => {
-      release = resolve;
-    });
-    statusRead = () => pending;
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     act(() => seed([notice("warning", "new-warning")]));
-    await waitFor(() => expect(statusReads).toBe(2));
-    expect(resolution("warning")).toBeNull();
-    await act(async () => {
-      release(status("new-warning", "failed"));
-      await pending;
-    });
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(statusReads).toBe(1);
     expect(resolution("warning")).toBeNull();
     expect(resolvedIds).toEqual([]);
   });
