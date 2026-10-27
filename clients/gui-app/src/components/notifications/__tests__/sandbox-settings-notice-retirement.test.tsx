@@ -31,9 +31,12 @@ import {
   environmentStatusResponseSchemaV11,
   type EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
-import type {
-  HostNotificationEnvironmentApplyFailedPayload,
-  HostNotificationsCloudFeedRowV15,
+import {
+  hostNotificationsCloudFeedRowSchemaV15,
+  type HostNotificationEnvironmentApplyFailedPayload,
+  type HostNotificationSandboxNotice,
+  type HostNotificationSeverity,
+  type HostNotificationsCloudFeedRowV15,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
@@ -201,6 +204,36 @@ function notice(
     },
   };
 }
+function sandboxNotice(
+  entryId: string,
+  detail: HostNotificationSandboxNotice,
+  severity: HostNotificationSeverity,
+  updatedAt: number,
+): HostNotificationsCloudFeedRowV15 {
+  return {
+    entryId,
+    originHostId: "cloud-settings",
+    coalesceKey: entryId,
+    presentation: { epicTitle: null, chatTitle: null },
+    entry: {
+      id: entryId,
+      updatedAt,
+      readAt: updatedAt,
+      kind: "sandbox.notice",
+      sourceRef: entryId,
+      severity,
+      epicId: null,
+      chatId: null,
+      outcome: "completed",
+      payload: {
+        kind: "sandbox_notice",
+        sandboxId: SANDBOX_ID,
+        sandboxName: "build-box",
+        notice: detail,
+      },
+    },
+  };
+}
 function readNotice(row: EnvironmentApplyFailedRow): EnvironmentApplyFailedRow {
   return {
     ...row,
@@ -211,7 +244,7 @@ function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
   // The opened session's owner: the signed-in `settings-user` below.
   useCloudNotificationsStore.setState({ accountId: "settings-user" });
   useCloudNotificationsStore.getState().applySnapshot({
-    rows,
+    rows: rows.map((row) => hostNotificationsCloudFeedRowSchemaV15.parse(row)),
     summary: { totalCount: rows.length, unreadCount: 0, attentionCount: 0 },
     version: (useCloudNotificationsStore.getState().version ?? 0) + 1,
   });
@@ -220,7 +253,8 @@ function resolution(entryId: string): number | null {
   const row = Object.values(useCloudNotificationsStore.getState().rows).find(
     (row) => row?.entryId === entryId,
   );
-  return row?.entry.kind === "environment.apply.failed"
+  return row?.entry.kind === "environment.apply.failed" ||
+    row?.entry.kind === "sandbox.notice"
     ? (row.entry.resolvedAt ?? null)
     : null;
 }
@@ -459,7 +493,7 @@ describe("sandbox settings warnings in the notification center", () => {
                 severity: "info",
                 epicId: null,
                 chatId: null,
-                outcome: "errored",
+                outcome: "completed",
                 payload: {
                   kind: "sandbox_notice",
                   sandboxId: SANDBOX_ID,
@@ -508,6 +542,120 @@ describe("sandbox settings warnings in the notification center", () => {
         screen.getByTestId("notifications-bell").getAttribute("aria-label"),
       ).toBe("Notifications, 1 needs you");
       expect(resolvedIds).toEqual([]);
+    },
+  );
+
+  const resting: HostNotificationSandboxNotice = {
+    kind: "resting_warning",
+    destroyAt: Date.now() + 10 * 60_000,
+    periodMinutes: 5,
+  };
+  const supersessionCases: ReadonlyArray<{
+    readonly name: string;
+    readonly warning: HostNotificationSandboxNotice;
+    readonly newer: HostNotificationSandboxNotice | "settings_failure";
+    readonly retires: boolean;
+  }> = [
+    {
+      name: "a failed Stop does not replace a resting warning",
+      warning: resting,
+      newer: {
+        kind: "manual_rest",
+        verb: "stop",
+        outcome: "failed",
+        byYou: true,
+        actorName: null,
+      },
+      retires: false,
+    },
+    {
+      name: "a settings failure does not replace a resting warning",
+      warning: resting,
+      newer: "settings_failure",
+      retires: false,
+    },
+    {
+      name: "a distinct later resting warning replaces one with the same deadline",
+      warning: resting,
+      newer: resting,
+      retires: true,
+    },
+    {
+      name: "a confirmed rest does not replace a frozen warning",
+      warning: { kind: "frozen", cause: "credits" },
+      newer: {
+        kind: "manual_rest",
+        verb: "stop",
+        outcome: "confirmed",
+        byYou: true,
+        actorName: null,
+      },
+      retires: false,
+    },
+  ];
+  it.each(supersessionCases)(
+    "$name",
+    async ({ warning: detail, newer: event, retires }) => {
+      const warning = sandboxNotice(
+        "lifecycle-warning",
+        detail,
+        "needs_action",
+        Date.now(),
+      );
+      const newer =
+        event === "settings_failure"
+          ? notice("unrelated-settings", OPERATION_ID)
+          : sandboxNotice(
+              "later-lifecycle",
+              event,
+              event.kind === "resting_warning" ? "needs_action" : "info",
+              warning.entry.updatedAt + 1,
+            );
+      seed([
+        warning,
+        {
+          ...newer,
+          entry: { ...newer.entry, updatedAt: warning.entry.updatedAt + 1 },
+        },
+      ]);
+      mount(true);
+      await screen.findByTestId("notifications-bell");
+
+      if (retires) {
+        expect(resolution(warning.entryId)).not.toBeNull();
+      } else {
+        expect(resolution(warning.entryId)).toBeNull();
+      }
+      expect(screen.getByText("Needs attention")).not.toBeNull();
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe(
+        event === "settings_failure"
+          ? "Notifications, 2 need you"
+          : "Notifications, 1 needs you",
+      );
+      if (detail.kind === "resting_warning") {
+        expect(
+          screen.getByRole("button", { name: "Give it another 5 minutes" }),
+        ).not.toBeNull();
+      }
+
+      act(() => seed([warning]));
+      if (retires) {
+        await waitFor(() =>
+          expect(screen.queryByText("Needs attention")).toBeNull(),
+        );
+        expect(resolution(warning.entryId)).not.toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Give it another 5 minutes" }),
+        ).toBeNull();
+      } else {
+        expect(resolution(warning.entryId)).toBeNull();
+        expect(screen.getByText("Needs attention")).not.toBeNull();
+      }
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe(retires ? "Notifications" : "Notifications, 1 needs you");
     },
   );
 

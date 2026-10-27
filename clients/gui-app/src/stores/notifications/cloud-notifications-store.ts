@@ -234,32 +234,48 @@ function sandboxNoticeOf(
   return payload?.kind === "sandbox_notice" ? payload : null;
 }
 
-function noticeSandboxId(row: HostNotificationsCloudFeedRowV15): string | null {
-  const notice = sandboxNoticeOf(row);
-  if (notice !== null) return notice.sandboxId;
-  if (row.entry.kind !== "environment.apply.failed") return null;
-  const sandbox = row.entry.payload.sandbox;
-  return sandbox !== null &&
-    typeof sandbox === "object" &&
-    "sandboxId" in sandbox &&
-    typeof sandbox.sandboxId === "string"
-    ? sandbox.sandboxId
-    : null;
+interface SandboxWarningSupersessionTimes {
+  readonly resting: number;
+  readonly frozen: number;
+}
+
+function sandboxNoticeSupersession(
+  notice: HostNotificationSandboxNoticePayload["notice"],
+): "resting" | "both" | null {
+  switch (notice.kind) {
+    case "manual_rest":
+      return notice.outcome === "confirmed" ? "resting" : null;
+    case "resting_warning":
+    case "frozen":
+    case "frozen_warning":
+    case "resting_destroyed":
+    case "frozen_deleting":
+    case "frozen_destroyed":
+    case "destroyed_by_member":
+    case "lost":
+    case "create_failed":
+      return "both";
+  }
 }
 
 function latestSandboxNoticeTimes(
   rows: CloudNotificationsState["rows"],
-): ReadonlyMap<string, number> {
-  const latest = new Map<string, number>();
+): ReadonlyMap<string, SandboxWarningSupersessionTimes> {
+  const latest = new Map<string, SandboxWarningSupersessionTimes>();
   for (const row of Object.values(rows)) {
     if (row === undefined) continue;
-    const sandboxId = noticeSandboxId(row);
-    if (sandboxId !== null) {
-      latest.set(
-        sandboxId,
-        Math.max(latest.get(sandboxId) ?? 0, row.entry.updatedAt),
-      );
-    }
+    const payload = sandboxNoticeOf(row);
+    if (payload === null) continue;
+    const supersession = sandboxNoticeSupersession(payload.notice);
+    if (supersession === null) continue;
+    const previous = latest.get(payload.sandboxId) ?? { resting: 0, frozen: 0 };
+    latest.set(payload.sandboxId, {
+      resting: Math.max(previous.resting, row.entry.updatedAt),
+      frozen:
+        supersession === "both"
+          ? Math.max(previous.frozen, row.entry.updatedAt)
+          : previous.frozen,
+    });
   }
   return latest;
 }
@@ -285,18 +301,36 @@ function mergeNoticeResolution(
   return Math.min(current, previous);
 }
 
+/** Only a distinct later entry supersedes a warning:
+ * resting_warning <- resting_warning, frozen/frozen_warning, confirmed manual_rest, terminal;
+ * frozen/frozen_warning <- resting_warning (thawed), frozen/frozen_warning, terminal.
+ * Terminal: resting_destroyed, frozen_deleting, frozen_destroyed, destroyed_by_member, lost, create_failed.
+ * Failed manual_rest and settings failures never supply supersession evidence. */
 function observedRetirementAt(
   row: HostNotificationsCloudFeedRowV15,
-  newer: number,
+  latest: ReadonlyMap<string, SandboxWarningSupersessionTimes>,
   now: number,
 ): number | null {
   // A later sandbox event does not prove this settings operation applied.
   if (row.entry.kind === "environment.apply.failed") return null;
+  const payload = sandboxNoticeOf(row);
+  if (payload === null) return null;
+  const times = latest.get(payload.sandboxId);
+  let newer = 0;
+  switch (payload.notice.kind) {
+    case "resting_warning":
+      newer = times?.resting ?? 0;
+      break;
+    case "frozen":
+    case "frozen_warning":
+      newer = times?.frozen ?? 0;
+      break;
+  }
+  // This row's own time cannot pass, including a re-emission of the same id.
   if (newer > row.entry.updatedAt) return newer;
-  const notice = sandboxNoticeOf(row);
-  return notice?.notice.kind === "resting_warning" &&
-    notice.notice.destroyAt <= now
-    ? notice.notice.destroyAt
+  return payload.notice.kind === "resting_warning" &&
+    payload.notice.destroyAt <= now
+    ? payload.notice.destroyAt
     : null;
 }
 
@@ -317,13 +351,11 @@ function reconcileSandboxNotices(
       row.entry.severity !== "needs_action"
     )
       continue;
-    const sandboxId = noticeSandboxId(row);
-    const newer = sandboxId === null ? 0 : (latest.get(sandboxId) ?? 0);
     const resolvedAt =
       mergeNoticeResolution(
         noticeResolvedAt(row),
         noticeResolvedAt(held[key]),
-      ) ?? observedRetirementAt(row, newer, now);
+      ) ?? observedRetirementAt(row, latest, now);
     if (resolvedAt !== null) {
       next[key] = { ...row, entry: { ...row.entry, resolvedAt } };
     }
