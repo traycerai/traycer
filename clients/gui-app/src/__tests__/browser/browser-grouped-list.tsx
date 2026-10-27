@@ -227,7 +227,8 @@ const SESSION = openSession();
 const liveState: BrowserSessionsState = {
   hostId: LOCAL_HOST_ID,
   lifecycle: "live",
-  inventoryReady: true,
+  // This fixture seeds discovery; no local sessions inventory has arrived.
+  inventoryReady: false,
   canMaterializeElectron: false,
   connectionGeneration: 0,
   items: [],
