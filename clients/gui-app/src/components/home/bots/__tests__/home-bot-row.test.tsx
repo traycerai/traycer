@@ -442,15 +442,23 @@ describe("<HomeBotRow /> open", () => {
 });
 
 describe("<HomeBotRow /> main bot", () => {
-  it("shows the Main badge beside the title of the environment's main bot", () => {
+  it("marks the environment's main bot with a star beside its title, labelled Main bot on hover", async () => {
+    const user = userEvent.setup();
     mountRow({ ...OWN_AND_DIALABLE, isMain: true });
 
-    expect(screen.getByTestId("home-bot-main").textContent).toBe("Main");
+    const star = screen.getByRole("img", { name: "Main bot" });
+    expect(star).toBe(screen.getByTestId("home-bot-main"));
+    expect(screen.getByTestId("home-bot-row").textContent).not.toContain(
+      "Main",
+    );
+
+    await user.hover(star);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Main bot");
   });
 
-  it("shows no Main badge for any other bot", () => {
+  it("shows no star for any other bot", () => {
     mountRow(OWN_AND_DIALABLE);
 
-    expect(screen.queryByTestId("home-bot-main")).toBeNull();
+    expect(screen.queryByRole("img", { name: "Main bot" })).toBeNull();
   });
 });
