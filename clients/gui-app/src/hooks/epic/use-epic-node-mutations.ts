@@ -1,5 +1,8 @@
 import type { CreateArtifactRequest } from "@traycer/protocol/host/epic/unary-schemas";
-import type { CreatableArtifactKind } from "@/lib/artifacts/node-display";
+import {
+  isMarkdownArtifactKind,
+  type CreatableArtifactKind,
+} from "@/lib/artifacts/node-display";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -119,6 +122,12 @@ export function useEpicCreateArtifact() {
   return useHostMutation({
     client,
     method: "epic.createArtifact",
+    // 1.0 knows the markdown kinds only; a canvas sent to a host still on 1.0
+    // would fail the projected schema, so refuse it here instead of on the wire.
+    requiredHostMethodVersion: (variables) =>
+      isMarkdownArtifactKind(variables.artifactType)
+        ? null
+        : { method: "epic.createArtifact", version: { major: 1, minor: 1 } },
     mapVariables: (
       variables: CreateArtifactRequest & {
         artifactType: CreatableArtifactKind;
