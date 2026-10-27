@@ -1,9 +1,18 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   BrowserCatalogIdentity,
   BrowserCatalogRecord,
 } from "@traycer/protocol/host/browser/catalog-contracts";
+import type { BrowserCatalogReadResponse } from "@traycer/protocol/host/browser/discovery-contracts";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserCatalogQueryData } from "../use-browser-catalog-inventory";
@@ -19,9 +28,16 @@ const mocks = vi.hoisted(() => ({
   userId: vi.fn<() => string | null>(),
 }));
 
-vi.mock("@traycer-clients/shared/host-client/remote-fetcher", () => ({
-  hostUnavailability: mocks.unavailability,
-}));
+vi.mock(
+  "@traycer-clients/shared/host-client/remote-fetcher",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/remote-fetcher")
+      >();
+    return { ...actual, hostUnavailability: mocks.unavailability };
+  },
+);
 vi.mock("@traycer-clients/shared/host-transport/remote/index", () => ({
   hasReadyRemoteSession: mocks.readyRemote,
 }));
@@ -59,6 +75,7 @@ vi.mock("@/lib/browser-view/sessions/browser-catalog-owner-action", () => ({
 }));
 
 import { useBrowserCatalogActions } from "../use-browser-catalog-actions";
+import { useBrowserCatalogInventory } from "../use-browser-catalog-inventory";
 
 const identity: BrowserCatalogIdentity = {
   epicId: "epic-1",
@@ -258,6 +275,67 @@ describe("useBrowserCatalogActions", () => {
       queryClient.getQueryData<BrowserCatalogQueryData>(otherTaskKey)?.records,
     ).toEqual([record]);
     expect(queryClient.getQueryState(otherTaskKey)?.isInvalidated).toBe(false);
+    queryClient.clear();
+  });
+
+  it("keeps a closed tab gone when the next catalog read still lists it", async () => {
+    const staleRecord: BrowserCatalogRecord = {
+      ...record,
+      sessionId: "session-stale",
+      tabs: [
+        { tabId: "tab-closed", title: "Closed", url: "https://a.example" },
+        { tabId: "tab-kept", title: "Kept", url: "https://b.example" },
+      ],
+    };
+    const read = vi.fn((): BrowserCatalogReadResponse => ({
+      kind: "available",
+      snapshot: { version: 1, records: [staleRecord] },
+    }));
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `catalog-read-${String(read.mock.calls.length)}`,
+        handlers: { "browser.catalog.read": read },
+      }),
+    });
+    const context = createRequestContextFixture({ origin: "renderer" });
+    spine.setRequestContext(context);
+    mocks.userId.mockReturnValue(context.identity.userId);
+    mocks.liveUserId.mockReturnValue(context.identity.userId);
+    const readerClient = spine.createRequester(mockLocalHostEntry);
+    const queryClient = createQueryClient();
+    const { result } = renderHook(
+      () => ({
+        actions: useBrowserCatalogActions("epic-1"),
+        inventory: useBrowserCatalogInventory({
+          epicId: "epic-1",
+          readerClient,
+        }),
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+    await waitFor(() =>
+      expect(result.current.inventory.records[0]?.tabs).toHaveLength(2),
+    );
+
+    await act(async () => {
+      await result.current.actions.closeTab(
+        { ...identity, sessionId: "session-stale" },
+        "tab-closed",
+      );
+    });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+    expect(
+      result.current.inventory.records.flatMap((entry) =>
+        entry.tabs.map((tab) => tab.tabId),
+      ),
+    ).toEqual(["tab-kept"]);
     queryClient.clear();
   });
 });

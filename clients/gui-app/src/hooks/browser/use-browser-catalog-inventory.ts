@@ -13,6 +13,7 @@ import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useNotificationsStore } from "@/stores/notifications/notifications-store";
+import { withoutClosedBrowserCatalogTabs } from "./browser-catalog-closed-tabs";
 
 export interface BrowserCatalogQueryData {
   readonly scope: "cloud" | "local-only" | "inaccessible";
@@ -56,7 +57,14 @@ export function useBrowserCatalogInventory(args: {
         case "available":
           return {
             scope: "cloud",
-            records: response.snapshot.records,
+            records:
+              userId === null
+                ? response.snapshot.records
+                : withoutClosedBrowserCatalogTabs(
+                    userId,
+                    epicId,
+                    response.snapshot.records,
+                  ),
             unavailable: false,
           };
         case "local-only":
