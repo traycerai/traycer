@@ -42,17 +42,14 @@ const mocks = vi.hoisted(() => ({
   destroyMutate: vi.fn<(variables: undefined, options: object) => void>(),
   batch: {
     isPending: false,
-    mutate:
-      vi.fn<
-        (
-          request: SandboxDestroyBatchRequest,
-          options: {
-            readonly onSuccess: (
-              results: readonly SandboxBatchResult[],
-            ) => void;
-          },
-        ) => void
-      >(),
+    mutate: vi.fn<
+      (
+        request: SandboxDestroyBatchRequest,
+        options: {
+          readonly onSuccess: (results: readonly SandboxBatchResult[]) => void;
+        },
+      ) => void
+    >(),
     reset: vi.fn(),
   },
 }));
