@@ -148,6 +148,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
     expect(rendered).toEqual([]);
 
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf(
         3,
         [span(1, ["r-1"])],
@@ -164,6 +165,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
 
   it("emits the hydrated row when the renderer includes its model", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf(
         3,
         [span(1, ["r-1"])],
@@ -191,6 +193,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
    */
   it("seats a live record at the ordinal the index has started naming", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       // Only ordinal 0 is spanned; the index names r-1 and r-2 but no range
       // has delivered either body yet. r-1 is one this client HOLDS, pushed as
       // a live record and not yet superseded by a span.
@@ -226,6 +229,7 @@ describe("transcriptListRows renderer-policy suppression", () => {
    */
   it("leaves a projected row - one no live record backs - as a placeholder", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf(
         3,
         [span(0, ["r-0"])],

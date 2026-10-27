@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
@@ -117,7 +117,8 @@ function SandboxTileOverlayLayer(props: {
   // up: say so, rather than offering a second Resume while the directory
   // still reads the state it had before the wake.
   const waking =
-    useIsMutating({ mutationKey: sandboxMutationKeys.wake(props.hostId) }) > 0;
+    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(props.hostId) }) >
+    0;
   const overlay: SandboxTileOverlay =
     waking && props.overlay.kind === "asleep"
       ? {

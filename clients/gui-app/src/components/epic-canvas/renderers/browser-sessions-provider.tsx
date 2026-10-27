@@ -18,8 +18,7 @@ import {
 } from "./browser-sessions-context";
 
 /**
- * Task-wide discovery once per canvas; the canvas host's live session stream
- * stays separate from discovery and owner-specific tile boundaries.
+ * One catalog query per canvas, alongside the canvas host's live session stream.
  *
  * Every provider here - this one, {@link BrowserSessionsHostProvider} and
  * {@link BrowserSessionsHostBoundary} - acquires the REFCOUNTED coordinator by

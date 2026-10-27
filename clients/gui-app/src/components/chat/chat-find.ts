@@ -38,5 +38,6 @@ export {
 export {
   queryMountedChatFindUnit,
   queryMountedChatMessageRoot,
+  queryMountedChatMessageRoots,
   queryMountedChatBlock,
 } from "@/components/chat/chat-find-highlighter";

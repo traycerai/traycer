@@ -26,14 +26,10 @@ import {
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
-import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
 import { BrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
 import { useBrowserPanelStore } from "@/stores/epics/browser-panel-store";
-import {
-  BROWSER_CATALOG_VERSION,
-  type BrowserCatalogRecord,
-} from "@traycer/protocol/host/browser/catalog-contracts";
+import type { BrowserCatalogRecord } from "@traycer/protocol/host/browser/catalog-contracts";
 
 const browserHostPinState = vi.hoisted(() => ({
   selection: null as string | null,
@@ -256,6 +252,24 @@ function renderList(onClose: () => void) {
   );
 }
 
+function renderErrorList(onClose: () => void, refetch: () => void) {
+  return render(
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider delayDuration={0}>
+        <BrowserCatalogContext.Provider
+          value={{ status: "error", scope: "cloud", records: [], refetch }}
+        >
+          <SwitcherBrowsersList
+            epicId="epic-1"
+            tabId={TAB_ID}
+            onClose={onClose}
+          />
+        </BrowserCatalogContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
 /** The header "+" opens the device picker; the choice is what creates. */
 async function addBrowserOnHome(user: UserEvent): Promise<void> {
   await user.click(screen.getAllByRole("button", { name: "Add browser" })[0]);
@@ -279,6 +293,7 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockReset();
     navigateNested.mockClear();
     catalogActions.closeTab.mockReset();
+    catalogActions.closeTab.mockResolvedValue(undefined);
     catalogActions.withOwner.mockReset();
     catalogActions.withOwner.mockImplementation(
       (hostId: string, run: (state: BrowserSessionsState) => Promise<void>) =>
@@ -505,8 +520,10 @@ describe("SwitcherBrowsersList", () => {
   it("keeps the sheet open when a browser cannot be created", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    replaceSessions([], "failed");
-    renderList(onClose);
+    catalogActions.withOwner.mockRejectedValue(
+      new Error("Couldn't connect to this device. Try again."),
+    );
+    renderErrorList(onClose, vi.fn());
 
     await addBrowserOnHome(user);
 
@@ -543,13 +560,15 @@ describe("SwitcherBrowsersList", () => {
 
   it("closes a tab from the row's own action", async () => {
     const user = userEvent.setup();
-    closeTab.mockResolvedValue(undefined);
     renderList(() => undefined);
 
     await user.click(screen.getByRole("button", { name: "Close Cart" }));
 
     await waitFor(() => {
-      expect(closeTab).toHaveBeenCalledWith("sess-1", "tab-1");
+      expect(catalogActions.closeTab).toHaveBeenCalledWith(
+        { epicId: "epic-1", hostId: "host-1", sessionId: "sess-1" },
+        "tab-1",
+      );
     });
   });
 
@@ -629,51 +648,15 @@ describe("SwitcherBrowsersList", () => {
     expect(emptyScroller).toBe(simulatorsScroller);
   });
 
-  it("keeps the rows reachable when the session stream drops", () => {
-    // A stream that fails does not un-open the tabs, and these rows are the
-    // only route to them. Desktop renders the banner ABOVE its list for the
-    // same reason; replacing the list would strand a phone user with tabs they
-    // can see nothing of.
-    replaceSessions(sessionsState.value.items, "failed");
-    renderList(() => undefined);
+  it("keeps the rows reachable and offers Retry when the catalog fails to load", () => {
+    const refetch = vi.fn();
+    renderErrorList(() => undefined, refetch);
 
-    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
+    expect(screen.getByText("Couldn't load browser tabs.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Cart/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Guide/ })).toBeTruthy();
-  });
-
-  it("mounts the desktop unavailable state with its retry", () => {
-    replaceSessions([], "failed");
-    renderList(() => undefined);
-    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-  });
-
-  it("names the host update as the remedy, with no retry, when the host has no browsers", async () => {
-    // A host from before browsers existed refuses the stream at handshake.
-    // Retrying cannot change that, so the state carries the remedy instead of
-    // a button - and the "+" tells the same story rather than "not connected".
-    replaceSessions([], "unsupported");
-    sessionsState.value = {
-      ...sessionsState.value,
-      errorMessage: BROWSERS_UNSUPPORTED_MESSAGE,
-    };
-    renderList(() => undefined);
-
-    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
-    expect(screen.getByText(BROWSERS_UNSUPPORTED_MESSAGE)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByTestId("browser-list-empty-state")).toBeNull();
-
-    catalogActions.withOwner.mockRejectedValue(
-      new Error(BROWSERS_UNSUPPORTED_MESSAGE),
-    );
-    await addBrowserOnHome(userEvent.setup());
-    await waitFor(() => {
-      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-        BROWSERS_UNSUPPORTED_MESSAGE,
-      );
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalledOnce();
   });
 });
 
@@ -695,39 +678,20 @@ describe("SwitcherBrowsersList over the task-wide catalog", () => {
   }
 
   function renderCatalog() {
-    return renderCatalogRevoking([]);
-  }
-
-  function catalogTree(revokedHostIds: readonly string[]): ReactNode {
     const records = [
       record("host-1", "s1", "t1", "Docs"),
       record("host-2", "s2", "t2", "Docs"),
       record("host-3", "s3", "t3", "Router"),
     ];
-    return (
+    return render(
       <QueryClientProvider client={testQueryClient}>
         <TooltipProvider delayDuration={0}>
           <BrowserCatalogContext.Provider
             value={{
-              inventory: {
-                status: "available",
-                records,
-                readiness: records.map((entry) => ({
-                  hostId: entry.hostId,
-                  state: "complete",
-                  indexingRevision: 1,
-                  capability: {
-                    catalogVersion: BROWSER_CATALOG_VERSION,
-                    durableInventoryRevisions: true,
-                    revisionedMutationAcks: true,
-                  },
-                })),
-                version: 1,
-                pendingCount: 0,
-                revokedHostIds,
-              },
-              hosts: new Map(),
-              refresh: vi.fn(),
+              status: "ready",
+              scope: "cloud",
+              records,
+              refetch: vi.fn(),
             }}
           >
             <SwitcherBrowsersList
@@ -737,22 +701,22 @@ describe("SwitcherBrowsersList over the task-wide catalog", () => {
             />
           </BrowserCatalogContext.Provider>
         </TooltipProvider>
-      </QueryClientProvider>
+      </QueryClientProvider>,
     );
-  }
-
-  function renderCatalogRevoking(revokedHostIds: readonly string[]) {
-    return render(catalogTree(revokedHostIds));
   }
 
   beforeEach(() => {
     window.localStorage.clear();
-    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+    useBrowserPanelStore.setState({ preferences: {} });
     seedCanvasTab();
     catalogActions.closeTab.mockReset();
     catalogActions.closeTab.mockResolvedValue(undefined);
     closeTab.mockReset();
-    replaceSessions([], "live");
+    replaceSessions([], "connecting");
+    sessionsState.value = {
+      ...sessionsState.value,
+      inventoryReady: false,
+    };
   });
 
   afterEach(cleanup);
@@ -813,35 +777,5 @@ describe("SwitcherBrowsersList over the task-wide catalog", () => {
       );
     });
     expect(closeTab).not.toHaveBeenCalled();
-  });
-
-  it("omits a revoked device's tabs and its create choice even while the device is online", async () => {
-    const user = userEvent.setup();
-    hostListState.hosts = [
-      hostOption("host-1", "Home Mac", "online"),
-      hostOption("host-2", "Work Mac", "online"),
-    ];
-    renderCatalogRevoking(["host-2"]);
-
-    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
-    expect(screen.getByTestId("browser-device-group-host-1")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
-    expect(screen.queryByRole("menuitem", { name: /Work Mac/ })).toBeNull();
-  });
-
-  it("drops a device's tabs and create choice when it is revoked after the list is showing", async () => {
-    const user = userEvent.setup();
-    hostListState.hosts = [
-      hostOption("host-1", "Home Mac", "online"),
-      hostOption("host-2", "Work Mac", "online"),
-    ];
-    const view = renderCatalogRevoking([]);
-    expect(screen.getByTestId("browser-device-group-host-2")).toBeTruthy();
-
-    view.rerender(catalogTree(["host-2"]));
-
-    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
-    expect(screen.queryByRole("menuitem", { name: /Work Mac/ })).toBeNull();
   });
 });

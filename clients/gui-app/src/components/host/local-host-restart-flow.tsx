@@ -1,7 +1,7 @@
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import { useRef, useState, type ReactNode } from "react";
 import {
-  useIsMutating,
   useMutation,
   useQueryClient,
   type UseMutationResult,
@@ -147,7 +147,7 @@ const UNREACHABLE_CLIENT_MESSAGE =
  * The forced bridge respawn, shared by both arms of the flow.
  *
  * Under the SAME mutation key as the Settings force offer, so every
- * cache-derived restart gate (`useIsMutating` on this key) sees a menu/tray
+ * cache-derived restart gate (`useIsMutatingOf` on this key) sees a menu/tray
  * initiated respawn too - the menu's old mutation ran under its own key and
  * was invisible to the Settings page-wide lifecycle gate.
  *
@@ -469,7 +469,7 @@ function CooperativeFirstRestartFlow(
   // submit respawns under this key, and each surface's own observer only sees
   // its own dispatches.
   const respawnInFlight =
-    useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
+    useIsMutatingOf({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
   const serviceRestart = useServiceHostRestart();
 
   // The service leg, against THIS machine's host id and no other: main

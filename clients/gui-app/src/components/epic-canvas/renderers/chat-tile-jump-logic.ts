@@ -1,9 +1,6 @@
 import { chatTranscriptEventRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import type {
-  ChatMessage as ChatMessageModel,
-  MessageSegment,
-} from "@/stores/composer/chat-store";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatTranscriptJumpTarget } from "@/stores/chats/chat-transcript-jump-store";
 import type {
   ChatApprovalState,
@@ -11,6 +8,11 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { visibleComposerApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+import {
+  segmentBlockChildren,
+  segmentContainsBlockId,
+  type SegmentBlockNode,
+} from "@/stores/chats/segment-block-ids";
 
 /**
  * Where a cross-tile jump LANDS, and who is able to say.
@@ -39,54 +41,13 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  */
 export const TRANSCRIPT_JUMP_TTL_MS = 30_000;
 
-type BackgroundBlockSearchNode =
-  | MessageSegment
-  | {
-      readonly id: string;
-      readonly children: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly files: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly group: {
-        readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
-      };
-    };
-
-function segmentContainsBackgroundBlock(
-  segment: BackgroundBlockSearchNode,
-  blockId: string,
-): boolean {
-  if (segment.id === blockId) return true;
-  return backgroundBlockSearchChildren(segment).some((child) =>
-    segmentContainsBackgroundBlock(child, blockId),
-  );
-}
-
-function backgroundBlockSearchChildren(
-  segment: BackgroundBlockSearchNode,
-): ReadonlyArray<BackgroundBlockSearchNode> {
-  if ("children" in segment) return segment.children;
-  if ("files" in segment) return segment.files;
-  if ("segments" in segment) return segment.segments;
-  if ("group" in segment) return segment.group.segments;
-  return [];
-}
-
 export function messageIdForBlock(
   messages: ReadonlyArray<ChatMessageModel>,
   blockId: string,
 ): string | null {
   const owner = messages.find((message) =>
     message.segments.some((segment) =>
-      segmentContainsBackgroundBlock(segment, blockId),
+      segmentContainsBlockId(segment, blockId),
     ),
   );
   return owner?.id ?? null;
@@ -152,7 +113,7 @@ function sentMessageAnchor(
     readonly blockId: string;
     readonly distance: number;
   }> = [];
-  const visit = (messageId: string, node: BackgroundBlockSearchNode): void => {
+  const visit = (messageId: string, node: SegmentBlockNode): void => {
     if (
       "kind" in node &&
       node.kind === "tool" &&
@@ -166,7 +127,7 @@ function sentMessageAnchor(
         distance: Math.abs(node.startedAt - target.timestamp),
       });
     }
-    for (const child of backgroundBlockSearchChildren(node)) {
+    for (const child of segmentBlockChildren(node)) {
       visit(messageId, child);
     }
   };
@@ -210,7 +171,7 @@ export function receiptAnchorBlockId(
   messages: ReadonlyArray<ChatMessageModel>,
   messageId: string,
 ): string | null {
-  const visit = (node: BackgroundBlockSearchNode): string | null => {
+  const visit = (node: SegmentBlockNode): string | null => {
     if (
       "kind" in node &&
       node.kind === "tool" &&
@@ -219,7 +180,7 @@ export function receiptAnchorBlockId(
     ) {
       return node.id;
     }
-    for (const child of backgroundBlockSearchChildren(node)) {
+    for (const child of segmentBlockChildren(node)) {
       const found = visit(child);
       if (found !== null) return found;
     }

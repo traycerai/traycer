@@ -1,9 +1,11 @@
-import { hashKey, useMutationState } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { hashKey, type Mutation } from "@tanstack/react-query";
 import {
   sandboxSupportReference,
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 import {
   SandboxDestroySkippedError,
   type SandboxDestroyRequest,
@@ -37,21 +39,22 @@ export function useSandboxOperation(
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const verbKey = hashKey(sandboxMutationKeys.verb(sandboxId));
   const destroyKey = hashKey(sandboxMutationKeys.destroy(sandboxId));
-  const operations = useMutationState({
-    filters: {
-      predicate: (mutation) => {
-        const key = hashKey(mutation.options.mutationKey ?? []);
-        const context = mutation.state.context;
-        return (
-          (key === verbKey || key === destroyKey) &&
-          typeof context === "object" &&
-          context !== null &&
-          "userId" in context &&
-          context.userId === userId
-        );
-      },
+  const predicate = useCallback(
+    (mutation: Mutation) => {
+      const key = hashKey(mutation.options.mutationKey ?? []);
+      const context = mutation.state.context;
+      return (
+        (key === verbKey || key === destroyKey) &&
+        typeof context === "object" &&
+        context !== null &&
+        "userId" in context &&
+        context.userId === userId
+      );
     },
-    select: (mutation) => ({
+    [verbKey, destroyKey, userId],
+  );
+  const select = useCallback(
+    (mutation: Mutation) => ({
       order: mutation.mutationId,
       verb:
         hashKey(mutation.options.mutationKey ?? []) === destroyKey
@@ -61,7 +64,9 @@ export function useSandboxOperation(
       status: mutation.state.status,
       error: mutation.state.error,
     }),
-  });
+    [destroyKey],
+  );
+  const operations = useMutationStateOf({ predicate }, select);
   const latest = operations.reduce<(typeof operations)[number] | null>(
     (newest, entry) =>
       newest === null || entry.order > newest.order ? entry : newest,

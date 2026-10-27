@@ -82,6 +82,7 @@ function MaximizedTerminalFocusProbe() {
         onDragOver={() => undefined}
         onDrop={() => undefined}
         onKeyDown={undefined}
+        interceptKeyDown={null}
         onFocus={() => undefined}
         onBlur={() => undefined}
         onEditorReady={null}
@@ -137,6 +138,7 @@ function Harness({
         onDragOver={() => undefined}
         onDrop={() => undefined}
         onKeyDown={undefined}
+        interceptKeyDown={null}
         onFocus={() => undefined}
         onBlur={() => undefined}
         onEditorReady={null}
@@ -248,6 +250,7 @@ describe("ComposerPromptEditor render isolation", () => {
           onDragOver={() => undefined}
           onDrop={() => undefined}
           onKeyDown={undefined}
+          interceptKeyDown={null}
           onFocus={() => undefined}
           onBlur={() => undefined}
           onEditorReady={null}

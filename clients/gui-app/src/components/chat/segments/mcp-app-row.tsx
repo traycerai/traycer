@@ -276,13 +276,20 @@ function LiveMcpApp(props: LiveMcpAppProps) {
   const enterFullscreen = (): boolean => {
     if (claimRef.current !== null) return true;
     const row = appRef.current?.closest("[data-message-id]") ?? null;
+    // The LIST key, which for a long turn drawn as several items names the
+    // part this app sits in rather than the turn's first row - the pin keeps
+    // exactly that item mounted. A row outside the transcript list (a
+    // subagent conversation) carries no list key and falls back to its id.
     const claim: FullscreenClaim = {
       // A yield has already released the claim; this only drops the mode.
       exit: () => {
         claimRef.current = null;
         setDisplayMode("inline");
       },
-      pinnedRowKey: row?.getAttribute("data-message-id") ?? null,
+      pinnedRowKey:
+        row?.getAttribute("data-row-key") ??
+        row?.getAttribute("data-message-id") ??
+        null,
     };
     if (!claimFullscreen(claim)) return false;
     claimRef.current = claim;

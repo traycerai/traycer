@@ -141,6 +141,8 @@ Use the tab strip's **Split group right** button to open a new group on the righ
 | Open notifications | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> | Open the notification center; use the arrow keys to move between notifications. Press it again to close. |
 | Open usage limits | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd> | Open the provider usage and rate-limit monitor. |
 | Open Resource Monitor | <kbd>Shift</kbd> + <kbd>Esc</kbd> | <kbd>Shift</kbd> + <kbd>Esc</kbd> | Open the Resource Monitor. Unbind it if you need <kbd>Shift</kbd> + <kbd>Esc</kbd> in a terminal. |
+| Find in active tile | <kbd>Cmd</kbd> + <kbd>F</kbd> | <kbd>Ctrl</kbd> + <kbd>F</kbd> | Open the active tile's [find bar](/panels#find-in-a-tile). A focused terminal keeps <kbd>Ctrl</kbd> + <kbd>F</kbd> on Windows and Linux. |
+| Find next in active tile | <kbd>Cmd</kbd> + <kbd>G</kbd> | <kbd>Ctrl</kbd> + <kbd>G</kbd> | Go to the next match in the active tile. A focused terminal keeps <kbd>Ctrl</kbd> + <kbd>G</kbd> on Windows and Linux. |
 | Find and replace in active tile | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>F</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> | Open the active tile's [find bar](/panels#find-in-a-tile), with the **Replace** row expanded where the tile supports it. |
 
 For the command palette, Search chats, Back and Forward, and reopening tabs, see [Search and navigation](/concepts/search-and-navigation).
@@ -169,6 +171,7 @@ These act on the terminal and browser panel on the start page. See [Start Page P
 | Command | macOS | Windows / Linux | What it does |
 |---|---|---|---|
 | Voice input | <kbd>Control</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | Dictate into the composer. Tap to toggle, or hold to talk. Speech is transcribed on-device. |
+| Accept suggested reply | <kbd>→</kbd> | <kbd>→</kbd> | Fill the empty composer with the suggested reply shown as its placeholder. The message is not sent. Rebind it to <kbd>Tab</kbd> if <kbd>→</kbd> is out of reach. See [Composer](/panels/agents/composer#suggested-prompts). |
 | Drafts | <kbd>Cmd</kbd> + <kbd>S</kbd> | <kbd>Ctrl</kbd> + <kbd>S</kbd> | Open the drafts list. See [Composer](/panels/agents/composer). |
 | Toggle model picker | <kbd>Control</kbd> + <kbd>Opt</kbd> + <kbd>M</kbd> | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | Open or close the model picker for the composer you're editing. |
 
@@ -207,18 +210,18 @@ The **Sub-leader** section of **Settings → Keybindings** lists the two number 
 
 ## Menu Shortcuts
 
-These belong to the app's menu and can't be changed in Settings.
+These belong to the app's menu and can't be changed in Settings. On macOS, rebinding or disabling a Find action in Settings leaves the menu's <kbd>Cmd</kbd> + <kbd>F</kbd> and <kbd>Cmd</kbd> + <kbd>G</kbd> shortcuts available.
 
 | Menu item | macOS | Windows / Linux |
 |---|---|---|
 | **File → New Window** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd> |
 | **File → Open Task in New Window…** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>O</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>O</kbd> |
-| **Edit → Find** | <kbd>Cmd</kbd> + <kbd>F</kbd> | Use <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> |
+| **Edit → Find** | <kbd>Cmd</kbd> + <kbd>F</kbd> | None |
 | **Edit → Find Next** | <kbd>Cmd</kbd> + <kbd>G</kbd> | None |
 | **Edit → Find Previous** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>G</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>G</kbd> |
 | **Window → Minimize** | <kbd>Cmd</kbd> + <kbd>M</kbd> | None |
 
-On Windows and Linux, <kbd>Ctrl</kbd> + <kbd>F</kbd>, <kbd>Ctrl</kbd> + <kbd>G</kbd>, and <kbd>Ctrl</kbd> + <kbd>M</kbd> are left to terminals. Inside an open find bar, <kbd>Enter</kbd> and <kbd>Shift</kbd> + <kbd>Enter</kbd> move to the next and previous match on every platform.
+On Windows and Linux, a focused terminal keeps <kbd>Ctrl</kbd> + <kbd>F</kbd> and <kbd>Ctrl</kbd> + <kbd>G</kbd>, and <kbd>Ctrl</kbd> + <kbd>M</kbd> is left to terminals. Inside an open find bar, <kbd>Enter</kbd> and <kbd>Shift</kbd> + <kbd>Enter</kbd> move to the next and previous match on every platform.
 
 ## Command Palette
 

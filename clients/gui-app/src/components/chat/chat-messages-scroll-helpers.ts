@@ -1,5 +1,10 @@
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import {
+  assistantTurnPartCuts,
+  assistantTurnPartIndexOfSegment,
+  assistantTurnPartKey,
+} from "@/stores/chats/assistant-turn-parts";
 
 /**
  * Per-press step for the transcript's arrow-key scrolling. Chromium's own
@@ -66,6 +71,41 @@ export interface ChatTimelineNavigationLocation {
   readonly index: number;
   readonly viewOffset: number;
   readonly animated: boolean;
+}
+
+/**
+ * The list row a navigation should land on: the PART of a long assistant turn
+ * that draws `blockId`, and the message's own row for everything else.
+ *
+ * A turn with several text blocks is several list items, so scrolling to the
+ * turn's first row can leave the named card several viewports below the
+ * viewport, unmounted, with nothing for the inner reveal to centre. Resolving
+ * the part first is what keeps a block link, a find hit and a cross-tile jump
+ * landing on the card they name.
+ *
+ * `blockId` is `null` for a navigation to the turn itself, which is part 0 by
+ * definition - the same row key the message has always had.
+ *
+ * `splitLongTurns` is the SAME decision `transcriptListRows` was given. A
+ * transcript that is not split has one row per turn under the message's own
+ * key, and a part key derived here would name a row the list never built.
+ */
+export function chatTimelineRowKeyForBlock(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+  blockId: string | null,
+  splitLongTurns: boolean,
+): string {
+  if (blockId === null || !splitLongTurns) return messageId;
+  const message = messages.find((candidate) => candidate.id === messageId);
+  if (message === undefined || message.role !== "assistant") return messageId;
+  const cuts = assistantTurnPartCuts(message.segments);
+  if (cuts.length === 0) return messageId;
+  return assistantTurnPartKey(
+    messageId,
+    cuts,
+    assistantTurnPartIndexOfSegment(message.segments, blockId),
+  );
 }
 
 export function chatTimelineLocationForMessage(

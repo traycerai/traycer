@@ -211,11 +211,8 @@ const fallbackSessionHarness = vi.hoisted(() => {
   };
 });
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  // The row reads "is any rung in flight" through the QueryClient; this suite
-  // mocks the mutation itself and has no client, so nothing is ever in flight.
-  useIsMutating: () => 0,
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({

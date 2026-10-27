@@ -157,6 +157,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
         <div style={{ height: 700, width: 800 }}>
           <ChatTimeline
             rows={transcriptListRows({
+              splitLongTurns: true,
               window: null,
               rendered: [makeMessage(0, "user")],
             })}

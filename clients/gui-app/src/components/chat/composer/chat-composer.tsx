@@ -256,8 +256,9 @@ interface ChatComposerProps {
   readonly topSlot: ReactNode | null;
   /**
    * The provider's predicted next prompt (`chat.subscribe@1.20`), offered as
-   * the empty composer's placeholder: → or a tap fills it. `undefined` offers
-   * nothing - which is also every host below `1.20`.
+   * the empty composer's placeholder: the accept key (→ unless rebound) or a
+   * rightward swipe fills it. `undefined` offers nothing - which is also every
+   * host below `1.20`.
    */
   readonly suggestedPrompt: string | undefined;
 }
@@ -831,8 +832,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
-  // Accepting the suggestion (→, or a rightward swipe on touch) FILLS and
-  // focuses - it never sends.
+  // Accepting the suggestion (the "Accept suggested reply" key, → unless
+  // rebound, or a rightward swipe on touch) FILLS and focuses - it never sends.
   const fillSuggestedPrompt = useCallback(
     (suggestion: string): boolean =>
       fillComposerWithSuggestion(editorRef.current, suggestion),

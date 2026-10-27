@@ -1,28 +1,19 @@
-import { useMemo } from "react";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import type { BrowserCatalogRecord } from "@traycer/protocol/host/browser/catalog-contracts";
 import type { BrowserCatalogModel } from "@/hooks/browser/use-browser-catalog-inventory";
-import type {
-  BrowserCatalogInventory,
-  BrowserCatalogStatus,
-} from "@/lib/browser-view/sessions/browser-catalog-inventory";
 import {
-  browserSessionsOwnerSupportsInventory,
+  browserSessionsCoordinatorsForEpic,
+  subscribeToBrowserSessionsCoordinators,
   type BrowserSessionsState,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
-import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { BrowserPanelPreferences } from "@/stores/epics/browser-panel-store";
 import { useBrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
-import {
-  useBrowserSessionsContext,
-  useMaybeBrowserSessionsCoordinatorKey,
-} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useBrowserPanelPreferences } from "@/stores/epics/browser-panel-store";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import {
   filterBrowserTabRows,
   useBrowserSidebarTabRows,
@@ -41,103 +32,68 @@ export interface BrowserDeviceGroupModel {
 }
 
 export interface BrowserListModel {
-  readonly catalog: BrowserCatalogModel | null;
-  readonly status: BrowserCatalogStatus;
-  readonly fallback: boolean;
-  readonly legacyView: boolean;
-  readonly legacyHostId: string | null;
-  readonly live: BrowserSessionsState;
-  readonly options: HostOptions;
+  readonly status: BrowserCatalogModel["status"];
   readonly preferences: BrowserPanelPreferences;
   readonly groups: readonly BrowserDeviceGroupModel[];
   readonly rows: readonly BrowserSidebarTabRow[];
   readonly matches: readonly BrowserSidebarTabRow[];
-  readonly incomplete: boolean;
   readonly loading: boolean;
-  readonly legacyUnavailable: boolean;
-  readonly directoryUnavailable: boolean;
   readonly hiddenOfflineMatches: boolean;
   readonly filteredEmpty: boolean;
   readonly refresh: () => void;
 }
 
-function fallbackMode(args: {
-  readonly status: BrowserCatalogStatus;
-  readonly legacyHostId: string | null;
-  readonly live: BrowserSessionsState;
-  readonly coordinatorKey: string | null;
-}): "common" | "local-only" | "unsupported-reader" | "legacy-owner" {
-  if (args.status === "local-only") return "local-only";
-  if (args.status === "unsupported") return "unsupported-reader";
-  if (args.status === "inaccessible") return "common";
-  if (
-    args.legacyHostId === null ||
-    args.legacyHostId !== args.live.hostId ||
-    args.coordinatorKey === null
-  )
-    return "common";
-  if (
-    args.live.lifecycle !== "live" ||
-    !args.live.inventoryReady ||
-    browserSessionsOwnerSupportsInventory(args.coordinatorKey)
-  )
-    return "common";
-  return "legacy-owner";
+/** Observe streams already held by a surface or action; listing never opens one. */
+function useHeldBrowserStates(epicId: string): readonly BrowserSessionsState[] {
+  const cache = useRef<readonly BrowserSessionsState[]>([]);
+  const getSnapshot = useCallback(() => {
+    const states = browserSessionsCoordinatorsForEpic(epicId).map(
+      (entry) => entry.state,
+    );
+    if (
+      states.length !== cache.current.length ||
+      states.some((state, index) => state !== cache.current[index])
+    )
+      cache.current = states;
+    return cache.current;
+  }, [epicId]);
+  return useSyncExternalStore(
+    subscribeToBrowserSessionsCoordinators,
+    getSnapshot,
+    getSnapshot,
+  );
 }
 
-/** Catalog membership/title/URL remain authoritative; live frames only decorate. */
-function catalogSidebarSessions(
+/** A connected owner's full inventory replaces that host's discovery rows. */
+function mergeBrowserSessions(
   records: readonly BrowserCatalogRecord[],
-  live: BrowserSessionsState,
+  states: readonly BrowserSessionsState[],
+  ambient: BrowserSessionsState,
 ): readonly BrowserSidebarSession[] {
-  const liveById = new Map(
-    live.items.map((session) => [
-      compositeKey(session.hostId, session.sessionId),
-      session,
-    ]),
-  );
-  return records.map((record) => {
-    const owner = liveById.get(compositeKey(record.hostId, record.sessionId));
-    const liveTabs = new Map(owner?.tabs.map((tab) => [tab.tabId, tab]) ?? []);
-    return {
-      source: "catalog",
-      hostId: record.hostId,
-      sessionId: record.sessionId,
-      profile: owner?.profile ?? null,
-      tabs: record.tabs.map((tab) => ({
-        ...tab,
-        status: liveTabs.get(tab.tabId)?.status ?? null,
-        drivenBy: liveTabs.get(tab.tabId)?.drivenBy ?? [],
+  const owners = new Map<string, BrowserSessionsState>();
+  for (const state of [ambient, ...states]) {
+    if (
+      state.hostId !== null &&
+      state.lifecycle === "live" &&
+      state.inventoryReady
+    )
+      owners.set(state.hostId, state);
+  }
+  return [
+    ...records
+      .filter((record) => !owners.has(record.hostId))
+      .map((record): BrowserSidebarSession => ({
+        hostId: record.hostId,
+        sessionId: record.sessionId,
+        profile: null,
+        tabs: record.tabs.map((tab) => ({
+          ...tab,
+          status: null,
+          drivenBy: [],
+        })),
       })),
-    };
-  });
-}
-
-function inventoryIncomplete(
-  inventory: BrowserCatalogInventory | undefined,
-  options: HostOptions,
-): boolean {
-  if (
-    options.isLoading ||
-    !options.listsResolved ||
-    options.listsFailed ||
-    inventory === undefined
-  )
-    return true;
-  if (
-    inventory.readiness.length === 0 ||
-    inventory.readiness.some((entry) => entry.state !== "complete")
-  )
-    return true;
-  const indexed = new Set(inventory.readiness.map((entry) => entry.hostId));
-  const revoked = new Set(inventory.revokedHostIds);
-  return options.hosts.some(
-    (host) =>
-      host.entry?.kind !== "pool" &&
-      host.health.state !== "removed" &&
-      !revoked.has(host.hostId) &&
-      !indexed.has(host.hostId),
-  );
+    ...[...owners.values()].flatMap((owner) => owner.items),
+  ];
 }
 
 function matchesReveal(
@@ -155,7 +111,6 @@ function matchesReveal(
 function groupBrowserRows(args: {
   readonly rows: readonly BrowserSidebarTabRow[];
   readonly hosts: ReadonlyMap<string, HostScopeOption>;
-  readonly directory: ReadonlyMap<string, HostDirectoryEntry> | undefined;
   readonly localHostId: string | null;
   readonly preferences: BrowserPanelPreferences;
   readonly query: string;
@@ -169,10 +124,7 @@ function groupBrowserRows(args: {
   }
   return [...grouped].map(([hostId, rows]) => ({
     hostId,
-    name:
-      args.hosts.get(hostId)?.name ??
-      args.directory?.get(hostId)?.label ??
-      hostId,
+    name: args.hosts.get(hostId)?.name ?? hostId,
     isLocal: hostId === args.localHostId,
     offline: isBrowserDeviceOffline(args.hosts.get(hostId)),
     expanded:
@@ -183,31 +135,6 @@ function groupBrowserRows(args: {
   }));
 }
 
-function listLifecycle(args: {
-  readonly status: BrowserCatalogStatus;
-  readonly live: BrowserSessionsState;
-  readonly fallback: boolean;
-  readonly rowCount: number;
-  readonly options: HostOptions;
-}) {
-  const { status, live, fallback, rowCount, options } = args;
-  const directoryLoading =
-    !fallback &&
-    !options.listsFailed &&
-    (options.isLoading || !options.listsResolved);
-  const directoryUnavailable = !fallback && options.listsFailed;
-  const ownerLoading =
-    fallback &&
-    !live.inventoryReady &&
-    ["live", "connecting", "reconnecting"].includes(live.lifecycle);
-  return {
-    directoryUnavailable,
-    loading:
-      rowCount === 0 &&
-      (status === "loading" || directoryLoading || ownerLoading),
-  };
-}
-
 /** One presentation of task discovery, shared by the rail and mobile switcher. */
 export function useBrowserListModel(
   epicId: string,
@@ -216,37 +143,26 @@ export function useBrowserListModel(
 ): BrowserListModel {
   const catalog = useBrowserCatalogContext();
   const live = useBrowserSessionsContext();
-  const coordinatorKey = useMaybeBrowserSessionsCoordinatorKey();
+  const heldStates = useHeldBrowserStates(epicId);
   const options = useHostOptions();
   const localHostId = useReactiveLocalHostId();
   const preferences = useBrowserPanelPreferences(epicId);
-  const inventory = catalog?.inventory;
-  const status = inventory?.status ?? "unsupported";
-  const revoked = useMemo(
-    () => new Set(inventory?.revokedHostIds ?? []),
-    [inventory],
+  const sessions = useMemo(
+    () =>
+      mergeBrowserSessions(
+        catalog?.scope === "cloud" ? catalog.records : [],
+        heldStates,
+        live,
+      ),
+    [catalog, heldStates, live],
   );
-  const legacyHostId =
-    preferences.legacyHostId !== null && !revoked.has(preferences.legacyHostId)
-      ? preferences.legacyHostId
-      : null;
-  const mode = fallbackMode({ status, legacyHostId, live, coordinatorKey });
-  const fallback = mode !== "common";
-  const sessions = useMemo<readonly BrowserSidebarSession[]>(() => {
-    if (status === "inaccessible") return [];
-    if (fallback)
-      return live.items.map((session) => ({ ...session, source: "legacy" }));
-    return catalogSidebarSessions(inventory?.records ?? [], live);
-  }, [fallback, inventory, live, status]);
   const allRows = useBrowserSidebarTabRows(sessions);
   const hosts = useMemo(
     () => new Map(options.hosts.map((host) => [host.hostId, host])),
     [options.hosts],
   );
   const rows = allRows.filter(
-    (row) =>
-      !revoked.has(row.session.hostId) &&
-      hosts.get(row.session.hostId)?.health.state !== "removed",
+    (row) => hosts.get(row.session.hostId)?.health.state !== "removed",
   );
   const visible = rows.filter(
     (row) =>
@@ -261,38 +177,19 @@ export function useBrowserListModel(
   const groups = groupBrowserRows({
     rows: matches,
     hosts,
-    directory: catalog?.hosts,
     localHostId,
     preferences,
     query,
     revealNodeId,
   });
-  const lifecycle = listLifecycle({
-    status,
-    live,
-    fallback,
-    rowCount: rows.length,
-    options,
-  });
+  const status = catalog?.status ?? "ready";
   return {
-    catalog,
     status,
-    fallback,
-    legacyView: mode === "legacy-owner",
-    legacyHostId,
-    live,
-    options,
     preferences,
     groups,
     rows,
     matches,
-    incomplete:
-      !fallback &&
-      status !== "inaccessible" &&
-      inventoryIncomplete(inventory, options),
-    legacyUnavailable:
-      (fallback || legacyHostId !== null) &&
-      ["failed", "closed", "unsupported"].includes(live.lifecycle),
+    loading: status === "loading" && rows.length === 0,
     hiddenOfflineMatches:
       !preferences.showOffline &&
       filterBrowserTabRows(
@@ -302,7 +199,6 @@ export function useBrowserListModel(
         query,
       ).length > 0,
     filteredEmpty: rows.length > 0 && visible.length === 0,
-    refresh: catalog?.refresh ?? live.retry,
-    ...lifecycle,
+    refresh: catalog?.refetch ?? live.retry,
   };
 }

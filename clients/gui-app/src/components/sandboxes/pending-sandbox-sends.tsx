@@ -18,7 +18,8 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useIsMutating, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useStore } from "zustand";
@@ -2843,7 +2844,7 @@ function PendingStagedSendItem(props: {
   const retrySend = usePendingStagedSendRetry(send, runner);
   const sandboxId = stage?.createdSandboxId ?? "";
   const verb = useSandboxVerb(sandboxId);
-  const activeVerbs = useIsMutating({
+  const activeVerbs = useIsMutatingOf({
     mutationKey: sandboxMutationKeys.verb(sandboxId),
   });
   const sandboxList = useSandboxList();
