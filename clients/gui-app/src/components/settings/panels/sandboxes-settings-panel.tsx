@@ -371,6 +371,40 @@ function automationsUnstarted(input: {
   );
 }
 
+/**
+ * Keep positions until membership or a public state changes. Only ids and
+ * states are retained: reports, costs and sessions still render fresh data.
+ * The configuration-keyed list owns this order for as long as it is open.
+ */
+function useOrderedSandboxRows(
+  rows: readonly SandboxSummary[] | null,
+): readonly SandboxSummary[] {
+  const [order, setOrder] = useState<
+    readonly { readonly id: string; readonly state: SandboxPublicState }[]
+  >([]);
+  if (rows === null) return [];
+
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  if (
+    order.length !== rows.length ||
+    order.some((entry) => {
+      const row = rowsById.get(entry.id);
+      return row === undefined || sandboxPublicState(row) !== entry.state;
+    })
+  ) {
+    const sorted = sortSandboxRows(rows);
+    setOrder(
+      sorted.map((row) => ({ id: row.id, state: sandboxPublicState(row) })),
+    );
+    return sorted;
+  }
+
+  return order.flatMap(({ id }) => {
+    const row = rowsById.get(id);
+    return row === undefined ? [] : [row];
+  });
+}
+
 function SandboxListSection(props: {
   readonly configuration: SandboxPageConfiguration;
   readonly teamEnvironmentIds: ReadonlySet<string>;
@@ -403,16 +437,9 @@ function SandboxListSection(props: {
       rowInConfiguration(row, configuration, props.teamEnvironmentIds),
     );
   }, [allRows, configuration, props.teamEnvironmentIds, props.teamsComplete]);
-  const shown = useMemo(
-    () =>
-      configurationRows === null
-        ? []
-        : sortSandboxRows(
-            configurationRows.filter((row) =>
-              sandboxRowMatches(row, filter, viewerUserId),
-            ),
-          ),
-    [configurationRows, filter, viewerUserId],
+  const orderedRows = useOrderedSandboxRows(configurationRows);
+  const shown = orderedRows.filter((row) =>
+    sandboxRowMatches(row, filter, viewerUserId),
   );
   const unstartedAutomations = automationsUnstarted({
     rows: configurationRows,

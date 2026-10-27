@@ -858,6 +858,178 @@ describe("<SandboxesSettingsPanel />", () => {
     ).toBe("Keep this sandbox");
   });
 
+  describe("row ordering", () => {
+    it("holds row positions through activity reports while rendering fresh data", () => {
+      mocks.sandboxes = [
+        row("sleeping", { state: "suspended", lastActivityAt: 300 }),
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older", "sleeping"]);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 500 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older", "sleeping"]);
+
+      mocks.sandboxes = mocks.sandboxes.map((summary) => ({
+        ...summary,
+        displayName: `${summary.id} refreshed`,
+      }));
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({})], terminals: [] },
+        false,
+      );
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual([
+        "newer refreshed",
+        "older refreshed",
+        "sleeping refreshed",
+      ]);
+      expect(
+        within(rowOf("older")).getByTestId("sandboxes-row-sessions")
+          .textContent,
+      ).toContain("1 session");
+    });
+
+    it("reorders from current activity when a public state changes", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 300 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("sleeping", { state: "awake", lastActivityAt: 300 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "sleeping", "newer"]);
+
+      mocks.sandboxes = mocks.sandboxes.map((summary) =>
+        summary.id === "older" ? { ...summary, frozen: true } : summary,
+      );
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["sleeping", "newer", "older"]);
+    });
+
+    it("keeps the order when a transition lands in the same public state", () => {
+      mocks.sandboxes = [
+        row("waking", { state: "resuming", lastActivityAt: 100 }),
+        row("awake", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("waking", { state: "awake", lastActivityAt: 300 }),
+        row("awake", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["awake", "waking"]);
+      expect(
+        within(rowOf("waking")).getByTestId("row-primary").textContent,
+      ).toBe("Suspend");
+    });
+
+    it("places every added row by the rule and counts it immediately", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("sleeping", { state: "suspended", lastActivityAt: 400 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        ...mocks.sandboxes,
+        row("middle", { lastActivityAt: 200 }),
+        row("newest", { lastActivityAt: 300 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newest", "middle", "older", "sleeping"]);
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "4 sandboxes",
+      );
+    });
+
+    it("drops a removed row and updates the count", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+        row("removed", { state: "suspended", lastActivityAt: 300 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 400 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "newer"]);
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "2 sandboxes",
+      );
+    });
+
+    it("breaks equal activity keys by id in both state groups", () => {
+      renderPanel([
+        row("z-sleeping", { state: "suspended", lastActivityAt: 200 }),
+        row("z-awake", { lastActivityAt: null, lastTransitionAt: 100 }),
+        row("a-sleeping", { state: "suspended", lastActivityAt: 200 }),
+        row("a-awake", { lastActivityAt: 100 }),
+      ]);
+      expect(names()).toEqual([
+        "a-awake",
+        "z-awake",
+        "a-sleeping",
+        "z-sleeping",
+      ]);
+    });
+
+    it("retains positions when a search is cleared after a report", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { rerender } = renderUi(<SandboxesSettingsPanel />);
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "older" },
+      });
+      expect(names()).toEqual(["older"]);
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 300 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      rerender(<SandboxesSettingsPanel />);
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "" },
+      });
+      expect(names()).toEqual(["newer", "older"]);
+    });
+
+    it("sorts from current activity again when the page reopens", () => {
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 100 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      const { unmount } = renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["newer", "older"]);
+      unmount();
+
+      mocks.sandboxes = [
+        row("older", { lastActivityAt: 300 }),
+        row("newer", { lastActivityAt: 200 }),
+      ];
+      renderUi(<SandboxesSettingsPanel />);
+      expect(names()).toEqual(["older", "newer"]);
+    });
+  });
+
   it("narrows the list by the search and by the state filter, with a count badge", () => {
     renderPanel([
       row("alpha", { state: "awake" }),
