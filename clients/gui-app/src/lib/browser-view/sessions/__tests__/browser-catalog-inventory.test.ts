@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   BrowserCatalogRecord,
   BrowserCatalogSnapshot,
@@ -966,6 +966,52 @@ describe("browser catalog inventory on IndexedDB", () => {
     );
     expect(afterClear.browserCatalogInventory.epoch(idbScope)).toBeGreaterThan(
       staleEpoch,
+    );
+  });
+
+  it("clears its memory synchronously and resolves when IndexedDB is absent", async () => {
+    const inventory = await freshModule();
+    const absentScope: BrowserCatalogScope = {
+      userId: "absent-idb-user",
+      epicId: EPIC,
+    };
+    await inventory.browserCatalogInventory.load(absentScope);
+    await inventory.browserCatalogInventory.owner(absentScope, "B", [
+      liveEvidence("B", "before-clear", 12),
+    ]);
+    expect(
+      inventory.browserCatalogInventory.read(absentScope).records,
+    ).toHaveLength(1);
+
+    const indexedDBDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "indexedDB",
+    );
+    onTestFinished(() => {
+      if (indexedDBDescriptor === undefined)
+        Reflect.deleteProperty(globalThis, "indexedDB");
+      else Object.defineProperty(globalThis, "indexedDB", indexedDBDescriptor);
+    });
+    Reflect.deleteProperty(globalThis, "indexedDB");
+
+    const clearing = inventory.browserCatalogInventory.clear();
+    expect(inventory.browserCatalogInventory.read(absentScope).records).toEqual(
+      [],
+    );
+    await expect(clearing).resolves.toBeUndefined();
+  });
+
+  it("rejects clear when the IndexedDB factory exists but its open fails", async () => {
+    const inventory = await freshModule();
+    const open = vi
+      .spyOn(globalThis.indexedDB, "open")
+      .mockImplementation(() => {
+        throw new Error("IndexedDB open failed");
+      });
+    onTestFinished(() => open.mockRestore());
+
+    await expect(inventory.browserCatalogInventory.clear()).rejects.toThrow(
+      "IndexedDB open failed",
     );
   });
 });

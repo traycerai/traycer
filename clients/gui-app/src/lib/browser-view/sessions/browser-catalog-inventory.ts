@@ -608,8 +608,9 @@ export const browserCatalogInventory = new BrowserCatalogInventoryStore({
     notifyOtherWindows();
     return next;
   },
-  clear: () =>
-    browserCatalogDatabase()(
+  clear: () => {
+    if (typeof indexedDB === "undefined") return Promise.resolve();
+    return browserCatalogDatabase()(
       "readwrite",
       (store) =>
         new Promise<void>((resolve, reject) => {
@@ -640,7 +641,8 @@ export const browserCatalogInventory = new BrowserCatalogInventoryStore({
                 new Error("Could not clear browser inventory."),
             );
         }),
-    ),
+    );
+  },
 });
 
 // The signal contains no inventory. Other windows re-read the same transactional store.
