@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -20,11 +21,13 @@ import type {
   HostNotificationCloudEntryV26,
   HostNotificationsCloudFeedRowV16,
 } from "@traycer/protocol/host/notifications/contracts";
+import type { NotificationHooksStatusResponse } from "@traycer/protocol/host/notifications/host-notifications";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -293,6 +296,71 @@ describe("a notification.hooks.removed row in the notification center", () => {
   });
 });
 
+type PendingRemovalNotices =
+  NotificationHooksStatusResponse["pendingRemovalNotices"];
+
+function statusWith(
+  pendingRemovalNotices: PendingRemovalNotices,
+): NotificationHooksStatusResponse {
+  return {
+    configPath: "/home/me/.traycer/notification-hooks.json",
+    configError: null,
+    hooks: [],
+    configurationRevision: "rev-1",
+    pendingRemovalNotices,
+  };
+}
+
+/** The Settings panel on the local host, answering every status read from
+ * `status` (a held promise lets a test keep the read in flight). */
+function settingsPanelFor(
+  requestId: string,
+  status: () =>
+    | NotificationHooksStatusResponse
+    | Promise<NotificationHooksStatusResponse>,
+): ReactNode {
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => requestId,
+      handlers: {
+        "host.notifications.getConfig": () => ({
+          matrix: {
+            info: { renderer: true, email: false },
+            needs_action: { renderer: true, email: false },
+            failure: { renderer: true, email: false },
+            done: { renderer: true, email: false },
+          },
+          channels: {
+            renderer: { lastError: null },
+            email: {
+              host: "",
+              port: 587,
+              user: "",
+              from: "",
+              credentialConfigured: false,
+              lastError: null,
+            },
+          },
+        }),
+        "host.notificationHooks.status": status,
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok" }),
+  );
+  return (
+    <NotificationsSettingsPanelForClient
+      client={spine.createRequester(mockLocalHostEntry)}
+    />
+  );
+}
+
 /**
  * The pending alert in Settings shares the Query cache with the notification
  * center. Its host keeps reporting the receipt (the retirement write has not
@@ -303,63 +371,18 @@ describe("the Settings alert after the notification center acknowledges a remova
   let statusCalls = 0;
 
   function settingsPanel(): ReactNode {
-    const spine = new HostClient<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      invalidator: { invalidateHostScope: () => undefined },
-      findHostById: (hostId) =>
-        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-      messenger: new MockHostMessenger<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => "req-stale-receipt",
-        handlers: {
-          "host.notifications.getConfig": () => ({
-            matrix: {
-              info: { renderer: true, email: false },
-              needs_action: { renderer: true, email: false },
-              failure: { renderer: true, email: false },
-              done: { renderer: true, email: false },
-            },
-            channels: {
-              renderer: { lastError: null },
-              email: {
-                host: "",
-                port: 587,
-                user: "",
-                from: "",
-                credentialConfigured: false,
-                lastError: null,
-              },
-            },
-          }),
-          "host.notificationHooks.status": () => {
-            statusCalls += 1;
-            return {
-              configPath: "/home/me/.traycer/notification-hooks.json",
-              configError: null,
-              hooks: [],
-              configurationRevision: "rev-1",
-              pendingRemovalNotices: [
-                {
-                  id: "receipt-1",
-                  hostId: mockLocalHostEntry.hostId,
-                  hostName: "Work laptop",
-                  count: 2,
-                  occurredAt: 1_700_000_000_000,
-                },
-              ],
-            };
-          },
+    return settingsPanelFor("req-stale-receipt", () => {
+      statusCalls += 1;
+      return statusWith([
+        {
+          id: "receipt-1",
+          hostId: mockLocalHostEntry.hostId,
+          hostName: "Work laptop",
+          count: 2,
+          occurredAt: 1_700_000_000_000,
         },
-      }),
+      ]);
     });
-    spine.setRequestContext(
-      createRequestContextFixture({ origin: "renderer", bearerToken: "tok" }),
-    );
-    return (
-      <NotificationsSettingsPanelForClient
-        client={spine.createRequester(mockLocalHostEntry)}
-      />
-    );
   }
 
   beforeEach(() => {
@@ -450,5 +473,254 @@ describe("the Settings alert after the notification center acknowledges a remova
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await expectAlertGoneAndStaysGone();
+  });
+});
+
+/**
+ * The Settings status read can still be in flight, with nothing cached, when
+ * the acknowledgment succeeds. Whatever that read (or the next one) later
+ * returns is stale: the person already acknowledged those receipts.
+ */
+describe("the Settings alert when a status read is in flight as the notification center acknowledges a removal", () => {
+  const sandbox = createFakeSandboxBinding();
+  const oldReceipt = {
+    id: "receipt-old",
+    hostId: mockLocalHostEntry.hostId,
+    hostName: "Alpha laptop",
+    count: 1,
+    occurredAt: 1_700_000_000_000,
+  };
+  const midReceipt = {
+    id: "receipt-mid",
+    hostId: mockLocalHostEntry.hostId,
+    hostName: "Bravo desktop",
+    count: 1,
+    occurredAt: 1_800_000_000_000,
+  };
+  const newerReceipt = {
+    id: "receipt-newer",
+    hostId: mockLocalHostEntry.hostId,
+    hostName: "Charlie tower",
+    count: 1,
+    occurredAt: 1_900_000_000_000,
+  };
+  let heldStatusReads: Array<
+    (response: NotificationHooksStatusResponse) => void
+  >;
+  let queryClient: QueryClient;
+
+  function heldSettingsPanel(): ReactNode {
+    return settingsPanelFor(
+      "req-held-status",
+      () =>
+        new Promise<NotificationHooksStatusResponse>((resolve) => {
+          heldStatusReads.push(resolve);
+        }),
+    );
+  }
+
+  function statusQueries() {
+    return queryClient.getQueryCache().findAll({
+      queryKey: hostQueryKeys.methodScope(
+        mockLocalHostEntry.hostId,
+        "host.notificationHooks.status",
+      ),
+    });
+  }
+
+  /** Answer every read the host is holding (including one a late invalidation
+   * dispatches) until the Settings query has data and is idle. */
+  async function answerStatusReadsWith(
+    notices: PendingRemovalNotices,
+  ): Promise<void> {
+    await waitFor(() => {
+      for (const resolve of heldStatusReads.splice(0)) {
+        resolve(statusWith(notices));
+      }
+      const queries = statusQueries();
+      expect(queries.length).toBeGreaterThan(0);
+      expect(
+        queries.every(
+          (query) =>
+            query.state.fetchStatus === "idle" &&
+            query.state.data !== undefined,
+        ),
+      ).toBe(true);
+    });
+  }
+
+  function hostCalls(method: string): unknown[] {
+    return hostRequestMock.mock.calls
+      .filter(([called]) => called === method)
+      .map(([, params]) => params);
+  }
+
+  function alertTexts(): string[] {
+    return within(screen.getByTestId("notification-hooks-manager"))
+      .queryAllByRole("alert")
+      .map((alert) => alert.textContent);
+  }
+
+  async function refreshStatusWith(
+    notices: PendingRemovalNotices,
+  ): Promise<void> {
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: /Refresh/ }));
+    await waitFor(() => {
+      expect(heldStatusReads.length).toBeGreaterThan(0);
+    });
+    await answerStatusReadsWith(notices);
+  }
+
+  async function awaitStatusReadHeldWithNothingCached(): Promise<void> {
+    await waitFor(() => {
+      expect(heldStatusReads).toHaveLength(1);
+    });
+    expect(statusQueries().map((query) => query.state.data)).toEqual([
+      undefined,
+    ]);
+  }
+
+  beforeEach(() => {
+    heldStatusReads = [];
+    queryClient = freshQueryClient();
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-hooks", userName: "U", email: "u@example.com" },
+        { userId: "user-hooks", username: "U" },
+        [],
+      );
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation((method) =>
+      Promise.resolve(
+        method === "host.notifications.cloudFeed.markRead"
+          ? { status: "applied", version: 2 }
+          : {},
+      ),
+    );
+    const hostClient: StubHostClient = {
+      request: hostRequestMock,
+      getActiveHostId: () => mockLocalHostEntry.hostId,
+      createRequesterForHostId: () => hostClient,
+      requestWithSignalRequiringHostMethodVersion: (method, params) =>
+        hostRequestMock(method, params),
+    };
+    binding.current = {
+      ...sandbox,
+      hostClient,
+      directory: {
+        ...sandbox.directory,
+        getLocalEntry: () => mockLocalHostEntry,
+        onChange: () => ({ dispose: () => undefined }),
+      },
+    };
+    __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    useCloudNotificationsStore.setState({ accountId: "user-hooks" });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    binding.current = null;
+    notificationFeedMode.value = "local";
+    useCloudNotificationsStore.getState().reset();
+  });
+
+  it("keeps a receipt gone after the cloud accepts Mark as read, however late its status read returns", async () => {
+    notificationFeedMode.value = "cloud";
+    const acknowledged = removalEntry(
+      "receipt-old",
+      "Alpha laptop",
+      1,
+      mockLocalHostEntry.hostId,
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        {
+          ...cloudRow(acknowledged),
+          originHostId: mockLocalHostEntry.hostId,
+        },
+      ],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    renderCenter(() => undefined, queryClient, heldSettingsPanel());
+    await awaitStatusReadHeldWithNothingCached();
+
+    fireEvent.click(await screen.findByTestId("notification-mark-read"));
+    await waitFor(() => {
+      expect(hostCalls("host.notifications.cloudFeed.markRead")).toEqual([
+        { entryId: "receipt-old" },
+      ]);
+    });
+    await waitFor(() => {
+      expect(queryClient.isMutating()).toBe(0);
+    });
+
+    await answerStatusReadsWith([oldReceipt, newerReceipt]);
+    expect(alertTexts()).toHaveLength(1);
+    expect(alertTexts()[0]).toContain("Charlie tower");
+
+    await refreshStatusWith([oldReceipt, newerReceipt]);
+    expect(alertTexts()).toHaveLength(1);
+    expect(alertTexts()[0]).toContain("Charlie tower");
+  });
+
+  it("keeps receipts gone after Clear notifications, at the highest cutoff acknowledged, however late its status read returns", async () => {
+    // The local host's clear carries `beforeUpdatedAt`; neither receipt below
+    // is a row whose id this gesture names.
+    function seedUnreadRow(id: string): void {
+      act(() => {
+        useHostNotificationsStore.getState().applySnapshot({
+          attention: { entries: [], nextCursor: null },
+          recent: {
+            entries: [
+              removalEntry(id, "Alpha laptop", 1, mockLocalHostEntry.hostId),
+            ],
+            nextCursor: null,
+          },
+          summary: { unreadCount: 1, attentionCount: 0 },
+        });
+      });
+    }
+    async function clearAllAt(cutoff: number): Promise<void> {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(cutoff);
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Clear notifications" }),
+      );
+      fireEvent.click(screen.getByTestId("confirm-action"));
+      await waitFor(() => {
+        expect(hostCalls("host.notifications.clearAll")).toHaveLength(
+          clearCalls + 1,
+        );
+      });
+      clock.mockRestore();
+      clearCalls += 1;
+      await waitFor(() => {
+        expect(queryClient.isMutating()).toBe(0);
+      });
+    }
+    let clearCalls = 0;
+    seedUnreadRow("feed-row-1");
+    renderCenter(() => undefined, queryClient, heldSettingsPanel());
+    await awaitStatusReadHeldWithNothingCached();
+    const allReceipts = [oldReceipt, midReceipt, newerReceipt];
+
+    await clearAllAt(1_850_000_000_000);
+    await answerStatusReadsWith(allReceipts);
+    expect(alertTexts()).toHaveLength(1);
+    expect(alertTexts()[0]).toContain("Charlie tower");
+
+    // A later, lower cutoff must not reopen what the higher one retired.
+    seedUnreadRow("feed-row-2");
+    await clearAllAt(1_750_000_000_000);
+    await refreshStatusWith(allReceipts);
+    expect(alertTexts()).toHaveLength(1);
+    expect(alertTexts()[0]).toContain("Charlie tower");
   });
 });
