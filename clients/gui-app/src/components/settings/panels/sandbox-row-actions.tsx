@@ -28,6 +28,7 @@ import {
 } from "@/components/hosts/sandbox-confirm-dialogs";
 import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import { AutomationTerminalOpenError } from "@/components/settings/panels/automation-terminal-open-error";
 import { restingVerb } from "@/components/composer/use-sandbox-staging";
 import {
   startStagedTerminal,
@@ -221,6 +222,12 @@ export function SandboxRowActions(props: {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2">
+      {summary.kind === "automation" && openAutomationTerminal.failed ? (
+        <AutomationTerminalOpenError
+          onRetry={openAutomationTerminal.run}
+          pending={openAutomationTerminal.starting}
+        />
+      ) : null}
       {giveAnother === null ? null : (
         <Button
           type="button"

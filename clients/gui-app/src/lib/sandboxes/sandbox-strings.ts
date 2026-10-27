@@ -450,6 +450,19 @@ export const OPEN_TERMINAL = "Open terminal";
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
 export const SANDBOX_READY = "Sandbox ready";
+/** The setup line names the sandbox; a row's button passes `null`. */
+export function stoppingSandboxLine(name: string | null): string {
+  return `Stopping${name === null ? "" : ` ${name}`} · pending`;
+}
+export function stoppedSandboxLine(
+  name: string,
+  savedInDrafts: boolean,
+): string {
+  return `Stopped ${name}. Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
+}
+export function couldntStopLine(name: string): string {
+  return `Couldn't stop ${name}`;
+}
 /** The settled line's time to ready: `24 s`. */
 export function readySecondsLabel(seconds: number): string {
   return `${seconds} s`;
@@ -498,17 +511,20 @@ export const COPY_SUPPORT_REFERENCE = "Copy support reference";
 export const DETAILS = "Details";
 export const START_NEW_WORK_ON_ANOTHER_HOST = "Start new work on another host";
 
-const ROW_VERB_PENDING: Record<SandboxLifecycleVerb | "destroy", string> = {
+const ROW_VERB_PENDING: Record<
+  Exclude<SandboxLifecycleVerb, "stop"> | "destroy",
+  string
+> = {
   start: "Starting · pending",
   resume: "Resuming · pending",
   suspend: "Suspending · pending",
-  stop: "Stopping · pending",
   destroy: "Destroying · pending",
 };
 
 export function sandboxVerbPendingLine(
   verb: SandboxLifecycleVerb | "destroy",
 ): string {
+  if (verb === "stop") return stoppingSandboxLine(null);
   return ROW_VERB_PENDING[verb];
 }
 
@@ -517,7 +533,9 @@ export function sandboxVerbFailureLine(
   name: string,
   reference: string,
 ): string {
-  return `Couldn't ${verb} ${name} · ${reference}`;
+  const sentence =
+    verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
+  return `${sentence} · ${reference}`;
 }
 
 /** `payments-ledger is awake, but Acme's settings didn't apply`. */

@@ -329,15 +329,15 @@ function dispatchLandingTerminalClose(args: {
  *
  * `target.availability` is the TERMINAL target host's verdict, and it decides
  * two things about this panel: whether the panel is mounted at all, and whether
- * its body is replaced by a status line. Both are correct for a terminal row,
- * which is served by that device.
+ * its body is replaced by a status line. Both are correct for a legacy terminal
+ * row, which needs that host's capability and launch context.
  *
- * A BROWSER row is not. It is maintained through its own device's independent
- * coordinator, its tile renders that device's own reconnecting and dormant
- * state, and none of that is the target's to answer for - so a target that is
- * unsupported, unselected or still resolving must not take a working page off
- * screen and replace it with a sentence about a machine it has nothing to do
- * with.
+ * A BROWSER row, and a terminal row its own host has acknowledged, are not.
+ * Each follows its own bound host's lifecycle and renders that host's own
+ * reconnecting and dormant state, and none of that is the target's to answer
+ * for - so a target that is unsupported, unselected or still resolving must
+ * not take a working tile off screen and replace it with a sentence about a
+ * machine it has nothing to do with.
  *
  * This is the rule in ONE place on purpose. It was first written as a term
  * inside the body's status branch, and the mount decision above that branch
@@ -348,7 +348,9 @@ function dispatchLandingTerminalClose(args: {
 function landingTargetVerdictGoverns(
   rows: ReadonlyArray<LandingPanelTabRef>,
 ): boolean {
-  return landingBrowserTabs(rows).length === 0;
+  return rows.every(
+    (row) => row.kind === "terminal" && row.hostAuthorityAcknowledged !== true,
+  );
 }
 
 /**
