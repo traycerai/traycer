@@ -1042,8 +1042,10 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
+  browserSessionsV23,
 } from "@traycer/protocol/host/browser/contracts";
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
+import { browserCatalogReadV10 } from "@traycer/protocol/host/browser/discovery-contracts";
 import {
   configSimulatorGetV10,
   configSimulatorSetV10,
@@ -6131,6 +6133,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: organizationHistoryV11,
           upgradeFromPreviousVersion: organizationHistoryUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "browser.catalog.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserCatalogReadV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -14839,7 +14854,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: browserSessionsV20,
@@ -14850,6 +14865,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         2: {
           contract: browserSessionsV22,
         },
+        3: { contract: browserSessionsV23 },
       },
     },
   },

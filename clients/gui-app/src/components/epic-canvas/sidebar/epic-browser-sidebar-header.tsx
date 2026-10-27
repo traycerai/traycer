@@ -1,16 +1,11 @@
-import { ListFilter, Plus, RotateCcw, Search } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { ListFilter, RotateCcw, Search } from "lucide-react";
+import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -23,12 +18,10 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
-import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
-import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import { BrowserCreatePicker } from "./browser-create-picker";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
@@ -40,7 +33,7 @@ import {
   useSurfaceHostPin,
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
-import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useBrowserPanelPreferences } from "@/stores/epics/browser-panel-store";
 import {
   usePanelHeaderSearchOpen,
   usePanelHeaderSearchQuery,
@@ -57,50 +50,8 @@ export const BROWSERS_PANEL_ID = "browsers";
 const FOLLOW_TASK_HOST_VALUE = "browser-follow-task-host";
 
 export function BrowsersPanelActions(props: LeftPanelSlotProps) {
-  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
-  return (
-    <BrowserSessionsHostBoundary
-      hostId={hostPin.resolvedHostId}
-      scope={{ kind: "epic", epicId: props.epicId }}
-    >
-      <BrowsersPanelActionsLive {...props} />
-    </BrowserSessionsHostBoundary>
-  );
-}
-
-function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   const searchOpen = usePanelHeaderSearchOpen(props.tabId, BROWSERS_PANEL_ID);
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
-  const surfaceKey = useTabSurfaceKey("browsers", props.tabId);
-  const hostPin = useSurfaceHostPin(surfaceKey);
-  const filterOpen = usePanelHeaderMenuOpen(
-    props.tabId,
-    BROWSERS_PANEL_ID,
-    "filter",
-  );
-  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
-  const [hostMenuOpen, setHostMenuOpen] = useState(false);
-  const resolvedHost = useHostDirectoryEntryForHostId(hostPin.resolvedHostId);
-  const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
-  const placement = useColumnOverlayPlacement("row");
-  const handleAdd = useCallback(() => {
-    addBrowser();
-  }, [addBrowser]);
-  const handleSearch = useCallback(() => {
-    openSearch(props.tabId, BROWSERS_PANEL_ID, "");
-  }, [openSearch, props.tabId]);
-  const handleFilterOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) setHostMenuOpen(false);
-      setMenuOpen(props.tabId, BROWSERS_PANEL_ID, "filter", open);
-    },
-    [props.tabId, setMenuOpen],
-  );
-  const filterLabel = hostPin.isPinned
-    ? "Filter browsers by host, 1 filter active"
-    : "Filter browsers by host";
-  const hostSummary =
-    resolvedHost?.label ?? (hostPin.isPinned ? "Selected host" : "Task host");
   return (
     <>
       {searchOpen ? null : (
@@ -110,90 +61,103 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           size="icon-sm"
           aria-label="Search browsers"
           data-testid="epic-browsers-panel-search"
-          onClick={handleSearch}
+          onClick={() => openSearch(props.tabId, BROWSERS_PANEL_ID, "")}
         >
           <Search className="size-4" aria-hidden />
         </Button>
       )}
-      <Button
-        type="button"
-        variant="muted"
-        size="icon-sm"
-        aria-label="Add browser"
-        data-testid="epic-browsers-panel-add"
-        disabled={isAdding}
-        onClick={handleAdd}
-      >
-        <Plus className="size-4" aria-hidden />
-      </Button>
-      <DropdownMenu open={filterOpen} onOpenChange={handleFilterOpenChange}>
-        <TooltipWrapper
-          label={filterLabel}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="muted"
-              size="icon-sm"
-              aria-label={filterLabel}
-              data-testid="epic-browsers-panel-filter"
-              className="relative"
-            >
-              <ListFilter className="size-4" aria-hidden />
-              {hostPin.isPinned ? (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
-                >
-                  1
-                </span>
-              ) : null}
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipWrapper>
-        <DropdownMenuContent
-          side={placement?.side ?? "right"}
-          align={placement?.align ?? "start"}
-          sideOffset={8}
-          avoidCollisions={false}
-          className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
-          data-testid="epic-browsers-panel-filter-menu"
-        >
-          <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
-          <DropdownMenuSub open={hostMenuOpen} onOpenChange={setHostMenuOpen}>
-            <DropdownMenuSubTrigger
-              aria-label={`Host, ${hostSummary}`}
-              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
-              onClick={() => setHostMenuOpen(true)}
-            >
-              <span className="min-w-0 truncate">Host</span>
-              <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
-                {hostSummary}
-              </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent
-              sideOffset={8}
-              alignOffset={-4}
-              avoidCollisions={placement?.side === "left"}
-              className="w-[min(90vw,20rem)]"
-              data-testid="epic-browsers-panel-host-menu"
-            >
-              <BrowserHostFilterChoices surfaceKey={surfaceKey} />
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <BrowserCreatePicker
+        epicId={props.epicId}
+        tabId={props.tabId}
+        onOpened={null}
+        testId="epic-browsers-panel-add"
+        trigger="icon"
+      />
+      <BrowserOfflineFilter
+        epicId={props.epicId}
+        tabId={props.tabId}
+        mobile={false}
+      />
     </>
   );
 }
 
+/** One offline preference shared by the rail and task switcher. */
+export function BrowserOfflineFilter(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly mobile: boolean;
+}) {
+  const preferences = useBrowserPanelPreferences(props.epicId);
+  const filterOpen = usePanelHeaderMenuOpen(
+    props.tabId,
+    BROWSERS_PANEL_ID,
+    "filter",
+  );
+  const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
+  const placement = useColumnOverlayPlacement("row");
+  const label = preferences.showOffline
+    ? "Filter browsers, 1 filter active"
+    : "Filter browsers";
+  const surfaceKey = useTabSurfaceKey("browsers", props.tabId);
+  return (
+    <DropdownMenu
+      open={filterOpen}
+      onOpenChange={(open) =>
+        setMenuOpen(props.tabId, BROWSERS_PANEL_ID, "filter", open)
+      }
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="muted"
+          size="icon-sm"
+          aria-label={label}
+          data-testid={
+            props.mobile
+              ? "switcher-browsers-filter"
+              : "epic-browsers-panel-filter"
+          }
+          className="relative"
+        >
+          <ListFilter className="size-4" aria-hidden />
+          {preferences.showOffline ? (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
+            >
+              1
+            </span>
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side={props.mobile ? "bottom" : (placement?.side ?? "right")}
+        align={props.mobile ? "end" : (placement?.align ?? "start")}
+        className="w-max"
+        data-testid="epic-browsers-panel-filter-menu"
+      >
+        <DropdownMenuCheckboxItem
+          checked={preferences.showOffline}
+          onCheckedChange={preferences.setShowOffline}
+        >
+          Show offline devices
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Simulator device</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-[min(90vw,20rem)]">
+            <BrowserHostFilterChoices surfaceKey={surfaceKey} />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /**
- * The radio list behind the panel's host filter: follow the task default, or pin
- * a specific one. Exported because the mobile switcher's Browsers category
- * mounts the same choices in its own menu shell rather than restating them.
+ * The simulator inventory keeps its existing selected-device scope.
+ * Browser discovery does not read or write this selection.
  */
 export function BrowserHostFilterChoices(props: {
   readonly surfaceKey: string;
@@ -209,7 +173,7 @@ export function BrowserHostFilterChoices(props: {
       ?.name ?? "Task host";
   return (
     <>
-      <DropdownMenuLabel>Show browsers from</DropdownMenuLabel>
+      <DropdownMenuLabel>Simulator device</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={value}>
         <DropdownMenuRadioItem
           value={FOLLOW_TASK_HOST_VALUE}
@@ -218,7 +182,7 @@ export function BrowserHostFilterChoices(props: {
             hostPin.setSelection(null);
           }}
         >
-          <span className="min-w-0 flex-1 truncate">Follow task host</span>
+          <span className="min-w-0 flex-1 truncate">Follow task device</span>
           <DropdownMenuShortcut>{followingHostName}</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
         {pickableHosts.length > 0 ? <DropdownMenuSeparator /> : null}

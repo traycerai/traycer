@@ -7,6 +7,7 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
+  browserSessionsV23,
 } from "@traycer/protocol/host/browser/contracts";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -78,13 +79,14 @@ describe("browser.sessions@2.1 burst and caption frames", () => {
     ).toBe(false);
   });
 
-  it("advertises sessions 2.2 and screencast 2.1 as latest while retaining the earlier contracts", () => {
+  it("advertises sessions 2.3 and screencast 2.1 as latest while retaining the earlier contracts", () => {
     const sessions = hostStreamRpcRegistry["browser.sessions"][2];
     const screencast = hostStreamRpcRegistry["browser.screencast"][2];
-    expect(sessions.latestMinor).toBe(2);
+    expect(sessions.latestMinor).toBe(3);
     expect(sessions.versions[0]?.contract).toBe(browserSessionsV20);
     expect(sessions.versions[1]?.contract).toBe(browserSessionsV21);
     expect(sessions.versions[2]?.contract).toBe(browserSessionsV22);
+    expect(sessions.versions[3]?.contract).toBe(browserSessionsV23);
     expect(screencast.latestMinor).toBe(1);
     expect(screencast.versions[0]?.contract).toBe(browserScreencastV20);
     expect(screencast.versions[1]?.contract).toBe(browserScreencastV21);

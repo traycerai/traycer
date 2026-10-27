@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -28,6 +28,12 @@ import {
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
+import { BrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
+import { useBrowserPanelStore } from "@/stores/epics/browser-panel-store";
+import {
+  BROWSER_CATALOG_VERSION,
+  type BrowserCatalogRecord,
+} from "@traycer/protocol/host/browser/catalog-contracts";
 
 const browserHostPinState = vi.hoisted(() => ({
   selection: null as string | null,
@@ -48,16 +54,51 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
   useSurfaceHostClient: () => null,
 }));
 
+const hostListState = vi.hoisted(() => ({
+  hosts: [] as Array<{
+    hostId: string;
+    name: string;
+    connectable: boolean;
+    sandbox: null;
+    entry: null;
+    item: null;
+    health: { state: string };
+  }>,
+}));
+
+function hostOption(hostId: string, name: string, state: string) {
+  return {
+    hostId,
+    name,
+    connectable: true,
+    sandbox: null,
+    entry: null,
+    item: null,
+    health: { state },
+  };
+}
+
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
-    hosts: [
-      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
-    ],
+    hosts: hostListState.hosts,
     activeHostId: "host-1",
     isLoading: false,
+    listsResolved: true,
     listsFailed: false,
     retryLists: vi.fn(),
   }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => "host-1",
+}));
+
+const catalogActions = vi.hoisted(() => ({
+  closeTab: vi.fn(),
+  withOwner: vi.fn(),
+}));
+vi.mock("@/hooks/browser/use-browser-catalog-actions", () => ({
+  useBrowserCatalogActions: () => catalogActions,
 }));
 
 vi.mock("@/components/settings/host-scope/host-option-row", () => ({
@@ -133,9 +174,15 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState }>(() => ({
   },
 }));
 
-vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useBrowserSessionsContext: () => sessionsState.value,
-}));
+vi.mock(
+  "@/components/epic-canvas/renderers/browser-sessions-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-canvas/renderers/browser-sessions-context")
+    >()),
+    useBrowserSessionsContext: () => sessionsState.value,
+  }),
+);
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => [{ id: "chat-driver", title: "Checkout agent" }],
@@ -209,6 +256,12 @@ function renderList(onClose: () => void) {
   );
 }
 
+/** The header "+" opens the device picker; the choice is what creates. */
+async function addBrowserOnHome(user: UserEvent): Promise<void> {
+  await user.click(screen.getAllByRole("button", { name: "Add browser" })[0]);
+  await user.click(await screen.findByRole("menuitem", { name: /Home Mac/ }));
+}
+
 function openTiles(): ReadonlyArray<{ readonly type: string }> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
   if (canvas === undefined) return [];
@@ -219,11 +272,19 @@ function openTiles(): ReadonlyArray<{ readonly type: string }> {
 
 describe("SwitcherBrowsersList", () => {
   beforeEach(() => {
+    hostListState.hosts = [hostOption("host-1", "Home Mac", "online")];
     seedCanvasTab();
     browserHostPinState.selection = null;
     closeTab.mockReset();
     openTab.mockReset();
     navigateNested.mockClear();
+    catalogActions.closeTab.mockReset();
+    catalogActions.withOwner.mockReset();
+    catalogActions.withOwner.mockImplementation(
+      (hostId: string, run: (state: BrowserSessionsState) => Promise<void>) =>
+        run({ ...sessionsState.value, hostId }),
+    );
+    vi.mocked(toast.error).mockClear();
     sessionsState.value = {
       ...sessionsState.value,
       prepareOpenTab: fakePrepareOpenTab({
@@ -331,6 +392,7 @@ describe("SwitcherBrowsersList", () => {
   });
 
   it("offers Add browser on a list that already has rows, and closes on the tile", async () => {
+    const user = userEvent.setup();
     const onClose = vi.fn();
     openTab.mockResolvedValue({
       sessionId: "sess-2",
@@ -339,22 +401,7 @@ describe("SwitcherBrowsersList", () => {
     });
     renderList(onClose);
 
-    // A list with rows renders no empty state, so the header "+" is the only
-    // control carrying this name here - the two-match case is pinned by its own
-    // test below.
-    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
-
-    // Synchronous with the click: a pending placeholder, not yet the real
-    // tab, so no sessionId/tabId is assignable to it yet. (`fireEvent`, not
-    // `userEvent`, so this assertion lands before the already-resolved
-    // `openTab` mock's microtask settles the rebind.)
-    expect(openTiles()).toMatchObject([
-      { type: "browser-session", sessionId: null, tabId: null },
-    ]);
-    const pendingInstanceId = Object.keys(
-      useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId ??
-        {},
-    ).at(0);
+    await addBrowserOnHome(user);
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledWith(null, "about:blank");
@@ -362,17 +409,13 @@ describe("SwitcherBrowsersList", () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
-    // The host's answer rebinds the SAME tile rather than opening a second
-    // one: one row, same instance id, now pointing at the real tab.
-    expect(openTiles()).toMatchObject([
-      { type: "browser-session", sessionId: "sess-2", tabId: "tab-9" },
-    ]);
-    expect(
-      Object.keys(
-        useEpicCanvasStore.getState().canvasByTabId[TAB_ID]
-          ?.tilesByInstanceId ?? {},
-      ),
-    ).toEqual([pendingInstanceId]);
+    // The host's answer rebinds the one pending tile rather than opening a
+    // second: a single tile, now pointing at the real tab.
+    await waitFor(() => {
+      expect(openTiles()).toMatchObject([
+        { type: "browser-session", sessionId: "sess-2", tabId: "tab-9" },
+      ]);
+    });
   });
 
   it("highlights the rebound row by host/session/tab once a pending add resolves onto it, even though the active tile's node id stays the pending one", async () => {
@@ -410,16 +453,7 @@ describe("SwitcherBrowsersList", () => {
     expect(cartRow.getAttribute("aria-current")).toBeNull();
     expect(otherHostRow.getAttribute("aria-current")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
-
-    expect(openTiles()).toMatchObject([
-      { type: "browser-session", sessionId: null, tabId: null },
-    ]);
-
-    const pendingInstanceId = Object.keys(
-      useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId ??
-        {},
-    ).at(0);
+    await addBrowserOnHome(userEvent.setup());
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledWith(null, "about:blank");
@@ -427,13 +461,7 @@ describe("SwitcherBrowsersList", () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
-
-    expect(
-      Object.keys(
-        useEpicCanvasStore.getState().canvasByTabId[TAB_ID]
-          ?.tilesByInstanceId ?? {},
-      ),
-    ).toEqual([pendingInstanceId]);
+    expect(openTiles()).toHaveLength(1);
     await waitFor(() => {
       expect(
         screen
@@ -465,7 +493,7 @@ describe("SwitcherBrowsersList", () => {
       name: "Add browser",
     });
 
-    await user.click(add);
+    await addBrowserOnHome(user);
     await waitFor(() => {
       expect(add.disabled).toBe(true);
     });
@@ -480,10 +508,13 @@ describe("SwitcherBrowsersList", () => {
     replaceSessions([], "failed");
     renderList(onClose);
 
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    await addBrowserOnHome(user);
 
     // Nothing opened, so there is nothing for the sheet to get out of the way
     // of - and leaving would take this state's Retry with it.
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalled();
+    });
     expect(openTab).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
@@ -495,13 +526,14 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockRejectedValue(new Error("no runtime"));
     renderList(onClose);
 
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    await addBrowserOnHome(user);
 
-    // `onClose` (the hook's `onOpened`) fires synchronously with the pending
-    // tile at click - before the host has answered at all - so a refusal
-    // arriving later does not get a second dismiss, and the sheet does not
-    // reopen for it either.
-    expect(onClose).toHaveBeenCalledOnce();
+    // `onClose` (the picker's `onOpened`) fires with the pending tile, before
+    // the host has answered at all - so a refusal arriving later does not get
+    // a second dismiss, and the sheet does not reopen for it either.
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledOnce();
+    });
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalled();
@@ -564,7 +596,7 @@ describe("SwitcherBrowsersList", () => {
   it("mounts the desktop empty state, add affordance included", () => {
     replaceSessions([], "live");
     renderList(() => undefined);
-    const empty = screen.getByTestId("epic-browsers-panel-empty");
+    const empty = screen.getByTestId("browser-list-empty-state");
     expect(empty).toBeTruthy();
     // The shared component's plain headline: this task has no browsers this
     // window can see anywhere, so "yet" is the honest word. The other-machine
@@ -588,7 +620,7 @@ describe("SwitcherBrowsersList", () => {
     // Sharing the scroller and holding its natural height is what prevents it.
     replaceSessions([], "live");
     renderList(() => undefined);
-    const empty = screen.getByTestId("epic-browsers-panel-empty");
+    const empty = screen.getByTestId("browser-list-empty-state");
     const simulators = screen.getByTestId("switcher-simulators-section-stub");
     const emptyScroller = empty.closest(".overflow-y-auto");
     const simulatorsScroller = simulators.closest(".overflow-y-auto");
@@ -596,9 +628,6 @@ describe("SwitcherBrowsersList", () => {
     expect(emptyScroller).not.toBeNull();
     expect(simulatorsScroller).not.toBeNull();
     expect(emptyScroller).toBe(simulatorsScroller);
-    const wrapper = empty.parentElement;
-    expect(wrapper?.classList.contains("shrink-0")).toBe(true);
-    expect(wrapper?.classList.contains("grow")).toBe(true);
   });
 
   it("keeps the rows reachable when the session stream drops", () => {
@@ -621,7 +650,7 @@ describe("SwitcherBrowsersList", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("names the host update as the remedy, with no retry, when the host has no browsers", () => {
+  it("names the host update as the remedy, with no retry, when the host has no browsers", async () => {
     // A host from before browsers existed refuses the stream at handshake.
     // Retrying cannot change that, so the state carries the remedy instead of
     // a button - and the "+" tells the same story rather than "not connected".
@@ -635,13 +664,185 @@ describe("SwitcherBrowsersList", () => {
     expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
     expect(screen.getByText(BROWSERS_UNSUPPORTED_MESSAGE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByTestId("epic-browsers-panel-empty")).toBeNull();
+    expect(screen.queryByTestId("browser-list-empty-state")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
-    return waitFor(() => {
+    catalogActions.withOwner.mockRejectedValue(
+      new Error(BROWSERS_UNSUPPORTED_MESSAGE),
+    );
+    await addBrowserOnHome(userEvent.setup());
+    await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
         BROWSERS_UNSUPPORTED_MESSAGE,
       );
     });
+  });
+});
+
+describe("SwitcherBrowsersList over the task-wide catalog", () => {
+  function record(
+    hostId: string,
+    sessionId: string,
+    tabId: string,
+    title: string,
+  ): BrowserCatalogRecord {
+    return {
+      epicId: "epic-1",
+      hostId,
+      sessionId,
+      inventoryRevision: 1,
+      lastActivityAt: 1,
+      tabs: [{ tabId, title, url: `https://${tabId}.example` }],
+    };
+  }
+
+  function renderCatalog() {
+    return renderCatalogRevoking([]);
+  }
+
+  function catalogTree(revokedHostIds: readonly string[]): ReactNode {
+    const records = [
+      record("host-1", "s1", "t1", "Docs"),
+      record("host-2", "s2", "t2", "Docs"),
+      record("host-3", "s3", "t3", "Router"),
+    ];
+    return (
+      <QueryClientProvider client={testQueryClient}>
+        <TooltipProvider delayDuration={0}>
+          <BrowserCatalogContext.Provider
+            value={{
+              inventory: {
+                status: "available",
+                records,
+                readiness: records.map((entry) => ({
+                  hostId: entry.hostId,
+                  state: "complete",
+                  indexingRevision: 1,
+                  capability: {
+                    catalogVersion: BROWSER_CATALOG_VERSION,
+                    durableInventoryRevisions: true,
+                    revisionedMutationAcks: true,
+                  },
+                })),
+                version: 1,
+                pendingCount: 0,
+                revokedHostIds,
+              },
+              hosts: new Map(),
+              refresh: vi.fn(),
+            }}
+          >
+            <SwitcherBrowsersList
+              epicId="epic-1"
+              tabId={TAB_ID}
+              onClose={() => undefined}
+            />
+          </BrowserCatalogContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  function renderCatalogRevoking(revokedHostIds: readonly string[]) {
+    return render(catalogTree(revokedHostIds));
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+    seedCanvasTab();
+    catalogActions.closeTab.mockReset();
+    catalogActions.closeTab.mockResolvedValue(undefined);
+    closeTab.mockReset();
+    replaceSessions([], "live");
+  });
+
+  afterEach(cleanup);
+
+  it("groups tabs by device with the same offline default as the desktop list", () => {
+    hostListState.hosts = [
+      hostOption("host-1", "Home Mac", "online"),
+      hostOption("host-2", "Work Mac", "unknown"),
+      hostOption("host-3", "NAS", "offline"),
+    ];
+    renderCatalog();
+
+    expect(
+      screen.getByTestId("browser-device-group-host-1").textContent,
+    ).toContain("Local");
+    expect(
+      screen.getByTestId("browser-device-group-host-2").textContent,
+    ).toContain("Work Mac");
+    expect(screen.queryByTestId("browser-device-group-host-3")).toBeNull();
+    expect(screen.getAllByText("Docs")).toHaveLength(2);
+  });
+
+  it("shows offline devices once the shared filter is switched on", async () => {
+    const user = userEvent.setup();
+    hostListState.hosts = [
+      hostOption("host-1", "Home Mac", "online"),
+      hostOption("host-2", "Work Mac", "online"),
+      hostOption("host-3", "NAS", "offline"),
+    ];
+    renderCatalog();
+
+    await user.click(screen.getByTestId("switcher-browsers-filter"));
+    await user.click(
+      await screen.findByRole("menuitemcheckbox", {
+        name: "Show offline devices",
+      }),
+    );
+
+    expect(
+      screen.getByTestId("browser-device-group-host-3").textContent,
+    ).toContain("Offline");
+  });
+
+  it("closes a tab through its owning device", async () => {
+    const user = userEvent.setup();
+    hostListState.hosts = [
+      hostOption("host-1", "Home Mac", "online"),
+      hostOption("host-2", "Work Mac", "online"),
+    ];
+    renderCatalog();
+
+    await user.click(screen.getAllByRole("button", { name: /^Close Docs/ })[1]);
+
+    await waitFor(() => {
+      expect(catalogActions.closeTab).toHaveBeenCalledWith(
+        { epicId: "epic-1", hostId: "host-2", sessionId: "s2" },
+        "t2",
+      );
+    });
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("omits a revoked device's tabs and its create choice even while the device is online", async () => {
+    const user = userEvent.setup();
+    hostListState.hosts = [
+      hostOption("host-1", "Home Mac", "online"),
+      hostOption("host-2", "Work Mac", "online"),
+    ];
+    renderCatalogRevoking(["host-2"]);
+
+    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
+    expect(screen.getByTestId("browser-device-group-host-1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    expect(screen.queryByRole("menuitem", { name: /Work Mac/ })).toBeNull();
+  });
+
+  it("drops a device's tabs and create choice when it is revoked after the list is showing", async () => {
+    const user = userEvent.setup();
+    hostListState.hosts = [
+      hostOption("host-1", "Home Mac", "online"),
+      hostOption("host-2", "Work Mac", "online"),
+    ];
+    const view = renderCatalogRevoking([]);
+    expect(screen.getByTestId("browser-device-group-host-2")).toBeTruthy();
+
+    view.rerender(catalogTree(["host-2"]));
+
+    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    expect(screen.queryByRole("menuitem", { name: /Work Mac/ })).toBeNull();
   });
 });
