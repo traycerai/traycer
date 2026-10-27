@@ -1,11 +1,14 @@
 import { useMemo } from "react";
 import {
   useMutation,
-  useMutationState,
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
@@ -169,13 +172,13 @@ function purgeIntentsForRemovedWorktrees(
 export function useSweepingWorktreePaths(
   hostId: string | null,
 ): ReadonlySet<string> {
-  const pendingVariables = useMutationState({
-    filters: {
+  const pendingVariables = useMutationStateOf(
+    {
       mutationKey: epicMutationKeys.sweepWorktrees(),
       status: "pending",
     },
-    select: (mutation) => mutation.state.variables,
-  });
+    selectMutationVariables,
+  );
   return useMemo(
     () => sweepingWorktreePathsForHost(pendingVariables, hostId),
     [hostId, pendingVariables],

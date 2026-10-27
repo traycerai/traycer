@@ -1,5 +1,6 @@
 import {
   MutationCache,
+  type MutationCacheNotifyEvent,
   QueryCache,
   QueryClient,
   type QueryKey,
@@ -30,6 +31,20 @@ const SAFE_QUERY_KEY_MARKERS = new Set([
   "fileDiff",
 ]);
 
+class AppMutationCache extends MutationCache {
+  override notify(event: MutationCacheNotifyEvent): void {
+    // Only pending mutations receive changed observer options. Idle and
+    // settled observers otherwise wake every cache watcher on each commit.
+    if (
+      event.type === "observerOptionsUpdated" &&
+      event.mutation?.state.status !== "pending"
+    ) {
+      return;
+    }
+    super.notify(event);
+  }
+}
+
 /**
  * Builds a `QueryClient` with the app's production configuration. Exported
  * (rather than only the singleton below) so integration tests can run against
@@ -51,7 +66,7 @@ export function createAppQueryClient(): QueryClient {
         });
       },
     }),
-    mutationCache: new MutationCache({
+    mutationCache: new AppMutationCache({
       onError: (error, _variables, _context, mutation) => {
         appLogger.warn("[mutation] request failed", {
           mutationKey: summarizeQueryKey(mutation.options.mutationKey ?? []),
