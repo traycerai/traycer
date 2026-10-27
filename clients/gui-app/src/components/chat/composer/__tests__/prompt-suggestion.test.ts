@@ -147,7 +147,10 @@ function acceptKeyDown(init: KeyboardEventInit): KeyboardEvent {
   return new KeyboardEvent("keydown", { cancelable: true, ...init });
 }
 
-const ARROW_RIGHT: KeyboardEventInit = { key: "ArrowRight", code: "ArrowRight" };
+const ARROW_RIGHT: KeyboardEventInit = {
+  key: "ArrowRight",
+  code: "ArrowRight",
+};
 const TAB: KeyboardEventInit = { key: "Tab", code: "Tab" };
 
 describe("isPromptSuggestionAcceptEvent", () => {
