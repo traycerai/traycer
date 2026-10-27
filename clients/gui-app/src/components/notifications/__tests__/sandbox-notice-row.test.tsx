@@ -39,6 +39,7 @@ import {
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { createFakeSandboxBinding } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { useNeedsYouTaskCountStore } from "@/stores/notifications/needs-you-task-count-store";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 
 const hostRequestMock = vi.hoisted(() =>
   vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
@@ -153,15 +154,15 @@ function Shell(): ReactNode {
   const shellRef = useRef<HTMLDivElement>(null);
   return (
     <>
-    <NotificationsBell />
-    <NotificationsPopover
-      variant="center"
-      onNavigate={() => undefined}
-      headingRef={headingRef}
-      shellRef={shellRef}
-      shellStyle={{}}
-      onFilterMenuOpenChange={() => undefined}
-    />
+      <NotificationsBell />
+      <NotificationsPopover
+        variant="center"
+        onNavigate={() => undefined}
+        headingRef={headingRef}
+        shellRef={shellRef}
+        shellStyle={{}}
+        onFilterMenuOpenChange={() => undefined}
+      />
     </>
   );
 }
@@ -239,6 +240,7 @@ describe("a sandbox.notice row in the notification center", () => {
       summary: { unreadCount: 0, attentionCount: 0 },
     });
     resetSandboxesPage();
+    useNotificationsPopoverStore.getState().setOpen(false);
     useNeedsYouTaskCountStore.setState({ count: 0 });
   });
 
@@ -291,7 +293,7 @@ describe("a sandbox.notice row in the notification center", () => {
     expect(screen.queryByTestId("notifications-needs-you-count")?.textContent ?? null).toBe(actionable ? "1" : null);
   });
 
-  it("keeps a read warning actionable and adds it to the task count", async () => {
+  it("keeps a read warning with no resolvedAt actionable and adds it to the task count", async () => {
     const warning = noticeRow("entry-read", WARNING, "needs_action");
     seedCloud([{ ...warning, entry: { ...warning.entry, readAt: Date.now() } }]);
     useNeedsYouTaskCountStore.setState({ count: 2 });
@@ -300,6 +302,42 @@ describe("a sandbox.notice row in the notification center", () => {
     await screen.findByText("Needs attention");
     expect(screen.getByTestId("notifications-bell").getAttribute("aria-label")).toBe("Notifications, 3 need you");
     expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("3");
+  });
+
+  it("mark all read acknowledges warnings without retiring them", async () => {
+    seedCloud([noticeRow("entry-bulk-read", WARNING, "needs_action")]);
+    renderCenter();
+    fireEvent.click(await screen.findByRole("button", { name: "Mark all notifications as read" }));
+    await waitFor(() => expect(hostCalls("host.notifications.cloudFeed.markAllRead")).toHaveLength(1));
+    expect(screen.getByText("Needs attention")).not.toBeNull();
+    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("1");
+  });
+
+  it("a resolved warning relayed by the server is recent even if unread", async () => {
+    const row = noticeRow("entry-resolved", WARNING, "needs_action");
+    seedCloud([{ ...row, entry: { ...row.entry, resolvedAt: Date.now() } }]);
+    renderCenter();
+    await screen.findByText("Recent activity");
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
+  });
+
+  it("counts settings that did not apply alongside task prompts and sandbox warnings", async () => {
+    const row: HostNotificationsCloudFeedRowV15 = {
+      ...noticeRow("entry-settings", WARNING, "needs_action"),
+      entry: {
+        id: "entry-settings", kind: "environment.apply.failed", severity: "needs_action",
+        updatedAt: Date.now(), readAt: Date.now(), sourceRef: null, outcome: "errored", epicId: null, chatId: null,
+        payload: { kind: "environment_apply_failed", environmentId: "env-settings", hostId: "host-cloud", hostName: "Sandbox", itemKey: "settings", reason: "unavailable" },
+      },
+    };
+    seedCloud([row, noticeRow("entry-warning", WARNING, "needs_action")]);
+    useNeedsYouTaskCountStore.setState({ count: 2 });
+    renderCenter();
+    await screen.findByText("Needs attention");
+    expect(screen.getByTestId("notifications-bell").getAttribute("aria-label")).toBe("Notifications, 4 need you");
+    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("4");
   });
 
   it("reading Details acknowledges a warning without retiring it", async () => {
@@ -373,7 +411,8 @@ describe("a sandbox.notice row in the notification center", () => {
   });
 
   it("extends with the row's own period, then retires the warning to Recent activity", async () => {
-    seedCloud([noticeRow("entry-warning", WARNING, "needs_action")]);
+    const warning = noticeRow("entry-warning", WARNING, "needs_action");
+    seedCloud([warning]);
     renderCenter();
 
     fireEvent.click(await screen.findByText("Give it another 5 minutes"));
@@ -395,6 +434,9 @@ describe("a sandbox.notice row in the notification center", () => {
       expect(screen.getByText("Recent activity")).not.toBeNull();
       expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
     });
+    // The deployed pool strips resolvedAt until its protocol pin is rebuilt.
+    act(() => seedCloud([warning]));
+    expect(screen.queryByText("Needs attention")).toBeNull();
   });
 
   it("opens Settings › Sandboxes on that sandbox from Details", async () => {
@@ -423,6 +465,7 @@ describe("a sandbox.notice row in the notification center", () => {
       ]);
     });
     expect(sandbox.auth.patchSandbox).not.toHaveBeenCalled();
+    act(() => seedCloud([]));
     await waitFor(() => {
       expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
       expect(screen.queryByTestId("notification-entry")).toBeNull();
@@ -439,5 +482,15 @@ describe("a sandbox.notice row in the notification center", () => {
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual(["Details", "Dismiss"]);
+  });
+
+  it("retires a used action even while the relay cannot confirm its resolve marker", async () => {
+    hostRequestMock.mockResolvedValue({ status: "unavailable", version: null });
+    seedCloud([noticeRow("entry-relay-unavailable", WARNING, "needs_action")]);
+    renderCenter();
+    fireEvent.click(await screen.findByText("Give it another 5 minutes"));
+    await waitFor(() => expect(hostCalls("host.notifications.cloudFeed.resolve")).toHaveLength(1));
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   });
 });
