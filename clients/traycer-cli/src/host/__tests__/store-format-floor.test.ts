@@ -1387,6 +1387,97 @@ describe("assertStoreFormatFloorAfterStop", () => {
     expect(warnedMessage).toContain("still running");
   });
 
+  describe("a first install the service manager gap leaves unproven", () => {
+    // Nothing installed, a target that declares its format: the formats cannot
+    // settle the move, so the quiescence reading decides it.
+    async function firstInstall(
+      quiescence: SwapQuiescence,
+      acceptStoreFormatLoss: boolean,
+      logger: ILogger,
+    ): Promise<void> {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.3.0",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: null,
+        installedStoreFormats: null,
+        observeQuiescence: async () => quiescence,
+        acceptStoreFormatLoss,
+        site: "host install",
+        logger,
+      });
+    }
+
+    it("service-manager-unreachable refuses in the person's terms - no format wording and no override to offer", async () => {
+      let thrown: unknown;
+      try {
+        await firstInstall(
+          { established: false, reason: "service-manager-unreachable" },
+          false,
+          fakeLogger(),
+        );
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      const err = thrown as CliError;
+      expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+      expect(err.message).toBe(
+        "host install: Traycer can't reach your systemd user session, so it can't confirm that no host will start during the install. Nothing has been replaced. Run this from a desktop or login session.",
+      );
+      expect(err.message).not.toContain("accept-store-format-loss");
+      const details = err.details as {
+        readonly verdict: string;
+        readonly quiescenceGap: string;
+      };
+      expect(details.verdict).toBe("quiescence-unproven");
+      expect(details.quiescenceGap).toBe("service-manager-unreachable");
+    });
+
+    it("--accept-store-format-loss still bypasses a service-manager-unreachable gap, and the warn names the gap", async () => {
+      const logger = fakeLogger();
+
+      await expect(
+        firstInstall(
+          { established: false, reason: "service-manager-unreachable" },
+          true,
+          logger,
+        ),
+      ).resolves.toBeUndefined();
+
+      const warnCall = logger.calls.find((call) => call.level === "warn");
+      expect(warnCall?.fields.quiescenceGap).toBe(
+        "service-manager-unreachable",
+      );
+    });
+
+    it("service-may-respawn keeps the formats wording and the override hint", async () => {
+      let thrown: unknown;
+      try {
+        await firstInstall(
+          { established: false, reason: "service-may-respawn" },
+          false,
+          fakeLogger(),
+        );
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      const err = thrown as CliError;
+      expect(err.message).toContain("refusing to install host 1.3.0");
+      expect(err.message).toContain(
+        "the service manager still held a host job",
+      );
+      expect(err.message).toContain("--accept-store-format-loss");
+      expect(err.message).not.toContain("systemd user session");
+    });
+  });
+
   it("resolves when quiescence is established and every store is fine", async () => {
     await writeStampedChatDb("epic-fine", 8);
     const logger = fakeLogger();
