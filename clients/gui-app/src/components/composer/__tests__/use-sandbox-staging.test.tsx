@@ -329,6 +329,7 @@ describe("a staged name at create", () => {
         queryClient: client,
         userId: null,
         wake: () => Promise.resolve(false),
+        readSettings: () => Promise.resolve("unsupported"),
         now: Date.now,
         sleep: () => Promise.resolve(),
       });

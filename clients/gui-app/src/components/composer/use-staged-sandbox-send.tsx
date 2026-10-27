@@ -6,7 +6,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
@@ -17,12 +17,19 @@ import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
-import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import {
+  useSandboxRepairGuestConfigurationOnHost,
+  useSandboxSettingsOperation,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
   priceClause,
   stageBalanceMc,
@@ -138,6 +145,38 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             directory: binding.directory,
             queryClient,
             userId,
+            readSettings: async (hostId: string) => {
+              const requestSettings = async () => {
+                const client = resolveNamedHostClient(binding, hostId);
+                if (client === null) throw new Error("Host unavailable");
+                return client.request("environment.status", {});
+              };
+              return queryClient
+                .fetchQuery(
+                  queryOptions({
+                    // A staged wake must not join a status read begun before it.
+                    queryKey: [
+                      ...hostQueryKeys.method<
+                        HostRpcRegistry,
+                        "environment.status"
+                      >(hostId, "environment.status", {}),
+                      "sandbox-settings",
+                      uuidv4(),
+                    ],
+                    queryFn: requestSettings,
+                    staleTime: 0,
+                    gcTime: 0,
+                    retry: false,
+                  }),
+                )
+                .catch((error: unknown) =>
+                  error instanceof HostRpcError &&
+                  error.code === "E_HOST_UNSUPPORTED" &&
+                  error.method === "environment.status"
+                    ? ("unsupported" as const)
+                    : null,
+                );
+            },
             wake: (hostId: string, gesture: SandboxVerbGesture) =>
               startSandboxWake(queryClient, binding, hostId, gesture),
             now: Date.now,
@@ -369,6 +408,8 @@ export function useStagedSandboxSend(input: {
             openStagedShapeSheet(surfaceKey);
           },
           onRetryApplying: newHost.onRetryApplying,
+          applyingPending: newHost.applyingPending,
+          applyingError: newHost.applyingError,
           onStop: () => {
             if (stage.createdSandboxId !== null) verb.mutate("stop");
             useStagedSandboxStore.getState().clear(surfaceKey);
@@ -632,16 +673,26 @@ export function useNewHostActions(
   run: (fresh: boolean) => void,
 ): {
   readonly onRetryApplying: () => void;
+  readonly applyingPending: boolean;
+  readonly applyingError: boolean;
   readonly onOpenTerminal: (() => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
+  const operation = useSandboxSettingsOperation(createdHostId ?? "");
   const terminalTarget = useFolderlessTerminalTarget(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
   );
   return {
+    applyingPending: operation === "pending",
+    applyingError: operation === "failed",
     onRetryApplying: () => {
-      if (surfaceKey === null || createdHostId === null) return;
+      if (
+        surfaceKey === null ||
+        createdHostId === null ||
+        operation === "pending"
+      )
+        return;
       const origin = readStagedSandbox(surfaceKey);
       if (origin === null) return;
       repair.mutate(

@@ -127,18 +127,11 @@ describe("EnvironmentMoveStalledCard", () => {
 });
 
 describe("EnvironmentApplyFailedCard", () => {
-  it("names the item, the host and the reason", () => {
-    render(
-      <EnvironmentApplyFailedCard
-        hostName="dev-box"
-        itemKey="MCP_URL"
-        reason="Permission denied."
-        details={DETAILS}
-      />,
-    );
+  it("names the host while keeping setting keys and raw reasons in diagnostics", () => {
+    render(<EnvironmentApplyFailedCard hostName="dev-box" details={DETAILS} />);
     expect(
       screen.getByTestId("environment-apply-failed-body").textContent,
-    ).toBe("MCP_URL was not applied on dev-box. Permission denied.");
+    ).toBe("dev-box's settings didn't apply.");
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
   });
 });

@@ -26,6 +26,9 @@ import {
   type SandboxSummary,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
@@ -65,8 +68,14 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const mocks = vi.hoisted(() => ({
+  /** The named host's environment.status answer, as its client throws or returns it. */
+  environmentStatus: vi.fn<() => Promise<unknown>>(),
   /** The viewer and the catalogue the setup line's facts are read from. */
   user: null as AuthenticatedUser | null,
   catalogue: null as SandboxCatalogue | null,
@@ -105,6 +114,15 @@ const mocks = vi.hoisted(() => ({
   >(() => Promise.resolve({ kind: "failed", detail: "Test wake stopped" })),
 }));
 
+vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
+  resolveNamedHostClient: () => ({
+    request: (method: string) =>
+      method === "environment.status"
+        ? mocks.environmentStatus()
+        : Promise.reject(new Error(`unexpected ${method}`)),
+  }),
+}));
 vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/sandboxes/staged-sandbox-run")
@@ -122,6 +140,7 @@ vi.mock(
       mocks.repairHostIds.push(hostId);
       return { mutate: mocks.repairMutate };
     },
+    useSandboxSettingsOperation: () => null,
   }),
 );
 // The new host answers with its default cwd as soon as it is named.
@@ -287,7 +306,26 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
   );
 }
 
+function unsupportedEnvironmentStatus(): HostRpcError {
+  return new HostRpcError({
+    code: "E_HOST_UNSUPPORTED",
+    message: "Unsupported.",
+    requestId: "request-1",
+    method: "environment.status",
+    fatalDetails: null,
+  });
+}
+
 beforeEach(() => {
+  // The host named by the run answers environment.status as an older build does.
+  mocks.environmentStatus.mockReset();
+  mocks.environmentStatus.mockRejectedValue(unsupportedEnvironmentStatus());
+  // The new host is a known older build with no environment.status; an unrecorded
+  // manifest would hold a real staged run's handoff.
+  resetNegotiatedManifests();
+  recordNegotiatedHostManifest(NEW_HOST, {
+    "epic.createChat": { major: 1, minor: 2 },
+  });
   mocks.user = null;
   mocks.catalogue = null;
   mocks.sandboxes = null;
@@ -343,6 +381,58 @@ describe("useStagedSandboxSend's setup line", () => {
       expect.objectContaining({ taskId: "epic-1" }),
       expect.any(Object),
     );
+  });
+
+  describe("the run's settings read", () => {
+    function runDeps(): StagedSandboxRunDeps {
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+      fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
+      const deps = mocks.runStagedSandbox.mock.calls.at(0)?.[3];
+      if (deps === undefined) throw new Error("no run started");
+      return deps;
+    }
+
+    it("never releases the send on a network failure, even with the method absent from a stale manifest", async () => {
+      const deps = runDeps();
+      mocks.environmentStatus.mockRejectedValue(new Error("socket closed"));
+
+      expect(await deps.readSettings(NEW_HOST)).toBeNull();
+    });
+
+    it("does not join a status read begun on the normal key before the wake", async () => {
+      const deps = runDeps();
+      let releaseOld: (value: string) => void = () => undefined;
+      const old = new Promise<string>((resolve) => {
+        releaseOld = resolve;
+      });
+      const oldRead = deps.queryClient.fetchQuery({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "environment.status">(
+          NEW_HOST,
+          "environment.status",
+          {},
+        ),
+        queryFn: () => old,
+        staleTime: 0,
+      });
+      mocks.environmentStatus.mockClear();
+      mocks.environmentStatus.mockRejectedValue(unsupportedEnvironmentStatus());
+
+      // The held pre-wake read does not answer for this wake's.
+      expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
+      expect(mocks.environmentStatus).toHaveBeenCalledTimes(1);
+
+      releaseOld("old");
+      await oldRead;
+    });
+
+    it("reads a typed unsupported-method answer as an older host, and a fresh read each time", async () => {
+      const deps = runDeps();
+
+      expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
+      expect(await deps.readSettings(NEW_HOST)).toBe("unsupported");
+      expect(mocks.environmentStatus).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("starts nothing when another sandbox was picked while the repair ran", () => {

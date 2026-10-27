@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { EnvironmentApplyFailedCard } from "@/components/notifications/environment-apply-failed-card";
+import { SandboxSettingsFailedCard } from "@/components/notifications/sandbox-settings-failed-card";
 import { EnvironmentMoveStalledCard } from "@/components/notifications/environment-move-stalled-card";
 import { SecretRemovedCard } from "@/components/notifications/secret-removed-card";
 import { TeamHostReturnedCard } from "@/components/notifications/team-host-returned-card";
@@ -18,6 +19,7 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
  */
 export function EnvironmentNotificationExtra(props: {
   readonly detail: EnvironmentNotificationDetail;
+  readonly onSettingsApplied?: () => void;
 }): ReactNode {
   const details = (
     <SettingsDetailsButton
@@ -69,11 +71,17 @@ export function EnvironmentNotificationExtra(props: {
     );
   }
   if (props.detail.kind === "environment_apply_failed") {
+    if (props.detail.sandbox !== null && props.detail.sandbox !== undefined)
+      return (
+        <SandboxSettingsFailedCard
+          detail={props.detail}
+          details={details}
+          onSettingsApplied={props.onSettingsApplied}
+        />
+      );
     return (
       <EnvironmentApplyFailedCard
         hostName={props.detail.hostName}
-        itemKey={props.detail.itemKey}
-        reason={props.detail.reason}
         details={details}
       />
     );

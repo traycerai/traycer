@@ -107,6 +107,7 @@ vi.mock(
       isPending: false,
       mutate: vi.fn(),
     }),
+    useSandboxSettingsOperation: () => null,
   }),
 );
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
