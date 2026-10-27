@@ -3630,6 +3630,63 @@ describe("a message for an existing chat whose sandbox rests", () => {
       expect(createChatCalls()).toEqual([]);
     });
 
+    it("sends once for a chat bound to OpenCode 1 even though the destination's new-chat Managed 2 setup failed", async () => {
+      const traycerSettings = {
+        ...PICKED_SETTINGS,
+        harnessId: "traycer",
+      } as const;
+      session = createMessageSessionHarness({
+        epicId: "epic-1",
+        chatId: "existing-chat",
+        hostId: SANDBOX_HOST,
+        userId: "user-1",
+        settings: traycerSettings,
+      });
+      sessionBridge.handle = session.handle;
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        send: { request: MESSAGE_REQUEST, settings: traycerSettings },
+        phase: "handoff",
+        created: true,
+      });
+      mocks.wake.mockResolvedValue({ kind: "awake" });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn("awake")];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+      // Managed 1 is installed; the line a new chat would start on, Managed 2,
+      // failed to set up. The chat itself is recorded on line 1.
+      answerHost(SANDBOX_HOST, {
+        harnesses: [harnessRow("traycer", {})],
+        providers: [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow(
+            {
+              status: "error",
+              reason: "disk-full",
+              message: "ENOSPC",
+              retryAtMs: null,
+            },
+            {},
+          ),
+        ],
+      });
+      session.openAsOwner();
+      session.handle.store.setState((state) =>
+        state.chat === null
+          ? state
+          : { chat: { ...state.chat, opencodeLine: 1 } },
+      );
+      expect(session.handle.store.getState().chat?.opencodeLine).toBe(1);
+      mount();
+
+      await waitFor(() => {
+        expect(sendFrames()).toHaveLength(1);
+      });
+      expect(readStagedSandbox(SURFACE)?.failure).toBeNull();
+      expect(createChatCalls()).toEqual([]);
+    });
+
     it("keeps the same message and action ids when the driver mounts again before any acknowledgement", async () => {
       seedAwakeMessage();
       session.openAsOwner();
@@ -7586,6 +7643,32 @@ describe("the ready line above an agent whose first message waited", () => {
     render(<SandboxReadyLineForChat chatId="chat-other" />);
 
     expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+  });
+
+  it("shows the signed-in account's own ready line, never another account's delivered message in the same chat", () => {
+    usePendingSandboxSendStore.getState().add({
+      ...delivered(),
+      id: "send-other-account",
+      userId: "user-other",
+      text: "another account's message",
+    });
+    mocks.sandboxes = [
+      sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        displayName: "e2e-sbx-own",
+      }),
+    ];
+    const { rerender } = render(<SandboxReadyLineForChat chatId="chat-1" />);
+
+    expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+
+    usePendingSandboxSendStore.getState().add(delivered());
+    rerender(<SandboxReadyLineForChat chatId="chat-1" />);
+
+    expect(screen.getByTestId("sandbox-ready-line-toggle").textContent).toBe(
+      "Sandbox ready·e2e-sbx-own·24 s",
+    );
   });
 });
 
