@@ -17,6 +17,7 @@ export async function consumePendingHookRemovalNotices(
     hostQueryKeys.methodScope(hostId, "host.notificationHooks.status"),
     hostQueryKeys.notificationHookRemovalBorrowedStatus(hostId),
   ];
+  const selectedIds = new Set("ids" in selection ? selection.ids : []);
   const consumed = queryKeys
     .flatMap((queryKey) =>
       queryClient.getQueriesData<NotificationHooksStatusResponse>({ queryKey }),
@@ -24,7 +25,7 @@ export async function consumePendingHookRemovalNotices(
     .flatMap(([, data]) => data?.pendingRemovalNotices ?? [])
     .filter((notice) =>
       "ids" in selection
-        ? selection.ids.includes(notice.id)
+        ? selectedIds.has(notice.id)
         : notice.occurredAt <= selection.beforeUpdatedAt,
     )
     .map((notice) => notice.id);
@@ -59,14 +60,15 @@ export function filterConsumedHookRemovalNotices(
   hostId: string | null,
 ): NotificationHooksStatusResponse {
   if (hostId === null) return response;
-  const consumed =
+  const consumed = new Set(
     queryClient.getQueryData<readonly string[]>(
       hostQueryKeys.notificationHookRemovalReadIds(hostId),
-    ) ?? [];
+    ) ?? [],
+  );
   return {
     ...response,
     pendingRemovalNotices: response.pendingRemovalNotices.filter(
-      (notice) => !consumed.includes(notice.id),
+      (notice) => !consumed.has(notice.id),
     ),
   };
 }

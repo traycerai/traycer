@@ -8,7 +8,10 @@ import {
   subscribeRemoteSessionReadiness,
   tryAcquireReadyRemoteSession,
 } from "@traycer-clients/shared/host-transport/remote/index";
-import type { NotificationHooksRemovalNotice } from "@traycer/protocol/host/notifications/host-notifications";
+import type {
+  NotificationHooksRemovalNotice,
+  NotificationHooksStatusResponse,
+} from "@traycer/protocol/host/notifications/host-notifications";
 import { notificationHooksRemovedMessage } from "@traycer/protocol/host/notifications/presentation";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useNotificationHooksStatusForClient } from "@/hooks/host/use-notification-hooks-query";
@@ -116,16 +119,20 @@ export function ConnectedHookRemovalObservers(props: {
     getSnapshot,
     getSnapshot,
   );
-  return connected
-    .split("\n")
-    .filter((hostId) => hostId.length > 0)
-    .map((hostId) => (
-      <ConnectedHookRemovalObserver
-        key={hostId}
-        hostId={hostId}
-        navigate={props.navigate}
-      />
-    ));
+  return (
+    <>
+      {connected
+        .split("\n")
+        .filter((hostId) => hostId.length > 0)
+        .map((hostId) => (
+          <ConnectedHookRemovalObserver
+            key={hostId}
+            hostId={hostId}
+            navigate={props.navigate}
+          />
+        ))}
+    </>
+  );
 }
 
 function ConnectedHookRemovalObserver(props: {
@@ -138,25 +145,7 @@ function ConnectedHookRemovalObserver(props: {
       queryKey: hostQueryKeys.notificationHookRemovalBorrowedStatus(
         props.hostId,
       ),
-      queryFn: async ({ signal }) => {
-        // A borrowed read cannot create or prolong a session, including when the
-        // tab disconnects between the render and this query's dispatch.
-        const borrowed = tryAcquireReadyRemoteSession<HostRpcRegistry>(
-          props.hostId,
-        );
-        if (borrowed === null)
-          throw new Error("Computer is no longer connected.");
-        try {
-          return await borrowed.sendUnary(
-            "host.notificationHooks.status",
-            {},
-            signal,
-            undefined,
-          );
-        } finally {
-          borrowed.release();
-        }
-      },
+      queryFn: ({ signal }) => readBorrowedHookStatus(props.hostId, signal),
       select: (response) =>
         filterConsumedHookRemovalNotices(response, queryClient, props.hostId),
       retry: false,
@@ -170,4 +159,24 @@ function ConnectedHookRemovalObserver(props: {
       navigate={props.navigate}
     />
   );
+}
+
+/** Borrowing cannot create or prolong a session, including a disconnect
+ * between the observer render and query dispatch. */
+async function readBorrowedHookStatus(
+  hostId: string,
+  signal: AbortSignal,
+): Promise<NotificationHooksStatusResponse> {
+  const borrowed = tryAcquireReadyRemoteSession<HostRpcRegistry>(hostId);
+  if (borrowed === null) throw new Error("Computer is no longer connected.");
+  try {
+    return await borrowed.sendUnary(
+      "host.notificationHooks.status",
+      {},
+      signal,
+      undefined,
+    );
+  } finally {
+    borrowed.release();
+  }
 }
