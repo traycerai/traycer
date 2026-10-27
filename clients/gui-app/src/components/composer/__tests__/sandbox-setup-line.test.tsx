@@ -27,6 +27,8 @@ vi.mock("@/lib/links/open-link", () => ({
 
 afterEach(cleanup);
 
+const onStop = vi.fn();
+
 const ACTIONS: SandboxSetupLineActions = {
   onKeepWaiting: vi.fn(),
   onCancel: vi.fn(),
@@ -36,7 +38,7 @@ const ACTIONS: SandboxSetupLineActions = {
   onSendAgain: vi.fn(),
   onChangeShape: vi.fn(),
   onRetryApplying: vi.fn(),
-  onStop: vi.fn(),
+  onStop,
   onOpenTerminal: null,
   onOpenProviders: null,
 };
@@ -225,7 +227,7 @@ describe("SandboxSetupLine's failed start", () => {
 
 describe("SandboxSetupLine's Stop action", () => {
   it("stays available while the created sandbox's line is collapsed or expanded", () => {
-    vi.mocked(ACTIONS.onStop).mockClear();
+    onStop.mockClear();
     render(
       <SandboxSetupLine
         stage={created()}
@@ -245,7 +247,7 @@ describe("SandboxSetupLine's Stop action", () => {
     expect(screen.getByTestId("sandbox-setup-line-detail")).toBeDefined();
     const stop = within(line).getByRole("button", { name: "Stop" });
     fireEvent.click(stop);
-    expect(ACTIONS.onStop).toHaveBeenCalledTimes(1);
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 
   it("hides Stop in both line states when withdrawal is unavailable", () => {
