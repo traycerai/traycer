@@ -599,8 +599,8 @@ function restingDestroyClause(
 const RESUMES_ON_YOUR_NEXT_ACTION = "resumes on your next action";
 
 /**
- * How long the row has been awake today: since it last woke, clipped to the
- * UTC day the cost header names.
+ * The current wake's age within the UTC day, for a local cost estimate
+ * before the ledger answers. The day's total duration comes from the cost view.
  */
 export function sandboxAwakeTodayMs(
   summary: SandboxSummary,
@@ -664,17 +664,25 @@ function awakeClockLine(input: SandboxClockInput): string {
       sandboxSupportReference(summary.failureCode),
     );
   }
-  const awakeMs = sandboxAwakeTodayMs(summary, now);
-  const today = sandboxTodayCost(summary, input.cost, awakeMs);
+  const awakeMs = input.cost?.todayAwakeMs ?? null;
+  const today = sandboxTodayCost(
+    summary,
+    input.cost,
+    sandboxAwakeTodayMs(summary, now),
+  );
+  const awake =
+    awakeMs === null
+      ? "Awake"
+      : `Awake ${formatSandboxDuration(awakeMs)} today`;
   if (summary.burst) {
     return joinParts(
-      `Awake ${formatSandboxDuration(awakeMs)}`,
+      awake,
       today,
       `destroys itself after ${idleMinutesOf(summary)} idle min · files on it are lost then`,
     );
   }
   return joinParts(
-    `Awake ${formatSandboxDuration(awakeMs)} today`,
+    awake,
     today,
     `suspends after ${idleMinutesOf(summary)} idle min`,
     input.wakeString,

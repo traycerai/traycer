@@ -991,6 +991,8 @@ export interface SandboxCost {
    * from a server before the field.
    */
   readonly todayMillicredits: number;
+  /** Today's (UTC day) awake-rate duration; null from a server before the field. */
+  readonly todayAwakeMs: number | null;
   /**
    * Details' History: every operation, oldest first, each with what it cost
    * until the next one started. Empty on a team row of the list (its
@@ -1040,6 +1042,7 @@ export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
     pendingMillicredits: z.number().nonnegative(),
     segments: z.array(sandboxCostSegmentSchema),
     todayMillicredits: z.number().nonnegative().default(0),
+    todayAwakeMs: z.number().nonnegative().nullable().default(null),
     // One unreadable entry (a state newer than this build) must not fail
     // the cost, and with it the page's figures.
     history: z.array(sandboxHistoryEntrySchema).default([]).catch([]),
