@@ -329,27 +329,32 @@ afterEach(() => {
 });
 
 describe("sandbox settings warnings in the notification center", () => {
-  it.each([OPERATION_ID, "later-operation"])(
-    "retires from a fresh successful status for %s while the center is closed",
-    async (operationId) => {
-      currentStatus = status(operationId, "applied");
-      seed([notice("warning", OPERATION_ID)]);
-      mount(false);
-      await waitFor(() => expect(resolution("warning")).not.toBeNull());
-      expect(
-        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-      ).toBe("Notifications");
-      expect(resolvedIds).toEqual(["warning"]);
-      expect(auth.auth.listSandboxes).toHaveBeenCalledTimes(1);
-    },
-  );
-  it("a newer terminal failed attempt overtakes the previous operation", async () => {
-    currentStatus = status("later-operation", "failed");
+  it("retires from a fresh successful status for the notice's own operation while the center is closed", async () => {
+    currentStatus = status(OPERATION_ID, "applied");
     seed([notice("warning", OPERATION_ID)]);
     mount(false);
     await waitFor(() => expect(resolution("warning")).not.toBeNull());
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications");
     expect(resolvedIds).toEqual(["warning"]);
+    expect(auth.auth.listSandboxes).toHaveBeenCalledTimes(1);
   });
+  it.each(["applied", "failed", "unsupported"])(
+    "a different operation's %s item does not retire the notice",
+    async (itemStatus) => {
+      currentStatus = status("later-operation", itemStatus);
+      seed([notice("warning", OPERATION_ID)]);
+      mount(false);
+      await waitFor(() => expect(statusReads).toBe(1));
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(resolution("warning")).toBeNull();
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe("Notifications, 1 needs you");
+      expect(resolvedIds).toEqual([]);
+    },
+  );
   it("Retry applying retires its own row only after a successful action", async () => {
     seed([notice("warning", OPERATION_ID)]);
     mount(true);
@@ -368,7 +373,7 @@ describe("sandbox settings warnings in the notification center", () => {
     "old-host",
   ])("retains an unconfirmed status: %s", async (kind) => {
     currentStatus = status(
-      kind === "failed" ? OPERATION_ID : "later-operation",
+      OPERATION_ID,
       kind === "offline" || kind === "unknown-operation" || kind === "old-host"
         ? "applied"
         : kind,
@@ -399,7 +404,7 @@ describe("sandbox settings warnings in the notification center", () => {
     "guest-unknown",
     "guest-failed",
   ])("retains unavailable evidence: %s", async (kind) => {
-    currentStatus = status("later-operation", "applied");
+    currentStatus = status(OPERATION_ID, "applied");
     if (kind === "list-error")
       auth.auth.listSandboxes.mockResolvedValue({
         kind: "network-error",
@@ -449,7 +454,7 @@ describe("sandbox settings warnings in the notification center", () => {
     expect(resolvedIds).toEqual([]);
   });
   it("shares one list read between multiple active notices", async () => {
-    currentStatus = status("later-operation", "applied");
+    currentStatus = status(OPERATION_ID, "applied");
     seed([
       notice("warning-a", OPERATION_ID),
       notice("warning-b", OPERATION_ID),

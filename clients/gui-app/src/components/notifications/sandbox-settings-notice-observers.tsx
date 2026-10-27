@@ -88,7 +88,7 @@ function SettingsNoticeObserver(props: {
     if (
       props.summary?.guestConfigured === true &&
       status.isSuccess &&
-      settingsNoticeOvertaken(status.data, props.notice.operationId)
+      settingsNoticeApplied(status.data, props.notice.operationId)
     ) {
       actions.resolveNotice(props.notice.row);
     }
@@ -102,7 +102,7 @@ function SettingsNoticeObserver(props: {
   return null;
 }
 
-function settingsNoticeOvertaken(
+function settingsNoticeApplied(
   status: EnvironmentStatusResponseV11,
   operationId: string,
 ): boolean {
@@ -110,20 +110,8 @@ function settingsNoticeOvertaken(
     status.reachability !== "connected" ||
     status.principal === null ||
     status.receivedRevision === null ||
-    typeof status.sandboxSettingsOperationId !== "string"
+    status.sandboxSettingsOperationId !== operationId
   )
     return false;
-  if (sandboxSettingsReady(status.items)) return true;
-  // A different, settled attempt replaces this warning. Pending, unknown or
-  // offline evidence cannot establish that a later attempt has finished.
-  return (
-    status.sandboxSettingsOperationId !== operationId &&
-    status.items.every(
-      (item) =>
-        item.status === "applied" ||
-        item.status === "not_used" ||
-        item.status === "failed" ||
-        item.status === "unsupported",
-    )
-  );
+  return sandboxSettingsReady(status.items);
 }
