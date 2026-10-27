@@ -472,7 +472,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
         .map((button) => button.textContent);
     }
 
-    it("offers exactly Add credits and Choose another host at a zero balance", () => {
+    it("offers Add credits, host choice and Cancel at a zero balance", () => {
       mocks.catalogue = LADDER;
       mocks.user = viewerWithCredits(0);
       stageRefused({ kind: "credits", shortfallMc: 120 });
@@ -481,6 +481,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
       expect(refusalButtons()).toEqual([
         "Add credits ↗",
         "Choose another host",
+        "Cancel the message",
       ]);
     });
 
@@ -493,8 +494,9 @@ describe("useStagedSandboxSend's line after a refusal", () => {
 
       expect(refusalButtons()).toEqual([
         "Add credits ↗",
-        "Choose another host",
         "Choose a smaller shape",
+        "Choose another host",
+        "Cancel the message",
       ]);
     });
   });

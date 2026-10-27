@@ -19,7 +19,11 @@ import {
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -58,6 +62,7 @@ import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
   harnessRow,
+  opencodeProviderRow,
   pendingSend,
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
@@ -79,6 +84,7 @@ import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-
 import {
   readStagedSandbox,
   useStagedSandboxStore,
+  type StagedSandboxFailure,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -537,6 +543,8 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   // A verb as the real mutation reports it: the call is recorded, the result
   // is pending until it answers, and a failure stays readable as `error`.
   useSandboxVerb: () => {
+    // A mutation hook must stay in its provider tree when its button moves into a toast.
+    useQueryClient();
     useAnswerVersion();
     const run = (verb: string): Promise<SandboxVerbOutcome> => {
       mocks.stopSandbox(verb);
@@ -960,6 +968,90 @@ afterEach(() => {
 });
 
 describe("a send waiting for the requested agent on its sandbox", () => {
+  it.each(["chat", "fork"] as const)(
+    "waits for Traycer's Managed 2 engine before a %s, then creates on that exact line",
+    async (kind) => {
+      const create = deferred<CreateChatResponseV12>();
+      mocks.createChatDeferred = create.promise;
+      onTestFinished(() => resolvePendingCreate(create));
+      seed({
+        ...SEEDED,
+        send: {
+          ...SEND_BY_KIND[kind],
+          settings: { ...PICKED_SETTINGS, harnessId: "traycer" },
+        },
+      });
+      answerHost(SANDBOX_HOST, {
+        harnesses: [harnessRow("traycer", {})],
+        providers: [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow({ status: "downloading", percent: 40 }, {}),
+        ],
+      });
+      mount();
+
+      expect(createChatCalls()).toEqual([]);
+      expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+      expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+      expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
+
+      answerHost(SANDBOX_HOST, {
+        harnesses: [harnessRow("traycer", {})],
+        providers: [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow({ status: "installed" }, {}),
+        ],
+      });
+
+      await waitForCreateChats(1);
+      expect(createChatCalls()[0]).toMatchObject({
+        clientHostId: SANDBOX_HOST,
+        input: { opencodeLine: 2, settings: { harnessId: "traycer" } },
+      });
+      render(
+        <SandboxReadyLineForChat chatId={createChatCalls()[0].input.chatId} />,
+      );
+      expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+      await resolvePendingCreate(create);
+      expect(await screen.findByTestId("sandbox-ready-line")).toBeDefined();
+      expect(screen.queryByTestId("pending-sandbox-message")).toBeNull();
+    },
+  );
+
+  it("refuses Traycer's failed Managed 2 setup even though Managed 1 is installed and its catalog is available", async () => {
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, harnessId: "traycer" } },
+    });
+    answerHost(SANDBOX_HOST, {
+      harnesses: [harnessRow("traycer", {})],
+      providers: [
+        providerRow("traycer", { status: "installed" }),
+        opencodeProviderRow(
+          {
+            status: "error",
+            reason: "disk-full",
+            message: "ENOSPC",
+            retryAtMs: null,
+          },
+          {},
+        ),
+      ],
+    });
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+        kind: "agent-setup-failed",
+      });
+    });
+    const failure = readStagedSandbox(SURFACE)?.failure;
+    if (failure?.kind !== "agent-setup-failed")
+      throw new Error("expected failed setup");
+    expect(failure.detail).toContain("disk space");
+    expect(createChatCalls()).toEqual([]);
+  });
+
   it("is not delivered while the requested agent's pack downloads, shows no error, and goes out once, on the sandbox's own client, when it is ready", async () => {
     seed(SEEDED);
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
@@ -1078,7 +1170,10 @@ describe("a send waiting for the requested agent on its sandbox", () => {
         harnessRow("codex", { available: true }),
         harnessRow("claude", { available: true }),
       ],
-      providers: [providerRow("codex", null), providerRow("claude-code", null)],
+      providers: [
+        providerRow("codex", { status: "installed" }),
+        providerRow("claude-code", null),
+      ],
     });
 
     await waitForCreateChats(1);
@@ -1267,6 +1362,140 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     } finally {
       restoreLocks();
     }
+  });
+
+  it.each([
+    ["no-provider", CODEX_UNAVAILABLE, { kind: "no-provider" }],
+    [
+      "not offered",
+      CODEX_NOT_OFFERED,
+      { kind: "agent-not-offered", harnessId: "codex" },
+    ],
+    [
+      "offered but off",
+      {
+        harnesses: [harnessRow("codex", { enabled: false, available: false })],
+        providers: [{ ...providerRow("codex", null), enabled: false }],
+      },
+      { kind: "no-provider" },
+    ],
+    ["failed install", CODEX_SETUP_FAILED, { kind: "agent-setup-failed" }],
+  ] as const satisfies ReadonlyArray<
+    readonly [string, HostAnswers, Partial<StagedSandboxFailure>]
+  >)(
+    "keeps a %s message and its remedy without waking when its sandbox suspends",
+    async (_label, answers, failure) => {
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, answers);
+      const view = mount();
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject(failure);
+      });
+
+      // A fresh idle suspension reaches the root driver even with no task open.
+      view.unmount();
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "suspended",
+          }),
+        ],
+        Date.now() + 120_000,
+      );
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      render(
+        <QueryClientProvider client={client}>
+          <PendingSandboxSendsDriver />
+        </QueryClientProvider>,
+      );
+
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(createChatCalls()).toEqual([]);
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "handoff",
+        failure,
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toMatchObject({
+        content: MESSAGE_CONTENT,
+        settings: PICKED_SETTINGS,
+        delivery: null,
+      });
+    },
+  );
+
+  it("wakes once to finish a pack install, then delivers when the requested agent is ready", async () => {
+    seed(SEEDED);
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+    expect(readStagedSandbox(SURFACE)?.failure).toBeNull();
+
+    const awake = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
+    answerSandboxRows([{ ...awake, state: "suspended" }], Date.now() + 120_000);
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
+      expect(stagedRunActive(SURFACE)).toBe(false);
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    expect(createChatCalls()).toEqual([]);
+
+    answerSandboxRows([awake], Date.now() + 120_001);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    await waitForCreateChats(1);
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps a refusal at rest until Retry wakes it once and delivers the saved message", async () => {
+    seed(SEEDED);
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "not-sent" },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const awake = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+    });
+    const fresh = Date.now() + 120_000;
+    answerSandboxRows([{ ...awake, state: "suspended" }], fresh);
+    mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
+    const wake = deferred<{ readonly kind: "awake" } | null>();
+    mocks.wake.mockReturnValue(wake.promise);
+    mount();
+    const line = await screen.findByTestId("sandbox-refusal-line");
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+
+    fireEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    answerSandboxRows([awake], fresh + 1);
+    await act(async () => {
+      wake.resolve({ kind: "awake" });
+      await wake.promise;
+    });
+    await waitForCreateChats(1);
+    await waitFor(() => {
+      expect(stagedRunActive(SURFACE)).toBe(false);
+    });
+    expect(createChatCalls()[0].input.initialMessage).toMatchObject({
+      content: MESSAGE_CONTENT,
+    });
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
   it("delivers the requested agent after its Personal provider is repaired, without a manual retry or a second sandbox", async () => {
@@ -3451,6 +3680,92 @@ describe("a pending chat create", () => {
   );
 });
 
+describe("cancelling a refused pending message", () => {
+  it.each([false, true])(
+    "returns the message with occupied composer=%s and leaves its sandbox alone",
+    async (occupied) => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        seed(SEEDED);
+        answerHost(SANDBOX_HOST, CODEX_UNAVAILABLE);
+        if (occupied)
+          useNewConversationModalStore
+            .getState()
+            .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+        mount();
+        const line = await screen.findByTestId("sandbox-refusal-line");
+        const resting = sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        });
+        answerSandboxRows([resting], Date.now() + 120_000);
+        fireEvent.click(
+          within(line).getByRole("button", { name: "Cancel the message" }),
+        );
+        await waitFor(() =>
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+        );
+        expect(readStagedSandbox(SURFACE)).toBeNull();
+        const receipt = occupied
+          ? "Your message wasn't sent; it's saved in your drafts."
+          : "Your message wasn't sent; it's back in the composer.";
+        expect(screen.getByText(receipt)).toBeDefined();
+        expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Choose another host" }),
+        ).toBeNull();
+        if (occupied) {
+          expect(
+            useNewConversationModalStore.getState().draftPatchesByEpicId[
+              "epic-1"
+            ],
+          ).toMatchObject({ content: OCCUPIED_NEW_CHAT_CONTENT });
+          expect(useLandingDraftStore.getState().drafts).toMatchObject([
+            {
+              content: MESSAGE_CONTENT,
+              settings: PICKED_SETTINGS,
+              closed: true,
+            },
+          ]);
+          expect(
+            useNewConversationModalOpenStore.getState().request,
+          ).toBeNull();
+          const draft = useLandingDraftStore.getState().drafts[0];
+          fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
+          expect(useLandingDraftStore.getState().activeDraftId).toBe(draft.id);
+        } else {
+          expect(
+            useNewConversationModalStore.getState().draftPatchesByEpicId[
+              "epic-1"
+            ],
+          ).toMatchObject({
+            content: MESSAGE_CONTENT,
+            settings: PICKED_SETTINGS,
+          });
+          expect(
+            useNewConversationModalOpenStore.getState().request,
+          ).toMatchObject({ epicId: "epic-1", tabId: "tab-1" });
+          expect(
+            screen.queryByRole("button", { name: "Open draft" }),
+          ).toBeNull();
+          answerSandboxRows(
+            [{ ...resting, state: "awake" }],
+            Date.now() + 120_001,
+          );
+          expect(screen.getByText(receipt)).toBeDefined();
+        }
+        expect(mocks.wake).not.toHaveBeenCalled();
+        expect(mocks.stopSandbox).not.toHaveBeenCalled();
+        expect(mocks.createSandbox).not.toHaveBeenCalled();
+        expect(createChatCalls()).toEqual([]);
+      } finally {
+        restoreLocks();
+      }
+    },
+  );
+});
+
 describe("a send that named no model, ready on its sandbox", () => {
   it("reads the host's default model with a live subscription and sends with it, once", async () => {
     seed({
@@ -4245,6 +4560,57 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
   }
+
+  it("cannot Cancel a refusal after another operation claims its delivery", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, CODEX_UNAVAILABLE);
+      mount();
+      const cancel = within(
+        await screen.findByTestId("sandbox-refusal-line"),
+      ).getByRole("button", { name: "Cancel the message" });
+      // Hold delivery on an unknown row, so this checks withdrawal rather than a result race.
+      answerSandboxRows([], 0);
+      const input = claimInput("chat");
+      act(() => {
+        useStagedSandboxStore.getState().report(SURFACE, { failure: null });
+        expect(
+          usePendingSandboxSendStore.getState().beginDispatch(SEND_ID, {
+            input,
+            status: "sending",
+            delivery: {
+              chatId: input.chatId,
+              hostId: SANDBOX_HOST,
+              sandboxId: SANDBOX_ID,
+              readySeconds: 24,
+            },
+          }),
+        ).toBe(true);
+        fireEvent.click(cancel);
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch?.input,
+      ).toEqual(input);
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toBeUndefined();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+      expect(
+        screen.queryByRole("button", { name: "Cancel the message" }),
+      ).toBeNull();
+      expect(
+        screen.queryByText(
+          "Your message wasn't sent; it's back in the composer.",
+        ),
+      ).toBeNull();
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(mocks.stopSandbox).not.toHaveBeenCalled();
+      expect(createChatCalls()).toEqual([]);
+    } finally {
+      restoreLocks();
+    }
+  });
 
   it.each(byKind(RESTING))(
     "wakes a %s sandbox for a saved %s claim whose stage is missing, before any create, then replays its exact input once awake",
@@ -5821,6 +6187,12 @@ describe("choosing Stop on an unclaimed send", () => {
         name: "Choose another host",
       }),
     ).toBeDefined();
+    fireEvent.click(
+      within(toastView.container).getByRole("button", { name: "Start" }),
+    );
+    await waitFor(() =>
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("start"),
+    );
   });
 
   it("does not recreate a dismissed receipt when the late Stop result follows a row give-back", async () => {

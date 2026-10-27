@@ -125,8 +125,81 @@ function buttonLabels(line: HTMLElement): string[] {
     .map((button) => button.textContent);
 }
 
+describe("withdrawing a message from every refusal or failure", () => {
+  const failures: readonly StagedSandboxFailure[] = [
+    { kind: "credits", shortfallMc: 120 },
+    { kind: "unverified" },
+    { kind: "shape" },
+    { kind: "unavailable" },
+    { kind: "refused", message: "Try another region" },
+    { kind: "no-provider" },
+    { kind: "agent-not-offered", harnessId: "codex" },
+    { kind: "agent-setup-failed", detail: "Install failed" },
+    { kind: "not-sent" },
+    { kind: "settings", code: "settings" },
+    { kind: "failed", code: "create", step: "creating" },
+    { kind: "timed-out", step: "booting" },
+  ];
+  it.each(
+    failures.flatMap((failure) =>
+      [false, true].map((resuming) => ({ failure, resuming })),
+    ),
+  )(
+    "$failure.kind with resuming=$resuming keeps Cancel between host choice and Details",
+    ({ failure, resuming }) => {
+      const stage = created();
+      const onCancel = vi.fn();
+      const onOpenTerminal = vi.fn();
+      render(
+        <SandboxSetupLine
+          stage={{
+            ...stage,
+            failure,
+            target: resuming
+              ? {
+                  kind: "existing",
+                  configuration: { kind: "personal" },
+                  name: "api-refactor",
+                  sandboxId: "sbx_made_1",
+                  hostId: "host-1",
+                  verb: "resume",
+                }
+              : stage.target,
+          }}
+          name="api-refactor"
+          facts={facts(false)}
+          actions={{
+            ...ACTIONS,
+            onCancel,
+            onOpenTerminal,
+            onOpenProviders: vi.fn(),
+            onChooseModel: vi.fn(),
+          }}
+          withdrawalAllowed
+        />,
+      );
+      const line =
+        screen.queryByTestId("sandbox-refusal-line") ??
+        screen.getByTestId("sandbox-setup-line-detail");
+      const labels = buttonLabels(line);
+      const exits = [
+        "Open terminal instead",
+        "Choose another host",
+        "Cancel the message",
+        "Details",
+      ];
+      expect(labels.filter((label) => exits.includes(label))).toEqual(exits);
+      fireEvent.click(
+        within(line).getByRole("button", { name: "Cancel the message" }),
+      );
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      expect(onOpenTerminal).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("SandboxSetupLine's refusal for credits", () => {
-  it("offers exactly Add credits and Choose another host on Personal", () => {
+  it("offers Add credits, host choice and Cancel on Personal", () => {
     const line = mountRefusal(
       { kind: "personal" },
       { kind: "credits", shortfallMc: 120 },
@@ -138,10 +211,11 @@ describe("SandboxSetupLine's refusal for credits", () => {
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
       "Choose another host",
+      "Cancel the message",
     ]);
   });
 
-  it("offers exactly Add credits and Choose another host on a team's allowance", () => {
+  it("offers Add credits, host choice and Cancel on a team's allowance", () => {
     const line = mountRefusal(
       { kind: "team", teamId: "team-1", teamName: "acme" },
       { kind: "credits", shortfallMc: 120 },
@@ -153,6 +227,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
       "Choose another host",
+      "Cancel the message",
     ]);
   });
 
@@ -166,8 +241,9 @@ describe("SandboxSetupLine's refusal for credits", () => {
 
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
-      "Choose another host",
       "Choose a smaller shape",
+      "Choose another host",
+      "Cancel the message",
     ]);
   });
 });
@@ -182,7 +258,11 @@ describe("SandboxSetupLine's refusal whose answer never came", () => {
     );
 
     expect(line.textContent).toContain("Couldn't verify your balance.");
-    expect(buttonLabels(line)).toEqual(["Retry", "Choose another host"]);
+    expect(buttonLabels(line)).toEqual([
+      "Retry",
+      "Choose another host",
+      "Cancel the message",
+    ]);
   });
 });
 
@@ -210,6 +290,7 @@ describe("SandboxSetupLine's agent refusals", () => {
       "Choose a model",
       "Open terminal instead",
       "Choose another host",
+      "Cancel the message",
     ]);
     fireEvent.click(
       within(line).getByRole("button", { name: "Choose a model" }),
@@ -233,6 +314,7 @@ describe("SandboxSetupLine's agent refusals", () => {
       "Open Personal's Providers",
       "Open terminal instead",
       "Choose another host",
+      "Cancel the message",
     ]);
     fireEvent.click(
       within(line).getByRole("button", { name: "Open Personal's Providers" }),
