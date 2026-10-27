@@ -32,6 +32,8 @@ const state = vi.hoisted(() => ({
   localHostId: "host-home",
   /** This machine's own host, as `useReactiveLocalHostId` reports it. */
   machineHostId: null as string | null,
+  /** The Browsers panel's pin, honoured (its host can serve). */
+  browsersPin: null as string | null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
@@ -70,10 +72,10 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 vi.mock("@/hooks/host/use-surface-host-pin", () => ({
   useTabSurfaceKey: (kind: string, tabId: string) => `${kind}:${tabId}`,
   useSurfaceHostPin: () => ({
-    selection: null,
-    honoredSelection: null,
+    selection: state.browsersPin,
+    honoredSelection: state.browsersPin,
     // A simulator pin must not steer the browser suggestion.
-    resolvedHostId: "host-vm",
+    resolvedHostId: state.browsersPin ?? "host-vm",
     followingHostId: state.pinned,
     setSelection: state.setSelection,
   }),
@@ -143,6 +145,7 @@ describe("BrowserCreatePicker", () => {
     state.scope = "cloud";
     state.localHostId = "host-home";
     state.machineHostId = null;
+    state.browsersPin = null;
     useSelectionAuthorityStore.getState().reset();
     state.setSelection.mockReset();
     state.withOwner.mockReset();
@@ -185,6 +188,17 @@ describe("BrowserCreatePicker", () => {
     expect(items[0]?.textContent).toContain("Suggested");
     expect(
       screen.getByRole("menuitem", { name: /Home Mac/ }).textContent,
+    ).not.toContain("Suggested");
+  });
+
+  it("does not let a honoured browsers pin steer the suggestion", async () => {
+    state.browsersPin = "host-work";
+    await openPicker();
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]?.textContent).toContain("Home Mac");
+    expect(items[0]?.textContent).toContain("Suggested");
+    expect(
+      screen.getByRole("menuitem", { name: /Work Mac/ }).textContent,
     ).not.toContain("Suggested");
   });
 
