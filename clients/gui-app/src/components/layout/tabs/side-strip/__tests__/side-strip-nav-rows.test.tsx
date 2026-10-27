@@ -26,7 +26,10 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostNotificationEntryV23, HostNotificationEntryV24 } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntryV23,
+  HostNotificationEntryV24,
+} from "@traycer/protocol/host/notifications/contracts";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -334,27 +337,53 @@ describe("SideStripNavRows", () => {
     ).toBe("Notifications, 2 need attention, 5 unread");
   });
 
-  it.each([false, true])("adds a read actionable notice to the task count (collapsed: %s)", async (collapsed) => {
-    useSideTabStripStore.setState({ collapsed });
-    const entries: HostNotificationEntryV24[] = [
-      approvalEntry("approval-a", 10),
-      approvalEntry("approval-b", 11),
-      {
-        id: "settings-failed", kind: "environment.apply.failed", updatedAt: 12,
-        readAt: 13, resolvedAt: null, sourceRef: "settings-failed",
-        severity: "needs_action", outcome: "errored", epicId: null, chatId: null,
-        payload: { kind: "environment_apply_failed", environmentId: "env-settings", hostId: "host-1", hostName: "Sandbox", itemKey: "settings", reason: "settings_not_applied" },
-      },
-    ];
-    useHostNotificationsStore.getState().applySnapshot({
-      attention: { entries, nextCursor: null }, recent: { entries, nextCursor: null },
-      summary: { unreadCount: 2, attentionCount: 2 },
-    });
-    renderStrip("left");
-    await screen.findByTestId("side-tab-strip");
-    expect(screen.getByTestId(collapsed ? "side-strip-inbox-needs-you-badge" : "side-strip-inbox-count").textContent).toBe("3");
-    expect(screen.getByTestId("side-strip-inbox").getAttribute("aria-label")).toBe("Notifications, 3 need you, 2 unread");
-  });
+  it.each([false, true])(
+    "adds a read actionable notice to the task count (collapsed: %s)",
+    async (collapsed) => {
+      useSideTabStripStore.setState({ collapsed });
+      const entries: HostNotificationEntryV24[] = [
+        approvalEntry("approval-a", 10),
+        approvalEntry("approval-b", 11),
+        {
+          id: "settings-failed",
+          kind: "environment.apply.failed",
+          updatedAt: 12,
+          readAt: 13,
+          resolvedAt: null,
+          sourceRef: "settings-failed",
+          severity: "needs_action",
+          outcome: "errored",
+          epicId: null,
+          chatId: null,
+          payload: {
+            kind: "environment_apply_failed",
+            environmentId: "env-settings",
+            hostId: "host-1",
+            hostName: "Sandbox",
+            itemKey: "settings",
+            reason: "settings_not_applied",
+          },
+        },
+      ];
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries, nextCursor: null },
+        recent: { entries, nextCursor: null },
+        summary: { unreadCount: 2, attentionCount: 2 },
+      });
+      renderStrip("left");
+      await screen.findByTestId("side-tab-strip");
+      expect(
+        screen.getByTestId(
+          collapsed
+            ? "side-strip-inbox-needs-you-badge"
+            : "side-strip-inbox-count",
+        ).textContent,
+      ).toBe("3");
+      expect(
+        screen.getByTestId("side-strip-inbox").getAttribute("aria-label"),
+      ).toBe("Notifications, 3 need you, 2 unread");
+    },
+  );
 
   it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
     activateActivityView();

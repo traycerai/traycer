@@ -25,7 +25,8 @@ export type NotificationLifecycleClassification =
 export function isActionableNotice(row: NotificationLifecycleInput): boolean {
   return (
     row.severity === "needs_action" &&
-    (row.sandboxNotice != null || row.hostKind === "environment.apply.failed")
+    ((row.sandboxNotice ?? null) !== null ||
+      row.hostKind === "environment.apply.failed")
   );
 }
 

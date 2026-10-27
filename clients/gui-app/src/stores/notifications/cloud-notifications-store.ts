@@ -243,13 +243,9 @@ function noticeSandboxId(row: HostNotificationsCloudFeedRowV15): string | null {
     : null;
 }
 
-/** A later fact or an elapsed deadline retires a warning, even on an old relay
- * that omits resolvedAt. Keep observed retirement through replaying snapshots. */
-function reconcileSandboxNotices(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV15>>>,
-  held: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV15>>>,
-  now: number,
-): Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV15>>> {
+function latestSandboxNoticeTimes(
+  rows: CloudNotificationsState["rows"],
+): ReadonlyMap<string, number> {
   const latest = new Map<string, number>();
   for (const row of Object.values(rows)) {
     if (row === undefined) continue;
@@ -261,6 +257,51 @@ function reconcileSandboxNotices(
       );
     }
   }
+  return latest;
+}
+
+function noticeResolvedAt(
+  row: HostNotificationsCloudFeedRowV15 | undefined,
+): number | null {
+  if (
+    row?.entry.kind !== "sandbox.notice" &&
+    row?.entry.kind !== "environment.apply.failed"
+  )
+    return null;
+  return row.entry.resolvedAt ?? null;
+}
+
+/** A resolution is a set-once marker: preserve the earliest observed value. */
+function mergeNoticeResolution(
+  current: number | null,
+  previous: number | null,
+): number | null {
+  if (current === null) return previous;
+  if (previous === null) return current;
+  return Math.min(current, previous);
+}
+
+function observedRetirementAt(
+  row: HostNotificationsCloudFeedRowV15,
+  newer: number,
+  now: number,
+): number | null {
+  if (newer > row.entry.updatedAt) return newer;
+  const notice = sandboxNoticeOf(row);
+  return notice?.notice.kind === "resting_warning" &&
+    notice.notice.destroyAt <= now
+    ? notice.notice.destroyAt
+    : null;
+}
+
+/** A later fact or an elapsed deadline retires a warning, even on an old relay
+ * that omits resolvedAt. Keep observed retirement through replaying snapshots. */
+function reconcileSandboxNotices(
+  rows: CloudNotificationsState["rows"],
+  held: CloudNotificationsState["rows"],
+  now: number,
+): CloudNotificationsState["rows"] {
+  const latest = latestSandboxNoticeTimes(rows);
   const next = { ...rows };
   for (const [key, row] of Object.entries(rows)) {
     if (
@@ -268,27 +309,15 @@ function reconcileSandboxNotices(
       (row.entry.kind !== "sandbox.notice" &&
         row.entry.kind !== "environment.apply.failed") ||
       row.entry.severity !== "needs_action"
-    ) continue;
-    const notice = sandboxNoticeOf(row);
-    const previous = held[key]?.entry;
-    let resolvedAt = row.entry.resolvedAt ?? null;
-    if (
-      (previous?.kind === "sandbox.notice" ||
-        previous?.kind === "environment.apply.failed") &&
-      previous.resolvedAt != null
-    ) {
-      resolvedAt = resolvedAt === null
-        ? previous.resolvedAt
-        : Math.min(resolvedAt, previous.resolvedAt);
-    }
+    )
+      continue;
     const sandboxId = noticeSandboxId(row);
-    const newer = sandboxId === null ? 0 : latest.get(sandboxId) ?? 0;
-    if (resolvedAt === null && newer > row.entry.updatedAt) resolvedAt = newer;
-    if (
-      resolvedAt === null &&
-      notice?.notice.kind === "resting_warning" &&
-      notice.notice.destroyAt <= now
-    ) resolvedAt = notice.notice.destroyAt;
+    const newer = sandboxId === null ? 0 : (latest.get(sandboxId) ?? 0);
+    const resolvedAt =
+      mergeNoticeResolution(
+        noticeResolvedAt(row),
+        noticeResolvedAt(held[key]),
+      ) ?? observedRetirementAt(row, newer, now);
     if (resolvedAt !== null) {
       next[key] = { ...row, entry: { ...row.entry, resolvedAt } };
     }
@@ -305,20 +334,24 @@ function scheduleSandboxNoticeExpiry(): void {
       row === undefined ||
       row.entry.kind !== "sandbox.notice" ||
       row.entry.severity !== "needs_action" ||
-      row.entry.resolvedAt != null
-    ) continue;
+      (row.entry.resolvedAt ?? null) !== null
+    )
+      continue;
     const notice = sandboxNoticeOf(row);
     if (notice?.notice.kind === "resting_warning") {
       nextDeadline = Math.min(nextDeadline, notice.notice.destroyAt);
     }
   }
   if (!Number.isFinite(nextDeadline)) return;
-  const timer = setTimeout(() => {
-    useCloudNotificationsStore.setState((state) => ({
-      rows: reconcileSandboxNotices(state.rows, state.rows, Date.now()),
-    }));
-    scheduleSandboxNoticeExpiry();
-  }, Math.min(2_147_483_647, Math.max(0, nextDeadline - Date.now())));
+  const timer = setTimeout(
+    () => {
+      useCloudNotificationsStore.setState((state) => ({
+        rows: reconcileSandboxNotices(state.rows, state.rows, Date.now()),
+      }));
+      scheduleSandboxNoticeExpiry();
+    },
+    Math.min(2_147_483_647, Math.max(0, nextDeadline - Date.now())),
+  );
   cancelSandboxExpiry = () => clearTimeout(timer);
 }
 
@@ -432,14 +465,16 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       if (
         row?.entry.kind !== "sandbox.notice" &&
         row?.entry.kind !== "environment.apply.failed"
-      ) return;
+      )
+        return;
       state.markReadLocally(entryId, resolvedAt);
       set((current) => {
         const currentRow = current.rows[key];
         if (
           currentRow?.entry.kind !== "sandbox.notice" &&
           currentRow?.entry.kind !== "environment.apply.failed"
-        ) return current;
+        )
+          return current;
         return {
           rows: {
             ...current.rows,

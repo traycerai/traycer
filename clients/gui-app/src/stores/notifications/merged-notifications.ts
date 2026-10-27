@@ -734,7 +734,8 @@ export function useNotificationBellState(): NotificationBellState {
     if (
       (row.source !== "cloud" && row.source !== "host") ||
       !isActionableNotice(row)
-    ) return delta;
+    )
+      return delta;
     const active = row.resolvedAt === null ? 1 : 0;
     const countedBySummary = row.readAt === null ? 1 : 0;
     return delta + active - countedBySummary;
@@ -761,7 +762,8 @@ export function useNotificationBellState(): NotificationBellState {
   }
   if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
-  const attention = hostSummary.attentionCount + appLocalUnread + noticeAdjustment;
+  const attention =
+    hostSummary.attentionCount + appLocalUnread + noticeAdjustment;
   if (attention > 0) return { kind: "attention", count: attention };
   const unread = mergedUnreadCount({
     hostUnread: hostSummary.unreadCount,
@@ -1020,10 +1022,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (!isCurrentCloudMutation(context)) return;
         handleCloudMutationResult(data);
         if (data.status === "applied") {
-          useCloudNotificationsStore.getState().resolveNoticeLocally(
-            variables.entryId,
-            Date.now(),
-          );
+          useCloudNotificationsStore
+            .getState()
+            .resolveNoticeLocally(variables.entryId, Date.now());
         }
       },
       onError: (_error, _variables, context) => {
@@ -1437,13 +1438,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           !isActionableNotice(row) ||
           feedMode !== "cloud" ||
           !cloudAuthorizedNow()
-        ) return;
+        )
+          return;
         // The action has already succeeded. Retire immediately even while
         // an older relay omits resolvedAt or the marker write is unavailable.
-        useCloudNotificationsStore.getState().resolveNoticeLocally(
-          row.sourceId,
-          Date.now(),
-        );
+        useCloudNotificationsStore
+          .getState()
+          .resolveNoticeLocally(row.sourceId, Date.now());
         cloudResolve.mutate({ entryId: row.sourceId });
       },
       markAsRead: (target) => {
@@ -1861,7 +1862,7 @@ function rowFromHostEntryForOrigin(
     globalEntry: null,
     severity: entry.severity,
     outcome: entry.outcome,
-    resolvedAt: "resolvedAt" in entry ? entry.resolvedAt ?? null : null,
+    resolvedAt: "resolvedAt" in entry ? (entry.resolvedAt ?? null) : null,
     sourceRef: entry.sourceRef,
     originHostId,
     providerPackAttribution,
@@ -1954,7 +1955,8 @@ export function rowFromCloudFeedRow(
     globalEntry: null,
     severity: row.entry.severity,
     outcome: row.entry.outcome,
-    resolvedAt: "resolvedAt" in row.entry ? row.entry.resolvedAt ?? null : null,
+    resolvedAt:
+      "resolvedAt" in row.entry ? (row.entry.resolvedAt ?? null) : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
     providerPackAttribution,

@@ -133,7 +133,9 @@ function noticeRow(
   };
 }
 
-function seedCloud(rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>): void {
+function seedCloud(
+  rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>,
+): void {
   notificationFeedMode.value = "cloud";
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
@@ -141,8 +143,10 @@ function seedCloud(rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>): void 
       totalCount: rows.length,
       unreadCount: rows.filter((row) => row.entry.readAt === null).length,
       attentionCount: rows.filter(
-        (row) => row.entry.readAt === null &&
-          (row.entry.severity === "needs_action" || row.entry.severity === "failure"),
+        (row) =>
+          row.entry.readAt === null &&
+          (row.entry.severity === "needs_action" ||
+            row.entry.severity === "failure"),
       ).length,
     },
     version: (useCloudNotificationsStore.getState().version ?? 0) + 1,
@@ -265,52 +269,121 @@ describe("a sandbox.notice row in the notification center", () => {
     readonly severity: HostNotificationSeverity;
     readonly actionable: boolean;
   }> = [
-    { name: "resting warning", notice: WARNING, severity: "needs_action", actionable: true },
-    { name: "credits frozen", notice: { kind: "frozen", cause: "credits" }, severity: "needs_action", actionable: true },
-    { name: "payer removed", notice: { kind: "frozen", cause: "payer_removed" }, severity: "needs_action", actionable: true },
-    { name: "day-30 warning", notice: { kind: "frozen_warning", daysLeft: 1 }, severity: "needs_action", actionable: true },
-    ...(["resting_destroyed", "frozen_deleting", "frozen_destroyed", "lost", "create_failed"] as const).map((kind) => ({
-      name: kind, notice: { kind }, severity: "info" as const, actionable: false,
+    {
+      name: "resting warning",
+      notice: WARNING,
+      severity: "needs_action",
+      actionable: true,
+    },
+    {
+      name: "credits frozen",
+      notice: { kind: "frozen", cause: "credits" },
+      severity: "needs_action",
+      actionable: true,
+    },
+    {
+      name: "payer removed",
+      notice: { kind: "frozen", cause: "payer_removed" },
+      severity: "needs_action",
+      actionable: true,
+    },
+    {
+      name: "day-30 warning",
+      notice: { kind: "frozen_warning", daysLeft: 1 },
+      severity: "needs_action",
+      actionable: true,
+    },
+    ...(
+      [
+        "resting_destroyed",
+        "frozen_deleting",
+        "frozen_destroyed",
+        "lost",
+        "create_failed",
+      ] as const
+    ).map((kind) => ({
+      name: kind,
+      notice: { kind },
+      severity: "info" as const,
+      actionable: false,
     })),
-    { name: "destroyed by member", notice: { kind: "destroyed_by_member", actorName: "Alex" }, severity: "info", actionable: false },
+    {
+      name: "destroyed by member",
+      notice: { kind: "destroyed_by_member", actorName: "Alex" },
+      severity: "info",
+      actionable: false,
+    },
     ...(["suspend", "stop"] as const).flatMap((verb) =>
       (["confirmed", "failed"] as const).map((outcome) => ({
         name: `${verb} ${outcome}`,
-        notice: { kind: "manual_rest" as const, verb, outcome, byYou: false, actorName: "Alex" },
+        notice: {
+          kind: "manual_rest" as const,
+          verb,
+          outcome,
+          byYou: false,
+          actorName: "Alex",
+        },
         severity: "info" as const,
         actionable: false,
       })),
     ),
   ];
 
-  it.each(CASES)("groups and counts $name through the center and bell", async ({ notice, severity, actionable }) => {
-    seedCloud([noticeRow("entry-kind", notice, severity)]);
-    renderCenter();
+  it.each(CASES)(
+    "groups and counts $name through the center and bell",
+    async ({ notice, severity, actionable }) => {
+      seedCloud([noticeRow("entry-kind", notice, severity)]);
+      renderCenter();
 
-    await screen.findByTestId("notification-entry");
-    expect(screen.queryByText("Needs attention") !== null).toBe(actionable);
-    expect(screen.queryByText("Recent activity") !== null).toBe(!actionable);
-    expect(screen.queryByTestId("notifications-needs-you-count")?.textContent ?? null).toBe(actionable ? "1" : null);
-  });
+      const entry = await screen.findByTestId("notification-entry");
+      const section = entry.closest("section");
+      if (section === null) throw new Error("notification has no section");
+      expect(
+        within(section).getByText(
+          actionable ? "Needs attention" : "Recent activity",
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.queryByTestId("notifications-needs-you-count")?.textContent ??
+          null,
+      ).toBe(actionable ? "1" : null);
+    },
+  );
 
   it("keeps a read warning with no resolvedAt actionable and adds it to the task count", async () => {
     const warning = noticeRow("entry-read", WARNING, "needs_action");
-    seedCloud([{ ...warning, entry: { ...warning.entry, readAt: Date.now() } }]);
+    seedCloud([
+      { ...warning, entry: { ...warning.entry, readAt: Date.now() } },
+    ]);
     useNeedsYouTaskCountStore.setState({ count: 2 });
     renderCenter();
 
     await screen.findByText("Needs attention");
-    expect(screen.getByTestId("notifications-bell").getAttribute("aria-label")).toBe("Notifications, 3 need you");
-    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("3");
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, 3 need you");
+    expect(
+      screen.getByTestId("notifications-needs-you-count").textContent,
+    ).toBe("3");
   });
 
   it("mark all read acknowledges warnings without retiring them", async () => {
     seedCloud([noticeRow("entry-bulk-read", WARNING, "needs_action")]);
     renderCenter();
-    fireEvent.click(await screen.findByRole("button", { name: "Mark all notifications as read" }));
-    await waitFor(() => expect(hostCalls("host.notifications.cloudFeed.markAllRead")).toHaveLength(1));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Mark all notifications as read",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        hostCalls("host.notifications.cloudFeed.markAllRead"),
+      ).toHaveLength(1),
+    );
     expect(screen.getByText("Needs attention")).not.toBeNull();
-    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("1");
+    expect(
+      screen.getByTestId("notifications-needs-you-count").textContent,
+    ).toBe("1");
   });
 
   it("a resolved warning relayed by the server is recent even if unread", async () => {
@@ -327,26 +400,50 @@ describe("a sandbox.notice row in the notification center", () => {
     const row: HostNotificationsCloudFeedRowV15 = {
       ...noticeRow("entry-settings", WARNING, "needs_action"),
       entry: {
-        id: "entry-settings", kind: "environment.apply.failed", severity: "needs_action",
-        updatedAt: Date.now(), readAt: Date.now(), sourceRef: null, outcome: "errored", epicId: null, chatId: null,
-        payload: { kind: "environment_apply_failed", environmentId: "env-settings", hostId: "host-cloud", hostName: "Sandbox", itemKey: "settings", reason: "unavailable" },
+        id: "entry-settings",
+        kind: "environment.apply.failed",
+        severity: "needs_action",
+        updatedAt: Date.now(),
+        readAt: Date.now(),
+        sourceRef: null,
+        outcome: "errored",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "environment_apply_failed",
+          environmentId: "env-settings",
+          hostId: "host-cloud",
+          hostName: "Sandbox",
+          itemKey: "settings",
+          reason: "unavailable",
+        },
       },
     };
     seedCloud([row, noticeRow("entry-warning", WARNING, "needs_action")]);
     useNeedsYouTaskCountStore.setState({ count: 2 });
     renderCenter();
     await screen.findByText("Needs attention");
-    expect(screen.getByTestId("notifications-bell").getAttribute("aria-label")).toBe("Notifications, 4 need you");
-    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("4");
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, 4 need you");
+    expect(
+      screen.getByTestId("notifications-needs-you-count").textContent,
+    ).toBe("4");
   });
 
   it("reading Details acknowledges a warning without retiring it", async () => {
     seedCloud([noticeRow("entry-read-details", WARNING, "needs_action")]);
     renderCenter();
     fireEvent.click(await screen.findByTestId("sandbox-notice-details"));
-    await waitFor(() => expect(hostCalls("host.notifications.cloudFeed.markRead")).toEqual([{ entryId: "entry-read-details" }]));
+    await waitFor(() =>
+      expect(hostCalls("host.notifications.cloudFeed.markRead")).toEqual([
+        { entryId: "entry-read-details" },
+      ]),
+    );
     expect(screen.getByText("Needs attention")).not.toBeNull();
-    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("1");
+    expect(
+      screen.getByTestId("notifications-needs-you-count").textContent,
+    ).toBe("1");
   });
 
   it("retires an older warning when a later notice arrives for its sandbox, including after the outcome is dismissed", async () => {
@@ -355,8 +452,20 @@ describe("a sandbox.notice row in the notification center", () => {
     renderCenter();
     await screen.findByText("Needs attention");
 
-    const outcome = noticeRow("entry-new", { kind: "resting_destroyed" }, "info");
-    act(() => seedCloud([warning, { ...outcome, entry: { ...outcome.entry, updatedAt: warning.entry.updatedAt + 1 } }]));
+    const outcome = noticeRow(
+      "entry-new",
+      { kind: "resting_destroyed" },
+      "info",
+    );
+    act(() =>
+      seedCloud([
+        warning,
+        {
+          ...outcome,
+          entry: { ...outcome.entry, updatedAt: warning.entry.updatedAt + 1 },
+        },
+      ]),
+    );
     await waitFor(() => {
       expect(screen.queryByText("Needs attention")).toBeNull();
       expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
@@ -367,26 +476,56 @@ describe("a sandbox.notice row in the notification center", () => {
 
   it("does not retire a warning for a different sandbox or an older notice", async () => {
     const warning = noticeRow("entry-current", WARNING, "needs_action");
-    const older = noticeRow("entry-old-outcome", { kind: "resting_destroyed" }, "info");
-    const other = noticeRow("entry-other", { kind: "destroyed_by_member", actorName: null }, "info");
+    const older = noticeRow(
+      "entry-old-outcome",
+      { kind: "resting_destroyed" },
+      "info",
+    );
+    const other = noticeRow(
+      "entry-other",
+      { kind: "destroyed_by_member", actorName: null },
+      "info",
+    );
     seedCloud([
       warning,
-      { ...older, entry: { ...older.entry, updatedAt: warning.entry.updatedAt - 1 } },
-      { ...other, entry: { ...other.entry, updatedAt: warning.entry.updatedAt + 1, payload: { ...other.entry.payload, sandboxId: "another-sandbox" } } },
+      {
+        ...older,
+        entry: { ...older.entry, updatedAt: warning.entry.updatedAt - 1 },
+      },
+      {
+        ...other,
+        entry: {
+          ...other.entry,
+          updatedAt: warning.entry.updatedAt + 1,
+          payload: { ...other.entry.payload, sandboxId: "another-sandbox" },
+        },
+      },
     ]);
     renderCenter();
     await screen.findByText("Needs attention");
-    expect(screen.getByTestId("notifications-needs-you-count").textContent).toBe("1");
+    expect(
+      screen.getByTestId("notifications-needs-you-count").textContent,
+    ).toBe("1");
   });
 
   it("retires at destroyAt without requiring another feed snapshot", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const now = Date.now();
-    seedCloud([noticeRow("entry-expiring", { kind: "resting_warning", destroyAt: now + 1_000, periodMinutes: 5 }, "needs_action")]);
+    seedCloud([
+      noticeRow(
+        "entry-expiring",
+        { kind: "resting_warning", destroyAt: now + 1_000, periodMinutes: 5 },
+        "needs_action",
+      ),
+    ]);
     renderCenter();
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(screen.getByText("Needs attention")).not.toBeNull();
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
     expect(screen.queryByText("Needs attention")).toBeNull();
     expect(screen.getByText("Recent activity")).not.toBeNull();
     expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
@@ -473,7 +612,9 @@ describe("a sandbox.notice row in the notification center", () => {
   });
 
   it("offers a notice that is not a warning only Details and Dismiss", async () => {
-    seedCloud([noticeRow("entry-destroyed", { kind: "resting_destroyed" }, "info")]);
+    seedCloud([
+      noticeRow("entry-destroyed", { kind: "resting_destroyed" }, "info"),
+    ]);
     renderCenter();
 
     const actions = await screen.findByTestId("sandbox-notice-actions");
@@ -489,7 +630,9 @@ describe("a sandbox.notice row in the notification center", () => {
     seedCloud([noticeRow("entry-relay-unavailable", WARNING, "needs_action")]);
     renderCenter();
     fireEvent.click(await screen.findByText("Give it another 5 minutes"));
-    await waitFor(() => expect(hostCalls("host.notifications.cloudFeed.resolve")).toHaveLength(1));
+    await waitFor(() =>
+      expect(hostCalls("host.notifications.cloudFeed.resolve")).toHaveLength(1),
+    );
     expect(screen.queryByText("Needs attention")).toBeNull();
     expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   });
