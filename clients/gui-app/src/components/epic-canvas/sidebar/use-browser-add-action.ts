@@ -14,6 +14,8 @@ import {
 import { toast } from "sonner";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
+import { useBrowserOpenHost } from "@/hooks/browser/use-browser-open-host";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import {
@@ -36,11 +38,24 @@ export interface AddBrowserAction {
   readonly add: () => void;
 }
 
+/**
+ * Adds a browser on the host {@link useBrowserOpenHost} picks, which is not
+ * necessarily the host the surrounding panel lists: with no pin, a desktop app
+ * opens it on its own machine, so the tab is native.
+ */
 export function useAddBrowserAction(
+  epicId: string,
   tabId: string,
   onOpened: (() => void) | null,
 ): AddBrowserAction {
-  const sessions = useBrowserSessionsContext();
+  const openHostId = useBrowserOpenHost(
+    tabId,
+    useBrowserSessionsContext().hostId,
+  );
+  const sessions = useBrowserSessionsForHost({
+    hostId: openHostId,
+    scope: { kind: "epic", epicId },
+  });
   const queryClient = useQueryClient();
   const { openTile } = useEpicTileNavigation();
   const openTabKey = browserMutationKeys.openTab(sessions.hostId);

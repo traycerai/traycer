@@ -133,6 +133,15 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => browserPanelState.value,
 }));
+// The add action reads the open host's sessions by host id; with no pin and no
+// local host the open host is the panel's own, so the same fake answers.
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsForHost: () => browserPanelState.value,
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
     props.children,

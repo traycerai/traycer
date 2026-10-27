@@ -3,20 +3,28 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
+import { useBrowserOpenHost } from "@/hooks/browser/use-browser-open-host";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useBrowserSessions } from "./use-browser-sessions";
 import {
+  useBrowserSessions,
+  useBrowserSessionsForHost,
+} from "./use-browser-sessions";
+import {
+  BrowserOpenSessionsSnapshotContext,
   BrowserSessionsContext,
   BrowserSessionsCoordinatorKeyContext,
   BrowserSessionsSnapshotContext,
+  type BrowserSessionsSnapshot,
 } from "./browser-sessions-context";
 
 /**
- * The canvas provider: the epic's inventory on the canvas host.
+ * The canvas provider: the epic's inventory on the canvas host, plus the open
+ * host's for links clicked under this view tab ({@link BrowserOpenSessionsProvider}).
  *
  * Every provider here - this one, {@link BrowserSessionsHostProvider} and
  * {@link BrowserSessionsHostBoundary} - acquires the REFCOUNTED coordinator by
@@ -31,14 +39,55 @@ export function BrowserSessionsProvider(props: {
 }) {
   const hostId = useCanvasHostId();
   const hostClient = useEpicSessionHostClient();
+  // Fixed for the surface's life (`EpicSurface` provides it), so the branch
+  // below never flips and never remounts the children.
+  const viewTabId = useEpicViewTabId();
   return (
     <BrowserSessionsHostProvider
       hostId={hostId}
       hostClient={hostClient}
       scope={{ kind: "epic", epicId: props.epicId }}
     >
-      {props.children}
+      {viewTabId === null ? (
+        props.children
+      ) : (
+        <BrowserOpenSessionsProvider epicId={props.epicId} tabId={viewTabId}>
+          {props.children}
+        </BrowserOpenSessionsProvider>
+      )}
     </BrowserSessionsHostProvider>
+  );
+}
+
+/**
+ * Holds the inventory of the host a browser the person opens from this view
+ * tab goes to ({@link useBrowserOpenHost}), for the link opener to read at
+ * click time.
+ *
+ * Here rather than in `useOpenBrowserUrl` because every link surface mounts
+ * that hook, and subscribing each one to a stream would re-render all of them
+ * on every frame. Acquired eagerly for the same reason `renderTile` acquires a
+ * tile's: a stream opened at click time is not live for that click. When the
+ * open host is the canvas host this shares the canvas's coordinator.
+ *
+ * Mounted once per view tab, and again by the hosted chat surface, which
+ * renders in a React root of its own.
+ */
+export function BrowserOpenSessionsProvider(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly children: ReactNode;
+}) {
+  const hostId = useBrowserOpenHost(props.tabId, null);
+  const sessions = useBrowserSessionsForHost({
+    hostId,
+    scope: { kind: "epic", epicId: props.epicId },
+  });
+  const snapshot = useSnapshotRef(hostId === null ? null : sessions);
+  return (
+    <BrowserOpenSessionsSnapshotContext.Provider value={snapshot}>
+      {props.children}
+    </BrowserOpenSessionsSnapshotContext.Provider>
   );
 }
 
@@ -133,15 +182,22 @@ export function BrowserSessionsSnapshotProvider(props: {
   readonly value: BrowserSessionsState | null;
   readonly children: ReactNode;
 }) {
-  const ref = useRef<BrowserSessionsState | null>(props.value);
-  // Layout, not passive: the ref has to hold the committed value before the
-  // frame the user can click in, and a passive effect may flush after paint.
-  useLayoutEffect(() => {
-    ref.current = props.value;
-  });
+  const snapshot = useSnapshotRef(props.value);
   return (
-    <BrowserSessionsSnapshotContext.Provider value={ref}>
+    <BrowserSessionsSnapshotContext.Provider value={snapshot}>
       {props.children}
     </BrowserSessionsSnapshotContext.Provider>
   );
+}
+
+function useSnapshotRef(
+  value: BrowserSessionsState | null,
+): BrowserSessionsSnapshot {
+  const ref = useRef<BrowserSessionsState | null>(value);
+  // Layout, not passive: the ref has to hold the committed value before the
+  // frame the user can click in, and a passive effect may flush after paint.
+  useLayoutEffect(() => {
+    ref.current = value;
+  });
+  return ref;
 }

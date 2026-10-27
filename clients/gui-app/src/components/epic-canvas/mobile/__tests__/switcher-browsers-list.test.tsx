@@ -136,6 +136,14 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState }>(() => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsState.value,
 }));
+// The add action reads the open host's sessions by host id; with no pin and no
+// local host the open host is the panel's own, so the same fake answers.
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsForHost: () => sessionsState.value,
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => [{ id: "chat-driver", title: "Checkout agent" }],

@@ -114,7 +114,11 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
   );
   // Leave when a tile opens, including request-only chrome. Preflight
   // refusals keep the sheet's Retry available; PiP waits for the result.
-  const { add: handleAdd, isAdding } = useAddBrowserAction(tabId, onClose);
+  const { add: handleAdd, isAdding } = useAddBrowserAction(
+    epicId,
+    tabId,
+    onClose,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

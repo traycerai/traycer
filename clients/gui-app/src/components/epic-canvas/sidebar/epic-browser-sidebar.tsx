@@ -138,7 +138,11 @@ function BrowsersPanelBodyLive(props: {
     );
   }, [searchQuery, tabs, visibleRevealRequest]);
   const { openTile } = useEpicTileNavigation();
-  const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
+  const { add: addBrowser, isAdding } = useAddBrowserAction(
+    props.epicId,
+    props.tabId,
+    null,
+  );
 
   useLayoutEffect(() => {
     if (revealRequest === null || listRef.current === null) return;

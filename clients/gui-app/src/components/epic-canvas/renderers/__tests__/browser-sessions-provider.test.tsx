@@ -1,5 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ReactNode } from "react";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
@@ -8,11 +15,20 @@ import {
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  BrowserOpenSessionsProvider,
   BrowserSessionsHostBoundary,
   BrowserSessionsHostProvider,
   BrowserSessionsProvider,
 } from "@/components/epic-canvas/renderers/browser-sessions-provider";
-import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  useBrowserSessionsContext,
+  useMaybeBrowserOpenSessionsSnapshot,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -1246,5 +1262,92 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(
       stream.sentFrames.filter((frame) => frame.kind === "closeTab"),
     ).toHaveLength(1);
+  });
+});
+
+describe("BrowserOpenSessionsProvider", () => {
+  const TAB_ID = "view-tab-open";
+  const LOCAL_HOST_ID = "local-host";
+  const PINNED_HOST_ID = "pinned-host";
+
+  // The ref is read at click time, so the probe reads it in a click handler.
+  function OpenSnapshotProbe(): ReactNode {
+    const snapshot = useMaybeBrowserOpenSessionsSnapshot();
+    const [published, setPublished] = useState("unread");
+    return (
+      <button
+        type="button"
+        data-testid="open-host"
+        onClick={() => {
+          setPublished(
+            snapshot === null ? "no-ref" : (snapshot.current?.hostId ?? "null"),
+          );
+        }}
+      >
+        {published}
+      </button>
+    );
+  }
+
+  function publishedOpenHost(): string | null {
+    fireEvent.click(screen.getByTestId("open-host"));
+    return screen.getByTestId("open-host").textContent;
+  }
+
+  function renderOpenProvider(): void {
+    render(
+      <BrowserOpenSessionsProvider epicId="epic-1" tabId={TAB_ID}>
+        <OpenSnapshotProbe />
+      </BrowserOpenSessionsProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    installTransport(false);
+    installTransportForHost(LOCAL_HOST_ID, "ws://local-host/stream");
+    installTransportForHost(PINNED_HOST_ID, "ws://pinned-host/stream");
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    hookState.localHostId = "host-test";
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  it("publishes this machine's host inventory when no pin picks one", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(LOCAL_HOST_ID);
+  });
+
+  it("publishes the panel's pinned host before this machine's", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(tabSurfaceKey("browsers", TAB_ID), PINNED_HOST_ID);
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "ready", dead: null },
+        { hostId: PINNED_HOST_ID, status: "ready", dead: null },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(PINNED_HOST_ID);
+  });
+
+  it("publishes nothing when neither a pin nor a local host picks one", () => {
+    hookState.localHostId = null;
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe("null");
   });
 });
