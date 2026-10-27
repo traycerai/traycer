@@ -5,7 +5,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -224,6 +226,9 @@ function ChatForkModelPicker(props: {
   readonly store: ComposerToolbarStore;
   readonly selectedHostId: string;
   readonly disabled: boolean;
+  readonly openForHarnessRef: RefObject<
+    ((harnessId: GuiHarnessId) => void) | null
+  >;
 }) {
   // Catalog updates replace toolbar state. Keep these subscriptions below the
   // dialog's useComposerToolbarStore hook so they cannot re-run its catalog
@@ -236,6 +241,7 @@ function ChatForkModelPicker(props: {
   );
   return (
     <HarnessModelPicker
+      openForHarnessRef={props.openForHarnessRef}
       labelDisplay="responsive"
       store={props.store}
       maxModeContext={maxModeContext}
@@ -617,12 +623,19 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.values.selection.harnessId,
   );
+  const forkModelPickerRef = useRef<((harnessId: GuiHarnessId) => void) | null>(
+    null,
+  );
   const stagedSignInCheck = useStagedSendSignInCheck({
-    client: selectedHostClient,
-    hostId: selectedHostId,
     harnessId: pickedHarnessId,
     active: activeWorkspaceTarget !== null && forkStage !== null,
+    onChooseModel: () => forkModelPickerRef.current?.("traycer"),
+    onChooseAnotherHost: () =>
+      useStagedSandboxStore.getState().clear(forkSurfaceKey),
   });
+  const stagedCheck = forkStage === null ? null : stagedSignInCheck(forkStage);
+  const stagedCatalogueNotice =
+    stagedCheck?.pending === true ? stagedCheck : null;
   // On a sandbox host an agent that cannot run there is refused at Fork, with
   // the configuration's Providers, never swapped; a staged fork is checked
   // above instead.
@@ -631,6 +644,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     client: selectedHostClient,
     harnessId: forkHarnessId,
     active: activeWorkspaceTarget !== null && forkStage === null,
+    onChooseModel: () => forkModelPickerRef.current?.("traycer"),
   });
   // The selected host's own gate: a staged sandbox is not that host, and the
   // fork runs on it under its own.
@@ -643,9 +657,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A stage's destination does not exist yet. Its driver validates the picked
   // model there, or reads that sandbox's default when no slug was picked.
   const modelResolved =
-    forkStage !== null ||
-    (modelSlugPresent &&
-      (!isCrossHost || catalogConfirmed || catalogSubstituted));
+    forkStage !== null
+      ? stagedCatalogueNotice === null
+      : modelSlugPresent &&
+        (!isCrossHost || catalogConfirmed || catalogSubstituted);
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"
@@ -847,7 +862,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   const submitStagedFork = useCallback(
     (staged: StagedSandbox, target: ChatForkDialogTarget): void => {
-      // An agent signed out on the staged configuration is refused here,
+      // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the dialog stays as it was.
       const signedOut = stagedSignInCheck(staged);
       if (signedOut !== null) {
@@ -1226,6 +1241,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             <div className="flex min-w-0 items-center gap-2">
               <ComposerStagedSurfaceKeyProvider surfaceKey={forkSurfaceKey}>
                 <ChatForkModelPicker
+                  openForHarnessRef={forkModelPickerRef}
                   key={modelPickerKey}
                   store={toolbarStore}
                   disabled={createChat.isPending || attachEnvironment.isPending}
@@ -1253,7 +1269,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             hostScope={workspaceHostScope}
           />
           <ComposerHostNotice
-            notice={stagedRefusal}
+            notice={stagedCatalogueNotice ?? stagedRefusal}
             onDismiss={() => setStagedRefusal(null)}
           />
           {teamSandboxHarnessBlocked ? (

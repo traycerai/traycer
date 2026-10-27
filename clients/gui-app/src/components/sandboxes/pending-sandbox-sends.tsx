@@ -74,6 +74,11 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useOpenLink } from "@/lib/links/open-link";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import {
+  isNewConversationDraftOccupied,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 import { recordStoppedSandboxSend } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -554,10 +559,8 @@ function executePendingReadiness(input: {
     agentNotReady(
       surfaceKey,
       current.failure,
-      requested.readiness.kind,
-      requested.readiness.kind === "setup-failed"
-        ? requested.readiness.detail
-        : null,
+      send.settings.harnessId,
+      requested.readiness,
     );
   }
   if (decision.effects.includes("fetch-model")) refetchModel();
@@ -913,6 +916,7 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
         ? "stop"
         : "settings";
     case "no-provider":
+    case "agent-not-offered":
     case "agent-setup-failed":
       return "provider";
     case "failed":
@@ -1022,33 +1026,35 @@ function projectSandboxBlocker(
 function agentNotReady(
   surfaceKey: string,
   failure: StagedSandbox["failure"],
-  readinessKind: RequestedAgentReadiness["kind"],
-  failureDetail: string | null,
+  harnessId: GuiHarnessId,
+  readiness: RequestedAgentReadiness,
 ): void {
-  if (readinessKind === "unusable" && failure?.kind !== "no-provider") {
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { failure: { kind: "no-provider" } });
-  } else if (
-    readinessKind === "setup-failed" &&
-    (failure?.kind !== "agent-setup-failed" ||
-      failure.detail !== (failureDetail ?? ""))
-  ) {
-    useStagedSandboxStore.getState().report(surfaceKey, {
-      failure: { kind: "agent-setup-failed", detail: failureDetail ?? "" },
-    });
-  } else if (
-    (readinessKind === "ready" || readinessKind === "waiting") &&
-    isAgentReadinessFailure(failure)
-  ) {
-    useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+  let next: StagedSandbox["failure"];
+  switch (readiness.kind) {
+    case "not-offered":
+      next = { kind: "agent-not-offered", harnessId };
+      break;
+    case "unusable":
+      next = { kind: "no-provider" };
+      break;
+    case "setup-failed":
+      next = { kind: "agent-setup-failed", detail: readiness.detail };
+      break;
+    case "ready":
+    case "waiting":
+      if (!isAgentReadinessFailure(failure)) return;
+      next = null;
   }
+  if (JSON.stringify(next) === JSON.stringify(failure)) return;
+  useStagedSandboxStore.getState().report(surfaceKey, { failure: next });
 }
 
 /** The requested agent can become ready without withdrawing the send. */
 function isAgentReadinessFailure(failure: StagedSandbox["failure"]): boolean {
   return (
-    failure?.kind === "no-provider" || failure?.kind === "agent-setup-failed"
+    failure?.kind === "no-provider" ||
+    failure?.kind === "agent-not-offered" ||
+    failure?.kind === "agent-setup-failed"
   );
 }
 
@@ -2163,12 +2169,42 @@ function PendingStopLine(props: {
   );
 }
 
+/** Model recovery needs an undispatched message and an empty destination draft. */
+function pendingSandboxModelRecovery(input: {
+  readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+  readonly tabId: string;
+  readonly canWithdraw: boolean;
+  readonly draftOccupied: boolean;
+}): (() => void) | null {
+  if (
+    input.send.request.kind !== "chat" ||
+    !input.send.epicConfirmed ||
+    input.send.ended === true ||
+    !input.canWithdraw ||
+    input.draftOccupied
+  )
+    return null;
+  return () => {
+    endSendBackToComposer({
+      send: input.send,
+      stage: input.stage,
+      tabId: input.tabId,
+      restage: false,
+      modelPickerHarnessId: "traycer",
+    });
+  };
+}
+
 function PendingStagedSendItem(props: {
   readonly send: PendingSandboxSend;
   readonly tabId: string;
 }): ReactNode {
   const { send } = props;
   const canWithdraw = usePendingSendWithdrawal(send.id);
+  const taskDraftOccupied = useNewConversationModalStore((state) =>
+    isNewConversationDraftOccupied(state.draftPatchesByEpicId[send.epicId]),
+  );
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const observedStage = useStagedSandbox(surfaceKey);
   const stage = observedStage ?? send.stopStage ?? null;
@@ -2281,6 +2317,13 @@ function PendingStagedSendItem(props: {
     stage.target.name.length > 0
       ? stage.target.name
       : stagedSandboxFallbackName(send.text);
+  const chooseModel = pendingSandboxModelRecovery({
+    send,
+    stage,
+    tabId: props.tabId,
+    canWithdraw,
+    draftOccupied: taskDraftOccupied,
+  });
   return (
     <div
       className="flex w-full flex-col gap-2"
@@ -2315,6 +2358,7 @@ function PendingStagedSendItem(props: {
             onOpenTerminal: newHost.onOpenTerminal,
             // The configuration's own Providers, a team's included.
             onOpenProviders: providersOpener(stage.target.configuration),
+            onChooseModel: chooseModel,
           }}
         />
       )}
@@ -2458,8 +2502,16 @@ function endSendBackToComposer(input: {
   readonly stage: StagedSandbox;
   readonly tabId: string;
   readonly restage: boolean;
+  readonly modelPickerHarnessId?: GuiHarnessId;
 }): ReturnedPendingSandboxSend {
   const { send } = input;
+  if (
+    input.modelPickerHarnessId !== undefined &&
+    isNewConversationDraftOccupied(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[send.epicId],
+    )
+  )
+    return { kind: "none" };
   const returned = returnPendingSandboxSend(send.id);
   if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
     return returned;
@@ -2472,12 +2524,24 @@ function endSendBackToComposer(input: {
     useStagedSandboxStore.getState().stage(key, input.stage.target);
     openStagedShapeSheet(key);
   }
+  if (
+    input.modelPickerHarnessId !== undefined &&
+    input.stage.createdHostId !== null
+  ) {
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(
+        newConversationSurfaceKey(send.epicId),
+        input.stage.createdHostId,
+      );
+  }
   useNewConversationModalOpenStore.getState().open({
     epicId: send.epicId,
     tabId: input.tabId,
     placement: returned.kind === "task" ? returned.placement : null,
     parentId: returned.kind === "task" ? returned.parentId : null,
     hostId: null,
+    modelPickerHarnessId: input.modelPickerHarnessId,
   });
   return returned;
 }

@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
@@ -96,7 +97,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   }),
 }));
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => () => testState.stagedSignedOut,
+  useStagedSendSignInCheck: () => () => testState.stagedNotice,
 }));
 
 vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => {
@@ -135,23 +136,9 @@ const testState = vi.hoisted(() => ({
   /** What the modal hands its workspace controls to stage a sandbox with. */
   sandboxStaging: null as SandboxStagingSurface | null,
   /** What a sandbox host's agent gate says about the agent picked. */
-  agentGateNotice: null as {
-    readonly kind: "refused";
-    readonly message: string;
-    readonly action: {
-      readonly label: string;
-      readonly onAction: () => void;
-    } | null;
-  } | null,
-  /** What the staged send's sign-in check says: `null` lets it through. */
-  stagedSignedOut: null as {
-    readonly kind: "refused";
-    readonly message: string;
-    readonly action: {
-      readonly label: string;
-      readonly onAction: () => void;
-    } | null;
-  } | null,
+  agentGateNotice: null as ComposerHostNoticeState | null,
+  /** What the staged send's catalogue check says: `null` lets it through. */
+  stagedNotice: null as ComposerHostNoticeState | null,
   /** Whether a sandbox is staged: the staged send then takes the Start. */
   staged: false,
   /** How many sends or Starts reached the staged send's intercept. */
@@ -641,7 +628,7 @@ afterEach(() => {
   testState.stagedSendInput = null;
   testState.stagedHandoffInput = null;
   testState.agentGateNotice = null;
-  testState.stagedSignedOut = null;
+  testState.stagedNotice = null;
   testState.sandboxStaging = null;
   testState.bodyMounts = 0;
   testState.bodyUnmounts = 0;
@@ -766,19 +753,24 @@ function deferred<T>(): {
 }
 
 describe("new-conversation modal refusals at Send", () => {
-  const SENTENCE = "Sign in to a coding agent to run agents on Personal.";
+  const SENTENCE =
+    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
 
-  function refusal(onAction: () => void) {
+  function refusal(onAction: () => void, message: string, label: string) {
     return {
       kind: "refused" as const,
-      message: SENTENCE,
-      action: { label: "Open Personal's Providers", onAction },
+      message,
+      action: { label, onAction },
     };
   }
 
   it("refuses an agent that cannot run on the sandbox host with the Providers link, creating nothing and keeping the draft", () => {
     const openProviders = vi.fn();
-    testState.agentGateNotice = refusal(openProviders);
+    testState.agentGateNotice = refusal(
+      openProviders,
+      SENTENCE,
+      "Open Personal's Providers",
+    );
     renderModal();
 
     act(() => {
@@ -795,9 +787,13 @@ describe("new-conversation modal refusals at Send", () => {
     expect(openProviders).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a staged send whose agent is signed out on the staged configuration, before any create or wake", () => {
-    const openProviders = vi.fn();
-    testState.stagedSignedOut = refusal(openProviders);
+  it("refuses a staged send when its requested agent is not offered, before any create or wake", () => {
+    const chooseModel = vi.fn();
+    testState.stagedNotice = refusal(
+      chooseModel,
+      "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      "Choose a model",
+    );
     renderModal();
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
@@ -808,7 +804,7 @@ describe("new-conversation modal refusals at Send", () => {
     });
 
     expect(screen.getByTestId("composer-host-notice").textContent).toContain(
-      SENTENCE,
+      "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
     );
     expect(testState.createChat).not.toHaveBeenCalled();
     expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
@@ -821,8 +817,8 @@ describe("new-conversation modal refusals at Send", () => {
     expect(draftSurvived()).toBe(true);
     expect(testState.onSubmitted).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId("composer-host-notice-action"));
-    expect(openProviders).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Choose a model" }));
+    expect(chooseModel).toHaveBeenCalledTimes(1);
   });
 
   it("hands the same staged send over when the agent is signed in", () => {

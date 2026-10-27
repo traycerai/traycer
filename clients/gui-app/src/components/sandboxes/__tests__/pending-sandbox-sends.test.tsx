@@ -131,8 +131,17 @@ const SANDBOX_HOST = "sbx-host";
 const SANDBOX_ID = "sbx-1";
 const SEND_ID = "send-1";
 const SURFACE = pendingSendSurfaceKey(SEND_ID);
+const OCCUPIED_NEW_CHAT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "keep my other draft" }],
+    },
+  ],
+};
 const PERSONAL_SENTENCE =
-  "Sign in to a coding agent to run agents on Personal.";
+  "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
 
 interface FakeClient {
   readonly hostId: string;
@@ -689,6 +698,11 @@ const CODEX_SETUP_FAILED: HostAnswers = {
   ],
 };
 
+const CODEX_NOT_OFFERED: HostAnswers = {
+  harnesses: [harnessRow("claude", { available: true })],
+  providers: [providerRow("claude-code", { status: "installed" })],
+};
+
 interface SeedOptions {
   readonly send: Partial<PendingSandboxSend>;
   readonly target: StagedSandboxTarget;
@@ -1126,15 +1140,21 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(createChatCalls()).toEqual([]);
   });
 
-  it("refuses a Personal send whose agent cannot run there with the sign-in sentence, uses no other agent, and opens Personal's Providers", async () => {
-    seed(SEEDED);
-    // Settled unavailable, nothing pending, no pack in the way; Claude is ready.
+  it("refuses a Personal send whose agent cannot run there, uses no other agent, and opens Personal's Providers", async () => {
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, harnessId: "traycer" } },
+    });
+    // Traycer is present but unavailable; another ready agent is not a fallback.
     answerHost(SANDBOX_HOST, {
       harnesses: [
-        harnessRow("codex", { available: false, availabilityPending: false }),
+        harnessRow("traycer", {
+          available: false,
+          availabilityPending: false,
+        }),
         harnessRow("claude", { available: true }),
       ],
-      providers: [providerRow("codex", null), providerRow("claude-code", null)],
+      providers: [providerRow("claude-code", null)],
     });
     mount();
 
@@ -1158,6 +1178,95 @@ describe("a send waiting for the requested agent on its sandbox", () => {
       configurationId: PERSONAL_CONFIGURATION_ID,
       pageId: "providers",
     });
+  });
+
+  it("keeps the Traycer picker remedy out of an occupied new-chat draft until it clears", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, CODEX_NOT_OFFERED);
+      mount();
+
+      const line = await screen.findByTestId("sandbox-refusal-line");
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "agent-not-offered",
+          harnessId: "codex",
+        });
+        expect(
+          within(line).getByRole("button", { name: "Choose another host" }),
+        ).toBeDefined();
+      });
+      expect(
+        within(line).getByText(
+          "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+        ),
+      ).toBeDefined();
+      expect(
+        within(line).getByRole("button", { name: "Choose a model" }),
+      ).toBeDefined();
+      expect(
+        within(line).getByRole("button", { name: "Open terminal instead" }),
+      ).toBeDefined();
+      expect(createChatCalls()).toEqual([]);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+        "fix the login bug",
+      );
+
+      act(() => {
+        useNewConversationModalStore
+          .getState()
+          .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+      });
+      await waitFor(() => {
+        expect(
+          within(line).queryByRole("button", { name: "Choose a model" }),
+        ).toBeNull();
+      });
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({ content: OCCUPIED_NEW_CHAT_CONTENT });
+      const openTerminalButton = within(line).getByRole("button", {
+        name: "Open terminal instead",
+      });
+      expect(
+        openTerminalButton instanceof HTMLButtonElement &&
+          openTerminalButton.disabled,
+      ).toBe(false);
+      const chooseAnotherHostButton = within(line).getByRole("button", {
+        name: "Choose another host",
+      });
+      expect(
+        chooseAnotherHostButton instanceof HTMLButtonElement &&
+          chooseAnotherHostButton.disabled,
+      ).toBe(false);
+
+      act(() => {
+        useNewConversationModalStore.getState().clearDraft("epic-1");
+      });
+      await within(line).findByRole("button", { name: "Choose a model" });
+
+      fireEvent.click(
+        within(line).getByRole("button", { name: "Choose a model" }),
+      );
+
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
+      expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
+        {
+          epicId: "epic-1",
+          modelPickerHarnessId: "traycer",
+        },
+      );
+    } finally {
+      restoreLocks();
+    }
   });
 
   it("delivers the requested agent after its Personal provider is repaired, without a manual retry or a second sandbox", async () => {
@@ -1208,7 +1317,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
       providers: [providerRow("codex", null), providerRow("claude-code", null)],
     };
 
-    it("refuses with the team's sentence and opens that team's own Providers, by its environment", async () => {
+    it("shows the team's Traycer Inference remedy and opens that team's Providers by its environment", async () => {
       mocks.environments = [
         { environmentId: "env-personal", ownerKind: "user", ownerId: "user-1" },
         {
@@ -1229,7 +1338,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
       const line = await screen.findByTestId("sandbox-refusal-line");
       expect(
         within(line).getByText(
-          "Sign in to a coding agent to run agents on Acme.",
+          "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
         ),
       ).toBeDefined();
       fireEvent.click(
@@ -2659,6 +2768,27 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
 });
 
 describe("a fork waiting on its sandbox", () => {
+  it("does not reopen a model picker when a pending fork's sandbox lacks its agent", async () => {
+    seed({ ...SEEDED, send: { request: FORK_REQUEST } });
+    answerHost(SANDBOX_HOST, CODEX_NOT_OFFERED);
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+        kind: "agent-not-offered",
+        harnessId: "codex",
+      });
+    });
+    const line = screen.getByTestId("sandbox-refusal-line");
+    expect(
+      within(line).queryByRole("button", { name: "Choose a model" }),
+    ).toBeNull();
+    expect(createChatCalls()).toEqual([]);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.request,
+    ).toEqual(FORK_REQUEST);
+  });
+
   it("keeps a fork wake classified as a send", async () => {
     const request = {
       kind: "fork" as const,

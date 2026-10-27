@@ -5,13 +5,19 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import {
+  sandboxAgentNotOfferedNotice,
+  sandboxAgentSecondaryActions,
+  type SandboxAgentRemedies,
+} from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
 import { requestedAgentReadiness } from "@/lib/sandboxes/pending-sandbox-send";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   configurationLabel,
   openProvidersLabel,
-  signInToCodingAgentLine,
+  enableSandboxInferenceLine,
 } from "@/lib/sandboxes/sandbox-strings";
 
 export interface SandboxAgentGate {
@@ -41,29 +47,40 @@ const NOT_BLOCKED: SandboxAgentGate = {
  * nothing. Every other host passes, as does a host whose lists have not
  * answered: the host has the final word.
  */
-export function useSandboxAgentGate(input: {
-  readonly hostId: string | null;
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly harnessId: GuiHarnessId | null;
-  readonly active: boolean;
-}): SandboxAgentGate {
+export function useSandboxAgentGate(
+  input: {
+    readonly hostId: string | null;
+    readonly client: HostClient<HostRpcRegistry> | null;
+    readonly harnessId: GuiHarnessId | null;
+    readonly active: boolean;
+  } & SandboxAgentRemedies,
+): SandboxAgentGate {
   const configuration = useSandboxHostConfiguration(input.hostId);
   const watching = input.active && configuration !== null;
   const activity = { enabled: watching, subscribed: watching };
   const harnesses = useGuiHarnessesQueryForClient(input.client, activity);
   const providers = useProvidersListForClient(input.client, activity);
+  const offeredAgents = useSandboxCatalogue(watching).data?.offeredAgents;
   const providersOpener = useConfigurationProvidersOpener(
     input.active && configuration !== null && configuration.kind === "team",
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
+  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId)) {
+    const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
+    return { blocked: true, hint: notice.message, notice };
+  }
   const readiness = requestedAgentReadiness(
     input.harnessId,
     harnesses.data?.harnesses,
     providers.data?.providers,
   );
+  if (readiness.kind === "not-offered") {
+    const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
+    return { blocked: true, hint: notice.message, notice };
+  }
   if (readiness.kind !== "unusable") return NOT_BLOCKED;
   const label = configurationLabel(stageConfigurationCopy(configuration));
-  const hint = signInToCodingAgentLine(label);
+  const hint = enableSandboxInferenceLine(label);
   const openProviders = providersOpener(configuration);
   return {
     blocked: true,
@@ -75,6 +92,7 @@ export function useSandboxAgentGate(input: {
         openProviders === null
           ? null
           : { label: openProvidersLabel(label), onAction: openProviders },
+      secondaryActions: sandboxAgentSecondaryActions(input),
     },
   };
 }

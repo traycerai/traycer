@@ -57,6 +57,7 @@ import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pac
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
+import { stagedSandboxCheckingNotice } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   selectGlobalLastRunSettings,
@@ -97,6 +98,7 @@ import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-hos
 import {
   useStagedSandboxHandoff,
   useStagedSandboxSend,
+  useOpenLandingStagedTerminal,
   type StagedResubmit,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
@@ -533,12 +535,20 @@ export function LandingComposer(props: LandingComposerProps) {
     toolbarStore,
     (s) => s.values.selection.harnessId,
   );
+  const openStagedTerminal = useOpenLandingStagedTerminal(composerSurfaceKey);
   const stagedSignInCheck = useStagedSendSignInCheck({
-    client: hostClient,
-    hostId: resolvedHostId,
     harnessId: pickedHarnessId,
     active: chatComposerActive && workspaceGate.stagedAhead,
+    onOpenTerminalInstead: openStagedTerminal,
+    onChooseAnotherHost: () => {
+      useStagedSandboxStore.getState().clear(composerSurfaceKey);
+      dismissHostNotice();
+    },
   });
+  const stagedCatalogueNotice = stagedSandboxCheckingNotice(
+    readStagedSandbox(composerSurfaceKey),
+    stagedSignInCheck,
+  );
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
     workspaceDisabledHint: workspaceGate.disabledHint,
     signedOut: reauthGate.signedOut,
@@ -551,7 +561,7 @@ export function LandingComposer(props: LandingComposerProps) {
     isSubmitting,
     attachmentPending,
     submitBlocked,
-    workspaceCanStart,
+    workspaceCanStart: workspaceCanStart && stagedCatalogueNotice === null,
     hasSubmittableContent,
   });
 
@@ -804,7 +814,7 @@ export function LandingComposer(props: LandingComposerProps) {
   /** Hands this draft to its task, preserving the staged sandbox and owner. */
   const submitStagedSandbox = useCallback(
     (staged: StagedSandbox): boolean => {
-      // An agent signed out on the staged configuration is refused here,
+      // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the draft and the chip stay.
       const signedOut = stagedSignInCheck(staged);
       if (signedOut !== null) {
@@ -1084,6 +1094,7 @@ export function LandingComposer(props: LandingComposerProps) {
             {stagedSend.line}
             <ComposerHostNotice
               notice={hostNotice}
+              pendingNotice={stagedCatalogueNotice}
               onDismiss={dismissHostNotice}
             />
             <LandingTeamChatLine owner={owner} />

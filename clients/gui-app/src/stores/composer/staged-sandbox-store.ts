@@ -1,4 +1,5 @@
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
@@ -84,10 +85,11 @@ export type StagedSandboxFailure =
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
   /**
-   * The sandbox is up; the requested agent cannot run on it (no sign-in on
-   * the configuration, or not offered there). Never swapped for another.
+   * The sandbox is up; its configuration cannot run the offered agent.
    */
   | { readonly kind: "no-provider" }
+  /** The sandbox is up, but its catalogue does not offer the requested agent. */
+  | { readonly kind: "agent-not-offered"; readonly harnessId: GuiHarnessId }
   /**
    * The sandbox is up; the requested agent's install there failed. `detail`
    * is the host's own sentence for it.
@@ -168,6 +170,7 @@ export function refusedBeforeCreate(
     case "settings":
     case "timed-out":
     case "no-provider":
+    case "agent-not-offered":
     case "agent-setup-failed":
     case "not-sent":
       return false;
