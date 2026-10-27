@@ -507,6 +507,33 @@ describe("<BotChannelView /> a post the bot parked on", () => {
     expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
   });
 
+  it("offers Retry on a post parked on its first delivery, before any turn took it", () => {
+    // As the host reports a delivery it could not start: no turn ever began,
+    // and the parked entry names the request the queue is held on.
+    const summary =
+      "Queue paused because a conversation message could not be delivered: the chat has no workspace to run in.";
+    activityStore.setState({
+      activity: {
+        trunk: {
+          state: "parked",
+          startedAt: null,
+          step: null,
+          requestId: POST_REQUEST,
+          reason: { summary, code: null, harnessId: "claude", action: "none" },
+        },
+        threads: {},
+      },
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-retry",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(new RegExp(summary.slice(0, 40)))).toBeTruthy();
+  });
+
   it("offers nothing when the parked session carries no request", () => {
     activityStore.setState({
       activity: { trunk: sessionOn("parked", null), threads: {} },
