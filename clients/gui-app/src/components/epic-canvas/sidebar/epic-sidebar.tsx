@@ -1315,6 +1315,7 @@ function CommentsPanelBodyLive(props: {
         icon={MessageSquareText}
         title="No artifact open"
         description="Open an artifact to see and add comments on it."
+        action={null}
         testId="epic-comments-empty"
       />
     );
@@ -1450,6 +1451,7 @@ function fileTreePanelBody(input: {
         icon={FolderOpen}
         title="No workspace linked."
         description={null}
+        action={null}
         testId="epic-file-tree-empty"
       />
     );

@@ -706,6 +706,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
         icon={FileText}
         title="No artifacts yet."
         description={null}
+        action={null}
         testId="epic-artifact-sidebar-empty"
       />
     );
@@ -715,6 +716,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
         icon={FileText}
         title={FILTERED_EMPTY_TITLE}
         description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
+        action={null}
         testId="epic-artifact-sidebar-filter-empty"
       />
     );

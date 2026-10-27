@@ -1302,6 +1302,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         icon={MessagesSquare}
         title="No agents yet."
         description="Add an agent and choose a Chat or Terminal interface."
+        action={null}
         testId="epic-chat-sidebar-empty"
       />
     );
@@ -1311,6 +1312,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         icon={MessagesSquare}
         title="No agents on this device."
         description="Agents on your other devices can't be checked until your sign-in is confirmed. Add an agent to start one here."
+        action={null}
         testId="epic-chat-sidebar-cloud-unchecked-empty"
       />
     );
@@ -1331,6 +1333,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           isChatFilterActive(chatFilter),
           messageHits.state === "empty",
         )}
+        action={null}
         testId="epic-chat-sidebar-search-empty"
       />
     );
@@ -1340,6 +1343,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         icon={MessagesSquare}
         title={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(chatFilter)}
+        action={null}
         testId="epic-chat-sidebar-filter-empty"
       />
     );
@@ -1358,6 +1362,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               icon={Archive}
               title={archiveEmptyState.title}
               description={archiveEmptyState.description}
+              action={null}
               testId="epic-chat-sidebar-archived-empty"
             />
           </m.div>
