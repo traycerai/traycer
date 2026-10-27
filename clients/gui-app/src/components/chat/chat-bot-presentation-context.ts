@@ -17,17 +17,20 @@ export interface ChatBotThreadLine {
 }
 
 /**
- * What the person can do about their message the bot failed to answer:
- * send it to the bot again as it is, or put its text back in the box to
- * edit and send as a new message that replaces it.
+ * What a member can do about a message the bot failed to answer: send it to
+ * the bot again as it is, and, on their own message, put its text back in
+ * the box to edit and send as a new message that replaces it.
  */
 export interface ChatBotFailedRequest {
   /** Sends it again; `text` is the message's own. */
   readonly retry: (text: string) => void;
   /** `true` while a retry of it is being sent. */
   readonly retrying: boolean;
-  /** Puts `text`, the message's own, in the box that replaces it. */
-  readonly edit: (text: string) => void;
+  /**
+   * Puts `text`, the message's own, in the box that replaces it; `null` on
+   * a teammate's message, which only its writer can replace.
+   */
+  readonly edit: ((text: string) => void) | null;
 }
 
 /**
@@ -90,12 +93,16 @@ export interface ChatBotPresentation {
    */
   readonly chooseOption: ((choice: string) => void) | null;
   /**
-   * A member's message the bot failed to answer, by its request id: its
-   * Retry and Edit actions, offered while the session that failed on it
-   * still holds it; `null` for any other request, and where nothing can.
+   * A member's message the bot failed to answer, by its request id and its
+   * writer: its Retry and Edit actions, offered while the session that
+   * failed or parked on it still holds it; `null` for any other request, and
+   * where nothing can.
    */
   readonly failedRequest:
-    | ((requestId: string) => ChatBotFailedRequest | null)
+    | ((
+        requestId: string,
+        senderUserId: string | null,
+      ) => ChatBotFailedRequest | null)
     | null;
 }
 

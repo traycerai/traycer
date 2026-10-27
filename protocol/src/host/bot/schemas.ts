@@ -797,13 +797,17 @@ export type BotActivityAction = z.infer<typeof botActivityActionSchema>;
 
 /**
  * Why a session is `failed` or `parked`. For `failed`, `summary` is the
- * turn's error as the transcript's error row draws it and `harnessId` the
- * harness that ran the turn; for `parked`, `summary` is why the queue is
- * paused, `harnessId` the session's harness and `action` `none`.
+ * turn's error as the transcript draws it (the error row's text, or the
+ * settled card's after a provider fallback), `code` the error row's code,
+ * which a client maps to its own words for a sandbox's refusal as the row
+ * does, and `harnessId` the harness that ran the turn; for `parked`,
+ * `summary` is why the queue is paused, `code` `null`, `harnessId` the
+ * session's harness and `action` `none`.
  */
 export const botActivityReasonSchema = lazySchema(() =>
   z.object({
     summary: z.string().min(1),
+    code: z.string().nullable().default(null),
     harnessId: z.string().min(1).max(64),
     action: botActivityActionSchema,
   }),

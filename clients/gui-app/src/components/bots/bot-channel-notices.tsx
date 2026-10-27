@@ -1,5 +1,6 @@
 import { useCallback, type ReactNode } from "react";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
@@ -49,6 +50,13 @@ export function BotUnansweredNotice(props: {
     return null;
   }
   const reason = activity.reason;
+  // A sandbox's refusal in the words the error row gives it, from the same
+  // code and text.
+  const summary =
+    reason === null
+      ? null
+      : (sandboxRefusalCopyFor(reason.code, reason.summary)?.description ??
+        reason.summary);
   // Held is degraded, failed is an error; they read the same way.
   return (
     <div
@@ -63,9 +71,9 @@ export function BotUnansweredNotice(props: {
       )}
     >
       <p className="whitespace-pre-wrap break-words">
-        {reason === null
+        {summary === null
           ? `${props.botTitle} couldn't answer.`
-          : `${props.botTitle} couldn't answer: ${reason.summary}`}
+          : `${props.botTitle} couldn't answer: ${summary}`}
       </p>
       {reason?.action !== "sign-in" && onOpenUnderTheHood === null ? null : (
         <div className="flex flex-wrap items-center gap-2">

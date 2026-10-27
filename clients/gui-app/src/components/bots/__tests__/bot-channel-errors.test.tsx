@@ -20,6 +20,7 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
@@ -63,7 +64,10 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => true,
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
@@ -224,7 +228,27 @@ function sessionWithReason(
 ): BotSessionActivity {
   return {
     ...session(state, "req-1"),
-    reason: { summary: REASON_SUMMARY, harnessId: "claude", action },
+    reason: {
+      summary: REASON_SUMMARY,
+      code: null,
+      harnessId: "claude",
+      action,
+    },
+  };
+}
+
+const SANDBOX_CODE = "SANDBOX_FROZEN";
+const SANDBOX_RAW_SUMMARY =
+  "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+
+/** A failed session whose reason carries `code`, with the host's raw `summary`. */
+function failedWithCode(
+  code: string | null,
+  summary: string,
+): BotSessionActivity {
+  return {
+    ...session("failed", "req-1"),
+    reason: { summary, code, harnessId: "claude", action: "none" },
   };
 }
 
@@ -493,6 +517,34 @@ describe("<BotChannelView /> an answer the bot does not give", () => {
     expect(within(notice).queryByTestId("bot-unanswered-sign-in")).toBeNull();
   });
 
+  it("says a sandbox's refusal in the words the transcript's error row gives it, not the host's raw message", () => {
+    const copy = sandboxRefusalCopyFor(SANDBOX_CODE, SANDBOX_RAW_SUMMARY);
+    if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    mocks.state.activity = activity(
+      failedWithCode(SANDBOX_CODE, SANDBOX_RAW_SUMMARY),
+      {},
+    );
+    mount(null);
+
+    const notice = screen.getByTestId("bot-channel-unanswered");
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${copy.description}Under the hood`,
+    );
+    expect(notice.textContent).not.toContain(SANDBOX_RAW_SUMMARY);
+  });
+
+  it("keeps the host's own summary for a code that is not a sandbox's refusal", () => {
+    mocks.state.activity = activity(
+      failedWithCode("PROVIDER_UNAUTHENTICATED", REASON_SUMMARY),
+      {},
+    );
+    mount(null);
+
+    expect(screen.getByTestId("bot-channel-unanswered").textContent).toBe(
+      `Release Bot couldn't answer: ${REASON_SUMMARY}Under the hood`,
+    );
+  });
+
   it("offers Sign in when the failure is a sign-out, which opens Settings on that provider", async () => {
     const user = userEvent.setup();
     mocks.state.activity = activity(sessionWithReason("failed", "sign-in"), {});
@@ -594,6 +646,22 @@ describe("<BotChannelView /> a thread the bot does not answer", () => {
     expect(
       within(notice).getByRole("button", { name: "Sign in" }),
     ).toBeTruthy();
+  });
+
+  it("says a sandbox's refusal in the thread in the error row's words too", () => {
+    const copy = sandboxRefusalCopyFor(SANDBOX_CODE, SANDBOX_RAW_SUMMARY);
+    if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    mocks.state.activity = activity(null, {
+      [THREAD_ID]: failedWithCode(SANDBOX_CODE, SANDBOX_RAW_SUMMARY),
+    });
+    mount(OPEN_LISTED_THREAD);
+
+    const notice = within(screen.getByTestId("bot-thread-panel")).getByTestId(
+      "bot-thread-unanswered",
+    );
+    expect(notice.textContent).toBe(
+      `Release Bot couldn't answer: ${copy.description}Under the hood`,
+    );
   });
 
   it("says nothing in the thread while its own session is idle, whatever the trunk is doing", () => {

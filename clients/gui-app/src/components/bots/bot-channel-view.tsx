@@ -216,6 +216,7 @@ export function BotChannelView(props: {
   );
   const failedRequest = useBotFailedRequest({
     client,
+    hostId,
     botId,
     conversationId: channelId,
     threadId: null,

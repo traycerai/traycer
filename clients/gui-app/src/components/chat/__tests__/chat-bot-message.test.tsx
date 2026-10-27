@@ -462,7 +462,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
   function failing(
     retry: (text: string) => void,
     retrying: boolean,
-    edit: (text: string) => void,
+    edit: ((text: string) => void) | null,
   ): ChatBotPresentation {
     return {
       ...channelPresentation(NO_THREAD_LINE, vi.fn()),
@@ -491,6 +491,45 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     await user.click(actions.getByRole("button", { name: "Edit" }));
     expect(edit).toHaveBeenCalledWith("Please review the release");
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry alone on a message whose Edit the presentation withholds", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, null));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Reply in thread"]);
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+  });
+
+  it("asks the presentation about the message's request and its writer", () => {
+    const asked: Array<{
+      readonly requestId: string;
+      readonly senderUserId: string | null;
+    }> = [];
+    renderRow(
+      { ...memberPost(OPEN_REQUEST), senderUserId: "user-teammate" },
+      {
+        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
+        failedRequest: (requestId, senderUserId) => {
+          asked.push({ requestId, senderUserId });
+          return null;
+        },
+      },
+    );
+
+    expect(asked).toContainEqual({
+      requestId: OPEN_REQUEST.requestId,
+      senderUserId: "user-teammate",
+    });
   });
 
   it("holds Retry while a retry is being sent, and leaves Edit", () => {

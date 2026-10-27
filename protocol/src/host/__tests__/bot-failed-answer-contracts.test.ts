@@ -26,6 +26,7 @@ const FAILED = {
 
 const REASON = {
   summary: "Your Grok CLI version (1.0.5) is outdated.",
+  code: null,
   harnessId: "grok",
   action: "none",
 } as const;
@@ -48,6 +49,13 @@ describe("bot.subscribe@1.1 activity reason", () => {
   it("keeps a reason and refuses an action it does not know", () => {
     expect(
       botSessionActivitySchema.parse({ ...FAILED, reason: REASON }).reason,
+    ).toEqual(REASON);
+    // A reason with no code, as a host before it sends, reads as none.
+    expect(
+      botSessionActivitySchema.parse({
+        ...FAILED,
+        reason: { summary: REASON.summary, harnessId: "grok", action: "none" },
+      }).reason,
     ).toEqual(REASON);
     expect(
       botSessionActivitySchema.safeParse({

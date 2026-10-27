@@ -87,9 +87,10 @@ export type BotTranscriptSurface =
         | null;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
-      /** A post the bot failed to answer, by its request id, and what can be done about it. */
+      /** A post the bot failed to answer, by its request id and writer, and what can be done about it. */
       readonly failedRequest: (
         requestId: string,
+        senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
       /** What the top of the channel says while nobody has written in it. */
       readonly intro: {
@@ -101,9 +102,10 @@ export type BotTranscriptSurface =
       readonly kind: "thread";
       /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
-      /** A message the bot failed to answer, by its request id, and what can be done about it. */
+      /** A message the bot failed to answer, by its request id and writer, and what can be done about it. */
       readonly failedRequest: (
         requestId: string,
+        senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
     };
 

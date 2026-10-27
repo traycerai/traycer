@@ -40,6 +40,12 @@ import type {
   AgentSender,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  negotiateBotSend,
+  resetBotFailedRequestSupport,
+  signInViewer,
+  VIEWER_USER_ID,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -379,10 +385,14 @@ beforeEach(() => {
   sendAnswer = () => Promise.resolve(SEND_RESPONSE);
   mocks.toastFromHostError.mockClear();
   mocks.client = hostClientRecordingSends();
+  // A host that can retry and replace, and a viewer who wrote the failed message.
+  negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+  signInViewer(VIEWER_USER_ID);
 });
 
 afterEach(() => {
   cleanup();
+  resetBotFailedRequestSupport();
   mocks.handle = null;
   mocks.channelHandle = null;
   mocks.client = null;
@@ -653,16 +663,17 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     };
   }
 
-  /** A member's message in the thread (or the channel), its request open. */
+  /** `senderUserId`'s message in the thread (or the channel), its request open. */
   function memberMessage(
     messageId: string,
     requestId: string,
     text: string,
+    senderUserId: string,
   ): Message {
     return {
       role: "user",
       messageId,
-      sender: { type: "user", userId: "user-teammate" },
+      sender: { type: "user", userId: senderUserId },
       message: { kind: "user", content: textDoc(text), browserAnnotations: [] },
       timestamp: 3_000,
       sessionAnchor: null,
@@ -674,13 +685,16 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     };
   }
 
-  /** The thread's own session failed answering `requestId`. */
-  function threadFailedOn(requestId: string): BotActivity {
+  /** The thread's own session failed or parked answering `requestId`. */
+  function threadSession(
+    state: "failed" | "parked",
+    requestId: string | null,
+  ): BotActivity {
     return {
       trunk: null,
       threads: {
         [THREAD_ID]: {
-          state: "failed",
+          state,
           startedAt: 1_000,
           step: null,
           requestId,
@@ -690,10 +704,20 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     };
   }
 
+  function threadFailedOn(requestId: string): BotActivity {
+    return threadSession("failed", requestId);
+  }
+
+  /** The viewer's own reply in the thread, which the thread's session failed on. */
   function mountFailedReply(): void {
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
-    mountPanel(listed("user-teammate"), [
-      memberMessage("member-reply-1", REPLY_REQUEST, "Hold for now"),
+    mountPanel(listed(VIEWER_USER_ID), [
+      memberMessage(
+        "member-reply-1",
+        REPLY_REQUEST,
+        "Hold for now",
+        VIEWER_USER_ID,
+      ),
     ]);
   }
 
@@ -802,10 +826,15 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
   it("retries the post the thread answers as a channel post, and hands its edit to the channel's box", async () => {
     const user = userEvent.setup();
     channelMessages = [
-      memberMessage("anchor-1", POST_REQUEST, "Ship the release today?"),
+      memberMessage(
+        "anchor-1",
+        POST_REQUEST,
+        "Ship the release today?",
+        VIEWER_USER_ID,
+      ),
     ];
     activityStore.setState({ activity: threadFailedOn(POST_REQUEST) });
-    mountPanel(listed("user-teammate"), []);
+    mountPanel(listed(VIEWER_USER_ID), []);
     const anchor = screen.getByTestId("bot-thread-anchor");
 
     await user.click(within(anchor).getByTestId("bot-message-edit"));
@@ -856,5 +885,134 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
     expect(screen.getByText("Hold for now")).toBeTruthy();
+  });
+
+  it("offers neither on the reply nor on the anchor post when the host negotiated bot.conversation.send 1.0", () => {
+    negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
+    channelMessages = [
+      memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+    ];
+    // Both the reply's and the anchor post's requests are held by a failed session.
+    activityStore.setState({
+      activity: {
+        trunk: {
+          state: "failed",
+          startedAt: 1_000,
+          step: null,
+          requestId: POST_REQUEST,
+          reason: null,
+        },
+        threads: threadFailedOn(REPLY_REQUEST).threads,
+      },
+    });
+    mountPanel(listed(VIEWER_USER_ID), [
+      memberMessage(
+        "member-reply-1",
+        REPLY_REQUEST,
+        "Hold for now",
+        VIEWER_USER_ID,
+      ),
+    ]);
+
+    expect(screen.getByText("Hold for now")).toBeTruthy();
+    expect(screen.getByText("Ship it?")).toBeTruthy();
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("offers Retry on a reply its thread's session parked on, re-delivered in the thread", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: threadSession("parked", REPLY_REQUEST),
+    });
+    mountPanel(listed(VIEWER_USER_ID), [
+      memberMessage(
+        "member-reply-1",
+        REPLY_REQUEST,
+        "Hold for now",
+        VIEWER_USER_ID,
+      ),
+    ]);
+
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-retry",
+      ),
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: REPLY_REQUEST });
+    expect(sent[0].threadId).toBe(THREAD_ID);
+  });
+
+  it("offers Retry on the anchor post its thread's session parked on, as a channel post", async () => {
+    const user = userEvent.setup();
+    channelMessages = [
+      memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+    ];
+    activityStore.setState({ activity: threadSession("parked", POST_REQUEST) });
+    mountPanel(listed(VIEWER_USER_ID), []);
+
+    await user.click(
+      within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+        "bot-message-retry",
+      ),
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
+    expect(sent[0].threadId).toBeNull();
+  });
+
+  it("offers nothing when the parked session carries no request", () => {
+    activityStore.setState({ activity: threadSession("parked", null) });
+    channelMessages = [
+      memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+    ];
+    mountPanel(listed(VIEWER_USER_ID), [
+      memberMessage(
+        "member-reply-1",
+        REPLY_REQUEST,
+        "Hold for now",
+        VIEWER_USER_ID,
+      ),
+    ]);
+
+    expect(screen.getByText("Hold for now")).toBeTruthy();
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("offers Retry and no Edit on a teammate's reply", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
+    mountPanel(listed(VIEWER_USER_ID), [
+      memberMessage(
+        "member-reply-1",
+        REPLY_REQUEST,
+        "Hold for now",
+        "user-teammate",
+      ),
+    ]);
+    const row = screen.getByTestId("bot-member-row");
+
+    expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
+    await user.click(within(row).getByTestId("bot-message-retry"));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: REPLY_REQUEST });
+    expect(sent[0].threadId).toBe(THREAD_ID);
+  });
+
+  it("offers Retry and no Edit on the anchor post a teammate wrote", () => {
+    channelMessages = [
+      memberMessage("anchor-1", POST_REQUEST, "Ship it?", "user-teammate"),
+    ];
+    activityStore.setState({ activity: threadFailedOn(POST_REQUEST) });
+    mountPanel(listed("user-teammate"), []);
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-message-retry")).toBeTruthy();
+    expect(within(anchor).queryByTestId("bot-message-edit")).toBeNull();
   });
 });

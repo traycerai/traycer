@@ -136,12 +136,16 @@ function failedActionsOf(
   const failed =
     request === undefined || presentation.failedRequest === null
       ? null
-      : presentation.failedRequest(request.requestId);
+      : presentation.failedRequest(
+          request.requestId,
+          message.senderUserId ?? null,
+        );
   if (failed === null) return null;
+  const { edit } = failed;
   return {
     onRetry: () => failed.retry(message.content),
     retrying: failed.retrying,
-    onEdit: () => failed.edit(message.content),
+    onEdit: edit === null ? null : () => edit(message.content),
   };
 }
 
@@ -314,11 +318,11 @@ export function BotMessageFrame(props: {
   );
 }
 
-/** A failed message's actions, bound to the row. */
+/** A failed message's actions, bound to the row; no Edit on a teammate's. */
 export type FailedMessageActions = {
   readonly onRetry: () => void;
   readonly retrying: boolean;
-  readonly onEdit: () => void;
+  readonly onEdit: (() => void) | null;
 };
 
 /**
@@ -346,14 +350,16 @@ function MessageActions(props: {
           >
             <RotateCcw aria-hidden="true" />
           </MessageAction>
-          <MessageAction
-            label="Edit"
-            testId="bot-message-edit"
-            disabled={false}
-            onClick={failed.onEdit}
-          >
-            <Pencil aria-hidden="true" />
-          </MessageAction>
+          {failed.onEdit === null ? null : (
+            <MessageAction
+              label="Edit"
+              testId="bot-message-edit"
+              disabled={false}
+              onClick={failed.onEdit}
+            >
+              <Pencil aria-hidden="true" />
+            </MessageAction>
+          )}
         </>
       )}
       {onReplyInThread === null ? null : (

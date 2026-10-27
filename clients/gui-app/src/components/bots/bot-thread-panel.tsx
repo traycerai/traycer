@@ -3,7 +3,10 @@ import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { BotMessageFrame } from "@/components/chat/chat-bot-message";
+import {
+  BotMessageFrame,
+  type FailedMessageActions,
+} from "@/components/chat/chat-bot-message";
 import { BotAvatar, MemberAvatar } from "@/components/bots/bot-avatars";
 import { TextSegment } from "@/components/chat/segments/text-segment";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
@@ -236,6 +239,7 @@ function ListedThread(
   const endEdit = useCallback(() => setEdit(null), []);
   const failedRequest = useBotFailedRequest({
     client,
+    hostId,
     botId,
     conversationId,
     threadId,
@@ -246,6 +250,7 @@ function ListedThread(
   // The post is the channel's: retried as a post, edited in the channel.
   const failedPost = useBotFailedRequest({
     client,
+    hostId,
     botId,
     conversationId,
     threadId: null,
@@ -303,7 +308,7 @@ function ListedThread(
             {(text) => (
               <ThreadAnchor
                 anchor={anchor}
-                failed={failedPost(anchor.requestId)}
+                failed={failedPost(anchor.requestId, anchor.senderUserId)}
                 text={text}
                 botTitle={botTitle}
                 senderLabel={anchorSenderLabel(anchor.senderUserId)}
@@ -448,15 +453,7 @@ function ThreadAnchor(props: {
       instanceId={anchor.messageId}
       testId="bot-thread-anchor"
       replyInThread={null}
-      failed={
-        failed === null || text === null
-          ? null
-          : {
-              onRetry: () => failed.retry(text),
-              retrying: failed.retrying,
-              onEdit: () => failed.edit(text),
-            }
-      }
+      failed={failedAnchorActions(failed, text)}
     >
       {text === null ? null : (
         <TextSegment
@@ -468,4 +465,18 @@ function ThreadAnchor(props: {
       )}
     </BotMessageFrame>
   );
+}
+
+/** The post's Retry, and Edit on the viewer's own, bound to its text. */
+function failedAnchorActions(
+  failed: ChatBotFailedRequest | null,
+  text: string | null,
+): FailedMessageActions | null {
+  if (failed === null || text === null) return null;
+  const { edit } = failed;
+  return {
+    onRetry: () => failed.retry(text),
+    retrying: failed.retrying,
+    onEdit: edit === null ? null : () => edit(text),
+  };
 }

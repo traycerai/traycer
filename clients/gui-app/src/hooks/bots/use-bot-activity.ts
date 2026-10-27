@@ -86,9 +86,9 @@ function startedBefore(a: BotSessionActivity, b: BotSessionActivity): boolean {
 }
 
 /**
- * Whether one of the bot's sessions, its trunk or a thread's, failed
- * answering `requestId` and still holds it: what Retry and Edit are offered
- * on.
+ * Whether one of the bot's sessions, its trunk or a thread's, failed or
+ * parked answering `requestId` and still holds it: what Retry and Edit are
+ * offered on.
  */
 export function failedOnRequest(
   activity: BotActivity | null,
@@ -101,10 +101,13 @@ export function failedOnRequest(
   );
 }
 
-/** Whether `session` failed answering `requestId`. */
+/** Whether `session` failed or parked answering `requestId`. */
 export function failedOn(
   session: BotSessionActivity | null,
   requestId: string,
 ): boolean {
-  return session?.state === "failed" && session.requestId === requestId;
+  return (
+    (session?.state === "failed" || session?.state === "parked") &&
+    session.requestId === requestId
+  );
 }

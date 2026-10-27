@@ -18,6 +18,8 @@ import type {
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
   botWorkingOf,
+  failedOn,
+  failedOnRequest,
   replyingSessionOf,
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
@@ -291,5 +293,55 @@ describe("replyingSessionOf and botWorkingOf", () => {
     expect(botWorkingOf({ trunk: IDLE, threads: { a: IDLE } })).toBe(false);
     expect(botWorkingOf({ trunk: null, threads: {} })).toBeNull();
     expect(botWorkingOf(null)).toBeNull();
+  });
+});
+
+describe("failedOn and failedOnRequest", () => {
+  const PARKED: BotSessionActivity = {
+    state: "parked",
+    startedAt: null,
+    step: null,
+    requestId: "req-3",
+    reason: null,
+  };
+
+  it.each([
+    ["failed", FAILED],
+    ["parked", PARKED],
+  ])(
+    "holds a %s session to the request it carries, and to no other",
+    (_state, session) => {
+      expect(failedOn(session, session.requestId ?? "")).toBe(true);
+      expect(failedOn(session, "req-other")).toBe(false);
+    },
+  );
+
+  it("offers nothing on a session that is replying, idle, or unknown, even on its request", () => {
+    expect(failedOn(REPLYING, "req-1")).toBe(false);
+    expect(failedOn({ ...PARKED, state: "idle" }, "req-3")).toBe(false);
+    expect(failedOn(null, "req-3")).toBe(false);
+  });
+
+  it("offers nothing on a parked session that carries no request", () => {
+    const parkedWithNone: BotSessionActivity = { ...PARKED, requestId: null };
+
+    expect(failedOn(parkedWithNone, "req-3")).toBe(false);
+    expect(
+      failedOnRequest({ trunk: parkedWithNone, threads: {} }, "req-3"),
+    ).toBe(false);
+  });
+
+  it("finds a parked request on the trunk or on any thread's session", () => {
+    expect(failedOnRequest({ trunk: PARKED, threads: {} }, "req-3")).toBe(true);
+    expect(
+      failedOnRequest(
+        { trunk: null, threads: { a: REPLYING, b: PARKED } },
+        "req-3",
+      ),
+    ).toBe(true);
+    expect(
+      failedOnRequest({ trunk: null, threads: { a: FAILED } }, "req-3"),
+    ).toBe(false);
+    expect(failedOnRequest(null, "req-3")).toBe(false);
   });
 });

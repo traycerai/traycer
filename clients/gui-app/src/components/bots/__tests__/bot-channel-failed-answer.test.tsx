@@ -35,6 +35,12 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  negotiateBotSend,
+  resetBotFailedRequestSupport,
+  signInViewer,
+  VIEWER_USER_ID,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -47,6 +53,7 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
@@ -98,7 +105,10 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => true,
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
@@ -181,8 +191,10 @@ const POST_ID = "post-1";
 const POST_REQUEST = "req-post";
 const POST_TEXT = "Is CI green?";
 
+const TEAMMATE_USER_ID = "user-teammate";
+
 const resolveMember: BotMemberResolver = (userId) =>
-  userId === "user-teammate"
+  userId === TEAMMATE_USER_ID
     ? { displayName: "Tess Teammate", avatarUrl: null }
     : null;
 
@@ -193,12 +205,12 @@ function textDoc(text: string): JsonContent {
   };
 }
 
-/** The member's post in the channel, its request open. */
-function memberPost(): Message {
+/** `senderUserId`'s post in the channel, its request open. */
+function memberPost(senderUserId: string): Message {
   return {
     role: "user",
     messageId: POST_ID,
-    sender: { type: "user", userId: "user-teammate" },
+    sender: { type: "user", userId: senderUserId },
     message: {
       kind: "user",
       content: textDoc(POST_TEXT),
@@ -214,31 +226,35 @@ function memberPost(): Message {
   };
 }
 
-const POST_THREAD: BotThreadSummary = {
-  threadId: THREAD_ID,
-  conversationId: CHANNEL_ID,
-  sessionChatId: "session-1",
-  anchor: {
-    messageId: POST_ID,
-    requestId: POST_REQUEST,
-    senderUserId: "user-teammate",
-    sentAt: 1_000,
-    resolvedAt: null,
-  },
-  replyCount: 1,
-  lastReplyAt: 2_000,
-  openRequestCount: 1,
-  costUsd: null,
-};
+/** The thread `senderUserId`'s post opened. */
+function postThread(senderUserId: string): BotThreadSummary {
+  return {
+    threadId: THREAD_ID,
+    conversationId: CHANNEL_ID,
+    sessionChatId: "session-1",
+    anchor: {
+      messageId: POST_ID,
+      requestId: POST_REQUEST,
+      senderUserId,
+      sentAt: 1_000,
+      resolvedAt: null,
+    },
+    replyCount: 1,
+    lastReplyAt: 2_000,
+    openRequestCount: 1,
+    costUsd: null,
+  };
+}
+
+function sessionOn(
+  state: "failed" | "parked",
+  requestId: string | null,
+): BotSessionActivity {
+  return { state, startedAt: 1_000, step: null, requestId, reason: null };
+}
 
 function failedOn(requestId: string): BotSessionActivity {
-  return {
-    state: "failed",
-    startedAt: 1_000,
-    step: null,
-    requestId,
-    reason: null,
-  };
+  return sessionOn("failed", requestId);
 }
 
 /** The bot's trunk failed answering `requestId`. */
@@ -312,9 +328,10 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(mockRemoteHostEntry);
 }
 
-function mountChannel(openThread: BotOpenThread | null): void {
+/** The channel with `post` in it, the viewer's own unless a case says otherwise. */
+function mountChannel(openThread: BotOpenThread | null, post: Message): void {
   mocks.channelHandle = {
-    store: createChannelStore([memberPost()]),
+    store: createChannelStore([post]),
   } as ChatSessionStoreHandle;
   render(
     <StrictMode>
@@ -352,10 +369,14 @@ beforeEach(() => {
   mocks.threads = [];
   activityStore.setState({ activity: null });
   mocks.client = hostClientRecordingSends();
+  // A host that can retry and replace, and a viewer who wrote the post.
+  negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+  signInViewer(VIEWER_USER_ID);
 });
 
 afterEach(() => {
   cleanup();
+  resetBotFailedRequestSupport();
   mocks.channelHandle = null;
   mocks.client = null;
 });
@@ -364,7 +385,7 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
   it("re-delivers the post as it is, as a channel post", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
-    mountChannel(null);
+    mountChannel(null, memberPost(VIEWER_USER_ID));
 
     await user.click(
       within(screen.getByTestId("bot-member-row")).getByTestId(
@@ -387,14 +408,14 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
 
   it("offers it, still as a channel post, when the thread the post opened is the session that failed", async () => {
     const user = userEvent.setup();
-    mocks.threads = [POST_THREAD];
+    mocks.threads = [postThread(VIEWER_USER_ID)];
     activityStore.setState({
       activity: {
         trunk: null,
         threads: { [THREAD_ID]: failedOn(POST_REQUEST) },
       },
     });
-    mountChannel(null);
+    mountChannel(null, memberPost(VIEWER_USER_ID));
 
     await user.click(
       within(screen.getByTestId("bot-member-row")).getByTestId(
@@ -409,10 +430,134 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
 
   it("is not offered while the session failed on a different request", () => {
     activityStore.setState({ activity: trunkFailedOn("req-other") });
-    mountChannel(null);
+    mountChannel(null, memberPost(VIEWER_USER_ID));
 
     expect(screen.getByText(POST_TEXT)).toBeTruthy();
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+});
+
+describe("<BotChannelView /> a host that cannot retry or replace", () => {
+  it("offers neither Retry nor Edit on a host that negotiated bot.conversation.send 1.0", () => {
+    negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(screen.getByText(POST_TEXT)).toBeTruthy();
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("offers neither while no handshake with the host is known", () => {
+    resetBotFailedRequestSupport();
+    signInViewer(VIEWER_USER_ID);
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(screen.getByText(POST_TEXT)).toBeTruthy();
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("offers both once the host's handshake reaches 1.1, without remounting", () => {
+    negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+
+    act(() => {
+      negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+    });
+
+    expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
+    expect(screen.getByTestId("bot-message-edit")).toBeTruthy();
+  });
+});
+
+describe("<BotChannelView /> a post the bot parked on", () => {
+  it("offers Retry, re-delivered as it is, on the post the trunk's parked queue holds", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: { trunk: sessionOn("parked", POST_REQUEST), threads: {} },
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-retry",
+      ),
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
+    expect(sent[0].threadId).toBeNull();
+  });
+
+  it("offers Retry on the post when the thread it opened is the session that parked", () => {
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: { [THREAD_ID]: sessionOn("parked", POST_REQUEST) },
+      },
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
+  });
+
+  it("offers nothing when the parked session carries no request", () => {
+    activityStore.setState({
+      activity: { trunk: sessionOn("parked", null), threads: {} },
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(screen.getByText(POST_TEXT)).toBeTruthy();
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+});
+
+describe("<BotChannelView /> a teammate's post the bot failed to answer", () => {
+  it("offers Retry, which any member may press, and no Edit, which only its writer may", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(TEAMMATE_USER_ID));
+    const row = screen.getByTestId("bot-member-row");
+
+    expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
+    await user.click(within(row).getByTestId("bot-message-retry"));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
+    expect(sent[0].supersedes).toBeNull();
+  });
+
+  it("offers Retry and no Edit on the thread anchor the teammate wrote", () => {
+    mocks.threads = [postThread(TEAMMATE_USER_ID)];
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: { [THREAD_ID]: failedOn(POST_REQUEST) },
+      },
+    });
+    mountChannel(
+      { anchorMessageId: POST_ID, announcement: false },
+      memberPost(TEAMMATE_USER_ID),
+    );
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-message-retry")).toBeTruthy();
+    expect(within(anchor).queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("offers no Edit to a viewer who is not signed in", () => {
+    useAuthStore.setState({ profile: null });
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
   });
 });
@@ -421,7 +566,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
   it("loads its text into the channel's box, and the send replaces the failed post", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
-    mountChannel(null);
+    mountChannel(null, memberPost(VIEWER_USER_ID));
     const box = channelBox();
     expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
 
@@ -459,7 +604,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
   it("leaves the box empty and sends nothing when the person cancels", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
-    mountChannel(null);
+    mountChannel(null, memberPost(VIEWER_USER_ID));
     await user.click(
       within(screen.getByTestId("bot-member-row")).getByTestId(
         "bot-message-edit",
@@ -475,14 +620,17 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
 
   it("closes the open thread and edits there, in the channel's box, when the post is a thread's anchor", async () => {
     const user = userEvent.setup();
-    mocks.threads = [POST_THREAD];
+    mocks.threads = [postThread(VIEWER_USER_ID)];
     activityStore.setState({
       activity: {
         trunk: null,
         threads: { [THREAD_ID]: failedOn(POST_REQUEST) },
       },
     });
-    mountChannel({ anchorMessageId: POST_ID, announcement: false });
+    mountChannel(
+      { anchorMessageId: POST_ID, announcement: false },
+      memberPost(VIEWER_USER_ID),
+    );
 
     await user.click(
       within(screen.getByTestId("bot-thread-anchor")).getByTestId(
@@ -499,7 +647,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
 describe("<BotChannelView /> a post the bot has since moved on from", () => {
   it("loses Retry and Edit when the session's activity moves on", () => {
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
-    mountChannel(null);
+    mountChannel(null, memberPost(VIEWER_USER_ID));
     expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
     expect(screen.getByTestId("bot-message-edit")).toBeTruthy();
 
