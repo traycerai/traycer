@@ -11,6 +11,7 @@
  * Real hooks and the real host directory; only the host reads are answered.
  */
 import { renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -23,6 +24,7 @@ import {
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   harnessRow,
+  opencodeProviderRow,
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import {
@@ -113,6 +115,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { ChatOpencodeLineContext } from "@/hooks/harnesses/chat-opencode-line-context";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import {
   registerActiveModelPicker,
@@ -190,6 +193,86 @@ function gateOn(
 }
 
 describe("useSandboxAgentGate", () => {
+  it("holds Send until Traycer's actual engine is ready, including missing line facts", () => {
+    answers.harnesses = [harnessRow("traycer", {})];
+    answers.providers = [providerRow("traycer", { status: "installed" })];
+    const { result, rerender } = renderHook(() =>
+      useSandboxAgentGate({
+        hostId: SANDBOX_HOST,
+        client: CLIENT,
+        harnessId: "traycer",
+        active: true,
+      }),
+    );
+    expect(result.current).toMatchObject({
+      blocked: true,
+      notice: { pending: true },
+    });
+
+    answers.providers = [
+      providerRow("traycer", { status: "installed" }),
+      opencodeProviderRow({ status: "downloading", percent: 40 }, {}),
+    ];
+    rerender();
+    expect(result.current.blocked).toBe(true);
+
+    answers.providers = [
+      providerRow("traycer", { status: "installed" }),
+      opencodeProviderRow(
+        {
+          status: "error",
+          reason: "disk-full",
+          message: "ENOSPC",
+          retryAtMs: null,
+        },
+        {},
+      ),
+    ];
+    rerender();
+    expect(result.current.notice).toMatchObject({
+      kind: "refused",
+      action: { label: "Open Personal's Providers" },
+    });
+    expect(result.current.notice?.message).toContain("disk space");
+
+    answers.providers = [
+      providerRow("traycer", { status: "installed" }),
+      opencodeProviderRow({ status: "installed" }, {}),
+    ];
+    rerender();
+    expect(result.current).toEqual({
+      blocked: false,
+      hint: null,
+      notice: null,
+    });
+  });
+
+  it("checks a bound chat's recorded line while a new chat would wait on Managed 2", () => {
+    answers.harnesses = [harnessRow("traycer", {})];
+    answers.providers = [
+      opencodeProviderRow({ status: "downloading", percent: 40 }, {}),
+    ];
+    expect(gateOn(SANDBOX_HOST, "traycer").blocked).toBe(true);
+
+    const { result } = renderHook(
+      () =>
+        useSandboxAgentGate({
+          hostId: SANDBOX_HOST,
+          client: CLIENT,
+          harnessId: "traycer",
+          active: true,
+        }),
+      {
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <ChatOpencodeLineContext value={1}>
+            {children}
+          </ChatOpencodeLineContext>
+        ),
+      },
+    );
+    expect(result.current.blocked).toBe(false);
+  });
+
   it("refuses an agent not offered on sandboxes, with the model picker and other remedies", () => {
     answers.catalogue = { offeredAgents: ["traycer"] };
     registerActiveModelPicker({
@@ -278,15 +361,6 @@ describe("useSandboxAgentGate", () => {
   it.each([
     ["a host that is not a sandbox", LAPTOP_HOST, "codex", CODEX_SIGNED_OUT],
     ["an agent that can run there", SANDBOX_HOST, "claude", CODEX_SIGNED_OUT],
-    [
-      "an agent whose availability is still being probed",
-      SANDBOX_HOST,
-      "codex",
-      [
-        harnessRow("codex", { available: false, availabilityPending: true }),
-        harnessRow("claude", { available: true }),
-      ],
-    ],
   ] as const)(
     "holds nothing for %s",
     (_label, hostId, harnessId, harnesses) => {
@@ -300,20 +374,36 @@ describe("useSandboxAgentGate", () => {
     },
   );
 
-  it("holds nothing while the pack is still downloading (the pack gate waits instead)", () => {
+  it("holds Send while the requested agent's availability is still being probed", () => {
+    answers.harnesses = [
+      harnessRow("codex", { available: true, availabilityPending: true }),
+    ];
+    expect(gateOn(SANDBOX_HOST, "codex")).toMatchObject({
+      blocked: true,
+      notice: { pending: true },
+    });
+  });
+
+  it("holds Send while the pack is still downloading", () => {
     answers.providers = [
       providerRow("codex", { status: "downloading", percent: 40 }),
       providerRow("claude-code", { status: "installed" }),
     ];
 
-    expect(gateOn(SANDBOX_HOST, "codex").blocked).toBe(false);
+    expect(gateOn(SANDBOX_HOST, "codex")).toMatchObject({
+      blocked: true,
+      notice: { pending: true },
+    });
   });
 
-  it("holds nothing before the host has answered its lists", () => {
+  it("holds Send before the host has answered its lists", () => {
     answers.harnesses = undefined;
     answers.providers = undefined;
 
-    expect(gateOn(SANDBOX_HOST, "codex").blocked).toBe(false);
+    expect(gateOn(SANDBOX_HOST, "codex")).toMatchObject({
+      blocked: true,
+      notice: { pending: true },
+    });
   });
 });
 
