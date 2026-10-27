@@ -15,9 +15,16 @@ import {
   environmentConfigurationMcpServersPutV10,
   environmentConfigurationMcpServersPutV11,
   environmentConfigurationPolicyPutV10,
+  environmentConfigurationSkillsImportV10,
+  environmentConfigurationSkillsListUpgradeV10ToV11,
   environmentConfigurationSkillsListV10,
+  environmentConfigurationSkillsListV11,
   environmentConfigurationSkillsRemoveV10,
+  environmentConfigurationSkillsRestoreBundledV10,
+  environmentConfigurationSkillsSetPolicyV10,
   environmentConfigurationSkillsSetProvidersV10,
+  environmentConfigurationSkillsStateV10,
+  environmentConfigurationSkillsUpdateV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
@@ -263,11 +270,16 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.configuration.skills.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentConfigurationSkillsListV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentConfigurationSkillsListV11,
+          upgradeFromPreviousVersion:
+            environmentConfigurationSkillsListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -293,6 +305,71 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentConfigurationSkillsSetProvidersV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.setPolicy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsSetPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.update": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsUpdateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.restoreBundled": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsRestoreBundledV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.state": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsStateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.import": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsImportV10,
           upgradeFromPreviousVersion: null,
         },
       },

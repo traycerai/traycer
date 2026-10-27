@@ -42,6 +42,7 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.configuration.policy.put",
   "environment.configuration.skills.list",
   "environment.configuration.skills.remove",
+  "environment.configuration.skills.setPolicy",
   "environment.configuration.skills.setProviders",
   "environment.configuration.skills.upload",
   "environment.history",
@@ -135,6 +136,21 @@ describe("host RPC routing table", () => {
 
   it("keeps environment.host.read on the target host for good", () => {
     expect(hostRpcRouteOf("environment.host.read")).toBe("target-host");
+  });
+
+  it("sends a skill's update, restore, state read and import to the host serving the configuration", () => {
+    expect(hostRpcRouteOf("environment.configuration.skills.update")).toBe(
+      "target-host",
+    );
+    expect(
+      hostRpcRouteOf("environment.configuration.skills.restoreBundled"),
+    ).toBe("target-host");
+    expect(hostRpcRouteOf("environment.configuration.skills.state")).toBe(
+      "target-host",
+    );
+    expect(hostRpcRouteOf("environment.configuration.skills.import")).toBe(
+      "target-host",
+    );
   });
 });
 

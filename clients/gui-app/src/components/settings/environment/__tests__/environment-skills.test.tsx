@@ -12,8 +12,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
-  EnvironmentConfigurationSkillsListResponse,
-  EnvironmentSkill,
+  EnvironmentConfigurationSkillImportResponse,
+  EnvironmentConfigurationSkillsListResponseV11,
+  EnvironmentSkillV11,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
@@ -27,6 +28,7 @@ import {
   hostSkill,
   nativeScopeTargets,
   negotiateMethods,
+  negotiateMethodsOn,
   projectScopedProviderState,
   providerState,
   reachableHost,
@@ -109,8 +111,9 @@ const CAPABLE: readonly ProviderId[] = [
 ];
 
 const LIST = { major: 1, minor: 0 };
+const LIST_V11 = { major: 1, minor: 1 };
 const BASE_METHODS = {
-  "environment.configuration.skills.list": LIST,
+  "environment.configuration.skills.list": LIST_V11,
   "environment.configuration.skills.remove": LIST,
   "providers.nativeMutate": { major: 1, minor: 3 },
 } as const;
@@ -119,23 +122,31 @@ const SWITCHES = {
   "environment.configuration.skills.setProviders": LIST,
 } as const;
 
-const REVIEW: EnvironmentSkill = {
+const REVIEW: EnvironmentSkillV11 = {
   name: "review",
   description: "Review a change.",
   origin: "room",
   edited: false,
   offFor: [],
+  policy: "evolve",
+  version: null,
+  updateAvailable: false,
+  upstream: null,
 };
-const BUILT_IN: EnvironmentSkill = {
+const BUILT_IN: EnvironmentSkillV11 = {
   name: "find-skills",
   description: "Discover skills.",
   origin: "bundled",
   edited: false,
   offFor: [],
+  policy: "auto-update",
+  version: "1.0.0",
+  updateAvailable: false,
+  upstream: null,
 };
 
 function handlers(options: {
-  readonly list: EnvironmentConfigurationSkillsListResponse;
+  readonly list: EnvironmentConfigurationSkillsListResponseV11;
   /** What the viewing host lists for a provider by itself. */
   readonly hostSkills: readonly ProviderSkill[];
 }): MockHandlerMap<HostRpcRegistry> {
@@ -175,9 +186,16 @@ function handlers(options: {
 }
 
 function listed(
-  skills: readonly EnvironmentSkill[],
-): EnvironmentConfigurationSkillsListResponse {
-  return { outcome: "listed", revision: "rev-1", skills: [...skills] };
+  skills: readonly EnvironmentSkillV11[],
+  policyRevision: string | null,
+): EnvironmentConfigurationSkillsListResponseV11 {
+  return {
+    outcome: "listed",
+    revision: "rev-1",
+    policyRevision,
+    skills: [...skills],
+    deletedBundled: [],
+  };
 }
 
 describe("The Skills page", () => {
@@ -187,11 +205,14 @@ describe("The Skills page", () => {
       "environment.configuration.skills.upload": LIST,
     });
     let uploaded = false;
-    const base = handlers({ list: listed([BUILT_IN]), hostSkills: [] });
+    const base = handlers({
+      list: listed([BUILT_IN], "pol-1"),
+      hostSkills: [],
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       ...base,
       "environment.configuration.skills.list": () =>
-        listed(uploaded ? [REVIEW, BUILT_IN] : [BUILT_IN]),
+        listed(uploaded ? [REVIEW, BUILT_IN] : [BUILT_IN], "pol-1"),
       "environment.configuration.skills.upload": () => {
         uploaded = true;
         return { outcome: "saved" as const, reason: null };
@@ -216,7 +237,10 @@ describe("The Skills page", () => {
       nativeSkills: () => readonly ProviderSkill[],
     ): Promise<void> {
       negotiateMethods(BASE_METHODS);
-      const base = handlers({ list: listed([REVIEW]), hostSkills: [] });
+      const base = handlers({
+        list: listed([REVIEW], "pol-1"),
+        hostSkills: [],
+      });
       const harness = mountTeamPage(poolSource("editor"), {
         ...base,
         "providers.list": (request) => {
@@ -276,11 +300,14 @@ describe("The Skills page", () => {
     negotiateMethods(BASE_METHODS);
     let description = REVIEW.description;
     const managed = hostSkill("review", "managed");
-    const base = handlers({ list: listed([REVIEW]), hostSkills: [managed] });
+    const base = handlers({
+      list: listed([REVIEW], "pol-1"),
+      hostSkills: [managed],
+    });
     const harness = mountTeamPage(poolSource("editor"), {
       ...base,
       "environment.configuration.skills.list": () =>
-        listed([{ ...REVIEW, description }]),
+        listed([{ ...REVIEW, description }], "pol-1"),
       "providers.nativeMutate": () => {
         description = "Review every change.";
         return { result: { ok: true, kind: "skills", skills: [managed] } };
@@ -323,12 +350,12 @@ describe("The Skills page", () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW, BUILT_IN], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
     expect(await screen.findByText("all providers")).toBeTruthy();
-    expect(screen.getByText("Built-in · all providers")).toBeTruthy();
+    expect(screen.getByText("Built-in · 1.0.0 · all providers")).toBeTruthy();
     expect(screen.queryByText(/written in Settings/)).toBeNull();
     expect(screen.getByText("review")).toBeTruthy();
     expect(screen.getByText("Review a change.")).toBeTruthy();
@@ -347,7 +374,7 @@ describe("The Skills page", () => {
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers({
-        list: listed([{ ...REVIEW, offFor: ["claude-code"] }]),
+        list: listed([{ ...REVIEW, offFor: ["claude-code"] }], "pol-1"),
         hostSkills: [],
       }),
     );
@@ -361,18 +388,21 @@ describe("The Skills page", () => {
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers({
-        list: listed([
-          {
-            ...REVIEW,
-            offFor: [
-              "claude-code",
-              "opencode",
-              "traycer",
-              "openrouter",
-              "huggingface",
-            ],
-          },
-        ]),
+        list: listed(
+          [
+            {
+              ...REVIEW,
+              offFor: [
+                "claude-code",
+                "opencode",
+                "traycer",
+                "openrouter",
+                "huggingface",
+              ],
+            },
+          ],
+          "pol-1",
+        ),
         hostSkills: [],
       }),
     );
@@ -381,11 +411,11 @@ describe("The Skills page", () => {
     expect(await screen.findByText("Codex only")).toBeTruthy();
   });
 
-  it("offers Edit on a written skill and Preview, with no Remove, on a built-in one", async () => {
+  it("offers Edit on a written skill and Preview, with Remove, on a built-in one", async () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW, BUILT_IN], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
@@ -402,8 +432,8 @@ describe("The Skills page", () => {
       within(builtIn).getByRole("button", { name: "Preview" }),
     ).toBeTruthy();
     expect(
-      within(builtIn).queryByRole("button", { name: "Remove" }),
-    ).toBeNull();
+      within(builtIn).getByRole("button", { name: "Remove" }),
+    ).toBeTruthy();
   });
 
   it.each([
@@ -421,7 +451,7 @@ describe("The Skills page", () => {
       negotiateMethods(BASE_METHODS);
       const harness = mountTeamPage(
         source,
-        handlers({ list: listed([REVIEW]), hostSkills: [] }),
+        handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
       );
       render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
@@ -442,7 +472,7 @@ describe("The Skills page", () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
@@ -480,7 +510,7 @@ describe("The Skills page", () => {
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers({
-        list: listed([REVIEW, BUILT_IN]),
+        list: listed([REVIEW, BUILT_IN], "pol-1"),
         hostSkills: [
           hostSkill("review", "managed"),
           hostSkill("find-skills", "managed"),
@@ -515,7 +545,7 @@ describe("The Skills page", () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
       poolSource("viewer"),
-      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
@@ -543,7 +573,7 @@ describe("The Skills page", () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
       personalPoolSource(),
-      handlers({ list: listed([]), hostSkills: [] }),
+      handlers({ list: listed([], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
@@ -568,10 +598,10 @@ describe("The Skills page", () => {
     negotiateMethods(BASE_METHODS);
     let fail = true;
     const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
       "environment.configuration.skills.list": () => {
         if (fail) throw new Error("host unavailable");
-        return listed([REVIEW]);
+        return listed([REVIEW], "pol-1");
       },
     });
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
@@ -590,7 +620,7 @@ describe("The Skills page", () => {
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers({
-        list: listed([REVIEW]),
+        list: listed([REVIEW], "pol-1"),
         hostSkills: [hostSkill("legacy", "shared")],
       }),
     );
@@ -610,7 +640,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
     negotiateMethods(SWITCHES);
     const harness = mountTeamPage(
       personalPoolSource(),
-      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
       wrapper: harness.Wrapper,
@@ -631,7 +661,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
     negotiateMethods(BASE_METHODS);
     const before = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
     );
     const { unmount } = render(
       <EnvironmentProviderSkillsTab providerId="claude-code" />,
@@ -653,7 +683,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
     negotiateMethods(SWITCHES);
     const after = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
       wrapper: after.Wrapper,
@@ -673,7 +703,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers({
-        list: listed([{ ...REVIEW, offFor: ["codex"] }]),
+        list: listed([{ ...REVIEW, offFor: ["codex"] }], "pol-1"),
         hostSkills: [],
       }),
     );
@@ -717,7 +747,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
       const harness = mountTeamPage(
         poolSource("editor"),
         handlers({
-          list: listed([{ ...REVIEW, offFor: before }]),
+          list: listed([{ ...REVIEW, offFor: before }], "pol-1"),
           hostSkills: [],
         }),
       );
@@ -744,11 +774,11 @@ describe("A provider's Skills tab on Personal or a team", () => {
     },
   );
 
-  it("says a built-in skill can't be removed on the provider's tab, and says nothing on a written one", async () => {
+  it("says a built-in skill comes with Traycer on the provider's tab, and says nothing on a written one", async () => {
     negotiateMethods(SWITCHES);
     const harness = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+      handlers({ list: listed([REVIEW, BUILT_IN], "pol-1"), hostSkills: [] }),
     );
     render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
       wrapper: harness.Wrapper,
@@ -761,10 +791,10 @@ describe("A provider's Skills tab on Personal or a team", () => {
     if (builtIn === null || written === null) return;
     expect(
       within(builtIn).getByText(
-        "Comes with Traycer and can't be removed. Switch it off for any provider that shouldn't use it.",
+        "Comes with Traycer. Switch it off for any provider that shouldn't use it.",
       ),
     ).toBeTruthy();
-    expect(within(written).queryByText(/can't be removed/)).toBeNull();
+    expect(within(written).queryByText(/Comes with Traycer/)).toBeNull();
   });
 
   it.each([
@@ -776,7 +806,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
       negotiateMethods(SWITCHES);
       const harness = mountTeamPage(
         source,
-        handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+        handlers({ list: listed([REVIEW, BUILT_IN], "pol-1"), hostSkills: [] }),
       );
       render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
         wrapper: harness.Wrapper,
@@ -820,7 +850,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
       ],
     };
     const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
       "providers.list": (request) =>
         request.native === null
           ? {
@@ -923,7 +953,7 @@ describe("A refused skill write", () => {
     async ({ outcome, line }) => {
       negotiateMethods(SWITCHES);
       const harness = mountTeamPage(poolSource("editor"), {
-        ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
         "environment.configuration.skills.setProviders": () => ({
           outcome,
           revision: null,
@@ -945,7 +975,7 @@ describe("A refused skill write", () => {
   it("shows the conflict line when a provider switch is answered stale", async () => {
     negotiateMethods(SWITCHES);
     const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
       "environment.configuration.skills.setProviders": () => ({
         outcome: "stale" as const,
         revision: "rev-9",
@@ -973,7 +1003,7 @@ describe("A refused skill write", () => {
     async ({ outcome, line }) => {
       negotiateMethods(BASE_METHODS);
       const harness = mountTeamPage(poolSource("editor"), {
-        ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
         "environment.configuration.skills.remove": () => ({
           outcome,
           reason: null,
@@ -998,4 +1028,626 @@ describe("A refused skill write", () => {
       expect((await screen.findByRole("status")).textContent).toBe(line);
     },
   );
+});
+
+describe("The Skills page's update policies", () => {
+  const POLICIES = {
+    ...BASE_METHODS,
+    "environment.configuration.skills.setPolicy": LIST,
+  } as const;
+  const FROZEN: EnvironmentSkillV11 = {
+    ...REVIEW,
+    name: "locked",
+    policy: "frozen",
+  };
+  const saved = {
+    outcome: "saved" as const,
+    revision: "pol-2",
+    reason: null,
+  };
+  const stale = {
+    outcome: "stale" as const,
+    revision: "pol-2",
+    reason: null,
+  };
+
+  function rowOf(name: string): HTMLElement {
+    const row = screen.getByText(name).closest("li");
+    if (row === null) throw new Error(`no row for ${name}`);
+    return row;
+  }
+
+  it("offers Preview and not Edit on a frozen skill, and Edit on an evolve one", async () => {
+    negotiateMethods(POLICIES);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({ list: listed([REVIEW, FROZEN], "pol-1"), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("review");
+    const frozen = rowOf("locked");
+    expect(
+      within(frozen).getByRole("button", { name: "Preview" }),
+    ).toBeTruthy();
+    expect(within(frozen).queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(
+      within(rowOf("review")).getByRole("button", { name: "Edit" }),
+    ).toBeTruthy();
+  });
+
+  it("sends the chosen policy with the list's policy revision", async () => {
+    negotiateMethods(POLICIES);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.setPolicy": () => saved,
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("review");
+    await userEvent.click(
+      within(rowOf("review")).getByRole("button", { name: "Frozen" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.skills.setPolicy"),
+      ).toEqual([
+        {
+          environmentId: "env-a",
+          name: "review",
+          policy: "frozen",
+          revision: "pol-1",
+        },
+      ]);
+    });
+  });
+
+  it("lists again on a stale answer and sends once more against the new revision", async () => {
+    negotiateMethods(POLICIES);
+    let moved = false;
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.list": () =>
+        listed([REVIEW], moved ? "pol-2" : "pol-1"),
+      "environment.configuration.skills.setPolicy": () => {
+        const first = !moved;
+        moved = true;
+        return first ? stale : saved;
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("review");
+    await userEvent.click(
+      within(rowOf("review")).getByRole("button", { name: "Frozen" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.skills.setPolicy"),
+      ).toMatchObject([{ revision: "pol-1" }, { revision: "pol-2" }]);
+    });
+    // The retry's answer is handled once the control is free again.
+    await waitFor(() => {
+      expect(
+        within(rowOf("review"))
+          .getByRole("group", { name: "Updates for review" })
+          .getAttribute("aria-disabled"),
+      ).toBeNull();
+    });
+    expect(screen.queryByText(/Changed by/)).toBeNull();
+  });
+
+  it("shows the conflict line, rather than sending a third time, when the retry is stale too", async () => {
+    negotiateMethods(POLICIES);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.setPolicy": () => stale,
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("review");
+    await userEvent.click(
+      within(rowOf("review")).getByRole("button", { name: "Frozen" }),
+    );
+
+    expect(
+      await screen.findByText("Changed by another member a moment ago"),
+    ).toBeTruthy();
+    expect(
+      harness.paramsOf("environment.configuration.skills.setPolicy"),
+    ).toHaveLength(2);
+  });
+
+  it("asks before letting an auto-update skill evolve, and sends only once confirmed", async () => {
+    negotiateMethods(POLICIES);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([BUILT_IN], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.setPolicy": () => saved,
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("find-skills");
+    await userEvent.click(
+      within(rowOf("find-skills")).getByRole("button", { name: "Evolve" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      harness.paramsOf("environment.configuration.skills.setPolicy"),
+    ).toEqual([]);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Stop updates" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.skills.setPolicy"),
+      ).toEqual([
+        {
+          environmentId: "env-a",
+          name: "find-skills",
+          policy: "evolve",
+          revision: "pol-1",
+        },
+      ]);
+    });
+  });
+
+  describe("update and restore", () => {
+    // The viewing host advertises the writes only it can make.
+    const negotiateHosted = (): void => {
+      negotiateMethods(POLICIES);
+      negotiateMethodsOn(reachableHost.hostId, {
+        "environment.configuration.skills.update": LIST,
+        "environment.configuration.skills.restoreBundled": LIST,
+      });
+    };
+    const UPDATE = "environment.configuration.skills.update";
+    const applied = { outcome: "applied" as const, reason: null };
+    const hasEdits = {
+      outcome: "refused" as const,
+      reason: "has_edits" as const,
+    };
+    const available = (
+      policy: "evolve" | "frozen",
+      edited: boolean,
+    ): EnvironmentSkillV11 => ({
+      ...REVIEW,
+      policy,
+      edited,
+      updateAvailable: true,
+    });
+
+    it.each(["evolve", "frozen"] as const)(
+      "asks before updating an edited %s skill, and sends the update with the confirm",
+      async (policy) => {
+        negotiateHosted();
+        const harness = mountTeamPage(poolSource("editor"), {
+          ...handlers({
+            list: listed([available(policy, true)], "pol-1"),
+            hostSkills: [],
+          }),
+          [UPDATE]: () => applied,
+        });
+        render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+        await userEvent.click(
+          await screen.findByRole("button", { name: "Update now" }),
+        );
+        const dialog = await screen.findByRole("dialog");
+        expect(harness.paramsOf(UPDATE)).toEqual([]);
+        await userEvent.click(
+          within(dialog).getByRole("button", { name: "Update now" }),
+        );
+
+        await waitFor(() => {
+          expect(harness.paramsOf(UPDATE)).toEqual([
+            { environmentId: "env-a", name: "review", confirm: true },
+          ]);
+        });
+      },
+    );
+
+    it("opens the confirm when the host answers has_edits to an update the page thought was clean", async () => {
+      negotiateHosted();
+      let first = true;
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([available("frozen", false)], "pol-1"),
+          hostSkills: [],
+        }),
+        [UPDATE]: () => {
+          const answer = first ? hasEdits : applied;
+          first = false;
+          return answer;
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Update now" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Update now" }),
+      );
+
+      await waitFor(() => {
+        expect(harness.paramsOf(UPDATE)).toEqual([
+          { environmentId: "env-a", name: "review", confirm: false },
+          { environmentId: "env-a", name: "review", confirm: true },
+        ]);
+      });
+    });
+
+    it("restores a deleted built-in from the fold", async () => {
+      negotiateHosted();
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+        "environment.configuration.skills.list": () => ({
+          ...listed([REVIEW], "pol-1"),
+          deletedBundled: ["old-skill"],
+        }),
+        "environment.configuration.skills.restoreBundled": () => ({
+          outcome: "restored" as const,
+          reason: null,
+        }),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Deleted built-ins" }),
+      );
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Restore" }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.restoreBundled"),
+        ).toEqual([{ environmentId: "env-a", name: "old-skill" }]);
+      });
+    });
+  });
+
+  it("asks before putting an edited built-in back on Auto-update, and sends only once confirmed", async () => {
+    negotiateMethods(POLICIES);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
+        list: listed(
+          [{ ...BUILT_IN, policy: "evolve", edited: true }],
+          "pol-1",
+        ),
+        hostSkills: [],
+      }),
+      "environment.configuration.skills.setPolicy": () => saved,
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("find-skills");
+    await userEvent.click(
+      within(rowOf("find-skills")).getByRole("button", {
+        name: "Auto-update",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      harness.paramsOf("environment.configuration.skills.setPolicy"),
+    ).toEqual([]);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Replace changes" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.skills.setPolicy"),
+      ).toMatchObject([{ name: "find-skills", policy: "auto-update" }]);
+    });
+  });
+
+  it("offers Auto-update on a built-in and not on a skill with nothing to follow", async () => {
+    negotiateMethods(POLICIES);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({ list: listed([REVIEW, BUILT_IN], "pol-1"), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("review");
+    expect(
+      within(rowOf("find-skills")).getByRole("button", {
+        name: "Auto-update",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(rowOf("review")).queryByRole("button", { name: "Auto-update" }),
+    ).toBeNull();
+  });
+});
+
+describe("The Skills page's skills from a source", () => {
+  const STATE = "environment.configuration.skills.state";
+  const UPDATE = "environment.configuration.skills.update";
+  const IMPORT = "environment.configuration.skills.import";
+  const UPSTREAM = { source: "https://github.com/acme/skills.git", ref: "dev" };
+  const FROM_SOURCE: EnvironmentSkillV11 = {
+    ...REVIEW,
+    name: "triage",
+    upstream: UPSTREAM,
+  };
+
+  /** The viewing host advertises the methods only it can answer. */
+  function negotiateHosted(
+    extra: Record<string, { major: number; minor: number }>,
+  ): void {
+    negotiateMethods(BASE_METHODS);
+    negotiateMethodsOn(reachableHost.hostId, extra);
+  }
+  const listedState = (
+    skills: readonly {
+      name: string;
+      version: string | null;
+      updateAvailable: boolean;
+    }[],
+    deletedBundled: readonly string[],
+  ) => ({
+    outcome: "listed" as const,
+    skills: [...skills],
+    deletedBundled: [...deletedBundled],
+  });
+
+  it("shows the badge and Update now when the viewing host's state finds an update the pool's list does not", async () => {
+    negotiateHosted({ [STATE]: LIST, [UPDATE]: LIST });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([FROM_SOURCE], "pol-1"), hostSkills: [] }),
+      [STATE]: () =>
+        listedState(
+          [{ name: "triage", version: "2.0.0", updateAvailable: true }],
+          [],
+        ),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Update available")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Update now" })).toBeTruthy();
+  });
+
+  it("lists the deleted built-ins the state names in place of the list's", async () => {
+    negotiateHosted({ [STATE]: LIST });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.list": () => ({
+        ...listed([REVIEW], "pol-1"),
+        deletedBundled: ["from-list"],
+      }),
+      [STATE]: () => listedState([], ["from-state"]),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Deleted built-ins" }),
+    );
+    expect(await screen.findByText("from-state")).toBeTruthy();
+    expect(screen.queryByText("from-list")).toBeNull();
+  });
+
+  it("shows where a skill from a source came from under its name", async () => {
+    negotiateHosted({ [STATE]: LIST });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([FROM_SOURCE], "pol-1"), hostSkills: [] }),
+      [STATE]: () => listedState([], []),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByText("From github.com/acme/skills · dev"),
+    ).toBeTruthy();
+  });
+
+  it("offers Check for updates only beside a skill with a source, and checks with a refresh", async () => {
+    negotiateHosted({ [STATE]: LIST });
+    const without = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      [STATE]: () => listedState([], []),
+    });
+    const first = render(<EnvironmentSkillsPage />, {
+      wrapper: without.Wrapper,
+    });
+    await screen.findByText("review");
+    expect(
+      screen.queryByRole("button", { name: "Check for updates" }),
+    ).toBeNull();
+    first.unmount();
+    cleanup();
+
+    negotiateHosted({ [STATE]: LIST });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([FROM_SOURCE], "pol-1"), hostSkills: [] }),
+      [STATE]: () => listedState([], []),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Check for updates" }),
+    );
+    await waitFor(() => {
+      expect(harness.paramsOf(STATE)).toContainEqual({
+        environmentId: "env-a",
+        refresh: true,
+      });
+    });
+  });
+
+  it("says the source could not be reached when Update now is answered fetch_failed", async () => {
+    negotiateHosted({ [STATE]: LIST, [UPDATE]: LIST });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([FROM_SOURCE], "pol-1"), hostSkills: [] }),
+      [STATE]: () =>
+        listedState(
+          [{ name: "triage", version: null, updateAvailable: true }],
+          [],
+        ),
+      [UPDATE]: () => ({
+        outcome: "refused" as const,
+        reason: "fetch_failed" as const,
+      }),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Update now" }),
+    );
+    expect(
+      await screen.findByText(
+        "Couldn't reach this skill's source. Try again later.",
+      ),
+    ).toBeTruthy();
+  });
+
+  describe("Import from source", () => {
+    const candidates = [
+      {
+        name: "triage",
+        description: null,
+        relPath: "skills/triage",
+        installed: false,
+      },
+      {
+        name: "review",
+        description: null,
+        relPath: "skills/review",
+        installed: true,
+      },
+    ];
+    const inspected: EnvironmentConfigurationSkillImportResponse = {
+      outcome: "inspected",
+      token: "tok-1",
+      commitSha: "abc123",
+      candidates,
+    };
+
+    async function readSource(
+      answers: (request: {
+        readonly step: "inspect" | "install";
+      }) => EnvironmentConfigurationSkillImportResponse,
+    ) {
+      negotiateHosted({ [STATE]: LIST, [IMPORT]: LIST });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+        [STATE]: () => listedState([], []),
+        [IMPORT]: (request) => answers(request),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Import from source" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.type(
+        within(dialog).getByLabelText("Skill source"),
+        "acme/skills",
+      );
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Read source" }),
+      );
+      return { harness, dialog };
+    }
+
+    it("reads the source, leaves an installed skill unchecked, installs the rest and closes", async () => {
+      const { harness, dialog } = await readSource((request) =>
+        request.step === "inspect"
+          ? inspected
+          : { outcome: "installed", names: ["triage"] },
+      );
+
+      expect(
+        (
+          await within(dialog).findByRole("checkbox", { name: "triage" })
+        ).getAttribute("data-state"),
+      ).toBe("checked");
+      expect(
+        within(dialog)
+          .getByRole("checkbox", { name: "review" })
+          .getAttribute("data-state"),
+      ).toBe("unchecked");
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Import 1 skill" }),
+      );
+
+      await waitFor(() => {
+        expect(harness.paramsOf(IMPORT)).toEqual([
+          { step: "inspect", environmentId: "env-a", source: "acme/skills" },
+          {
+            step: "install",
+            environmentId: "env-a",
+            token: "tok-1",
+            names: ["triage"],
+          },
+        ]);
+      });
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+    });
+
+    it.each<readonly ["exists" | "bundled_name", string, string]>([
+      [
+        "exists",
+        "triage",
+        "Acme already has a skill named triage. Remove it first.",
+      ],
+      [
+        "bundled_name",
+        "triage",
+        "triage is the name of a built-in skill. It can't be imported under that name.",
+      ],
+    ])("names the %s refusal in its own line", async (reason, name, line) => {
+      const { dialog } = await readSource((request) =>
+        request.step === "inspect"
+          ? inspected
+          : { outcome: "refused", reason, name },
+      );
+      await userEvent.click(
+        await within(dialog).findByRole("button", { name: "Import 1 skill" }),
+      );
+
+      expect(await within(dialog).findByText(line)).toBeTruthy();
+    });
+
+    it("returns to the source step when the install is answered expired", async () => {
+      const { dialog } = await readSource((request) =>
+        request.step === "inspect"
+          ? inspected
+          : { outcome: "refused", reason: "expired", name: null },
+      );
+      await userEvent.click(
+        await within(dialog).findByRole("button", { name: "Import 1 skill" }),
+      );
+
+      expect(
+        await within(dialog).findByText(
+          "This source changed since it was read. Read it again.",
+        ),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("button", { name: "Read source" }),
+      ).toBeTruthy();
+    });
+
+    it("offers no Import button when the viewing host does not support skills.import", async () => {
+      negotiateHosted({ [STATE]: LIST });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+        [STATE]: () => listedState([], []),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await screen.findByText("review");
+      expect(
+        screen.queryByRole("button", { name: "Import from source" }),
+      ).toBeNull();
+    });
+  });
 });

@@ -426,9 +426,23 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.configuration.mcpServers.put": "pool-only",
   "environment.configuration.mcpServers.setEnabled": "pool-only",
   "environment.configuration.policy.put": "pool-only",
+  // An import fetches a skill's source and writes it, which only a host
+  // serving the configuration does: the page sends it to its viewing host.
+  "environment.configuration.skills.import": "target-host",
   "environment.configuration.skills.list": "pool-only",
   "environment.configuration.skills.remove": "pool-only",
+  // A built-in's restore writes this host build's skill files, which only a
+  // host serving the configuration holds: the page sends it to its viewing
+  // host.
+  "environment.configuration.skills.restoreBundled": "target-host",
+  "environment.configuration.skills.setPolicy": "pool-only",
   "environment.configuration.skills.setProviders": "pool-only",
+  // What only the serving host knows of the skills (its build, its checks of
+  // each skill's source), beside the pool's list: its viewing host.
+  "environment.configuration.skills.state": "target-host",
+  // A skill's update writes its upstream's files, which only a host serving
+  // the configuration holds: the page sends it to its viewing host.
+  "environment.configuration.skills.update": "target-host",
   "environment.configuration.skills.upload": "pool-only",
   "environment.history": "pool-only",
   "environment.host.bind": "target-host",

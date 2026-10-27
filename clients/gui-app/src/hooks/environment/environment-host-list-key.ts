@@ -42,6 +42,7 @@ export const CONFIGURATION_READS = [
   "environment.configuration.items",
   "environment.configuration.mcpServers.list",
   "environment.configuration.skills.list",
+  "environment.configuration.skills.state",
   "environment.configuration.guide.get",
   "environment.plans.list",
 ] as const;

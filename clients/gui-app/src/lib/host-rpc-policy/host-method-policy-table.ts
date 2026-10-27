@@ -2525,6 +2525,10 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.configuration.skills.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.skills.state": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2571,6 +2575,26 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.configuration.skills.setProviders": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.update": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.restoreBundled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.import": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

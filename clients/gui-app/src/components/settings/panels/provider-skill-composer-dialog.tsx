@@ -108,6 +108,7 @@ export function ProviderSkillComposerDialog(props: {
             <ImportFields
               source={draft.source}
               setSource={draft.setSource}
+              hint={PROVIDER_IMPORT_SOURCE_HINT}
               disabled={props.pending}
               canWrite={props.authoring.canWrite}
               onWrite={draft.goToWrite}
@@ -461,15 +462,25 @@ function WriteFields({
   );
 }
 
-function ImportFields({
+const PROVIDER_IMPORT_SOURCE_HINT =
+  "Paste an npx skills command, owner/repo, git or tree URL, or a folder path.";
+
+/**
+ * The import's source step: the source field, and the way back to writing a
+ * skill when `canWrite`. An environment's import shows it too, with its own
+ * `hint`.
+ */
+export function ImportFields({
   source,
   setSource,
+  hint,
   disabled,
   canWrite,
   onWrite,
 }: {
   readonly source: string;
   readonly setSource: (v: string) => void;
+  readonly hint: string;
   readonly disabled: boolean;
   readonly canWrite: boolean;
   readonly onWrite: () => void;
@@ -479,7 +490,7 @@ function ImportFields({
       <Field
         htmlFor="skill-import-source"
         label="Skill source"
-        hint="Paste an npx skills command, owner/repo, git or tree URL, or a folder path."
+        hint={hint}
         error={null}
       >
         <Input
@@ -505,7 +516,8 @@ function ImportFields({
   );
 }
 
-function PickerFields({
+/** The import's picker step: the source's skills to choose from. */
+export function PickerFields({
   candidates,
   selectedNames,
   note,
