@@ -37,7 +37,7 @@ import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
  *   what the old "open it live" button lacked when reachability alone routed
  *   it to a tile that opened nothing.
  */
-export function publishedChatOpensLive(input: {
+function publishedChatOpensLive(input: {
   readonly ownerOpensLive: boolean;
   readonly ownerRefusesStore: boolean;
   readonly ownerIsThisHost: boolean;
