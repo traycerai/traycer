@@ -49,6 +49,9 @@ export interface CloudNotificationsState {
   /** Increments whenever ownership changes, so a late command from an old
    * host/session cannot change the replacement session's presentation. */
   readonly sessionEpoch: number;
+  /** The account that owns this session's rows, including a replica seed.
+   * Auth may switch before the provider tears the old session down. */
+  readonly accountId: string | null;
   /**
    * Entries whose view-consumption mark-read the server ACCEPTED this session.
    *
@@ -83,6 +86,7 @@ export interface CloudNotificationsState {
    * replaces them wholesale.
    */
   seedFromReplica(input: {
+    readonly accountId: string;
     readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>;
     readonly summary: HostNotificationsCloudFeedSummary;
   }): void;
@@ -363,6 +367,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     connectionState: "unavailable",
     hasSnapshot: false,
     sessionEpoch: 0,
+    accountId: null,
     entityReadSucceeded: new Set<string>(),
     entityReadRetries: {},
     applySnapshot: (input) => {
@@ -395,11 +400,16 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     },
     seedFromReplica: (input) => {
       set((state) => {
-        if (state.hasSnapshot) return state;
+        if (
+          state.hasSnapshot ||
+          (state.accountId !== null && state.accountId !== input.accountId)
+        )
+          return state;
         const rows: Partial<Record<string, HostNotificationsCloudFeedRowV15>> =
           {};
         for (const row of input.rows) rows[rowKey(row)] = row;
         return {
+          accountId: input.accountId,
           rows: reconcileSandboxNotices(rows, state.rows, Date.now()),
           summary: input.summary,
         };
@@ -566,6 +576,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         connectionState: "unavailable",
         hasSnapshot: false,
         sessionEpoch: state.sessionEpoch + 1,
+        accountId: null,
         // View-consumption bookkeeping is relay-session scoped, like every
         // other field here: a new session rediscovers from its own snapshot.
         entityReadSucceeded: new Set<string>(),
@@ -578,7 +589,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
 /** Opens the distinct cloud-feed stream. It deliberately owns a fresh-session
  * retry loop: a terminal stream close is otherwise permanent in the shared
  * transport and would leave the cloud-only surface stale until app restart. */
-// eslint-disable-next-line max-params -- All four are semantically distinct: one reconnect policy, one transport, and two unrelated callbacks (auth, snapshot) that no caller supplies together. The policy arrived with P4.1's consolidation handing it IN rather than each store constructing its own; folding the callbacks into a bag would restructure this store's public surface across ten call sites for a consolidation ticket whose acceptance is "no behavior change at surfaces". Mirrors git-query-keys.ts's fileDiff.
+// eslint-disable-next-line max-params -- The reconnect policy, transport, owning account and two unrelated callbacks (auth, snapshot) describe distinct stream boundaries.
 export function openCloudNotificationsStream(
   /**
    * THE reconnect policy for this stream's host (redesign P4.1 /
@@ -590,6 +601,7 @@ export function openCloudNotificationsStream(
    */
   reconnectEngine: HostReconnectEngine,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  accountId: string,
   onAuthError: (() => void) | null,
   onSnapshot:
     | ((input: {
@@ -598,6 +610,11 @@ export function openCloudNotificationsStream(
       }) => void)
     | null,
 ): () => void {
+  const state = useCloudNotificationsStore.getState();
+  if (state.accountId !== accountId) {
+    state.reset();
+    useCloudNotificationsStore.setState({ accountId });
+  }
   let disposed = false;
   let currentSession: IStreamSession | null = null;
   // Ownership is established when this relay controller opens. A replacement

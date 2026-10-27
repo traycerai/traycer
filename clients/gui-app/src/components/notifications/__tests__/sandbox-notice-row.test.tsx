@@ -243,6 +243,7 @@ describe("a sandbox.notice row in the notification center", () => {
     __resetHostNotificationsStoreForTests();
     __resetAppLocalNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
+    useCloudNotificationsStore.setState({ accountId: "user-notice" });
     useHostNotificationsStore.getState().applySnapshot({
       attention: { entries: [], nextCursor: null },
       recent: { entries: [], nextCursor: null },

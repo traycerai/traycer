@@ -186,6 +186,8 @@ function notice(
   };
 }
 function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+  // The opened session's owner: the signed-in `settings-user` below.
+  useCloudNotificationsStore.setState({ accountId: "settings-user" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
     summary: { totalCount: rows.length, unreadCount: 0, attentionCount: 0 },
