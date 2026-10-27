@@ -76,9 +76,7 @@ describe("a removal's per-host progress", () => {
   );
 
   it("counts a host once all three facts have arrived", () => {
-    expect(removalBody([ALL_DONE, ALL_DONE])).toBe(
-      "Sam is no longer in Acme.",
-    );
+    expect(removalBody([ALL_DONE, ALL_DONE])).toBe("Sam is no longer in Acme.");
   });
 });
 

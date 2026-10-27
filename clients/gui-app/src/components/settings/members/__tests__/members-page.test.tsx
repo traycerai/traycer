@@ -444,9 +444,7 @@ describe("MembersPage offboarding previews", () => {
 
     await userEvent.click(
       within(
-        await screen
-          .findByText("Priya")
-          .then(() => rowOf("u-priya")),
+        await screen.findByText("Priya").then(() => rowOf("u-priya")),
       ).getByRole("button", { name: "Remove" }),
     );
     const dialog = await screen.findByTestId("members-remove-preview");
