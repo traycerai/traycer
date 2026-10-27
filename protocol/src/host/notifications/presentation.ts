@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV25,
+  type HostNotificationCloudEntryV26,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -34,7 +34,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV25,
+  entry: HostNotificationCloudEntryV26,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -127,7 +127,20 @@ export function formatHostNotificationPresentation(
       return environmentNotificationPresentation(entry.kind, known);
     case "sandbox.notice":
       return sandboxNoticePresentation(known, Date.now());
+    case "notification.hooks.removed":
+      return {
+        title: "Notification hooks removed",
+        body: known?.kind === "notification_hooks_removed"
+          ? notificationHooksRemovedMessage(known.hostName, known.count)
+          : "Review notification hooks on the affected computer.",
+      };
   }
+}
+
+export function notificationHooksRemovedMessage(hostName: string, count: number): string {
+  return count === 1
+    ? `Removed 1 notification hook from ${hostName} because it could send its private data.`
+    : `Removed ${count} notification hooks from ${hostName} because they could send its private data.`;
 }
 
 const SANDBOX_FILES_LINE =
