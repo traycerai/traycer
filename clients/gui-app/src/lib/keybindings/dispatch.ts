@@ -13,7 +13,11 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
-import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
+import {
+  advanceActiveTileFind,
+  openActiveTileFind,
+  openActiveTileFindWithReplace,
+} from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { openActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
@@ -412,6 +416,8 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.left": (r) => focusGroupInDirection(r, "left"),
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
+  "tile.find.open": () => openActiveTileFind(),
+  "tile.find.next": () => advanceActiveTileFind(1),
   "tile.find.replace": () => openActiveTileFindWithReplace(),
   "nav.back": (r) => {
     if (!r.isHistoryNavAvailable() || !r.canGoBack()) return false;
