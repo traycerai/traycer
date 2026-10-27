@@ -508,7 +508,10 @@ export async function destroySandboxViaHttp(
 ): Promise<SandboxVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
-    sandboxesUrl(serverBaseUrl, `/${sandboxId}${onlyIfIdle ? "?onlyIfIdle=true" : ""}`),
+    sandboxesUrl(
+      serverBaseUrl,
+      `/${sandboxId}${onlyIfIdle ? "?onlyIfIdle=true" : ""}`,
+    ),
     {
       method: "DELETE",
       body: null,

@@ -425,7 +425,9 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   const { filter, setFilter, highlighted, reveals } = useRevealedSandboxFilter(
     props.revealSandboxId,
   );
-  const [destroyAllTargets, setDestroyAllTargets] = useState<readonly SandboxSummary[] | null>(null);
+  const [destroyAllTargets, setDestroyAllTargets] = useState<
+    readonly SandboxSummary[] | null
+  >(null);
 
   const allRows = list.data?.sandboxes ?? null;
   // The configuration's Automations host before its first shell creates it:
@@ -484,11 +486,25 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
       configuration={configuration}
     />
   );
+  const destroyDialog = (
+    <SandboxDestroyAllIdleDialog
+      targets={destroyAllTargets ?? []}
+      open={destroyAllTargets !== null}
+      onOpenChange={(open) => {
+        if (!open) setDestroyAllTargets(null);
+      }}
+    />
+  );
   if (
     configurationRows === null ||
-    (configurationRows.length === 0 && !unstartedAutomations && destroyAllTargets === null)
+    (configurationRows.length === 0 && !unstartedAutomations)
   ) {
-    return gate;
+    return (
+      <>
+        {gate}
+        {destroyDialog}
+      </>
+    );
   }
   const figures = todayFigures({
     configuration,
@@ -568,11 +584,7 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
           />
         ) : null}
       </ul>
-      <SandboxDestroyAllIdleDialog
-        targets={destroyAllTargets ?? []}
-        open={destroyAllTargets !== null}
-        onOpenChange={(open) => { if (!open) setDestroyAllTargets(null); }}
-      />
+      {destroyDialog}
     </section>
   );
 }

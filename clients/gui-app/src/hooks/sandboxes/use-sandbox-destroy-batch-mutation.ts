@@ -95,21 +95,40 @@ export function useSandboxDestroyBatch(): UseMutationResult<
       const results: SandboxBatchResult[] = [];
       for (const target of targets) {
         stopIfAccountChanged();
-        const mutation = queryClient.getMutationCache().build(queryClient,
-          sandboxDestroyMutationOptions({
-            id: target.sandboxId,
-            hostId: target.hostId,
-            displayName: target.name,
-          }, binding, queryClient, runnerHost),
+        const mutation = queryClient.getMutationCache().build(
+          queryClient,
+          sandboxDestroyMutationOptions(
+            {
+              id: target.sandboxId,
+              hostId: target.hostId,
+              displayName: target.name,
+            },
+            binding,
+            queryClient,
+            runnerHost,
+          ),
         );
         try {
           const gone = await mutation.execute({ idleOnly: true, startedBy });
-          results.push({ ...target, outcome: { kind: gone ? "destroyed" : "destroying" } });
+          results.push({
+            ...target,
+            outcome: { kind: gone ? "destroyed" : "destroying" },
+          });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Couldn't destroy this sandbox.";
-          results.push({ ...target, outcome: {
-            kind: error instanceof SandboxDestroySkippedError ? "skipped" : "failed", message,
-          } });
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Couldn't destroy this sandbox.";
+          results.push({
+            ...target,
+            outcome: {
+              kind:
+                error instanceof SandboxDestroySkippedError
+                  ? "skipped"
+                  : "failed",
+              message,
+            },
+          });
         }
       }
       return results;

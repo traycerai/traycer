@@ -3133,7 +3133,10 @@ export class AuthService {
     return this.runnerHost.createSandbox(bearer, request);
   }
 
-  async destroySandbox(sandboxId: string, onlyIfIdle: boolean): Promise<SandboxVerbFetchResult> {
+  async destroySandbox(
+    sandboxId: string,
+    onlyIfIdle: boolean,
+  ): Promise<SandboxVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();

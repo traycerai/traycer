@@ -937,7 +937,10 @@ describe("<SandboxCard /> destroy", () => {
     typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1", false);
+      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+        "sbx_1",
+        false,
+      );
     });
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(`Destroyed ${NAME}`);

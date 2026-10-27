@@ -302,7 +302,12 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.destroySandbox,
-    async (_event, bearerToken: unknown, sandboxId: unknown, onlyIfIdle: unknown) => {
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      onlyIfIdle: unknown,
+    ) => {
       assertString(bearerToken, "destroySandbox.bearerToken");
       assertString(sandboxId, "destroySandbox.sandboxId");
       const idle = onlyIfIdle === undefined ? false : onlyIfIdle;

@@ -21,7 +21,11 @@ export function SandboxOperationFailure(props: {
 }): ReactNode {
   const { operation } = props;
   if (operation?.kind === "skipped") {
-    return <p role="status" className="w-full text-ui-xs text-muted-foreground">Skipped {props.name} · {operation.message}</p>;
+    return (
+      <p role="status" className="w-full text-ui-xs text-muted-foreground">
+        Skipped {props.name} · {operation.message}
+      </p>
+    );
   }
   if (operation?.kind !== "failed") return null;
   return (

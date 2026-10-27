@@ -522,7 +522,7 @@ describe("useSandboxKeep", () => {
       outcome = await result.current.mutateAsync();
     });
 
-    expect(state.binding?.auth.keepSandbox).toHaveBeenCalledWith("sbx_1", false);
+    expect(state.binding?.auth.keepSandbox).toHaveBeenCalledWith("sbx_1");
     expect(outcome).toBe("kept");
     expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
@@ -594,7 +594,10 @@ describe("useSandboxDestroyBatch", () => {
     });
 
     expect(state.binding?.auth.destroySandbox).toHaveBeenCalledTimes(1);
-    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1", true);
+    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+      "sbx_1",
+      true,
+    );
     expect(outcomes).toEqual(["destroyed", "skipped"]);
   });
 
@@ -648,7 +651,10 @@ describe("useSandboxDestroy", () => {
       gone = await result.current.mutateAsync();
     });
 
-    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1", false);
+    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+      "sbx_1",
+      false,
+    );
     expect(gone).toBe(true);
     expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);

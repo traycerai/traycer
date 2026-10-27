@@ -10,6 +10,8 @@ import {
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { AuthService } from "@/lib/auth/auth-service";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -43,9 +45,11 @@ export type SandboxDestroyRequest = void | {
 
 export class SandboxDestroySkippedError extends Error {
   constructor(reason: "idle" | "authority") {
-    super(reason === "idle"
-      ? "no longer idle, left as it is"
-      : "no longer available to destroy, left as it is");
+    super(
+      reason === "idle"
+        ? "no longer idle, left as it is"
+        : "no longer available to destroy, left as it is",
+    );
     this.name = "SandboxDestroySkippedError";
   }
 }
@@ -70,11 +74,18 @@ export class SandboxDestroySkippedError extends Error {
  */
 export function useSandboxDestroy(
   sandbox: Pick<SandboxSummary, "id" | "hostId" | "displayName">,
-): UseMutationResult<boolean, Error, SandboxDestroyRequest, SandboxDestroyContext> {
+): UseMutationResult<
+  boolean,
+  Error,
+  SandboxDestroyRequest,
+  SandboxDestroyContext
+> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
-  const mutation = useMutation(sandboxDestroyMutationOptions(sandbox, binding, queryClient, runnerHost));
+  const mutation = useMutation(
+    sandboxDestroyMutationOptions(sandbox, binding, queryClient, runnerHost),
+  );
   return useAccountFencedMutation(mutation);
 }
 
@@ -84,7 +95,12 @@ export function sandboxDestroyMutationOptions(
   binding: HostRuntimeBinding<HostRpcRegistry> | null,
   queryClient: QueryClient,
   runnerHost: IRunnerHost,
-): UseMutationOptions<boolean, Error, SandboxDestroyRequest, SandboxDestroyContext> {
+): UseMutationOptions<
+  boolean,
+  Error,
+  SandboxDestroyRequest,
+  SandboxDestroyContext
+> {
   const sandboxId = sandbox.id;
   return {
     mutationKey: sandboxMutationKeys.destroy(sandboxId),
@@ -96,34 +112,14 @@ export function sandboxDestroyMutationOptions(
       if (binding === null) {
         throw new Error("Sign in to destroy this sandbox.");
       }
-      let target = sandbox;
-      if (request !== undefined) {
-        const checkAccount = (): void => {
-          if (signedInUserId() !== request.startedBy) {
-            throw new SandboxDestroySkippedError("authority");
-          }
-        };
-        checkAccount();
-        // This authenticated list carries the same management authority as a
-        // row. Read afresh for each target, including an individual row Retry.
-        const listed = await binding.auth.listSandboxes();
-        checkAccount();
-        if (listed.kind !== "ok") {
-          if (listed.kind === "unauthorized" ||
-            (listed.kind === "refused" && (listed.status === 403 || listed.status === 404))) {
-            throw new SandboxDestroySkippedError("authority");
-          }
-          throw new SandboxOperationError(listed);
-        }
-        const current = listed.response.sandboxes.find((row) => row.id === sandboxId);
-        if (current === undefined || current.kind === "automation") {
-          throw new SandboxDestroySkippedError("authority");
-        }
-        if (current.frozen || (current.state !== "suspended" && current.state !== "stopped")) {
-          throw new SandboxDestroySkippedError("idle");
-        }
-        target = current;
-      }
+      const target =
+        request === undefined
+          ? sandbox
+          : await readIdleDestroyTarget(
+              binding.auth,
+              sandboxId,
+              request.startedBy,
+            );
       const viewer = signedInUserId();
       if (viewer !== null) {
         recordEndedSandboxHost(target.hostId, {
@@ -132,24 +128,29 @@ export function sandboxDestroyMutationOptions(
           actor: { userId: viewer, displayName: null },
         });
       }
-      const result = await binding.auth.destroySandbox(sandboxId, request !== undefined);
-      // `404 sandbox_not_found` resolves too: the user's intent ("this
-      // sandbox should not exist") already holds - destroyed from another
-      // window, or by its own idle timer.
+      const result = await binding.auth.destroySandbox(
+        sandboxId,
+        request !== undefined,
+      );
+      // Ordinary Destroy is idempotent on a 404. A guarded batch cannot tell
+      // an already destroyed row from lost authority, so it records a skip.
       if (result.kind === "ok") return result.settled;
       if (
         result.kind === "refused" &&
-        result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+        result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND &&
+        request === undefined
       ) {
         return true;
       }
       forgetEndedSandboxHost(target.hostId);
-      if (request !== undefined && (result.kind === "unauthorized" ||
-        (result.kind === "refused" && result.status === 403))) {
+      if (request !== undefined && isAuthorityFailure(result)) {
         throw new SandboxDestroySkippedError("authority");
       }
-      if (request !== undefined && result.kind === "refused" &&
-        result.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT) {
+      if (
+        request !== undefined &&
+        result.kind === "refused" &&
+        result.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT
+      ) {
         throw new SandboxDestroySkippedError("idle");
       }
       throw new SandboxOperationError(result);
@@ -165,10 +166,48 @@ export function sandboxDestroyMutationOptions(
     onError: (error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;
       if (error instanceof SandboxDestroySkippedError) {
-        void queryClient.invalidateQueries({ queryKey: authQueryKeys.registeredHostsAll() });
+        void queryClient.invalidateQueries({
+          queryKey: authQueryKeys.registeredHostsAll(),
+        });
         return;
       }
       toastFromAuthError(error, "Couldn't destroy the sandbox.");
     },
   };
+}
+
+/** Recheck each batch target through the current account's authorized list. */
+async function readIdleDestroyTarget(
+  auth: Pick<AuthService, "listSandboxes">,
+  sandboxId: string,
+  startedBy: string | null,
+): Promise<SandboxSummary> {
+  if (signedInUserId() !== startedBy)
+    throw new SandboxDestroySkippedError("authority");
+  const listed = await auth.listSandboxes();
+  // A sign-in can change while the authenticated read is in flight.
+  if (signedInUserId() !== startedBy)
+    throw new SandboxDestroySkippedError("authority");
+  if (listed.kind !== "ok") {
+    if (isAuthorityFailure(listed))
+      throw new SandboxDestroySkippedError("authority");
+    throw new SandboxOperationError(listed);
+  }
+  const row = listed.response.sandboxes.find(
+    (candidate) => candidate.id === sandboxId,
+  );
+  if (row === undefined || row.kind === "automation")
+    throw new SandboxDestroySkippedError("authority");
+  if (row.frozen || (row.state !== "suspended" && row.state !== "stopped")) {
+    throw new SandboxDestroySkippedError("idle");
+  }
+  return row;
+}
+
+function isAuthorityFailure(failure: SandboxControlFailure): boolean {
+  return (
+    failure.kind === "unauthorized" ||
+    (failure.kind === "refused" &&
+      (failure.status === 403 || failure.status === 404))
+  );
 }

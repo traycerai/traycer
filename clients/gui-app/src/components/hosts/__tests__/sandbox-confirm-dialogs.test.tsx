@@ -42,7 +42,17 @@ const mocks = vi.hoisted(() => ({
   destroyMutate: vi.fn<(variables: undefined, options: object) => void>(),
   batch: {
     isPending: false,
-    mutate: vi.fn<(request: SandboxDestroyBatchRequest, options: { readonly onSuccess: (results: readonly SandboxBatchResult[]) => void }) => void>(),
+    mutate:
+      vi.fn<
+        (
+          request: SandboxDestroyBatchRequest,
+          options: {
+            readonly onSuccess: (
+              results: readonly SandboxBatchResult[],
+            ) => void;
+          },
+        ) => void
+      >(),
     reset: vi.fn(),
   },
 }));
@@ -683,32 +693,53 @@ describe("sandbox confirm dialogs", () => {
 
   it("keeps the confirmed set in Destroy all idle once the list drops the destroyed rows", () => {
     const targets = [
-      sandboxSummaryFixture({ id: "sbx-a", hostId: "host-a", displayName: "box-a", state: "suspended" }),
-      sandboxSummaryFixture({ id: "sbx-b", hostId: "host-b", displayName: "box-b", state: "stopped" }),
+      sandboxSummaryFixture({
+        id: "sbx-a",
+        hostId: "host-a",
+        displayName: "box-a",
+        state: "suspended",
+      }),
+      sandboxSummaryFixture({
+        id: "sbx-b",
+        hostId: "host-b",
+        displayName: "box-b",
+        state: "stopped",
+      }),
     ];
-    const requestTargets = targets.map((target) => ({ sandboxId: target.id, hostId: target.hostId, name: target.displayName }));
+    const requestTargets = targets.map((target) => ({
+      sandboxId: target.id,
+      hostId: target.hostId,
+      name: target.displayName,
+    }));
     const dialog = (live: typeof targets) => (
       <SandboxDestroyAllIdleDialog targets={live} open onOpenChange={vi.fn()} />
     );
     const { rerender } = render(dialog(targets));
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(mocks.batch.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ targets: requestTargets }), expect.any(Object),
+      expect.objectContaining({ targets: requestTargets }),
+      expect.any(Object),
     );
 
     rerender(dialog([targets[1]]));
-    expect(screen.getByRole("heading").textContent).toBe("Destroy 2 idle sandboxes?");
-    const callback = mocks.batch.mutate.mock.calls[0]?.[1];
-    if (callback === undefined) throw new Error("Expected the batch callback");
-    act(() => callback.onSuccess([
-      { ...requestTargets[0], outcome: { kind: "destroyed" } },
-      { ...requestTargets[1], outcome: { kind: "failed", message: "busy" } },
-    ]));
+    expect(screen.getByRole("heading").textContent).toBe(
+      "Destroy 2 idle sandboxes?",
+    );
+    const callback = mocks.batch.mutate.mock.calls[0][1];
+    act(() =>
+      callback.onSuccess([
+        { ...requestTargets[0], outcome: { kind: "destroyed" } },
+        { ...requestTargets[1], outcome: { kind: "failed", message: "busy" } },
+      ]),
+    );
     rerender(dialog([]));
-    expect(screen.getByRole("heading").textContent).toBe("Destroy 2 idle sandboxes?");
+    expect(screen.getByRole("heading").textContent).toBe(
+      "Destroy 2 idle sandboxes?",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(mocks.batch.mutate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ targets: [requestTargets[1]] }), expect.any(Object),
+      expect.objectContaining({ targets: [requestTargets[1]] }),
+      expect.any(Object),
     );
   });
 });

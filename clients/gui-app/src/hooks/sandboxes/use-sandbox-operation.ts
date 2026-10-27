@@ -4,7 +4,10 @@ import {
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
-import { SandboxDestroySkippedError, type SandboxDestroyRequest } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import {
+  SandboxDestroySkippedError,
+  type SandboxDestroyRequest,
+} from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -101,8 +104,14 @@ function isRowVerb(value: unknown): value is SandboxRowVerb {
 }
 
 function destroyRetryRequest(value: unknown): SandboxDestroyRequest {
-  if (typeof value === "object" && value !== null && "idleOnly" in value && value.idleOnly === true &&
-    "startedBy" in value && (typeof value.startedBy === "string" || value.startedBy === null)) {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "idleOnly" in value &&
+    value.idleOnly === true &&
+    "startedBy" in value &&
+    (typeof value.startedBy === "string" || value.startedBy === null)
+  ) {
     return { idleOnly: true, startedBy: value.startedBy };
   }
   return undefined;

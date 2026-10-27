@@ -869,19 +869,28 @@ function SandboxDestroyNameField(props: {
   return (
     <div className="flex flex-col gap-1.5 px-5 pb-4">
       <Label htmlFor={inputId}>Type the name to confirm</Label>
-      <Input id={inputId} value={props.typed} autoComplete="off"
-        placeholder={props.name} data-testid="sandbox-confirm-destroy-typed"
-        onChange={(event) => props.onChange(event.target.value)} />
+      <Input
+        id={inputId}
+        value={props.typed}
+        autoComplete="off"
+        placeholder={props.name}
+        data-testid="sandbox-confirm-destroy-typed"
+        onChange={(event) => props.onChange(event.target.value)}
+      />
     </div>
   );
 }
 
 function batchOutcomeLine(result: SandboxBatchResult): string {
   switch (result.outcome.kind) {
-    case "destroyed": return `${result.name} · destroyed`;
-    case "destroying": return `${result.name} · Destroying · pending`;
-    case "skipped": return `${result.name} · ${result.outcome.message}`;
-    case "failed": return `${result.name} · couldn't be destroyed: ${result.outcome.message}`;
+    case "destroyed":
+      return `${result.name} · destroyed`;
+    case "destroying":
+      return `${result.name} · Destroying · pending`;
+    case "skipped":
+      return `${result.name} · ${result.outcome.message}`;
+    case "failed":
+      return `${result.name} · couldn't be destroyed: ${result.outcome.message}`;
   }
 }
 
@@ -891,7 +900,12 @@ export function SandboxDestroyAllIdleDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  return props.open ? <SandboxDestroyAllIdleConfirmation targets={props.targets} onOpenChange={props.onOpenChange} /> : null;
+  return props.open ? (
+    <SandboxDestroyAllIdleConfirmation
+      targets={props.targets}
+      onOpenChange={props.onOpenChange}
+    />
+  ) : null;
 }
 
 /** The enumerated set and its per-target outcomes stay fixed across retries. */
@@ -899,16 +913,31 @@ function SandboxDestroyAllIdleConfirmation(props: {
   readonly targets: readonly SandboxSummary[];
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  const [targets] = useState(() => props.targets.filter((target) => target.kind !== "automation"));
-  const [results, setResults] = useState<readonly SandboxBatchResult[] | null>(null);
+  const [targets] = useState(() =>
+    props.targets.filter((target) => target.kind !== "automation"),
+  );
+  const [results, setResults] = useState<readonly SandboxBatchResult[] | null>(
+    null,
+  );
   const [ready, setReady] = useState<ReadonlySet<string>>(() => new Set());
   const batch = useSandboxDestroyBatch();
   const [startedBy] = useState(signedInUserId);
   const viewerUserId = useViewerUserId();
   const count = targets.length;
   const pendingTargets: readonly SandboxBatchTarget[] = targets
-    .filter((target) => results === null || results.some((result) => result.sandboxId === target.id && result.outcome.kind === "failed"))
-    .map((target) => ({ sandboxId: target.id, hostId: target.hostId, name: target.displayName }));
+    .filter(
+      (target) =>
+        results === null ||
+        results.some(
+          (result) =>
+            result.sandboxId === target.id && result.outcome.kind === "failed",
+        ),
+    )
+    .map((target) => ({
+      sandboxId: target.id,
+      hostId: target.hostId,
+      name: target.displayName,
+    }));
   const onReady = useCallback((id: string, valid: boolean): void => {
     setReady((previous) => {
       if (previous.has(id) === valid) return previous;
@@ -918,43 +947,75 @@ function SandboxDestroyAllIdleConfirmation(props: {
       return next;
     });
   }, []);
-  const blocked = viewerUserId !== startedBy || pendingTargets.length === 0 || pendingTargets.some((target) => !ready.has(target.sandboxId));
+  const blocked =
+    viewerUserId !== startedBy ||
+    pendingTargets.length === 0 ||
+    pendingTargets.some((target) => !ready.has(target.sandboxId));
   return (
     <ConfirmDestructiveDialog
-      blockedReason={blocked ? "" : null} open
+      blockedReason={blocked ? "" : null}
+      open
       onOpenChange={props.onOpenChange}
       title={`Destroy ${count} idle ${count === 1 ? "sandbox" : "sandboxes"}?`}
-      description={<>
-        <span data-testid="sandbox-destroy-all-idle-targets" className="flex flex-col">
-          {targets.map((target) => <span key={target.id}>{target.displayName}</span>)}
-        </span>
-        Files on these sandboxes cannot be recovered; published chats stay readable.
-      </>}
+      description={
+        <>
+          <span
+            data-testid="sandbox-destroy-all-idle-targets"
+            className="flex flex-col"
+          >
+            {targets.map((target) => (
+              <span key={target.id}>{target.displayName}</span>
+            ))}
+          </span>
+          Files on these sandboxes cannot be recovered; published chats stay
+          readable.
+        </>
+      }
       cascadeSummary={null}
       actionLabel={results === null ? `Destroy ${count}` : "Retry"}
       isPending={batch.isPending}
       onConfirm={() => {
         if (blocked) return;
-        batch.mutate({ targets: pendingTargets, startedBy }, {
-          onSuccess: (next) => {
-            setResults((previous) => {
-              const outcomes = new Map((previous ?? []).map((result) => [result.sandboxId, result]));
-              for (const result of next) outcomes.set(result.sandboxId, result);
-              return targets.flatMap((target) => {
-                const result = outcomes.get(target.id);
-                return result === undefined ? [] : [result];
+        batch.mutate(
+          { targets: pendingTargets, startedBy },
+          {
+            onSuccess: (next) => {
+              setResults((previous) => {
+                const outcomes = new Map(
+                  (previous ?? []).map((result) => [result.sandboxId, result]),
+                );
+                for (const result of next)
+                  outcomes.set(result.sandboxId, result);
+                return targets.flatMap((target) => {
+                  const result = outcomes.get(target.id);
+                  return result === undefined ? [] : [result];
+                });
               });
-            });
+            },
           },
-        });
+        );
       }}
     >
-      {targets.map((target) => <SandboxBatchDestroyConfirmationTarget
-        key={target.id} sandbox={target} onReady={onReady}
-        onNavigate={() => props.onOpenChange(false)} />)}
-      {results === null ? null : <ul className="mx-5 mb-4 list-none space-y-1 p-0 text-ui-sm" aria-label="Destroy outcomes">
-        {results.map((result) => <li key={result.sandboxId} className="wrap-anywhere">{batchOutcomeLine(result)}</li>)}
-      </ul>}
+      {targets.map((target) => (
+        <SandboxBatchDestroyConfirmationTarget
+          key={target.id}
+          sandbox={target}
+          onReady={onReady}
+          onNavigate={() => props.onOpenChange(false)}
+        />
+      ))}
+      {results === null ? null : (
+        <ul
+          className="mx-5 mb-4 list-none space-y-1 p-0 text-ui-sm"
+          aria-label="Destroy outcomes"
+        >
+          {results.map((result) => (
+            <li key={result.sandboxId} className="wrap-anywhere">
+              {batchOutcomeLine(result)}
+            </li>
+          ))}
+        </ul>
+      )}
     </ConfirmDestructiveDialog>
   );
 }
@@ -972,12 +1033,28 @@ function SandboxBatchDestroyConfirmationTarget(props: {
   const hasSessions = report.kind !== "unknown" && report.count > 0;
   const reason = sandboxTypedNameReason(typed, sandbox.displayName);
   const valid = !hasSessions || reason === null;
-  useEffect(() => { onReady(sandbox.id, valid); }, [onReady, sandbox.id, valid]);
+  useEffect(() => {
+    onReady(sandbox.id, valid);
+  }, [onReady, sandbox.id, valid]);
   if (!hasSessions) return null;
-  return <>
-    <p className="px-5 pb-2 text-ui-sm font-medium">{sandbox.displayName}</p>
-    <SandboxSessionsBlock report={report} countLine trailing={null} hostId={sandbox.hostId} onNavigate={props.onNavigate} />
-    <SandboxDestroyNameField name={sandbox.displayName} typed={typed} onChange={setTyped} />
-    {reason === null || reason.length === 0 ? null : <p className="px-5 pb-4 text-ui-sm text-destructive">{reason}</p>}
-  </>;
+  return (
+    <>
+      <p className="px-5 pb-2 text-ui-sm font-medium">{sandbox.displayName}</p>
+      <SandboxSessionsBlock
+        report={report}
+        countLine
+        trailing={null}
+        hostId={sandbox.hostId}
+        onNavigate={props.onNavigate}
+      />
+      <SandboxDestroyNameField
+        name={sandbox.displayName}
+        typed={typed}
+        onChange={setTyped}
+      />
+      {reason === null || reason.length === 0 ? null : (
+        <p className="px-5 pb-4 text-ui-sm text-destructive">{reason}</p>
+      )}
+    </>
+  );
 }

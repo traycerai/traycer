@@ -558,16 +558,30 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
 
 describe("destroySandboxViaHttp", () => {
   it("sends the idle-only precondition and preserves the typed CAS conflict", async () => {
-    const fetchMock = stubFetch(async () => jsonResponse(409, { code: "sandbox_transition_conflict", sandboxId: "sbx_1", state: "awake" }));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", true)).toMatchObject({
-      kind: "refused", status: 409, code: "sandbox_transition_conflict",
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(409, {
+        code: "sandbox_transition_conflict",
+        sandboxId: "sbx_1",
+        state: "awake",
+      }),
+    );
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", true),
+    ).toMatchObject({
+      kind: "refused",
+      status: 409,
+      code: "sandbox_transition_conflict",
     });
-    expect(String(fetchMock.mock.calls[0][0])).toBe(`${BASE}/api/sandboxes/sbx_1?onlyIfIdle=true`);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `${BASE}/api/sandboxes/sbx_1?onlyIfIdle=true`,
+    );
   });
 
   it("DELETEs the sandbox and reads 200 as settled, 202 as still destroying", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false)).toEqual({
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
+    ).toEqual({
       kind: "ok",
       settled: true,
     });
@@ -576,7 +590,9 @@ describe("destroySandboxViaHttp", () => {
     expect(init?.method).toBe("DELETE");
 
     stubFetch(async () => jsonResponse(202, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false)).toEqual({
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
+    ).toEqual({
       kind: "ok",
       settled: false,
     });
@@ -586,9 +602,9 @@ describe("destroySandboxViaHttp", () => {
     // An empty id would otherwise DELETE the collection.
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
     for (const id of UNSAFE_IDS) {
-      expect(await destroySandboxViaHttp(BASE, BEARER, null, id, false)).toEqual(
-        INVALID_ID_RESULT,
-      );
+      expect(
+        await destroySandboxViaHttp(BASE, BEARER, null, id, false),
+      ).toEqual(INVALID_ID_RESULT);
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });

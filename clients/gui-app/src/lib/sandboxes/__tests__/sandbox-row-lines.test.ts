@@ -273,8 +273,16 @@ describe("sandbox row filters", () => {
     expect(sandboxDestroyAllIdleOffered({ ...filter, kind: "agent" })).toBe(
       false,
     );
-    expect(sandboxDestroyAllIdleOffered({ ...filter, state: "suspended" })).toBe(true);
-    expect(sandboxDestroyAllIdleOffered({ ...filter, kind: "sandbox", state: "stopped" })).toBe(true);
+    expect(
+      sandboxDestroyAllIdleOffered({ ...filter, state: "suspended" }),
+    ).toBe(true);
+    expect(
+      sandboxDestroyAllIdleOffered({
+        ...filter,
+        kind: "sandbox",
+        state: "stopped",
+      }),
+    ).toBe(true);
   });
 });
 
