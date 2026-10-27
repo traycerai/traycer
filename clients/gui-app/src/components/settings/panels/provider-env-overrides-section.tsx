@@ -27,6 +27,8 @@ import {
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import { providerEnvSubtitle } from "./provider-env-subtitle";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -73,6 +75,8 @@ export function ProviderEnvOverridesSection({
   readonly envOverrideScope: ProviderCliState["nativeCapabilities"]["envOverrideScope"];
 }) {
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
+  const viewerId = useCloudChatViewerId();
+  const configurationKey = useConfigurationKey();
   // A team is read from the cloud (`TeamProviders`): this tab is Personal on
   // a host running it, or a Local row's computer.
   const local = useEnvironmentPick().kind === "local";
@@ -162,9 +166,10 @@ export function ProviderEnvOverridesSection({
     oldKey: string,
     newKey: string,
     value: string | null,
-  ): void => {
-    if (credentialRefusal !== null) return;
-    commitOverride.mutate({ oldKey, newKey, value });
+  ): Promise<void> => {
+    if (credentialRefusal !== null)
+      return Promise.reject(new Error(credentialRefusal));
+    return commitOverride.mutateAsync({ oldKey, newKey, value });
   };
 
   return (
@@ -195,6 +200,7 @@ export function ProviderEnvOverridesSection({
       </div>
       <CredentialRefusalNote refusal={credentialRefusal} />
       <EnvOverrideEditor
+        key={JSON.stringify([viewerId, configurationKey, providerId])}
         rowNotes={rowNotes}
         onHold={onHold}
         claimedBy={claimedBy}
@@ -218,7 +224,9 @@ export function ProviderEnvOverridesSection({
           />
         )}
         onCommit={onCommit}
-        onDelete={(key) => deleteOverride.mutate({ providerId, key })}
+        onDelete={async (key) => {
+          await deleteOverride.mutateAsync({ providerId, key });
+        }}
       />
       {keyShaped.dialog}
     </div>

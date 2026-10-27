@@ -39,6 +39,9 @@ export function useSecretRemovalRetry(
         undefined,
         { method: "environment.secrets.versions", version: VERSION_1_1 },
       );
+      // The button may have rendered before the completion reached its list.
+      // A fresh terminal answer is authoritative and must never re-run Remove.
+      if (versions.removal?.outcome === "destroyed") return;
       const current = versions.versions.find((version) => version.current);
       if (current === undefined) {
         throw new Error("There is no current version to remove.");

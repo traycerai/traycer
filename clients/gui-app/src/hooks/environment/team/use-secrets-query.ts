@@ -35,6 +35,7 @@ export function useEnvironmentSecretsQuery(
             version: { major: 1, minor: 1 },
           },
     options: {
+      poll: true,
       enabled:
         resolved &&
         (environmentId === null || (viewerId.length > 0 && authorized)),

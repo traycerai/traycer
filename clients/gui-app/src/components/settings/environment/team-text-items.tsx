@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,15 @@ import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "./configuration-source";
+
+interface PendingTextWrite {
+  readonly key: string;
+  readonly os: EnvironmentOs | null;
+  readonly action: "put" | "remove";
+  readonly value: string;
+  readonly original: ConfigurationItem | null;
+  readonly accepted: boolean;
+}
 
 const OS_LABELS: Readonly<Record<Exclude<EnvironmentOs, "any">, string>> = {
   linux: "Linux",
@@ -37,7 +46,35 @@ export function TeamTextItems(props: {
   readonly renderDetails: (item: ConfigurationItem) => ReactNode;
 }): ReactNode {
   const canEdit = useCanEditConfiguration();
-  const rows = props.items.filter(
+  const [pending, setPending] = useState<PendingTextWrite | null>(null);
+  const observed =
+    pending !== null &&
+    pending.accepted &&
+    (pending.action === "remove"
+      ? !props.items.some(
+          (item) => item.key === pending.key && item.os === pending.os,
+        )
+      : props.items.some(
+          (item) =>
+            item.key === pending.key &&
+            item.os === pending.os &&
+            configurationTextValueSchema.parse(item.value).value ===
+              pending.value,
+        ));
+  useEffect(() => {
+    if (observed) setPending(null);
+  }, [observed]);
+  const inventory = [...props.items];
+  if (
+    pending?.original !== null &&
+    pending?.original !== undefined &&
+    !inventory.some(
+      (item) => item.key === pending.key && item.os === pending.os,
+    )
+  ) {
+    inventory.push(pending.original);
+  }
+  const rows = inventory.filter(
     (item) =>
       item.kind === props.kind &&
       (props.os === "any" || item.os === props.os) &&
@@ -52,6 +89,8 @@ export function TeamTextItems(props: {
           // the draft seeds from it once, so a new address must remount.
           key={`${item.os}:${item.key}:${item.revision}`}
           item={item}
+          pending={pending}
+          onPending={setPending}
           kind={props.kind}
           os={props.os}
           osLabel={
@@ -64,13 +103,15 @@ export function TeamTextItems(props: {
           details={props.renderDetails(item)}
         />
       ))}
-      {rows.length === 0 ? (
+      {rows.length === 0 && pending === null ? (
         <p className="text-ui-sm text-muted-foreground">No variables yet.</p>
       ) : null}
       {canEdit ? (
         <TeamTextItemEditor
           key={`new:${props.kind}:${props.os}:${props.providerId}`}
           item={null}
+          pending={pending}
+          onPending={setPending}
           kind={props.kind}
           os={props.os}
           osLabel={null}
@@ -85,6 +126,8 @@ export function TeamTextItems(props: {
 
 function TeamTextItemEditor(props: {
   readonly item: ConfigurationItem | null;
+  readonly pending: PendingTextWrite | null;
+  readonly onPending: (write: PendingTextWrite | null) => void;
   readonly kind: "variable" | "env_override";
   readonly os: EnvironmentOs;
   /** The single OS a row listed under `any` is scoped to, else `null`. */
@@ -104,6 +147,16 @@ function TeamTextItemEditor(props: {
       : configurationTextValueSchema.parse(props.item.value).value;
   const [name, setName] = useState("");
   const [value, setValue] = useState(saved);
+  const [accepted, setAccepted] = useState(false);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!accepted || props.pending !== null) return;
+    if (props.item === null) {
+      setName("");
+      setValue("");
+    }
+    setAccepted(false);
+  }, [accepted, props.pending, props.item]);
   const title = props.item?.key ?? "New variable";
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const validName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
@@ -114,27 +167,43 @@ function TeamTextItemEditor(props: {
       (props.providerId === null
         ? name.trim()
         : `${props.providerId}:${name.trim()}`);
+    const write: PendingTextWrite = {
+      key,
+      os: props.item === null ? props.os : props.item.os,
+      action: "put",
+      value,
+      original: props.item,
+      accepted: false,
+    };
+    props.onPending(write);
+    setWriteError(null);
     put.mutate(
       {
         environmentId: source.environmentId,
         kind: props.kind,
         key,
         // An item keeps its own scope; only a new one takes the picker's.
-        os: props.item?.os ?? props.os,
+        os: props.item === null ? props.os : props.item.os,
         value: { value },
         revision: props.item?.revision ?? null,
       },
       {
+        onError: (error) => {
+          props.onPending(null);
+          setWriteError(error.message);
+        },
         onSuccess: (result) => {
           props.onOutcome(result);
-          if (result.outcome === "saved" && props.item === null) {
-            setName("");
-            setValue("");
-          }
+          if (result.outcome === "saved") {
+            setAccepted(true);
+            props.onPending({ ...write, accepted: true });
+          } else props.onPending(null);
         },
       },
     );
   };
+  let pendingAction = props.item === null ? "Adding" : "Saving";
+  if (props.pending?.action === "remove") pendingAction = "Removing";
   return (
     <section
       className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
@@ -154,6 +223,7 @@ function TeamTextItemEditor(props: {
       {props.item === null ? (
         <Input
           aria-label="Variable name"
+          disabled={props.pending !== null}
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="NODE_ENV"
@@ -162,11 +232,25 @@ function TeamTextItemEditor(props: {
       {canEdit ? (
         <Input
           aria-label={`${label} value`}
+          disabled={props.pending !== null}
           value={value}
           onChange={(event) => setValue(event.target.value)}
         />
       ) : (
         <span className="font-mono text-ui-sm">{saved}</span>
+      )}
+      {props.pending !== null &&
+      (props.item === null
+        ? props.pending.original === null
+        : props.pending.original?.key === props.item.key) ? (
+        <p role="status" className="text-ui-xs text-muted-foreground">
+          {props.pending.key} · {pendingAction}
+        </p>
+      ) : null}
+      {writeError === null ? null : (
+        <p role="alert" className="text-ui-xs text-destructive">
+          {writeError}
+        </p>
       )}
       {canEdit ? (
         <div className="flex justify-end gap-2">
@@ -175,19 +259,42 @@ function TeamTextItemEditor(props: {
               type="button"
               variant="ghost"
               size="sm"
-              disabled={remove.isPending || put.isPending}
+              disabled={
+                props.pending !== null || remove.isPending || put.isPending
+              }
               onClick={() => {
-                if (source.kind === "pool" && props.item !== null)
-                  remove.mutate(
-                    {
-                      environmentId: source.environmentId,
-                      kind: props.kind,
-                      key: props.item.key,
-                      os: props.item.os,
-                      revision: props.item.revision,
+                if (source.kind !== "pool" || props.item === null) return;
+                const write: PendingTextWrite = {
+                  key: props.item.key,
+                  os: props.item.os,
+                  action: "remove",
+                  value: saved,
+                  original: props.item,
+                  accepted: false,
+                };
+                props.onPending(write);
+                setWriteError(null);
+                remove.mutate(
+                  {
+                    environmentId: source.environmentId,
+                    kind: props.kind,
+                    key: props.item.key,
+                    os: props.item.os,
+                    revision: props.item.revision,
+                  },
+                  {
+                    onError: (error) => {
+                      props.onPending(null);
+                      setWriteError(error.message);
                     },
-                    { onSuccess: props.onOutcome },
-                  );
+                    onSuccess: (result) => {
+                      props.onOutcome(result);
+                      if (result.outcome === "saved")
+                        props.onPending({ ...write, accepted: true });
+                      else props.onPending(null);
+                    },
+                  },
+                );
               }}
             >
               Delete
@@ -197,6 +304,7 @@ function TeamTextItemEditor(props: {
             type="button"
             size="sm"
             disabled={
+              props.pending !== null ||
               put.isPending ||
               remove.isPending ||
               (props.item === null ? !validName : value === saved)

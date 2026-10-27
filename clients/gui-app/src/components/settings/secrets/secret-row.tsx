@@ -15,6 +15,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useSecretRemovalRetry } from "@/components/settings/details/use-secret-removal-retry";
 import { useSecretRowActions } from "@/components/settings/secrets/use-secret-row-actions";
 import { removalWithFailures } from "@/components/settings/secrets/secret-removal-lines";
 import { SecretRemovalStatus } from "@/components/settings/secrets/secret-removal-status";
@@ -319,8 +320,9 @@ export function SecretRow(props: {
   // Each accepted replacement remounts the status, so it reads the new
   // rotation from the start and re-reads it until it settles.
   const [replacements, setReplacements] = useState(0);
-  const actions = useSecretRowActions(props);
+  const actions = useSecretRowActions({ ...props, removing: secret.revoked });
   const environmentId = useDetailsEnvironmentId(props.client);
+  const retry = useSecretRemovalRetry(props.client, props.hostId);
   const source = useConfigurationSource();
   // Personal's values, and a computer's own, are all the person's; a team's
   // author is not on the wire.
@@ -342,7 +344,8 @@ export function SecretRow(props: {
     actions.verify.error,
     secret.protocol,
   );
-  const removeError = removalFailure(actions.remove.data, actions.remove.error);
+  const removeError =
+    retry.error ?? removalFailure(actions.remove.data, actions.remove.error);
   const remove = (): void => {
     if (actions.currentVersionId === null) return;
     actions.remove.mutate(
@@ -421,11 +424,19 @@ export function SecretRow(props: {
         <SecretRemovalStatus
           removal={removalWithFailures(removal, null)}
           hostName={props.hostName}
-          pending={actions.remove.isPending || actions.versions.isFetching}
+          pending={
+            retry.pending ||
+            actions.remove.isPending ||
+            actions.versions.isFetching ||
+            environmentId === null
+          }
           onRetry={() => {
-            if (actions.currentVersionId === null)
-              void actions.versions.refetch();
-            else remove();
+            if (environmentId === null) return;
+            retry.onRetry({
+              environmentId,
+              kind: "secret",
+              key: secret.secretId,
+            });
           }}
         />
       )}

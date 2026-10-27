@@ -49,6 +49,15 @@ export interface EnvOverrideValue {
   readonly value: string | null;
 }
 
+interface PendingEnvWrite {
+  readonly oldKey: string;
+  readonly key: string;
+  readonly value: string | null;
+  readonly action: "put" | "remove";
+  readonly original: EnvOverrideValue | null;
+  readonly accepted: boolean;
+}
+
 interface Draft {
   readonly key: string;
   readonly value: string;
@@ -305,21 +314,109 @@ export function EnvOverrideEditor(props: {
     oldKey: string,
     newKey: string,
     value: string | null,
-  ) => void;
-  readonly onDelete: (key: string) => void;
+  ) => void | Promise<void>;
+  readonly onDelete: (key: string) => void | Promise<void>;
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
-  const {
-    overrides,
-    disabled,
-    credentialRefusal,
-    namePlaceholder,
-    emptyLabel,
-    onCommit,
-    onDelete,
-  } = props;
-  const keys = overrides.map((entry) => entry.key);
+  const { credentialRefusal, namePlaceholder, emptyLabel } = props;
   const [adding, setAdding] = useState(false);
+  const [pending, setPending] = useState<PendingEnvWrite | null>(null);
+  const pendingRef = useRef<PendingEnvWrite | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const disabled = props.disabled || pending !== null;
+  const observed =
+    pending !== null &&
+    pending.accepted &&
+    (pending.action === "remove"
+      ? !props.overrides.some((entry) => entry.key === pending.key)
+      : props.overrides.some(
+          (entry) => entry.key === pending.key && entry.value === pending.value,
+        ) &&
+        (pending.oldKey === "" ||
+          pending.oldKey === pending.key ||
+          !props.overrides.some((entry) => entry.key === pending.oldKey)));
+  useEffect(() => {
+    if (!observed) return;
+    if (pending?.oldKey === "" && pending.action === "put") setAdding(false);
+    pendingRef.current = null;
+    setPending(null);
+  }, [observed, pending]);
+  // Only a submitted write is retained, never a second cache of the list.
+  // Its read can lag acceptance, or arrive before the mutation's reply.
+  const overrides = props.overrides.filter(
+    (entry) =>
+      pending === null ||
+      pending.action !== "put" ||
+      pending.oldKey !== "" ||
+      entry.key !== pending.key,
+  );
+  if (
+    pending?.original !== null &&
+    pending?.original !== undefined &&
+    !overrides.some((entry) => entry.key === pending.original?.key)
+  ) {
+    overrides.push(pending.original);
+  }
+  const keys = overrides.map((entry) => entry.key);
+  async function submit(
+    write: PendingEnvWrite,
+    run: () => void | Promise<void>,
+  ): Promise<void> {
+    if (pendingRef.current !== null) return;
+    pendingRef.current = write;
+    setPending(write);
+    setWriteError(null);
+    try {
+      await run();
+      if (pendingRef.current !== write) return;
+      const accepted = { ...write, accepted: true };
+      pendingRef.current = accepted;
+      setPending(accepted);
+    } catch (error) {
+      if (pendingRef.current !== write) return;
+      pendingRef.current = null;
+      setPending(null);
+      setWriteError(
+        error instanceof Error ? error.message : "Couldn't save this variable.",
+      );
+    }
+  }
+  const onCommit = (
+    oldKey: string,
+    key: string,
+    value: string | null,
+  ): void => {
+    void submit(
+      {
+        oldKey,
+        key,
+        value,
+        action: "put",
+        original: props.overrides.find((entry) => entry.key === oldKey) ?? null,
+        accepted: false,
+      },
+      () => props.onCommit(oldKey, key, value),
+    );
+  };
+  const onDelete = (key: string): void => {
+    void submit(
+      {
+        oldKey: key,
+        key,
+        value: null,
+        action: "remove",
+        original: props.overrides.find((entry) => entry.key === key) ?? null,
+        accepted: false,
+      },
+      () => props.onDelete(key),
+    );
+  };
+  let pendingLabel: string | null = null;
+  if (pending !== null) {
+    let action = pending.oldKey === "" ? "Adding" : "Saving";
+    if (pending.action === "remove") action = "Removing";
+    pendingLabel = `${pending.key} · ${action}`;
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60">
@@ -340,7 +437,7 @@ export function EnvOverrideEditor(props: {
         </div>
         <span className="sr-only">Actions</span>
       </div>
-      {overrides.length === 0 && !adding ? (
+      {overrides.length === 0 && !adding && pending === null ? (
         <div className="px-3 py-5 text-center text-ui-sm text-muted-foreground">
           {emptyLabel}
         </div>
@@ -404,7 +501,6 @@ export function EnvOverrideEditor(props: {
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
             onCommit("", key, value);
-            setAdding(false);
           }}
           onCancel={() => setAdding(false)}
         />
@@ -421,6 +517,16 @@ export function EnvOverrideEditor(props: {
             Add a variable
           </Button>
         </div>
+      )}
+      {pendingLabel === null ? null : (
+        <p role="status" className="px-3 py-2 text-ui-xs text-muted-foreground">
+          {pendingLabel}
+        </p>
+      )}
+      {writeError === null ? null : (
+        <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
+          {writeError}
+        </p>
       )}
     </div>
   );

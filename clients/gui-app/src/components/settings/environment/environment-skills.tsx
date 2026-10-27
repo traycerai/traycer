@@ -1,5 +1,6 @@
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
 import type { EnvironmentSkill } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -141,6 +142,8 @@ function EnvironmentSkills(props: {
   readonly providerId: ProviderId | null;
 }): ReactNode {
   const served = useServedSkills();
+  const viewerId = useCloudChatViewerId();
+  const configurationKey = useConfigurationKey();
   const name = useConfigurationName();
   const canEdit = useCanEditConfiguration();
   const canRemove = canEdit && served.removable;
@@ -196,6 +199,7 @@ function EnvironmentSkills(props: {
       />
     ) : (
       <ProviderSkillsList
+        key={JSON.stringify([viewerId, configurationKey, props.providerId])}
         providerId={props.providerId}
         skills={skills}
         revision={revision}
@@ -489,6 +493,12 @@ export function EnvironmentProviderSkillsTab(props: {
   );
 }
 
+interface PendingSkillSwitch {
+  readonly name: string;
+  readonly offFor: readonly string[];
+  readonly accepted: boolean;
+}
+
 function ProviderSkillsList(props: {
   readonly providerId: ProviderId;
   readonly skills: readonly EnvironmentSkill[];
@@ -503,6 +513,19 @@ function ProviderSkillsList(props: {
   const { setProviders } = useEnvironmentSkillMutations(
     useConfigurationReadClient(),
   );
+  const [pending, setPending] = useState<PendingSkillSwitch | null>(null);
+  const observed =
+    pending !== null &&
+    pending.accepted &&
+    props.skills.some(
+      (skill) =>
+        skill.name === pending.name &&
+        skill.offFor.length === pending.offFor.length &&
+        skill.offFor.every((provider) => pending.offFor.includes(provider)),
+    );
+  useEffect(() => {
+    if (observed) setPending(null);
+  }, [observed]);
   const switchIssue =
     setProviders.data === undefined
       ? null
@@ -533,7 +556,9 @@ function ProviderSkillsList(props: {
         )}
         <ul className="flex flex-col gap-2">
           {props.skills.map((skill) => {
-            const uses = !skill.offFor.includes(props.providerId);
+            const offFor =
+              pending?.name === skill.name ? pending.offFor : skill.offFor;
+            const uses = !offFor.includes(props.providerId);
             return (
               <li
                 key={skill.name}
@@ -556,7 +581,8 @@ function ProviderSkillsList(props: {
                   disabled={
                     !props.switchesAvailable ||
                     !props.canEdit ||
-                    setProviders.isPending
+                    setProviders.isPending ||
+                    pending !== null
                   }
                   onCheckedChange={(next) => {
                     if (source.kind !== "pool") return;
@@ -564,12 +590,29 @@ function ProviderSkillsList(props: {
                     const others = skill.offFor.filter(
                       (id) => !group.some((member) => member === id),
                     );
-                    setProviders.mutate({
-                      environmentId: source.environmentId,
+                    const write: PendingSkillSwitch = {
                       name: skill.name,
                       offFor: next ? others : [...others, ...group],
-                      revision: props.revision,
-                    });
+                      accepted: false,
+                    };
+                    setPending(write);
+                    setProviders.mutate(
+                      {
+                        environmentId: source.environmentId,
+                        name: skill.name,
+                        offFor: [...write.offFor],
+                        revision: props.revision,
+                      },
+                      {
+                        onError: () => setPending(null),
+                        onSuccess: (answer) =>
+                          setPending(
+                            answer.outcome === "saved"
+                              ? { ...write, accepted: true }
+                              : null,
+                          ),
+                      },
+                    );
                   }}
                 />
               </li>
