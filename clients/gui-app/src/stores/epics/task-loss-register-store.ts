@@ -110,7 +110,11 @@ export function clearTaskLoss(
   });
 }
 
-/** The latest entry that reaches `hostId` for the task; `null` when none does. */
+/**
+ * What the window has learned about the task on `hostId`, or `null`: a
+ * deletion that reaches it, whatever was learned after it in any scope, else
+ * the latest entry that reaches it.
+ */
 export function taskLossFor(
   state: TaskLossRegisterState,
   userId: string | null,
@@ -118,10 +122,16 @@ export function taskLossFor(
   taskId: string,
 ): TaskLossEntry | null {
   if (userId === null) return null;
-  const entries = state.byUserId[userId]?.[taskId] ?? [];
+  const entries = (state.byUserId[userId]?.[taskId] ?? []).filter((entry) =>
+    reaches(entry, hostId),
+  );
+  const deleted = entries.filter((entry) => entry.loss === "gone");
+  return latestOf(deleted.length > 0 ? deleted : entries);
+}
+
+function latestOf(entries: ReadonlyArray<TaskLossEntry>): TaskLossEntry | null {
   let latest: TaskLossEntry | null = null;
   for (const entry of entries) {
-    if (!reaches(entry, hostId)) continue;
     if (latest === null || entry.sequence > latest.sequence) latest = entry;
   }
   return latest;

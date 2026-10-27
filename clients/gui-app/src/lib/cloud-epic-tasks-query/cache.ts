@@ -135,16 +135,30 @@ export function recheckTaskContextAnswers(
         taskId,
       ),
     );
-  const patched = queryClient.getQueryCache().findAll({ predicate: holding });
+  // A chip's lookup still waiting for its first answer holds nothing yet:
+  // it is cancelled and read again too, so the answer that counts is sent
+  // after the signal (invalidating alone keeps a first read in flight).
+  const ownLookups = queryClient.getQueryCache().findAll({
+    predicate: (query) => taskReferenceLookupReadsAny(query, scope, lost),
+  });
+  const affected = [
+    ...queryClient.getQueryCache().findAll({ predicate: holding }),
+    ...ownLookups,
+  ];
   patchMatchingQueries(
     queryClient,
     holding,
     (response: GetTaskContextsResponse) =>
       replaceTaskContexts(response, lost, null),
   );
-  void queryClient.invalidateQueries({
-    predicate: (query) => patched.includes(query),
-  });
+  void (async (): Promise<void> => {
+    await queryClient.cancelQueries({
+      predicate: (query) => ownLookups.includes(query),
+    });
+    await queryClient.invalidateQueries({
+      predicate: (query) => affected.includes(query),
+    });
+  })();
 }
 
 /**

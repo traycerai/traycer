@@ -43,7 +43,11 @@ import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
-import { useTaskLossRegister } from "@/stores/epics/task-loss-register-store";
+import {
+  recordTaskLoss,
+  taskLossFor,
+  useTaskLossRegister,
+} from "@/stores/epics/task-loss-register-store";
 import {
   EpicSessionContext,
   handleHostIds,
@@ -54,6 +58,7 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 const HOST_ID = "host-test";
 const USER_ID = "user-test";
+const SIBLING_HOST_ID = "host-sibling";
 const TASK_ID = "6f1c2a9e-4b7d-4e21-9c3a-1d2e3f4a5b6c";
 const AGENT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 /** The chip's own lookup of `TASK_ID`. */
@@ -583,6 +588,133 @@ describe("a task id in a message", () => {
       expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
     });
     expect(lookedUpIds()).toEqual([TASK_ID]);
+  });
+
+  it("reads again when the person may have lost the task while its first lookup is pending, and settles on that answer", async () => {
+    const answers: Array<(response: GetTaskContextsResponse) => void> = [];
+    mocks.request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+    await waitFor(() => {
+      expect(lookedUpIds()).toEqual([TASK_ID]);
+    });
+
+    act(() => {
+      recheckTaskContextAnswers(
+        queryClient,
+        { hostId: null, userId: USER_ID },
+        [TASK_ID],
+      );
+    });
+    await waitFor(() => {
+      expect(lookedUpIds()).toEqual([TASK_ID, TASK_ID]);
+    });
+    // The read sent before the signal answers found; the one sent after it
+    // answers that the task is out of reach.
+    act(() => {
+      answers[0]?.(
+        lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
+      );
+      answers[1]?.({
+        tasks: { [TASK_ID]: { status: "unknown", reason: "denied" } },
+      });
+    });
+    await settle();
+
+    expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("does not admit a found answer to a read sent before a possible loss, whatever ends that read", async () => {
+    let answer: (response: GetTaskContextsResponse) => void = () => undefined;
+    mocks.request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+    await waitFor(() => {
+      expect(lookedUpIds()).toEqual([TASK_ID]);
+    });
+
+    // The loss recorded with nothing cancelling the read in flight.
+    act(() => {
+      recordTaskLoss({ hostId: null, userId: USER_ID }, [TASK_ID], "recheck");
+      answer(
+        lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
+      );
+    });
+    await waitFor(() => {
+      expect(queryClient.getQueryState(OWN_LOOKUP_KEY)?.status).toBe("success");
+    });
+
+    expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(OWN_LOOKUP_KEY)?.tasks,
+    ).toEqual({});
+    expect(queryClient.getQueryState(OWN_LOOKUP_KEY)?.isInvalidated).toBe(
+      false,
+    );
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: OWN_LOOKUP_KEY, exact: true })
+        ?.isStale(),
+    ).toBe(true);
+  });
+
+  it("keeps a task deleted on its host as text when every host is asked to read it again, and a sibling host is untouched", async () => {
+    mocks.request.mockImplementation(() =>
+      Promise.resolve({
+        tasks: { [TASK_ID]: { status: "unknown", reason: "transport" } },
+      } satisfies GetTaskContextsResponse),
+    );
+    // Another host's list still names the task.
+    queryClient.setQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(
+        SIBLING_HOST_ID,
+        USER_ID,
+        LIST_CLOUD_TASKS_REQUEST,
+      ),
+      {
+        tasks: [listTaskLight(TASK_ID, "Ship the release")],
+        hasMore: false,
+        facets: { repos: [], workspaces: [], ownershipScopes: [] },
+      },
+    );
+    removeDeletedEpicsFromCloudTaskCaches(
+      queryClient,
+      { hostId: HOST_ID, userId: USER_ID },
+      [TASK_ID],
+    );
+    const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+    expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+
+    act(() => {
+      recheckTaskContextAnswers(
+        queryClient,
+        { hostId: null, userId: USER_ID },
+        [TASK_ID],
+      );
+    });
+    await settle();
+
+    expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(lookedUpIds()).toEqual([]);
+    expect(
+      taskLossFor(
+        useTaskLossRegister.getState(),
+        USER_ID,
+        SIBLING_HOST_ID,
+        TASK_ID,
+      )?.loss,
+    ).toBe("recheck");
   });
 
   it("keeps a settled answer through host reconnects instead of reading it again", async () => {

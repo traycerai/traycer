@@ -250,9 +250,9 @@ function useTaskReferenceTitle(
 /**
  * The chip's own answer as it may be cached. Nothing makes a deleted task
  * reachable again, and an answer to a read sent before the window learned the
- * task was out of reach is not admitted for it; a settling answer is
- * recorded, and one finding the task forgets what was learned before the read
- * was sent.
+ * task was out of reach, or may have been lost, is not admitted for it, so
+ * it settles nothing and is read again; a settling answer is recorded, and
+ * one finding the task forgets what was learned before the read was sent.
  */
 function admitOwnAnswer(
   response: GetTaskContextsResponse,
@@ -281,6 +281,14 @@ function admitOwnAnswer(
   }
   const verdict = verdictOf(response.tasks[taskId]);
   if (verdict === null) return response;
+  if (loss?.loss === "recheck" && loss.sequence > sentAt) {
+    return {
+      ...response,
+      tasks: Object.fromEntries(
+        Object.entries(response.tasks).filter(([id]) => id !== taskId),
+      ),
+    };
+  }
   if (verdict.kind === "found") {
     clearTaskLoss(userId, hostId, taskId, sentAt);
   } else {
