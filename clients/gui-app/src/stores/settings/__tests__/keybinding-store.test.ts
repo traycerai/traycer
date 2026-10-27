@@ -48,6 +48,28 @@ describe("useKeybindingStore", () => {
     );
   });
 
+  // The suggested-reply accept key is the one binding a person records as a
+  // bare key with no modifier (Tab in place of →): it has to survive the
+  // canonical form, the persisted write and a rehydrate exactly as recorded.
+  it("keeps a bare-key rebind of the accept key through persistence", async () => {
+    useKeybindingStore
+      .getState()
+      .setBinding("composer.suggestion.accept", "tab");
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("tab");
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("tab");
+    useKeybindingStore.getState().resetAll();
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("arrowright");
+  });
+
   it("clearBinding sets the action to null", () => {
     useKeybindingStore.getState().clearBinding("epic.switch.byDigit");
     expect(

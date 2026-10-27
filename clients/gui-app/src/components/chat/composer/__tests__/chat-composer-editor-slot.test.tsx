@@ -1,4 +1,4 @@
-import { createRef, type KeyboardEventHandler } from "react";
+import { createRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   cleanup,
   createEvent,
@@ -7,8 +7,13 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import {
+  createComposerPickerStore,
+  type ComposerPickerStore,
+} from "@/components/chat/composer/picker/composer-picker-store";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { modLabel } from "@/lib/keybindings/platform";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { ChatComposerEditorSlot } from "@/components/chat/composer/chat-composer-editor-slot";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 
@@ -21,9 +26,11 @@ vi.mock("@/components/home/composer/composer-narrow-hooks", () => ({
 interface MockComposerPromptEditorProps {
   readonly placeholder: string;
   readonly editorClassName: string | undefined;
-  readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
+  readonly interceptKeyDown: ((event: KeyboardEvent) => boolean) | null;
 }
 
+// Stands in for the editor's own keydown hook: the native event goes to
+// `interceptKeyDown`, and a `true` takes the key, as ProseMirror does.
 vi.mock("@/components/chat/composer/composer-prompt-editor", () => ({
   ComposerPromptEditor: (props: MockComposerPromptEditorProps) => (
     <div
@@ -31,7 +38,11 @@ vi.mock("@/components/chat/composer/composer-prompt-editor", () => ({
       role="textbox"
       tabIndex={0}
       className={props.editorClassName}
-      onKeyDown={props.onKeyDown}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (props.interceptKeyDown?.(event.nativeEvent) === true) {
+          event.preventDefault();
+        }
+      }}
     >
       {props.placeholder}
     </div>
@@ -46,6 +57,7 @@ describe("ChatComposerEditorSlot", () => {
   afterEach(() => {
     cleanup();
     narrowState.value = false;
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
 
   describe("placeholder", () => {
@@ -56,6 +68,7 @@ describe("ChatComposerEditorSlot", () => {
         suggestedPrompt: null,
         onAcceptSuggestion: NOOP_ACCEPT,
         steerHintActive: true,
+        pickerStore: createComposerPickerStore(),
       });
 
       expect(screen.getByTestId("composer-placeholder").textContent).toBe(
@@ -68,6 +81,7 @@ describe("ChatComposerEditorSlot", () => {
         suggestedPrompt: null,
         onAcceptSuggestion: NOOP_ACCEPT,
         steerHintActive: true,
+        pickerStore: createComposerPickerStore(),
       });
 
       expect(screen.getByTestId("composer-placeholder").textContent).toContain(
@@ -80,6 +94,7 @@ describe("ChatComposerEditorSlot", () => {
         suggestedPrompt: "Add a test for the new endpoint",
         onAcceptSuggestion: NOOP_ACCEPT,
         steerHintActive: true,
+        pickerStore: createComposerPickerStore(),
       });
 
       expect(screen.getByTestId("composer-placeholder").textContent).toBe(
@@ -88,44 +103,58 @@ describe("ChatComposerEditorSlot", () => {
     });
   });
 
-  describe("ArrowRight acceptance", () => {
-    it("accepts a bare ArrowRight when a suggestion is offered", () => {
+  describe("accept key", () => {
+    const SUGGESTION = "Add a test for the new endpoint";
+    const ARROW_RIGHT = { key: "ArrowRight", code: "ArrowRight" };
+    const TAB = { key: "Tab", code: "Tab" };
+
+    function fireAcceptKey(
+      target: HTMLElement,
+      init: KeyboardEventInit,
+    ): KeyboardEvent {
+      const event = createEvent.keyDown(target, init);
+      fireEvent(target, event);
+      return event;
+    }
+
+    it("accepts the default → when a suggestion is offered, and takes the key", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
-
-      fireEvent.keyDown(screen.getByTestId("composer-placeholder"), {
-        key: "ArrowRight",
-      });
+      const event = fireAcceptKey(target, ARROW_RIGHT);
 
       expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
-      expect(onAcceptSuggestion).toHaveBeenCalledWith(
-        "Add a test for the new endpoint",
-      );
+      expect(onAcceptSuggestion).toHaveBeenCalledWith(SUGGESTION);
+      expect(event.defaultPrevented).toBe(true);
     });
 
-    it("takes the key when the suggestion was accepted, so the caret does not move", () => {
+    // A rebind in Settings applies to the next keystroke: the new key accepts
+    // and the old one goes back to its ordinary job.
+    it("accepts the rebound key instead of → once the binding is Tab", () => {
+      useKeybindingStore
+        .getState()
+        .setBinding("composer.suggestion.accept", "tab");
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
+      const arrow = fireAcceptKey(target, ARROW_RIGHT);
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+      expect(arrow.defaultPrevented).toBe(false);
 
-      const target = screen.getByTestId("composer-placeholder");
-      const event = createEvent.keyDown(target, { key: "ArrowRight" });
-      fireEvent(target, event);
+      const tab = fireAcceptKey(target, TAB);
+      expect(onAcceptSuggestion).toHaveBeenCalledWith(SUGGESTION);
+      expect(tab.defaultPrevented).toBe(true);
+    });
 
-      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
-      expect(onAcceptSuggestion).toHaveBeenCalledWith(
-        "Add a test for the new endpoint",
-      );
-      expect(event.defaultPrevented).toBe(true);
+    it("accepts nothing while the action is unbound", () => {
+      useKeybindingStore.getState().clearBinding("composer.suggestion.accept");
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      const event = fireAcceptKey(target, ARROW_RIGHT);
+
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     });
 
     // The live draft can stop being empty before the suggestion prop
@@ -133,80 +162,129 @@ describe("ChatComposerEditorSlot", () => {
     // keep its ordinary job: moving the caret.
     it("leaves the key alone when the fill is declined, so the caret still moves", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => false);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
-
-      const target = screen.getByTestId("composer-placeholder");
-      const event = createEvent.keyDown(target, { key: "ArrowRight" });
-      fireEvent(target, event);
+      const event = fireAcceptKey(target, ARROW_RIGHT);
 
       expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
-      expect(onAcceptSuggestion).toHaveBeenCalledWith(
-        "Add a test for the new endpoint",
-      );
       expect(event.defaultPrevented).toBe(false);
     });
 
-    it.each([
-      ["shiftKey", { shiftKey: true }],
-      ["altKey", { altKey: true }],
-      ["metaKey", { metaKey: true }],
-      ["ctrlKey", { ctrlKey: true }],
-    ])("does not accept a modified ArrowRight (%s)", (_name, modifier) => {
+    it("does not accept a modified → (shift)", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
 
-      renderEditorSlot({
-        suggestedPrompt: "Add a test for the new endpoint",
-        onAcceptSuggestion,
-        steerHintActive: false,
-      });
-
-      fireEvent.keyDown(screen.getByTestId("composer-placeholder"), {
-        key: "ArrowRight",
-        ...modifier,
-      });
+      fireAcceptKey(target, { ...ARROW_RIGHT, shiftKey: true });
 
       expect(onAcceptSuggestion).not.toHaveBeenCalled();
     });
 
-    it("does not accept ArrowRight when there is no suggestion", () => {
+    it("does not accept when there is no suggestion", () => {
       const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
-
       renderEditorSlot({
         suggestedPrompt: null,
         onAcceptSuggestion,
         steerHintActive: false,
+        pickerStore: createComposerPickerStore(),
       });
 
-      fireEvent.keyDown(screen.getByTestId("composer-placeholder"), {
-        key: "ArrowRight",
-      });
+      fireAcceptKey(screen.getByTestId("composer-placeholder"), ARROW_RIGHT);
 
       expect(onAcceptSuggestion).not.toHaveBeenCalled();
     });
 
-    it.each(["Enter", "ArrowLeft"])(
-      "does not accept another key (%s)",
-      (key) => {
-        const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+    // The picker owns Tab (commit) and the arrows while it is open; the
+    // accept key must not fill underneath it.
+    it("yields to an open mention or slash picker", () => {
+      useKeybindingStore
+        .getState()
+        .setBinding("composer.suggestion.accept", "tab");
+      const pickerStore = createComposerPickerStore();
+      pickerStore.setState({ open: true });
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      renderEditorSlot({
+        suggestedPrompt: SUGGESTION,
+        onAcceptSuggestion,
+        steerHintActive: false,
+        pickerStore,
+      });
 
-        renderEditorSlot({
-          suggestedPrompt: "Add a test for the new endpoint",
-          onAcceptSuggestion,
-          steerHintActive: false,
-        });
+      const event = fireAcceptKey(
+        screen.getByTestId("composer-placeholder"),
+        TAB,
+      );
 
-        fireEvent.keyDown(screen.getByTestId("composer-placeholder"), {
-          key,
-        });
+      expect(onAcceptSuggestion).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
 
-        expect(onAcceptSuggestion).not.toHaveBeenCalled();
-      },
-    );
+    // A held key fills on its first press and keeps repeating. With the draft
+    // no longer empty those repeats would fall through to the key's ordinary
+    // job (an Enter binding would submit the text just filled), so they are
+    // taken - until that key is pressed afresh, which is the person's own.
+    it("takes the OS repeats of the key that filled, until it is pressed afresh", () => {
+      // Fills once; the draft is then no longer empty, so a later fill
+      // declines the way the production fill does.
+      const onAcceptSuggestion = vi
+        .fn<AcceptSuggestion>()
+        .mockReturnValueOnce(true)
+        .mockReturnValue(false);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      fireAcceptKey(target, ARROW_RIGHT);
+      const repeat = fireAcceptKey(target, { ...ARROW_RIGHT, repeat: true });
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(repeat.defaultPrevented).toBe(true);
+
+      const fresh = fireAcceptKey(target, ARROW_RIGHT);
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(2);
+      expect(fresh.defaultPrevented).toBe(false);
+      const laterRepeat = fireAcceptKey(target, {
+        ...ARROW_RIGHT,
+        repeat: true,
+      });
+      expect(laterRepeat.defaultPrevented).toBe(false);
+    });
+
+    // Shift tapped while the accept key is still held is a fresh keydown of
+    // ANOTHER key. It must not hand the held key back: its next repeat would
+    // reach the key's ordinary job with the suggestion already filled.
+    it("keeps taking the held key's repeats across a modifier pressed meanwhile", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      fireAcceptKey(target, ARROW_RIGHT);
+      fireAcceptKey(target, { key: "Shift", code: "ShiftLeft" });
+      const repeat = fireAcceptKey(target, { ...ARROW_RIGHT, repeat: true });
+
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(repeat.defaultPrevented).toBe(true);
+    });
+
+    it("does not take the repeats of another key", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      fireAcceptKey(target, ARROW_RIGHT);
+      const other = fireAcceptKey(target, {
+        key: "a",
+        code: "KeyA",
+        repeat: true,
+      });
+
+      expect(other.defaultPrevented).toBe(false);
+    });
+
+    it("does not take a repeat when nothing was filled", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => false);
+      const target = renderOfferedSlot(SUGGESTION, onAcceptSuggestion);
+
+      fireAcceptKey(target, ARROW_RIGHT);
+      const repeat = fireAcceptKey(target, { ...ARROW_RIGHT, repeat: true });
+
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(repeat.defaultPrevented).toBe(false);
+    });
   });
 
   describe("touch swipe acceptance", () => {
@@ -343,6 +421,7 @@ describe("ChatComposerEditorSlot", () => {
         suggestedPrompt: null,
         onAcceptSuggestion,
         steerHintActive: false,
+        pickerStore: createComposerPickerStore(),
       });
 
       const target = screen.getByTestId("composer-placeholder");
@@ -363,6 +442,7 @@ describe("ChatComposerEditorSlot", () => {
         suggestedPrompt: null,
         onAcceptSuggestion: NOOP_ACCEPT,
         steerHintActive: false,
+        pickerStore: createComposerPickerStore(),
       });
       expect(
         screen
@@ -423,6 +503,7 @@ function renderOfferedSlot(
     suggestedPrompt,
     onAcceptSuggestion,
     steerHintActive: false,
+    pickerStore: createComposerPickerStore(),
   });
   return screen.getByTestId("composer-placeholder");
 }
@@ -431,13 +512,14 @@ interface RenderEditorSlotOptions {
   readonly suggestedPrompt: string | null;
   readonly onAcceptSuggestion: AcceptSuggestion;
   readonly steerHintActive: boolean;
+  readonly pickerStore: ComposerPickerStore;
 }
 
 function renderEditorSlot(options: RenderEditorSlotOptions): void {
   render(
     <ChatComposerEditorSlot
       ref={createRef<ComposerPromptEditorHandle>()}
-      pickerStore={createComposerPickerStore()}
+      pickerStore={options.pickerStore}
       initialContent={{ type: "doc", content: [{ type: "paragraph" }] }}
       initialSelection={null}
       slashProviderId="claude"

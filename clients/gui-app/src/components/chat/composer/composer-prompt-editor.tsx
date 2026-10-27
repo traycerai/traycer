@@ -224,6 +224,17 @@ export interface ComposerPromptEditorProps {
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
   readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
+  /**
+   * A keydown hook that runs INSIDE the editor, before any of its keymaps -
+   * the submit and picker bindings included - and before the browser default.
+   * Returning `true` takes the key (the editor prevents its default); `false`
+   * leaves it to the keymaps and then to `onKeyDown`, which only sees a key
+   * after the editor has had it. For a key the editor would otherwise act on
+   * first (Enter submits), this is the only hook that can precede it. Read at
+   * event time, never baked into the editor, so a changing callback never
+   * rebuilds Tiptap. `null` installs nothing.
+   */
+  readonly interceptKeyDown: ((event: KeyboardEvent) => boolean) | null;
   readonly onFocus: () => void;
   readonly onBlur: () => void;
   /**
@@ -312,6 +323,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onDragOver,
     onDrop,
     onKeyDown,
+    interceptKeyDown,
     onFocus,
     onBlur,
     onEditorReady,
@@ -340,6 +352,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   const applyingContentRef = useRef(false);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onEditorReadyRef = useRef(onEditorReady);
+  const interceptKeyDownRef = useRef(interceptKeyDown);
   const initialSelectionRef = useRef(normalizedInitial.selection);
   const initialAutofocusSelectionPreparedRef = useRef(false);
   useEffect(() => {
@@ -348,6 +361,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onUserInputRef.current = onUserInput;
     onSelectionChangeRef.current = onSelectionChange;
     onEditorReadyRef.current = onEditorReady;
+    interceptKeyDownRef.current = interceptKeyDown;
   });
 
   const [stableSubmitHolder] = useState<{
@@ -402,6 +416,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       editable: !disabled,
       editorProps: {
         attributes: editorAttributesObject,
+        // The view's own props run before every plugin's, so this precedes
+        // the keymaps (Enter, the picker's Tab) - see `interceptKeyDown`.
+        // ProseMirror already skips it mid-composition.
+        handleKeyDown: (_view, event) =>
+          interceptKeyDownRef.current?.(event) ?? false,
       },
       onUpdate({ editor: updatedEditor, transaction }) {
         // setContent can emit an update depending on emitUpdate; it is not user input.
