@@ -1,4 +1,6 @@
-import { useMutationState } from "@tanstack/react-query";
+import { useCallback } from "react";
+import type { Mutation } from "@tanstack/react-query";
+import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 
 function stringField(value: unknown, field: string): string | null {
   if (typeof value !== "object" || value === null || !(field in value))
@@ -28,9 +30,8 @@ export function useConfigurationSavingOffline(
   environmentId: string | null,
   hostIds: ReadonlySet<string>,
 ): boolean {
-  const paused = useMutationState({
-    filters: { status: "pending" },
-    select: (mutation) => {
+  const selectPaused = useCallback(
+    (mutation: Mutation) => {
       if (!mutation.state.isPaused) return false;
       const method = mutation.options.mutationKey?.at(0);
       if (typeof method !== "string") return false;
@@ -50,6 +51,8 @@ export function useConfigurationSavingOffline(
         stringField(mutation.state.variables, "hostId");
       return hostId !== null && hostIds.has(hostId);
     },
-  });
+    [environmentId, hostIds],
+  );
+  const paused = useMutationStateOf({ status: "pending" }, selectPaused);
   return paused.some(Boolean);
 }

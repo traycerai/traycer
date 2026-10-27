@@ -124,6 +124,7 @@ function unitsFor(segment: ToolSegment): ReadonlyArray<ChatFindUnit> {
   return buildChatFindRows([message], TILE_INSTANCE_ID, new Set(), {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: null,
+    splitLongTurns: true,
   })[0].units;
 }
 

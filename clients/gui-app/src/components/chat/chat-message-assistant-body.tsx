@@ -1,4 +1,12 @@
-import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import {
+  buildChatActivityTimeline,
+  type ChatActivityTimelineItem,
+} from "@/components/chat/chat-activity-groups";
+import { assistantTurnPartIndexes } from "@/components/chat/chat-turn-parts";
+import {
+  assistantTurnPartCuts,
+  type TranscriptRowPart,
+} from "@/stores/chats/assistant-turn-parts";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
 import { BrowserSessionRow } from "./segments/browser-session-row";
@@ -167,6 +175,13 @@ interface AssistantBodyProps {
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
+  /**
+   * Which slice of this turn the list item is drawing. Absent, or `null`, for
+   * a turn drawn whole. A long turn is several list items so the transcript
+   * mounts only the ones on screen; see
+   * `stores/chats/assistant-turn-parts.ts`.
+   */
+  part?: TranscriptRowPart | null;
 }
 
 type ProviderNoticeMessageSegment = Extract<
@@ -250,6 +265,29 @@ function recoveryRoleOf(
   };
 }
 
+/** What the body needs to know about the slice it is drawing. */
+interface TurnPartView {
+  /** 0-based part index; 0 for a turn drawn whole. */
+  readonly index: number;
+  /** Whether this item carries the turn's ending - true when it is drawn whole. */
+  readonly isLast: boolean;
+  /** Whether the turn is drawn as several list items at all. */
+  readonly isSplit: boolean;
+}
+
+function turnPartView(
+  part: TranscriptRowPart | null | undefined,
+): TurnPartView {
+  if (part === undefined || part === null) {
+    return { index: 0, isLast: true, isSplit: false };
+  }
+  return {
+    index: part.index,
+    isLast: part.index === part.count - 1,
+    isSplit: true,
+  };
+}
+
 export function AssistantMessageBody({
   segments,
   backgroundToolBlockIds,
@@ -272,7 +310,9 @@ export function AssistantMessageBody({
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
+  part,
 }: AssistantBodyProps) {
+  const partView = turnPartView(part);
   const activityTimelineTurnState = runState === null ? "complete" : "active";
   // A ghost while the editor points at hidden Thinking (L-14).
   const thinkingShown = useRegionShown("thinking");
@@ -314,6 +354,27 @@ export function AssistantMessageBody({
       ),
     [timeline],
   );
+  // The items THIS list item draws, with the keys the WHOLE turn assigned
+  // them: `distinctRenderKeys` disambiguates across the turn, so slicing the
+  // timeline before keying would let two parts mint the same key.
+  const partItems = useMemo(() => {
+    if (!partView.isSplit) {
+      return timeline.map((item, index) => ({
+        item,
+        key: timelineKeys[index],
+      }));
+    }
+    const partIndexes = assistantTurnPartIndexes(
+      timeline,
+      assistantTurnPartCuts(segments),
+    );
+    const drawn: { item: ChatActivityTimelineItem; key: string }[] = [];
+    timeline.forEach((item, index) => {
+      if (partIndexes[index] !== partView.index) return;
+      drawn.push({ item, key: timelineKeys[index] });
+    });
+    return drawn;
+  }, [partView, segments, timeline, timelineKeys]);
   // A content-less boundary row's own segments never carry copyable text
   // (the reply lives on an earlier row in the same turn, before the trailing
   // steer bubble) - fall back to the turn-wide text `withTurnCompletion`
@@ -389,8 +450,7 @@ export function AssistantMessageBody({
       className="flex w-full max-w-none flex-col gap-2 py-1 @container"
       data-assistant-turn
     >
-      {timeline.map((item, index) => {
-        const key = timelineKeys[index];
+      {partItems.map(({ item, key }) => {
         if (item.kind === "activity_group") {
           return <ActivityGroupSegment key={key} group={item.group} />;
         }
@@ -470,6 +530,78 @@ export function AssistantMessageBody({
           </ChatBlockNavigationAnchor>
         );
       })}
+      {partView.isLast ? (
+        <AssistantTurnEnding
+          runState={runState}
+          messageId={messageId}
+          workingVerbSeed={workingVerbSeed}
+          elapsedStartedAt={elapsedStartedAt}
+          pausedDurationMs={pausedDurationMs}
+          pausedSinceMs={pausedSinceMs}
+          completedAt={completedAt}
+          stopped={stopped}
+          stoppedBeforeResponding={stoppedBeforeResponding}
+          showElapsedFooter={showElapsedFooter}
+          meta={meta}
+          replyText={replyText}
+          // A split turn's earlier parts can be unmounted while its footer is
+          // on screen, so speech projects the reply from the segments instead
+          // of reading the rendered DOM - the same path, and the same reason,
+          // as a stopped boundary row whose reply its earlier rows draw.
+          boundaryReplySegments={
+            boundaryReplySegments ?? (partView.isSplit ? segments : null)
+          }
+          forkAction={forkAction}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * How the turn ENDED, and nothing about what it said: the in-progress
+ * indicator, the note for a turn stopped before it replied, and the elapsed
+ * footer with its reply actions. A background event the agent let pass says
+ * how it ended inside its own card, so it has nothing here.
+ *
+ * Its own component because a long turn is drawn as several list items and
+ * exactly one of them - the last - carries this. Keeping the three conditions
+ * beside the item loop would make each of them ask twice, once about the turn
+ * and once about which part is drawing it.
+ */
+function AssistantTurnEnding({
+  runState,
+  messageId,
+  workingVerbSeed,
+  elapsedStartedAt,
+  pausedDurationMs,
+  pausedSinceMs,
+  completedAt,
+  stopped,
+  stoppedBeforeResponding,
+  showElapsedFooter,
+  meta,
+  replyText,
+  boundaryReplySegments,
+  forkAction,
+}: {
+  runState: ChatMessageRunState | null;
+  messageId: string;
+  workingVerbSeed: string | undefined;
+  elapsedStartedAt: number;
+  pausedDurationMs: number;
+  pausedSinceMs: number | null;
+  completedAt: number | null;
+  stopped: ChatMessageStoppedInfo | null;
+  stoppedBeforeResponding: boolean;
+  showElapsedFooter: boolean;
+  meta: AssistantTurnMeta | null;
+  replyText: string;
+  boundaryReplySegments: ReadonlyArray<MessageSegment> | null;
+  forkAction: ChatMessageForkAction | null;
+}) {
+  return (
+    <>
       {/* Trailing indicator keeps the in-progress cue visible for the whole
           turn once content has started streaming, not just the empty gap. */}
       {runState !== null ? (
@@ -496,7 +628,7 @@ export function AssistantMessageBody({
           forkAction={forkAction}
         />
       ) : null}
-    </div>
+    </>
   );
 }
 

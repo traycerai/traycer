@@ -34,7 +34,10 @@ import {
   isEditableEventTarget,
 } from "@/lib/keybindings/editable-target";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
-import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
+import {
+  isNativeOnlyBrowserAction,
+  streamedBrowserChordsFor,
+} from "@/lib/browser-view/reserved-chords-registration";
 import { selectLandingTerminalSurfaceActive } from "@/components/home/terminal-panel/landing-terminal-surface-binding";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -106,15 +109,13 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     /**
      * The chords a focused browser tile hands BACK to the app, as tokens.
      *
-     * The SAME table main replays from on the native side
-     * (`reservedBrowserChordsFor`), filtered to the app-forwarded rows - the
-     * ones whose `command` is null. Browser-scoped rows are deliberately
+     * The shared policy's streamed rows (`streamedBrowserChordsFor`), filtered
+     * to app-forwarded rows whose `command` is null. Native-only Find actions
+     * remain page-owned. Browser-scoped rows are deliberately
      * absent: `mod+t` / `mod+w` / `mod+l` / `mod+r` belong to the tile, and
      * the tile claims them (address focus is routed to its chrome before the
-     * armed gate below). Deriving from that one
-     * table is the whole point - a chord the native path replays and the
-     * streamed path swallows is the defect this closes, and two lists would
-     * grow one back.
+     * armed gate below). Both delivery paths derive their shared actions from
+     * the same declarations.
      *
      * Read at event time rather than subscribed to, and memoised on the two
      * inputs' identities. A subscription would either re-register the window
@@ -142,7 +143,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         return cached.tokens;
       }
       const tokens = new Set(
-        reservedBrowserChordsFor(bindings, { landingSurfaceActive })
+        streamedBrowserChordsFor(bindings, { landingSurfaceActive })
           .filter((row) => row.command === null)
           .map((row) => row.token),
       );
@@ -349,8 +350,6 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       hideLeaderHints(pathname);
     };
 
-    // Reserved v1 list is empty - OS-level chords live in the Electron menu
-    // and never reach this listener. No action-id list.
     const skipAppActions = (
       event: KeyboardEvent,
       pathname: string,
@@ -381,18 +380,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // and a STREAMED tile has no main process in its input path at all - so
       // without this the same chords are simply lost while a tile is armed.
       //
-      // Reaching dispatch is guaranteed for a CHORD token, not hoped for: it
-      // came from the live binding table, so `findActionMatchForChord` matches
-      // it by construction, and none of the forwarded actions is externally
-      // handled or is `nav.back` / `nav.forward` (the two
-      // `resolveReservedAction` can still refuse). That is what lets the
-      // page-key release sit here instead of beside each dispatch - and it has
-      // to happen before the action runs, because an action that takes focus
-      // out of the tile's IME input is exactly the case where the matching
-      // keyup never arrives.
+      // Release held page keys before an app action takes focus away from the
+      // tile's IME input, where the matching keyup would otherwise never arrive.
+      // Check the actual chord winner before granting that exemption.
       //
       // A LEADER's digit tokens (⌘1-⌘9, expanded in
-      // `reservedBrowserChordsFor`) reach `matchDigitAction` below instead,
+      // `streamedBrowserChordsFor`) reach `matchDigitAction` below instead,
       // which needs an ACTIVE leader scope on top of the mask - so for those
       // the guarantee is narrower: dispatch, or the digit is spent on nothing.
       // It holds where it has to. The only leader rows here are the landing
@@ -405,8 +398,18 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         chord !== null &&
         readForwardedChords().has(chord)
       ) {
-        useScreencastArmedStore.getState().releasePageKeys?.();
-        return false;
+        // A native-only action rebound onto a shared token still belongs to
+        // the page while streamed. Active digit actions retain their priority
+        // over chord actions, as in handleKeyDown below.
+        const match = findActionMatchForChord(chord);
+        if (
+          match === null ||
+          !isNativeOnlyBrowserAction(match.actionId) ||
+          matchDigitAction(event) !== null
+        ) {
+          useScreencastArmedStore.getState().releasePageKeys?.();
+          return false;
+        }
       }
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       else resetHintSession(pathname);

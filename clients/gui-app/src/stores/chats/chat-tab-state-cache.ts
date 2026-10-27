@@ -15,6 +15,8 @@ export type ChatTabScrollMode = "following-end" | "free-scrolling";
 export interface SavedChatTabScrollState {
   readonly mode: ChatTabScrollMode;
   readonly anchorMessageId: string | null;
+  /** Owning unsplit row key. Absent in saved states from older clients. */
+  readonly anchorRowKey?: string | null;
   readonly anchorIndex: number | null;
   readonly offset: number;
 }
@@ -38,6 +40,9 @@ function isSavedChatTabScrollState(
     (value.mode === "following-end" || value.mode === "free-scrolling") &&
     (typeof value.anchorMessageId === "string" ||
       value.anchorMessageId === null) &&
+    (value.anchorRowKey === undefined ||
+      value.anchorRowKey === null ||
+      typeof value.anchorRowKey === "string") &&
     (typeof value.anchorIndex === "number" || value.anchorIndex === null) &&
     (value.anchorIndex === null || Number.isFinite(value.anchorIndex)) &&
     typeof value.offset === "number" &&
@@ -57,6 +62,32 @@ export function peekSavedChatTabState(
 }
 
 /**
+ * Resolve an owning row without parsing segment ids, which may contain `#`.
+ * Older saved states omit the explicit owner; a matching row-key prefix also
+ * recovers part anchors written before the owner field was introduced.
+ */
+export function savedChatTabAnchorRowKey(
+  saved: SavedChatTabScrollState,
+  rowKeys: readonly string[],
+): string | null {
+  if (saved.anchorRowKey !== undefined && saved.anchorRowKey !== null) {
+    return saved.anchorRowKey;
+  }
+  const anchor = saved.anchorMessageId;
+  if (anchor === null || rowKeys.includes(anchor)) return anchor;
+  let owner = anchor;
+  for (const key of rowKeys) {
+    if (
+      anchor.startsWith(`${key}#`) &&
+      (owner === anchor || key.length > owner.length)
+    ) {
+      owner = key;
+    }
+  }
+  return owner;
+}
+
+/**
  * @param rowKeys The LIST's row keys in render order - `TranscriptListRow.key`
  * values (which on the windowed line include unhydrated placeholder rows, so a
  * saved anchor deep in cold history resolves without waiting for its body),
@@ -72,7 +103,28 @@ export function restoreChatTabState(
   if (rowKeys.includes(saved.anchorMessageId)) {
     return saved;
   }
-  if (rowKeys.length === 0 || saved.anchorIndex === null) {
+  const owner = savedChatTabAnchorRowKey(saved, rowKeys);
+  if (
+    owner !== null &&
+    owner !== saved.anchorMessageId &&
+    rowKeys.includes(owner)
+  ) {
+    return {
+      ...saved,
+      anchorMessageId: owner,
+      anchorRowKey: owner,
+      anchorIndex: rowKeys.indexOf(owner),
+      offset: 0,
+    };
+  }
+  // A new saved index describes an expanded list. It cannot locate a missing
+  // row in a cold or differently expanded list; retain only semantic identity.
+  if (
+    saved.anchorRowKey !== undefined ||
+    owner !== saved.anchorMessageId ||
+    rowKeys.length === 0 ||
+    saved.anchorIndex === null
+  ) {
     return {
       mode: saved.mode,
       anchorMessageId: null,

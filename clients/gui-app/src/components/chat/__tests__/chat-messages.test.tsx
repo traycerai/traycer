@@ -77,7 +77,10 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type { InterviewSegment } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
@@ -401,6 +404,13 @@ function makeCompletedTranscript(count: number): ChatMessageModel[] {
       runState: null,
     };
   });
+}
+
+function assistantTextSegment(
+  id: string,
+  markdown: string,
+): Extract<MessageSegment, { kind: "text" }> {
+  return { id, kind: "text", markdown, isStreaming: false };
 }
 
 /** P4: a pure agent-to-agent child chat - every `role: "user"` row carries
@@ -3331,6 +3341,105 @@ describe("ChatMessages scroll policy", () => {
       ).toBeLessThanOrEqual(1);
     });
 
+    it("does not let a mounted sibling part satisfy a missing later-part landing", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 10;
+      const base = messages[targetIndex];
+      const target: ChatMessageModel = {
+        ...base,
+        id: "split-scroll-sibling-check",
+        role: "assistant",
+        segments: [
+          assistantTextSegment("text-first", "First part."),
+          assistantTextSegment("text-later", "Requested later part."),
+        ],
+      };
+      messages[targetIndex] = target;
+      const laterPartKey = `${target.id}#text-later`;
+      const landedOn: { rowKey: string | null } = { rowKey: null };
+      const onScrollRequestSettled = vi.fn(
+        (requestId: number, outcome: ChatScrollRequestOutcome) => {
+          if (requestId === 60 && outcome === "landed") {
+            landedOn.rowKey =
+              getScrollNode().querySelector<HTMLElement>(
+                `[data-row-key="${laterPartKey}"]`,
+              )?.dataset.rowKey ?? null;
+          }
+        },
+      );
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-sibling-does-not-land",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      // First land with the requested row mounted. This provides the positive
+      // half of the contract and brings the sibling into the same viewport.
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: "text-later",
+          requestId: 60,
+        },
+      });
+      await waitFor(() => {
+        expect(onScrollRequestSettled).toHaveBeenCalledWith(60, "landed");
+      });
+      expect(landedOn.rowKey).toBe(laterPartKey);
+
+      const scrollNode = getScrollNode();
+      // Model the real virtualized state in which the request's target part
+      // has not mounted yet while another part of its message remains mounted.
+      for (const row of scrollNode.querySelectorAll<HTMLElement>(
+        "[data-message-id]",
+      )) {
+        if (row.dataset.messageId === target.id) row.remove();
+      }
+      const mountedSibling = document.createElement("div");
+      mountedSibling.dataset.messageId = target.id;
+      mountedSibling.dataset.rowKey = target.id;
+      scrollNode.append(mountedSibling);
+      expect(scrollNode.querySelector(`[data-row-key="${target.id}"]`)).toBe(
+        mountedSibling,
+      );
+      expect(
+        scrollNode.querySelector(`[data-row-key="${laterPartKey}"]`),
+      ).toBeNull();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const scrollToOffset = vi
+        .spyOn(list, "scrollToOffset")
+        .mockResolvedValue(undefined);
+      try {
+        rerenderWith({
+          scrollRequest: {
+            kind: "message",
+            messageId: target.id,
+            blockId: "text-later",
+            requestId: 61,
+          },
+        });
+
+        await waitFor(
+          () => {
+            expect(onScrollRequestSettled).toHaveBeenCalledWith(
+              61,
+              "exhausted",
+            );
+          },
+          { timeout: 8_000 },
+        );
+        expect(scrollToOffset).toHaveBeenCalled();
+      } finally {
+        scrollToOffset.mockRestore();
+      }
+
+      expect(onScrollRequestSettled).not.toHaveBeenCalledWith(61, "landed");
+    });
+
     it("reports cancelled when a reader gesture interrupts the landing", async () => {
       const messages = makeCompletedTranscript(30);
       const targetIndex = 10;
@@ -5853,6 +5962,191 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).not.toBe(
         maxScrollTopFor(getScrollNode()),
       );
+      second.unmount();
+    });
+
+    it("keeps a later-part anchor durable while its owner placeholder settles, then reopens at that part", async () => {
+      const rowCount = 80;
+      const ownerOrdinal = 20;
+      const ownerRowKey = `split-turn-${ownerOrdinal}`;
+      const laterTextId = "text-later";
+      const savedPartKey = `${ownerRowKey}#${laterTextId}`;
+      const savedOffset = 24;
+      const savedExpandedIndex = ownerOrdinal + 1;
+      const closedInstance = `cold-part-close-${Math.random().toString(36).slice(2)}`;
+      const reopenedInstance = `cold-part-reopen-${Math.random().toString(36).slice(2)}`;
+      const epicId = "epic-1";
+      const taskId = "task-1";
+      const closedIdentity = makeTestIdentity(closedInstance, epicId, taskId);
+      const reopenedIdentity = makeTestIdentity(
+        reopenedInstance,
+        epicId,
+        taskId,
+      );
+      const skeleton = Array.from({ length: rowCount }, (_unused, ordinal) => {
+        const rowId = ordinal === ownerOrdinal ? ownerRowKey : `row-${ordinal}`;
+        return {
+          rowId,
+          createdAt: ordinal,
+          role: "assistant" as const,
+          byteLength: 80,
+          bodyDigest: `digest-${ordinal}`,
+        };
+      });
+      const coldWindow: TranscriptWindow = {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount,
+        skeleton,
+        skeletonRevision: 2,
+        skeletonComplete: true,
+        skeletonStreamCoveredThrough: rowCount,
+        indexRevision: 2,
+        indexRevisionRebuilding: false,
+      };
+      const missingOwnerWindow: TranscriptWindow = {
+        ...coldWindow,
+        skeletonRevision: 1,
+        indexRevision: 1,
+        skeleton: skeleton.map((entry, ordinal) =>
+          ordinal === ownerOrdinal
+            ? { ...entry, rowId: `row-${ordinal}` }
+            : entry,
+        ),
+      };
+      const ownerMessage: ChatMessageModel = {
+        ...makeMessageAt(0, "assistant", 1_000),
+        id: ownerRowKey,
+        completedAt: 1_100,
+        segments: [
+          assistantTextSegment(
+            "text-first",
+            "First block of the assistant turn.",
+          ),
+          assistantTextSegment(
+            laterTextId,
+            "Later block containing the saved anchor.",
+          ),
+        ],
+      };
+      const hydratedWindow: TranscriptWindow = {
+        ...coldWindow,
+        spans: [
+          {
+            fromOrdinal: ownerOrdinal,
+            rowIds: [ownerRowKey],
+            rowContext: {},
+            messageIds: [],
+            eventIds: [],
+            contextBytes: 0,
+          },
+        ],
+      };
+      const visibleRanges: Array<OrdinalRange | null> = [];
+      function rowOffsetDifference(rowKey: string, offset: number): number {
+        const actualOffset = viewportOffsetForKey(rowKey);
+        return Math.abs(actualOffset - (offset - LEGEND_LIST_HEADER_PX));
+      }
+
+      saveChatTabState({
+        identity: closedIdentity,
+        mode: "free-scrolling",
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: savedExpandedIndex,
+        offset: savedOffset,
+      });
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages: [],
+        instanceId: closedInstance,
+        epicId,
+        taskId,
+        transcriptWindow: missingOwnerWindow,
+        onVisibleOrdinalRangeChange: (range) => visibleRanges.push(range),
+      });
+
+      await settleLegendList();
+      expect(visibleRanges).not.toContainEqual({
+        fromOrdinal: ownerOrdinal,
+        toOrdinal: ownerOrdinal + 1,
+      });
+      first.rerenderWith({ transcriptWindow: coldWindow });
+      await waitFor(() => {
+        expect(visibleRanges).toContainEqual({
+          fromOrdinal: ownerOrdinal,
+          toOrdinal: ownerOrdinal + 1,
+        });
+      });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(rowOffsetDifference(ownerRowKey, 0)).toBeLessThanOrEqual(1);
+      });
+      expect(
+        screen
+          .getAllByTestId("chat-transcript-placeholder-row")
+          .some(
+            (placeholder) =>
+              placeholder.getAttribute("data-ordinal") === String(ownerOrdinal),
+          ),
+      ).toBe(true);
+      expect(peekSavedChatTabState(closedIdentity)).toMatchObject({
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: savedExpandedIndex,
+        offset: savedOffset,
+      });
+
+      // Close while only the owner placeholder has converged. Its temporary
+      // offset must not replace the raw part key and part-relative offset in
+      // the durable chat-key entry.
+      evictChatTabState([closedInstance]);
+      tileLiveness.live = false;
+      first.unmount();
+
+      expect(peekSavedChatTabState(reopenedIdentity)).toMatchObject({
+        mode: "free-scrolling",
+        anchorMessageId: savedPartKey,
+        anchorRowKey: ownerRowKey,
+        anchorIndex: savedExpandedIndex,
+        offset: savedOffset,
+      });
+
+      tileLiveness.live = true;
+      const reopenedRanges: Array<OrdinalRange | null> = [];
+      const second = renderChatMessages({
+        messages: [],
+        instanceId: reopenedInstance,
+        epicId,
+        taskId,
+        transcriptWindow: coldWindow,
+        onVisibleOrdinalRangeChange: (range) => reopenedRanges.push(range),
+      });
+      await waitFor(() => {
+        expect(reopenedRanges).toContainEqual({
+          fromOrdinal: ownerOrdinal,
+          toOrdinal: ownerOrdinal + 1,
+        });
+      });
+      await settleLegendList();
+      second.rerenderWith({
+        messages: [ownerMessage],
+        transcriptWindow: hydratedWindow,
+      });
+      await waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>(
+            `[data-row-key="${savedPartKey}"]`,
+          ),
+        ).not.toBeNull();
+        expect(
+          rowOffsetDifference(savedPartKey, savedOffset),
+        ).toBeLessThanOrEqual(1);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       second.unmount();
     });
 

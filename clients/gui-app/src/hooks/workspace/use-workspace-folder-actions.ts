@@ -1,9 +1,5 @@
 import { useCallback, useRef } from "react";
-import {
-  useIsMutating,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -16,6 +12,7 @@ import type {
   WorkspacePrepareFoldersRequestV14,
   WorkspacePrepareFoldersResponseV14,
 } from "@traycer/protocol/host/workspace/unary-schemas";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host/runtime";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -182,9 +179,11 @@ export function useWorkspaceFolderActionsForClient(
   });
 
   const preparePending =
-    useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
+    useIsMutatingOf({ mutationKey: workspaceMutationKeys.prepareFolders() }) >
+    0;
   const removeRepoPending =
-    useIsMutating({ mutationKey: workspaceMutationKeys.removeEpicRepo() }) > 0;
+    useIsMutatingOf({ mutationKey: workspaceMutationKeys.removeEpicRepo() }) >
+    0;
 
   const { mutateAsync: prepareFoldersAsync } = prepareFoldersMutation;
 

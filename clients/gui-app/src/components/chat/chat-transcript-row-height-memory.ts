@@ -111,16 +111,36 @@ const CALIBRATION_MIN_FACTOR = 0.01;
 const CALIBRATION_MAX_FACTOR = 10;
 
 interface RememberedRow {
-  /** The row's last measured height in px. */
+  /**
+   * The sum of the row's measured parts in px. It is exact only once every
+   * slot in `partCount` has reported; until then missing slots are estimated. A
+   * long assistant turn is drawn as several list items and the placeholder
+   * that later stands in for its ordinal stands in for all of them at once.
+   */
   height: number;
   /**
-   * The role bucket this row contributed to, or `null` if it never has.
+   * Last measured height per list item, keyed by the part's INDEX in the row.
+   * One entry at 0 for a row drawn whole.
    *
-   * The ROLE rather than a boolean, because a remeasurement has to find the
-   * bucket again to correct it - and the skeleton entry that named the role is
-   * not necessarily still at that ordinal by then.
+   * The index rather than the list key, so the set can be reconciled against
+   * the row's current part COUNT: a turn redrawn into fewer parts - rewritten,
+   * regenerated, re-projected over fewer blocks - keeps reporting the slots it
+   * still draws and never mentions the ones it dropped, so a key-addressed
+   * entry would linger and hold the remembered total, the pooled role factor
+   * and every placeholder calibrated from them as tall as the turn used to be.
    */
-  sampledRole: RowSkeletonEntry["role"] | null;
+  readonly parts: Map<number, number>;
+  partCount: number;
+  /**
+   * The complete row's calibration contribution, or `null` while partial.
+   *
+   * Keep the original byte estimate to withdraw the sample if a growing turn
+   * becomes partial, even when its skeleton entry is no longer at that ordinal.
+   */
+  sample: {
+    readonly role: RowSkeletonEntry["role"];
+    readonly estimated: number;
+  } | null;
 }
 
 interface RoleCalibration {
@@ -210,6 +230,15 @@ export interface ChatTranscriptRowHeightMemory {
    */
   recordMeasuredHeight(input: {
     readonly rowId: string;
+    /**
+     * Which LIST ITEM of the row was measured, and how many the row is drawn
+     * as: `0` and `1` for a row drawn whole. A long assistant turn reports one
+     * measurement per part and the row's remembered height is their sum, so
+     * the count is what lets a row redrawn into fewer parts forget the slots
+     * it no longer has (see {@link RememberedRow.parts}).
+     */
+    readonly partIndex: number;
+    readonly partCount: number;
     readonly ordinal: number | null;
     readonly height: number;
   }): void;
@@ -221,8 +250,9 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
   const rows = new Map<string, RememberedRow>();
   const byRole = new Map<RowSkeletonEntry["role"], RoleCalibration>();
   let skeleton: readonly (RowSkeletonEntry | undefined)[] = [];
-  /** Sum of the latest height of every row in `rows`, for the unknown-row average. */
+  /** Only complete rows contribute to the unknown-row average. */
   let heightTotal = 0;
+  let measuredRowCount = 0;
   /**
    * The tallest row this transcript has actually drawn, which is what raises
    * the placeholder ceiling above its fixed default. A row that has been
@@ -238,14 +268,19 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
   let layoutBasis: RowHeightLayoutBasis | null = null;
 
   const sample = (entry: RowSkeletonEntry, remembered: RememberedRow): void => {
-    if (remembered.sampledRole !== null) return;
-    remembered.sampledRole = entry.role;
+    if (
+      remembered.sample !== null ||
+      remembered.parts.size !== remembered.partCount
+    )
+      return;
+    const estimated = rawPlaceholderRowHeight(entry.byteLength);
+    remembered.sample = { role: entry.role, estimated };
     const bucket = byRole.get(entry.role) ?? {
       estimated: 0,
       measured: 0,
       count: 0,
     };
-    bucket.estimated += rawPlaceholderRowHeight(entry.byteLength);
+    bucket.estimated += estimated;
     bucket.measured += remembered.height;
     bucket.count += 1;
     byRole.set(entry.role, bucket);
@@ -256,7 +291,10 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
     const oldest = rows.keys().next();
     if (oldest.done === true) return;
     const dropped = rows.get(oldest.value);
-    if (dropped !== undefined) heightTotal -= dropped.height;
+    if (dropped !== undefined && dropped.parts.size === dropped.partCount) {
+      heightTotal -= dropped.height;
+      measuredRowCount -= 1;
+    }
     rows.delete(oldest.value);
   };
 
@@ -323,71 +361,99 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       rows.clear();
       byRole.clear();
       heightTotal = 0;
+      measuredRowCount = 0;
       tallestMeasured = 0;
     },
 
-    recordMeasuredHeight({ rowId, ordinal, height }): void {
+    recordMeasuredHeight({
+      rowId,
+      partIndex,
+      partCount,
+      ordinal,
+      height,
+    }): void {
       // A zero or negative measurement is an unmounted or not-yet-laid-out row,
       // never an observation about how tall the row is.
       if (!Number.isFinite(height) || height <= 0) return;
-      if (height > tallestMeasured) tallestMeasured = height;
-      const existing = rows.get(rowId);
-      if (existing === undefined) {
-        const remembered: RememberedRow = { height, sampledRole: null };
-        rows.set(rowId, remembered);
-        heightTotal += height;
-        evictOldest();
-        if (ordinal === null) return;
-        const entry = skeleton[ordinal];
-        // The skeleton is ordinal-indexed and can lag the spans, so confirm it
-        // describes THIS row before treating it as this row's byte length.
-        if (entry !== undefined && entry.rowId === rowId)
-          sample(entry, remembered);
-        return;
+      const remembered: RememberedRow = rows.get(rowId) ?? {
+        height: 0,
+        parts: new Map<number, number>(),
+        partCount,
+        sample: null,
+      };
+      const wasComplete = remembered.parts.size === remembered.partCount;
+      const previousHeight = remembered.height;
+      if (wasComplete) {
+        heightTotal -= previousHeight;
+        measuredRowCount -= 1;
       }
-      const delta = height - existing.height;
-      heightTotal += delta;
-      existing.height = height;
-      // Keep the role bucket in step with the row's CURRENT height, not the
-      // first one it ever reported. A streaming assistant row is remeasured
-      // continuously, and rows grow again when images and tool output finish
-      // loading - so with only `MIN_CALIBRATION_SAMPLES` rows behind a factor,
-      // a handful of rows sampled at their initial height can hold the whole
-      // role's scale far below reality and undersize every unseen placeholder,
-      // while this memory already holds the correct final numbers.
-      //
-      // `estimated` and `count` are untouched: the byte-derived estimate for
-      // this row has not changed and it is still exactly one sample.
-      if (existing.sampledRole === null) return;
-      const bucket = byRole.get(existing.sampledRole);
-      if (bucket === undefined) return;
-      bucket.measured += delta;
+      remembered.partCount = partCount;
+      remembered.parts.set(partIndex, height);
+      // A rewrite can drop slots without those removed parts reporting again.
+      for (const index of remembered.parts.keys()) {
+        if (index >= partCount) remembered.parts.delete(index);
+      }
+      remembered.height = 0;
+      for (const partHeight of remembered.parts.values()) {
+        remembered.height += partHeight;
+      }
+      const complete = remembered.parts.size === partCount;
+      if (complete) {
+        heightTotal += remembered.height;
+        measuredRowCount += 1;
+        tallestMeasured = Math.max(tallestMeasured, remembered.height);
+      }
+      // A growing turn can become partial again, even when this measurement
+      // leaves its sum unchanged. Withdraw its WHOLE-row sample immediately.
+      const previousSample = remembered.sample;
+      if (previousSample !== null) {
+        const bucket = byRole.get(previousSample.role);
+        if (bucket !== undefined) {
+          if (complete) {
+            bucket.measured += remembered.height - previousHeight;
+          } else {
+            bucket.measured -= previousHeight;
+            bucket.estimated -= previousSample.estimated;
+            bucket.count -= 1;
+          }
+        }
+        if (!complete) remembered.sample = null;
+      }
+      rows.set(rowId, remembered);
+      evictOldest();
+      if (ordinal === null) return;
+      const entry = skeleton[ordinal];
+      // Skeleton delivery can lag the body; never pair a different row's bytes.
+      if (entry !== undefined && entry.rowId === rowId)
+        sample(entry, remembered);
     },
 
     placeholderHeight(entry): number {
-      if (entry !== null) {
-        const remembered = rows.get(entry.rowId);
-        if (remembered !== undefined) return remembered.height;
-      }
       if (entry === null) {
-        if (rows.size === 0) return PLACEHOLDER_UNKNOWN_HEIGHT_PX;
+        if (measuredRowCount === 0) return PLACEHOLDER_UNKNOWN_HEIGHT_PX;
         return clampPlaceholderHeight(
-          heightTotal / rows.size,
+          heightTotal / measuredRowCount,
           calibratedCeiling(),
         );
       }
+      const remembered = rows.get(entry.rowId);
+      if (
+        remembered !== undefined &&
+        remembered.parts.size === remembered.partCount
+      ) {
+        return remembered.height;
+      }
       const base = rawPlaceholderRowHeight(entry.byteLength);
       const factor = factorFor(entry.role);
-      // With no scale factor there is no evidence that a big byte count means
-      // a tall row - the two roles here differ 39x at the same size - so the
-      // raw model stays behind the conservative no-evidence cap.
-      if (factor === null) {
-        return clampPlaceholderHeight(
-          base,
-          PLACEHOLDER_UNCALIBRATED_MAX_HEIGHT_PX,
-        );
-      }
-      return clampPlaceholderHeight(base * factor, calibratedCeiling());
+      // Only complete observations can calibrate the whole-row byte estimate.
+      const estimate =
+        factor === null
+          ? clampPlaceholderHeight(base, PLACEHOLDER_UNCALIBRATED_MAX_HEIGHT_PX)
+          : clampPlaceholderHeight(base * factor, calibratedCeiling());
+      if (remembered === undefined) return estimate;
+      const missingShare =
+        (remembered.partCount - remembered.parts.size) / remembered.partCount;
+      return remembered.height + estimate * missingShare;
     },
   };
 }

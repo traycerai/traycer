@@ -184,6 +184,7 @@ function findUnitsFor(
     hideReasoning: false,
     queuePauseReasonProtocolSupported:
       handle.store.getState().queuePauseReasonProtocolSupported,
+    splitLongTurns: true,
   }).flatMap((row) => row.units);
 }
 
