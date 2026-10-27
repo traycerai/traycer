@@ -1,3 +1,5 @@
+import { useBrowserCatalogInventory } from "@/hooks/browser/use-browser-catalog-inventory";
+import { BrowserCatalogContext } from "./browser-catalog-context";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -16,7 +18,8 @@ import {
 } from "./browser-sessions-context";
 
 /**
- * The canvas provider: the epic's inventory on the canvas host.
+ * Task-wide discovery once per canvas; the canvas host's live session stream
+ * stays separate from discovery and owner-specific tile boundaries.
  *
  * Every provider here - this one, {@link BrowserSessionsHostProvider} and
  * {@link BrowserSessionsHostBoundary} - acquires the REFCOUNTED coordinator by
@@ -31,14 +34,20 @@ export function BrowserSessionsProvider(props: {
 }) {
   const hostId = useCanvasHostId();
   const hostClient = useEpicSessionHostClient();
+  const catalog = useBrowserCatalogInventory({
+    epicId: props.epicId,
+    readerClient: hostClient,
+  });
   return (
-    <BrowserSessionsHostProvider
-      hostId={hostId}
-      hostClient={hostClient}
-      scope={{ kind: "epic", epicId: props.epicId }}
-    >
-      {props.children}
-    </BrowserSessionsHostProvider>
+    <BrowserCatalogContext.Provider value={catalog}>
+      <BrowserSessionsHostProvider
+        hostId={hostId}
+        hostClient={hostClient}
+        scope={{ kind: "epic", epicId: props.epicId }}
+      >
+        {props.children}
+      </BrowserSessionsHostProvider>
+    </BrowserCatalogContext.Provider>
   );
 }
 

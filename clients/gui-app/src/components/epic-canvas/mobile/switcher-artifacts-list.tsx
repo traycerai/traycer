@@ -498,6 +498,7 @@ function SwitcherArtifactRow(props: {
       style={{ paddingLeft: `${depth * INDENT_PX}px` }}
     >
       <SwitcherListRow
+        disabled={false}
         icon={
           <SwitcherArtifactIcon type={record.type} status={record.status} />
         }

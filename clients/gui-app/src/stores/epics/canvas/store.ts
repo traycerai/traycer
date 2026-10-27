@@ -1,3 +1,5 @@
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { browserCatalogInventory } from "@/lib/browser-view/sessions/browser-catalog-inventory";
 import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { readTabStripLayout } from "@/stores/tabs/store";
 import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
@@ -1649,6 +1651,15 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeTabsForEpics: (epicIds) => {
           pruneRecoveryEpics(epicIds);
+          const inventoryUserId =
+            useAuthStore.getState().contextMetadata?.userId ?? null;
+          if (inventoryUserId !== null) {
+            for (const epicId of epicIds) {
+              void browserCatalogInventory
+                .purge({ userId: inventoryUserId, epicId })
+                .catch(() => undefined);
+            }
+          }
           const targetEpicIds = new Set(epicIds);
           if (targetEpicIds.size === 0) return;
           // Cancel any in-flight epic-title backstop timers so a deletion

@@ -9,6 +9,7 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
+  browserSessionsV23,
 } from "@traycer/protocol/host/browser/contracts";
 import {
   browserScreencastOpenRequestSchemaV10,
@@ -79,9 +80,10 @@ describe("browser stream majors", () => {
     expect(Object.keys(screencast).sort()).toEqual(["1", "2"]);
     expect(sessions[1].versions[0]?.contract).toBe(browserSessionsV10);
     expect(sessions[2].versions[0]?.contract).toBe(browserSessionsV20);
-    expect(sessions[2].latestMinor).toBe(2);
+    expect(sessions[2].latestMinor).toBe(3);
     expect(sessions[2].versions[1]?.contract).toBe(browserSessionsV21);
     expect(sessions[2].versions[2]?.contract).toBe(browserSessionsV22);
+    expect(sessions[2].versions[3]?.contract).toBe(browserSessionsV23);
     expect(screencast[1].versions[0]?.contract).toBe(browserScreencastV10);
     expect(screencast[2].versions[0]?.contract).toBe(browserScreencastV20);
     expect(screencast[2].latestMinor).toBe(1);

@@ -25,6 +25,7 @@ export function SwitcherListRow(props: {
   readonly onSelect: () => void;
   readonly actions: ReactNode;
   readonly selectTestId: string;
+  readonly disabled: boolean;
 }) {
   const {
     icon,
@@ -46,6 +47,7 @@ export function SwitcherListRow(props: {
         type="button"
         variant="ghost"
         onClick={onSelect}
+        disabled={props.disabled}
         data-testid={selectTestId}
         aria-current={active ? "true" : undefined}
         className="flex min-h-11 min-w-0 flex-1 items-center justify-start text-left font-normal"
