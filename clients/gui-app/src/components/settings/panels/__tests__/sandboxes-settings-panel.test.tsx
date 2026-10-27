@@ -47,7 +47,11 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
-import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
+import {
+  authQueryKeys,
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys";
 import type {
   SandboxAutomationResponse,
   SandboxCatalogue,
@@ -132,6 +136,8 @@ const mocks = vi.hoisted(() => ({
   /** `false` while the list query has not answered. */
   listed: true,
   realActions: false,
+  /** The Automations read and open run through their real hooks and query. */
+  realAutomation: false,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
@@ -240,19 +246,50 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
     failed: mocks.sessionFailed,
   }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
-  useSandboxAutomation: () => ({ data: mocks.automation }),
-  useSandboxTeamPods: () => new Map(),
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
-  useSandboxAutomationOpen: () => ({
-    mutateAsync: mocks.openAutomation,
-    mutate: vi.fn(),
-    isPending: false,
-    isError: false,
-    reset: vi.fn(),
-  }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-automation-query",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-automation-query")
+      >();
+    return {
+      ...original,
+      useSandboxAutomation: (environmentId: string | null) => {
+        const real = original.useSandboxAutomation(environmentId);
+        return mocks.realAutomation ? real : { data: mocks.automation };
+      },
+      useSandboxTeamPods: (environmentIds: readonly string[]) => {
+        const real = original.useSandboxTeamPods(environmentIds);
+        return mocks.realAutomation ? real : new Map();
+      },
+    };
+  },
+);
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-automation-open-mutation",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-automation-open-mutation")
+      >();
+    return {
+      ...original,
+      useSandboxAutomationOpen: (feedback: "toast" | "inline") => {
+        const real = original.useSandboxAutomationOpen(feedback);
+        return mocks.realAutomation
+          ? real
+          : {
+              mutateAsync: mocks.openAutomation,
+              mutate: vi.fn(),
+              isPending: false,
+              isError: false,
+              reset: vi.fn(),
+            };
+      },
+    };
+  },
+);
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://platform.example.dev/sign-in" }),
@@ -489,6 +526,7 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.sessionFailed = false;
     mocks.costs = null;
     mocks.automation = null;
+    mocks.realAutomation = false;
     mocks.openAutomation.mockReset();
     mocks.openLink.mockReset();
     mocks.close.mockReset();
@@ -2042,6 +2080,189 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBe("Running, but Traycer can't connect"),
     );
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3);
+  });
+
+  describe("a held team pod Retry belongs to its mounted row", () => {
+    const POD_ROW = "sbx-pod";
+    const ACME: SandboxPageConfiguration = {
+      kind: "team",
+      teamId: "t-acme",
+      teamName: "Acme",
+      environmentId: "env-acme",
+    };
+    const BETA: SandboxPageConfiguration = {
+      kind: "team",
+      teamId: "t-beta",
+      teamName: "Beta",
+      environmentId: "env-beta",
+    };
+
+    /** Acme's failed pod in a separate team configuration from Beta. */
+    function mountHeldRetry(): {
+      readonly binding: FakeSandboxBinding;
+      readonly answerLookup: () => void;
+    } {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      mocks.realActions = true;
+      mocks.realAutomation = true;
+      mocks.configurations = [{ kind: "personal" }, ACME, BETA];
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u1", username: "ada" },
+      });
+      const pod = row(POD_ROW, {
+        kind: "automation",
+        state: "failed",
+        environmentId: "env-acme",
+        displayName: "Automations",
+      });
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [pod] },
+      });
+      const lookups: Array<() => void> = [];
+      binding.auth.getSandboxAutomation.mockImplementation((environmentId) => {
+        if (environmentId !== "env-acme") {
+          return Promise.resolve({
+            kind: "ok",
+            automation: { available: true, sandbox: null, pods: [] },
+          });
+        }
+        return new Promise((resolve) => {
+          lookups.push(() =>
+            resolve({
+              kind: "ok",
+              automation: {
+                available: true,
+                sandbox: null,
+                pods: [
+                  {
+                    sandbox: pod,
+                    ordinal: 2,
+                    liveShells: 0,
+                    headroom: 1,
+                  },
+                ],
+              },
+            }),
+          );
+        });
+      });
+      binding.auth.openSandboxAutomation.mockResolvedValue({
+        kind: "ok",
+        sandbox: { ...pod, state: "awake" },
+        settled: true,
+      });
+      useSettingsEnvironmentPickStore
+        .getState()
+        .setPick({ kind: "team", environmentId: "env-acme" });
+      renderUi(<SandboxesSettingsPanel />);
+      return {
+        binding,
+        answerLookup: () => {
+          for (const answer of lookups) answer();
+        },
+      };
+    }
+
+    async function clickRetryHeldInLookup(binding: FakeSandboxBinding) {
+      await userEvent.click(await screen.findByTestId("sandbox-row-retry"));
+      await waitFor(() => {
+        expect(binding.auth.getSandboxAutomation).toHaveBeenCalled();
+      });
+    }
+
+    /** The held Retry's mutation, with any wake it starts, has finished. */
+    async function settleHeldRetry(userId: string): Promise<void> {
+      const client = harness?.queryClient;
+      if (client === undefined) throw new Error("no page is mounted");
+      await waitFor(() => {
+        expect(
+          client.isMutating({
+            mutationKey: sandboxMutationKeys.automationRetry(
+              userId,
+              "env-acme",
+              POD_ROW,
+            ),
+            exact: true,
+          }),
+        ).toBe(0);
+      });
+    }
+
+    it("wakes nothing when the page switches configuration before the lookup answers", async () => {
+      const { binding, answerLookup } = mountHeldRetry();
+      await clickRetryHeldInLookup(binding);
+
+      act(() => {
+        useSettingsEnvironmentPickStore
+          .getState()
+          .setPick({ kind: "team", environmentId: "env-beta" });
+      });
+      expect(screen.queryByTestId("sandbox-row-retry")).toBeNull();
+      answerLookup();
+      await settleHeldRetry("u1");
+
+      expect(binding.auth.openSandboxAutomation).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
+
+    it("wakes nothing when the filter hides the clicked row before the lookup answers", async () => {
+      const { binding, answerLookup } = mountHeldRetry();
+      await clickRetryHeldInLookup(binding);
+
+      await userEvent.type(screen.getByTestId("sandboxes-search"), "zzz");
+      expect(screen.queryByTestId("sandbox-row-retry")).toBeNull();
+      answerLookup();
+      await settleHeldRetry("u1");
+
+      expect(binding.auth.openSandboxAutomation).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+
+      await userEvent.clear(screen.getByTestId("sandboxes-search"));
+      const remountedRetry =
+        await screen.findByTestId<HTMLButtonElement>("sandbox-row-retry");
+      expect(remountedRetry.disabled).toBe(false);
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      await userEvent.click(remountedRetry);
+      answerLookup();
+      await waitFor(() => {
+        expect(binding.auth.openSandboxAutomation).toHaveBeenCalledTimes(1);
+      });
+      expect(binding.auth.openSandboxAutomation).toHaveBeenCalledWith({
+        environmentId: "env-acme",
+        ordinal: 2,
+      });
+      await waitFor(() => {
+        expect(binding.auth.openSandboxAutomation).toHaveResolved();
+      });
+      await settleHeldRetry("u1");
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
+
+    it("wakes nothing when the row unmounts and the account changes before the lookup answers", async () => {
+      const { binding, answerLookup } = mountHeldRetry();
+      await clickRetryHeldInLookup(binding);
+
+      act(() => {
+        useSettingsEnvironmentPickStore
+          .getState()
+          .setPick({ kind: "team", environmentId: "env-beta" });
+      });
+      act(() => {
+        useAuthStore.setState({
+          status: "signed-in",
+          contextMetadata: { userId: "u2", username: "grace" },
+        });
+      });
+      answerLookup();
+      await settleHeldRetry("u1");
+
+      expect(binding.auth.openSandboxAutomation).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    });
   });
 
   describe("an Automations host that is not created yet", () => {

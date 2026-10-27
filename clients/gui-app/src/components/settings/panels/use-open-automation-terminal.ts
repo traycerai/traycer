@@ -40,10 +40,13 @@ export function useOpenAutomationTerminal(
     () => ({ userId, sandboxId, teamEnvironmentId }),
     [userId, sandboxId, teamEnvironmentId],
   );
-  const currentIdentity = useRef(identity);
+  const currentIdentity = useRef<AutomationRowRetryIdentity | null>(identity);
   const heldRetry = useRef<AutomationRowRetryIdentity | null>(null);
   useEffect(() => {
     currentIdentity.current = identity;
+    return () => {
+      currentIdentity.current = null;
+    };
   }, [identity]);
   // One mutation holds the click through lookup and wake, including a cold read.
   const retryOperation = useMutation({
