@@ -1066,3 +1066,56 @@ describe("<KeybindingProvider /> and AltGr (Ctrl+Alt presented as AltGraph)", ()
     expect(useEpicCanvasStore.getState().activeTabId).toBe(secondTabId);
   });
 });
+
+// The suggested-reply accept key is matched by the chat composer's own editor
+// (`isExternallyHandled`), never reserved here: reserved, a person's rebind to
+// Tab would be swallowed in every field of the app, and the default → in
+// every text input.
+describe("<KeybindingProvider /> and the suggested-reply accept key", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    __resetTabNavigationControllerForTesting();
+    seedEpicTabs();
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+  });
+
+  it.each([
+    { binding: "arrowright", init: { key: "ArrowRight", code: "ArrowRight" } },
+    { binding: "tab", init: { key: "Tab", code: "Tab" } },
+  ])(
+    "leaves a $binding binding to the field that has focus",
+    ({ binding, init }) => {
+      useKeybindingStore
+        .getState()
+        .setBinding("composer.suggestion.accept", binding);
+      render(
+        createElement(KeybindingProvider, {
+          router: buildProviderRouterSource("/epics/e1"),
+          children: null,
+        }),
+      );
+      const field = document.createElement("input");
+      document.body.append(field);
+      field.focus();
+
+      let event: KeyboardEvent | undefined;
+      act(() => {
+        event = fireKeyDownOn(field, init);
+      });
+
+      expect(event?.defaultPrevented).toBe(false);
+    },
+  );
+});

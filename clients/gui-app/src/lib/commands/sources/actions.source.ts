@@ -15,6 +15,8 @@ import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
  *   - `composer.dictation.toggle` (no `dispatchAction` handler - it's a
  *     press-and-hold action owned by a capture-phase hook, so a palette
  *     entry would be inert; toggling it is the mic button's job);
+ *   - `composer.suggestion.accept` (no `dispatchAction` handler either - the
+ *     chat composer matches it in its own editor while a suggestion shows);
  *   - `desktopOnly` actions in the installed mobile app (the surface they
  *     act on is never drawn there);
  *   - `app.home.open` while the Home tab setting is off;
@@ -77,6 +79,10 @@ function isPaletteEligible(
   if (meta.id === "app.palette.open") return false;
   // No dispatchAction handler; handled by the capture-phase dictation hook.
   if (meta.id === "composer.dictation.toggle") return false;
+  // No dispatchAction handler either: the chat composer matches the chord in
+  // its own editor, and only while it shows a suggestion. A palette row would
+  // be inert.
+  if (meta.id === "composer.suggestion.accept") return false;
   // The composer source emits a context-gated "Change model…" entry (with the
   // active model as its subtitle); a second generic row here would duplicate it.
   if (meta.id === "composer.model-picker.toggle") return false;
