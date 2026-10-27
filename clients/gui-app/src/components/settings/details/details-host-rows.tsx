@@ -9,6 +9,7 @@ import {
   detailsRecoveryLabel,
   detailsTime,
 } from "@/components/settings/details/details-copy";
+import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
 
 const STATE_LABELS: Readonly<Record<string, string>> = {
   applied: "Applied",
@@ -55,7 +56,7 @@ export function DetailsHostRows(props: {
             <div className="min-w-0 flex-1">
               <p className="break-words font-medium">
                 {host.state === "not_used"
-                  ? `${host.item} · not used on sandboxes`
+                  ? `${unusedSettingLabel(host.item)} · not used on sandboxes`
                   : host.name}
                 {host.item === null || host.state === "not_used"
                   ? null
@@ -64,7 +65,9 @@ export function DetailsHostRows(props: {
               <p className="text-ui-xs text-muted-foreground">
                 {host.state === "not_used" ? host.name : stateLabel(host.state)}
                 {host.at === null ? null : ` · ${detailsTime(host.at)}`}
-                {host.reason === null ? null : ` · ${host.reason}`}
+                {host.state === "not_used" || host.reason === null
+                  ? null
+                  : ` · ${host.reason}`}
               </p>
               {host.lastReportedAt === null ? null : (
                 <p className="text-ui-xs text-muted-foreground">
