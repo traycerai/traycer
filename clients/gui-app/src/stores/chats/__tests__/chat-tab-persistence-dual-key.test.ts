@@ -465,6 +465,46 @@ describe("ticket 15 dual-key scroll cache", () => {
     expect(peekSavedChatTabState(reopened) !== null).toBe(false);
   });
 
+  it("cold-restores a saved later part to its current owner row without clamping its expanded index", () => {
+    const id = chatIdIdentity("cold-part-owner");
+    saveChatTabState({
+      identity: id,
+      mode: "free-scrolling",
+      anchorMessageId: "turn-20#text-later",
+      anchorRowKey: "turn-20",
+      anchorIndex: 21,
+      offset: 24,
+    });
+
+    expect(
+      restoreChatTabState(id, ["row-before", "turn-20", "row-after"]),
+    ).toEqual({
+      mode: "free-scrolling",
+      anchorMessageId: "turn-20",
+      anchorRowKey: "turn-20",
+      anchorIndex: 1,
+      offset: 0,
+    });
+  });
+
+  it("recovers an older split anchor's owner from its row-key prefix", () => {
+    const id = chatIdIdentity("legacy-cold-part-owner");
+    saveChatTabState({
+      identity: id,
+      mode: "free-scrolling",
+      anchorMessageId: "turn#text-with-#-inside",
+      anchorIndex: 8,
+      offset: 16,
+    });
+
+    expect(restoreChatTabState(id, ["before", "turn", "after"])).toMatchObject({
+      mode: "free-scrolling",
+      anchorMessageId: "turn",
+      anchorIndex: 1,
+      offset: 0,
+    });
+  });
+
   it("stale-anchor nearest-neighbor: clamps index below, above, and empty", () => {
     const messages = makeMessages(5);
     const id = chatIdIdentity("stale-a");

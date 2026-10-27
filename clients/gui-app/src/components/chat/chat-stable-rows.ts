@@ -236,6 +236,21 @@ function isTranscriptListRowUnchanged(
   if (a.ordinal !== b.ordinal) return false;
   if (a.kind === "hydrated") {
     if (b.kind !== "hydrated") return false;
+    if (a.part === null || b.part === null) {
+      // One side splits and the other does not: the row changed shape, so it
+      // is never unchanged however its fields compare.
+      if (a.part !== b.part) return false;
+      return isChatMessageUnchanged(a.model, b.model);
+    }
+    if (a.part.index !== b.part.index || a.part.count !== b.part.count) {
+      return false;
+    }
+    // A part is compared on the WHOLE turn, not on its own slice of segments.
+    // `buildChatActivityTimeline` has whole-turn inputs - the question tools an
+    // interview later in the turn suppresses, the trailing group it marks
+    // active, the routing notice a part away from its error - so a later
+    // segment can change what an EARLIER part draws, and a slice comparison
+    // would freeze that part's body. See `assistant-turn-parts.ts`.
     return isChatMessageUnchanged(a.model, b.model);
   }
   if (b.kind !== "placeholder") return false;
