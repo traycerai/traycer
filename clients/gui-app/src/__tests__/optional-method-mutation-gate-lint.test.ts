@@ -177,6 +177,8 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "target-choice gate: BotOnboardingCard sends it only to the host chooseBotCreateHost picks from useHostsAdvertisingMethod(connectableHostIds, 'bot.onboarding.complete'), so a host without it is never the target (home/bots/bot-onboarding-card.tsx)",
   "epic.attachEnvironment":
     "call-and-catch degrade: a host that predates it answers E_HOST_UNSUPPORTED, which the hook does not toast and the fork dialog answers by forking as it did before the method existed (use-epic-attach-environment-mutation.ts, chat-fork-dialog.tsx)",
+  "browser.catalog.read":
+    "call-and-catch fallback: browser-catalog-discovery.ts:174-175 classifies E_HOST_UNSUPPORTED as an unsupported inventory response and accepts that result, preserving the existing unsupported/legacy behavior instead of pre-gating the read",
 };
 
 /**
