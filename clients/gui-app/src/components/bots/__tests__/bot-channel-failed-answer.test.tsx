@@ -5,9 +5,10 @@
  * records the request that leaves. Only the virtualised list is replaced, as
  * in the thread-panel suite, and what the bot is doing is scripted through
  * the one `useBotActivity` the view reads. What is asserted is what the
- * person sees on the row and what the host RECEIVES: Retry re-delivers the
- * request as it is, Edit loads the text into the channel's box and the send
- * replaces the failed post.
+ * person sees on the row and what the host RECEIVES: the row says under its
+ * text that it was not answered and why, Retry re-delivers the request as it
+ * is, Edit loads the text into the channel's box and the send replaces the
+ * failed post, and Sign in opens the provider on the bot's host.
  */
 import { StrictMode } from "react";
 import {
@@ -54,6 +55,9 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
@@ -89,6 +93,7 @@ const mocks = vi.hoisted(() => ({
   channelHandle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
+  openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -142,6 +147,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: () => null,
+}));
+// Opening Settings is the router's; the providers focus it sets is real.
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
@@ -385,7 +394,6 @@ function mountChannelWith(
               openThread={openThread}
               onOpenThread={onOpenThread}
               onOpenUnderTheHood={vi.fn()}
-              onOpenTrunkUnderTheHood={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
@@ -404,6 +412,8 @@ beforeEach(() => {
   sent = [];
   heldSends = null;
   onOpenThread.mockClear();
+  mocks.openSettings.mockClear();
+  useProvidersFocusStore.getState().clearFocusHarnessId();
   mocks.threads = [];
   activityStore.setState({ activity: null });
   mocks.client = hostClientRecordingSends();
@@ -613,8 +623,12 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
     );
 
     const anchor = screen.getByTestId("bot-thread-anchor");
-    expect(within(anchor).getByTestId("bot-message-retry")).toBeTruthy();
-    expect(within(anchor).queryByTestId("bot-message-edit")).toBeNull();
+    expect(
+      within(anchor).getByTestId("bot-message-unanswered-retry"),
+    ).toBeTruthy();
+    expect(
+      within(anchor).queryByTestId("bot-message-unanswered-edit"),
+    ).toBeNull();
   });
 
   it("offers no Edit to a viewer who is not signed in", () => {
@@ -732,7 +746,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
 
     await user.click(
       within(screen.getByTestId("bot-thread-anchor")).getByTestId(
-        "bot-message-edit",
+        "bot-message-unanswered-edit",
       ),
     );
 
@@ -766,6 +780,210 @@ describe("<BotChannelView /> a post the bot has since moved on from", () => {
 
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
     expect(screen.getByText(POST_TEXT)).toBeTruthy();
+  });
+});
+
+describe("<BotChannelView /> the line under a post the bot did not answer", () => {
+  const GROK_OUTDATED =
+    "Your Grok CLI version (1.0.5) is outdated. Update to 1.0.13 or later.";
+
+  /** The trunk failed or parked answering the post, saying why. */
+  function trunkWithReason(
+    state: "failed" | "parked",
+    reason: NonNullable<BotSessionActivity["reason"]>,
+  ): BotActivity {
+    return {
+      trunk: { ...sessionOn(state, POST_REQUEST), reason },
+      threads: {},
+    };
+  }
+
+  function lineOf(scope: HTMLElement): HTMLElement {
+    return within(scope).getByTestId("bot-message-unanswered");
+  }
+
+  it("says it under the post in the host's words, with Retry and Edit, and nothing above the box", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: GROK_OUTDATED,
+        code: null,
+        harnessId: "grok",
+        action: "none",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    const row = screen.getByTestId("bot-member-row");
+    const line = lineOf(row);
+    expect(line.textContent).toBe(
+      `Not answered: ${GROK_OUTDATED} · Retry · Edit`,
+    );
+    expect(line.getAttribute("data-state")).toBe("failed");
+    expect(line.className).toContain("text-destructive");
+    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-unanswered")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(within(line).queryByText("Under the hood")).toBeNull();
+
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
+    expect(sent[0].threadId).toBeNull();
+
+    await user.click(within(line).getByRole("button", { name: "Edit" }));
+    expect(channelBox().value).toBe(POST_TEXT);
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+  });
+
+  it("says a sandbox's refusal in the words the transcript's error row gives it, and keeps the host's summary for any other code", () => {
+    const raw = "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+    const copy = sandboxRefusalCopyFor("SANDBOX_FROZEN", raw);
+    if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: raw,
+        code: "SANDBOX_FROZEN",
+        harnessId: "claude",
+        action: "none",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    const line = lineOf(screen.getByTestId("bot-member-row"));
+    expect(line.textContent).toBe(
+      `Not answered: ${copy.description} · Retry · Edit`,
+    );
+    expect(line.textContent).not.toContain(raw);
+
+    act(() => {
+      activityStore.setState({
+        activity: trunkWithReason("failed", {
+          summary: GROK_OUTDATED,
+          code: "PROVIDER_UNAUTHENTICATED",
+          harnessId: "claude",
+          action: "none",
+        }),
+      });
+    });
+    expect(lineOf(screen.getByTestId("bot-member-row")).textContent).toBe(
+      `Not answered: ${GROK_OUTDATED} · Retry · Edit`,
+    );
+  });
+
+  it("adds Sign in for a sign-out, which opens Settings ▸ Providers on the bot's host at that provider", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: "Claude is signed out.",
+        code: null,
+        harnessId: "claude",
+        action: "sign-in",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    const line = lineOf(screen.getByTestId("bot-member-row"));
+    expect(line.textContent).toBe(
+      "Not answered: Claude is signed out. · Retry · Edit · Sign in",
+    );
+    await user.click(within(line).getByRole("button", { name: "Sign in" }));
+
+    const focus = useProvidersFocusStore.getState();
+    expect(focus.focusHarnessId).toBe("claude");
+    expect(focus.focusHostId).toBe(HOST_ID);
+    expect(focus.focusTargetHostId).toBe(HOST_ID);
+    expect(mocks.openSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.openSettings.mock.calls[0][0].section).toBe("providers");
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+    expect(sent).toEqual([]);
+  });
+
+  it("opens Settings on the bot's host with no earlier focus left armed when the harness is not one this client knows", async () => {
+    const user = userEvent.setup();
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-other",
+      profileId: "profile-other",
+      startSignIn: true,
+    });
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: "Signed out.",
+        code: null,
+        harnessId: "not-a-harness",
+        action: "sign-in",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    await user.click(
+      within(lineOf(screen.getByTestId("bot-member-row"))).getByRole("button", {
+        name: "Sign in",
+      }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+    });
+    expect(mocks.openSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+  });
+
+  it("says a parked post in the warning colour with the parked summary, and offers Retry alone", () => {
+    const summary =
+      "Queue paused because a conversation message could not be delivered.";
+    activityStore.setState({
+      activity: trunkWithReason("parked", {
+        summary,
+        code: null,
+        harnessId: "claude",
+        action: "sign-in",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    const line = lineOf(screen.getByTestId("bot-member-row"));
+    expect(line.getAttribute("data-state")).toBe("parked");
+    expect(line.className).toContain("text-warning-foreground");
+    expect(line.textContent).toBe(`Not answered: ${summary} · Retry`);
+  });
+
+  it("says it under the post a thread opens on, inside the thread, and not above the thread's box", () => {
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...sessionOn("failed", POST_REQUEST),
+            reason: {
+              summary: GROK_OUTDATED,
+              code: null,
+              harnessId: "grok",
+              action: "none",
+            },
+          },
+        },
+      },
+    });
+    mountChannel(
+      { anchorMessageId: POST_ID, announcement: false },
+      memberPost(VIEWER_USER_ID),
+    );
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(lineOf(anchor).textContent).toBe(
+      `Not answered: ${GROK_OUTDATED} · Retry · Edit`,
+    );
+    expect(screen.queryByTestId("bot-thread-unanswered")).toBeNull();
+    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
   });
 });

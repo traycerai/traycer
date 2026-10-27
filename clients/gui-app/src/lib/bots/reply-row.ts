@@ -1,3 +1,5 @@
+import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { ChatMessage } from "@/stores/composer/chat-store";
@@ -90,22 +92,129 @@ export function repliedPostOf(
 }
 
 /**
- * The text of the channel row `messageId` - a member's post or one of the
- * bot's own rows - as the chat's store holds it (Tracy Bots T65): a thread
- * names the post it answers by id only, and wherever a thread shows its
- * post, the text is read from the channel. `null` when the store has not
- * loaded that row.
+ * The text of a channel row - a member's post or one of the bot's own rows
+ * - as the chat's store holds it (Tracy Bots T65): a thread names the post
+ * it answers by id only, and wherever a thread shows its post, the text is
+ * read from the channel. `null` when the store has not loaded that row.
  */
-export function postTextOf(
-  messages: ReadonlyArray<OpenMessage>,
-  messageId: string,
-): string | null {
-  const post = messages.find((message) => message.messageId === messageId);
-  if (post === undefined) return null;
+export function postTextOf(post: OpenMessage | null): string | null {
+  if (post === null) return null;
   if (post.role === "user") {
     return extractPlainTextFromComposerJSONContent(post.message.content);
   }
   return post.blocks
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
     .join("\n");
+}
+
+/**
+ * The post a thread opens on, as the channel's row draws it (Tracy Bots,
+ * decision 90): from the channel's row once it is loaded, else from what the
+ * thread list says of the post - its writer, its time and its request - with
+ * no text yet. A member's post carries its request, so a post the bot failed
+ * to answer says so here as in the channel; the bot's own question or
+ * proposal carries its announcement. `null` while neither is known.
+ */
+export function threadOriginRow(input: {
+  readonly post: OpenMessage | null;
+  readonly anchor: BotThreadAnchor | null;
+  /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
+  readonly senderLabel: (senderUserId: string | null) => string;
+  readonly senderAvatarUrl: (senderUserId: string) => string | null;
+}): ChatMessage | null {
+  const { post, anchor, senderLabel, senderAvatarUrl } = input;
+  if (post !== null) {
+    const text = postTextOf(post) ?? "";
+    if (post.role === "assistant") {
+      return {
+        ...originRowBase(post.messageId, "assistant", post.timestamp, text),
+        ...(post.announcement === undefined
+          ? {}
+          : { announcement: post.announcement }),
+      };
+    }
+    const userId = post.sender.type === "user" ? post.sender.userId : null;
+    return memberOriginRow(
+      originRowBase(post.messageId, "user", post.timestamp, text),
+      userId,
+      post.conversationRequest ?? null,
+      input,
+    );
+  }
+  if (anchor === null) return null;
+  const base = originRowBase(
+    anchor.messageId,
+    anchor.senderUserId === null ? "assistant" : "user",
+    anchor.sentAt,
+    "",
+  );
+  if (anchor.senderUserId === null) return base;
+  return memberOriginRow(
+    base,
+    anchor.senderUserId,
+    {
+      requestId: anchor.requestId,
+      resolvedAt: anchor.resolvedAt,
+      resolvedByMessageId: null,
+    },
+    { senderLabel, senderAvatarUrl },
+  );
+}
+
+function memberOriginRow(
+  base: ChatMessage,
+  userId: string | null,
+  request: ConversationRequest | null,
+  names: {
+    readonly senderLabel: (senderUserId: string | null) => string;
+    readonly senderAvatarUrl: (senderUserId: string) => string | null;
+  },
+): ChatMessage {
+  const avatarUrl = userId === null ? null : names.senderAvatarUrl(userId);
+  return {
+    ...base,
+    senderLabel: names.senderLabel(userId),
+    ...(userId === null ? {} : { senderUserId: userId }),
+    ...(avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl }),
+    ...(request === null ? {} : { conversationRequest: request }),
+  };
+}
+
+function originRowBase(
+  messageId: string,
+  role: "user" | "assistant",
+  sentAt: number,
+  text: string,
+): ChatMessage {
+  return {
+    id: messageId,
+    role,
+    content: text,
+    segments:
+      text.length > 0
+        ? [
+            {
+              id: `${messageId}:text`,
+              kind: "text",
+              markdown: text,
+              isStreaming: false,
+            },
+          ]
+        : [],
+    structuredContent: null,
+    attachments: [],
+    settings: null,
+    createdAt: sentAt,
+    completedAt: null,
+    stopped: null,
+    persistentMessageId: messageId,
+    senderLabel: null,
+    assistantMeta: null,
+    statusLabel: null,
+    agentSenderInfo: null,
+    agentMessage: null,
+    runState: null,
+    sessionAnchor: null,
+    steerBadge: null,
+  };
 }

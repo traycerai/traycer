@@ -25,7 +25,6 @@ import {
   BotMessageComposer,
   type BotComposerEdit,
 } from "@/components/bots/bot-message-composer";
-import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
@@ -141,8 +140,6 @@ export function BotChannelView(props: {
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
   readonly onOpenUnderTheHood: (sessionChatId: string) => void;
-  /** Opens the transcript of the bot's own session, which answers direct posts. */
-  readonly onOpenTrunkUnderTheHood: () => void;
 }): ReactNode {
   const {
     botId,
@@ -154,7 +151,6 @@ export function BotChannelView(props: {
     openThread: open,
     onOpenThread,
     onOpenUnderTheHood,
-    onOpenTrunkUnderTheHood,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -291,7 +287,7 @@ export function BotChannelView(props: {
     ],
   );
 
-  const trunk = channelTrunk(activity);
+  const trunkReply = channelTrunkReply(activity);
 
   const threadOpen = openThreadPostId !== null && threadListSupported;
   const openThread =
@@ -304,15 +300,9 @@ export function BotChannelView(props: {
     if (threadList.isError) {
       return { kind: "failed", retry: () => void refetchThreads() };
     }
-    if (open !== null && open.announcement && channelId !== null) {
-      return {
-        kind: "unopened",
-        conversationId: channelId,
-        announcementId: open.anchorMessageId,
-      };
-    }
+    if (open?.announcement === true) return { kind: "unopened" };
     return { kind: "pending" };
-  }, [channelId, open, openThread, refetchThreads, threadList.isError]);
+  }, [open, openThread, refetchThreads, threadList.isError]);
   useReadThreadWhilePresented({
     client,
     botId,
@@ -404,15 +394,8 @@ export function BotChannelView(props: {
           />
           <BotReplyingStrip
             botTitle={botTitle}
-            activity={trunk.reply}
+            activity={trunkReply}
             testId="bot-channel-replying"
-          />
-          <BotUnansweredNotice
-            botTitle={botTitle}
-            hostId={hostId}
-            activity={trunk.session}
-            onOpenUnderTheHood={onOpenTrunkUnderTheHood}
-            testId="bot-channel-unanswered"
           />
           <BotMessageComposer
             botId={botId}
@@ -441,6 +424,8 @@ export function BotChannelView(props: {
               botId={botId}
               hostId={hostId}
               botTitle={botTitle}
+              conversationId={channel.conversationId}
+              originMessageId={openThreadPostId}
               thread={panelThread}
               anchorSenderLabel={anchorSenderLabel}
               resolveMember={resolveMember}
@@ -479,22 +464,16 @@ function threadParticipants(
   return thread.replyCount > 0 ? [...writer, { kind: "bot" }] : writer;
 }
 
-type ChannelTrunk = {
-  readonly session: BotSessionActivity | null;
-  readonly reply: BotSessionActivity | null;
-};
-
 /**
  * The trunk answers a direct post at the channel's top level: its running
- * turn is the channel's typing line (`reply`) only while it answers one, so
- * its other work (a routine, a check-in) and a turn whose post is answered
- * draw none. The notice under the last row reads the trunk's state alone
- * (`session`).
+ * turn is the channel's typing line only while it answers one, so its other
+ * work (a routine, a check-in) and a turn whose post is answered draw none.
  */
-function channelTrunk(activity: BotActivity | null): ChannelTrunk {
+function channelTrunkReply(
+  activity: BotActivity | null,
+): BotSessionActivity | null {
   const session = activity?.trunk ?? null;
-  const reply = session !== null && session.requestId !== null ? session : null;
-  return { session, reply };
+  return session !== null && session.requestId !== null ? session : null;
 }
 
 /**

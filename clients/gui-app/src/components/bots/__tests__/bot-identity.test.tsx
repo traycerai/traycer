@@ -253,6 +253,10 @@ describe("the owner line beside a bot's name", () => {
 
     const line = screen.getByTestId("bot-owner-line");
     expect(line.textContent).toBe("·managed byOlive Owner");
+    // The avatar, the name and the owner say it is a bot; no tag beside it.
+    expect(
+      within(screen.getByTestId("bot-reply-row")).queryByText("APP"),
+    ).toBeNull();
     await user.click(within(line).getByTestId("bot-owner-name"));
 
     const card = await screen.findByTestId("bot-owner-card");

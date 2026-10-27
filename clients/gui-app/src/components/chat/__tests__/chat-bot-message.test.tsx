@@ -23,8 +23,6 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { hostEntryFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotAnnouncement,
@@ -40,13 +38,13 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
   ChatBotPresentationContext,
+  type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
 } from "@/components/chat/chat-bot-presentation-context";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -59,23 +57,11 @@ const mocks = vi.hoisted(
     openLink: Mock<
       (url: string, kind: string, event: unknown) => Promise<void>
     >;
-    hostLabel: { current: string | null };
   } => ({
     openLink:
       vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
-    hostLabel: { current: null },
   }),
 );
-
-// The host directory is the boundary: which label a host id carries.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostDirectoryEntryForHostId: (
-    hostId: string | null,
-  ): HostDirectoryEntry | null =>
-    hostId === null || mocks.hostLabel.current === null
-      ? null
-      : { ...hostEntryFixture(hostId), label: mocks.hostLabel.current },
-}));
 
 vi.mock("@/lib/links/open-link", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/links/open-link")>()),
@@ -87,13 +73,11 @@ const POST_ID = "post-1";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.hostLabel.current = null;
   mocks.openLink.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   cleanup();
-  useRetrospectiveSheetStore.setState({ target: null, open: false });
 });
 
 function channelPresentation(
@@ -464,12 +448,115 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     retrying: boolean,
     edit: ((text: string) => void) | null,
   ): ChatBotPresentation {
+    return failingWith({
+      state: "failed",
+      summary: "Your Grok CLI version (1.0.5) is outdated.",
+      signIn: null,
+      retry,
+      retrying,
+      edit,
+    });
+  }
+
+  function failingWith(failed: ChatBotFailedRequest): ChatBotPresentation {
     return {
       ...channelPresentation(NO_THREAD_LINE, vi.fn()),
       failedRequest: (requestId) =>
-        requestId === OPEN_REQUEST.requestId ? { retry, retrying, edit } : null,
+        requestId === OPEN_REQUEST.requestId ? failed : null,
     };
   }
+
+  it("says under the message's text that it was not answered and why, with Retry and Edit as text", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, edit));
+
+    const row = screen.getByTestId("bot-member-row");
+    const line = within(row).getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Your Grok CLI version (1.0.5) is outdated. · Retry · Edit",
+    );
+    expect(line.getAttribute("data-state")).toBe("failed");
+    expect(line.className).toContain("text-destructive");
+    expect(line.getAttribute("role")).toBeNull();
+    // The line follows the message's own text.
+    const text = within(row).getByText("Please review the release");
+    expect(
+      text.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    await user.click(within(line).getByRole("button", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("Please review the release");
+    expect(within(line).queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("adds Sign in to the line when signing in is the fix", async () => {
+    const user = userEvent.setup();
+    const signIn = vi.fn<() => void>();
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: "Claude is signed out.",
+        signIn,
+        retry: vi.fn(),
+        retrying: false,
+        edit: null,
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Claude is signed out. · Retry · Sign in",
+    );
+    await user.click(within(line).getByRole("button", { name: "Sign in" }));
+    expect(signIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a held answer in the warning colour, with Retry alone", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "parked",
+        summary: "The queue is paused.",
+        signIn: vi.fn(),
+        retry: vi.fn(),
+        retrying: false,
+        edit: vi.fn(),
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe("Not answered: The queue is paused. · Retry");
+    expect(line.getAttribute("data-state")).toBe("parked");
+    expect(line.className).toContain("text-warning-foreground");
+    expect(line.className).not.toContain("text-destructive");
+  });
+
+  it("says only that it was not answered when the host gave no reason, and holds the line's Retry while one is sent", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: null,
+        signIn: null,
+        retry: vi.fn(),
+        retrying: true,
+        edit: null,
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe("Not answered · Retry");
+    expect(
+      within(line)
+        .getByRole("button", { name: "Retry" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
 
   it("offers Retry and Edit beside Reply in thread, each handing the message's own text back", async () => {
     const user = userEvent.setup();
@@ -551,12 +638,14 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     );
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
     expect(screen.getByTestId("bot-message-reply-in-thread")).toBeTruthy();
     cleanup();
 
     renderRow(botRow(undefined), failing(vi.fn(), false, vi.fn()));
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
   it("shows no See reply on a request a later message of the member's took over", () => {
@@ -590,12 +679,12 @@ describe("<ChatMessage /> bot rows", () => {
     failedRequest: null,
   };
 
-  it("labels a bot's reply with the bot's current title and the APP tag", () => {
+  it("labels a bot's reply with the bot's current title and no tag", () => {
     renderRow(botRow(undefined), presentation);
 
     const row = screen.getByTestId("bot-reply-row");
     expect(within(row).getByText("Release Bot")).toBeTruthy();
-    expect(within(row).getByText("APP")).toBeTruthy();
+    expect(within(row).queryByText("APP")).toBeNull();
     expect(within(row).getByText("The bot says hello")).toBeTruthy();
     expect(screen.queryByTestId("bot-announcement")).toBeNull();
     expect(screen.queryByTestId("bot-reply-options")).toBeNull();
@@ -616,7 +705,6 @@ describe("<ChatMessage /> bot rows", () => {
 
       const row = screen.getByTestId("bot-announcement");
       expect(screen.queryByTestId("bot-reply-row")).toBeNull();
-      expect(within(row).getByText("APP")).toBeTruthy();
       expect(within(row).getByText(label)).toBeTruthy();
       expect(within(row).getByText("The bot says hello")).toBeTruthy();
       expect(
@@ -650,39 +738,24 @@ describe("<ChatMessage /> bot rows", () => {
     );
   });
 
-  it.each<readonly [string | null, string]>([
-    [null, "this computer"],
-    ["Office Mac", "Office Mac"],
-  ])(
-    "draws a retrospective sheet link as a Review action that opens that host's sheet (directory label %s)",
-    async (label, hostName) => {
-      const user = userEvent.setup();
-      const hostId = "host/a b";
-      mocks.hostLabel.current = label;
-      renderRow(
-        botRow({
-          kind: "proposal",
-          link: `environment/retrospective?host=${encodeURIComponent(hostId)}`,
-        }),
-        presentation,
-      );
+  it("draws a retrospective sheet link's record as its label and text, with no Review and no link row", () => {
+    renderRow(
+      botRow({
+        kind: "proposal",
+        link: `environment/retrospective?host=${encodeURIComponent("host/a b")}`,
+      }),
+      presentation,
+    );
 
-      expect(screen.queryByText(/environment\/retrospective/)).toBeNull();
-      const row = screen.getByTestId("bot-announcement");
-      expect(
-        within(row).getByText("Shared by an earlier version"),
-      ).toBeTruthy();
-      expect(within(row).queryByText("New proposal")).toBeNull();
-      expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
-      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
-
-      await user.click(screen.getByTestId("bot-announcement-review"));
-
-      const state = useRetrospectiveSheetStore.getState();
-      expect(state.open).toBe(true);
-      expect(state.target).toEqual({ hostId, hostName });
-    },
-  );
+    const row = screen.getByTestId("bot-announcement");
+    expect(within(row).getByText("Shared by an earlier version")).toBeTruthy();
+    expect(within(row).getByText("The bot says hello")).toBeTruthy();
+    expect(within(row).queryByText("New proposal")).toBeNull();
+    expect(within(row).queryByText(/environment\/retrospective/)).toBeNull();
+    expect(within(row).queryByText("Review")).toBeNull();
+    expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
 
   it("shows an epic-relative path as the path it is, not as a link", () => {
     renderRow(
