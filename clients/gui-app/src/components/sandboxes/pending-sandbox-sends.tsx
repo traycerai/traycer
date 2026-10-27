@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useShallow } from "zustand/react/shallow";
@@ -23,6 +23,10 @@ import {
   SandboxReadyLine,
   SandboxSetupLine,
 } from "@/components/composer/sandbox-setup-line";
+import {
+  StoppedSandboxSendReceipts,
+  StoppedSandboxSendReceiptStrip,
+} from "@/components/sandboxes/stopped-sandbox-send-receipts";
 import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
 import {
   stagedSandboxFallbackName,
@@ -76,6 +80,7 @@ import {
   isNewConversationDraftOccupied,
   useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
+import { recordStoppedSandboxSend } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -99,9 +104,22 @@ import {
   completePendingSandboxTerminal,
   canWithdrawPendingSandboxSend,
   returnPendingSandboxSend,
+  returnPendingSandboxSendToDraft,
+  pendingSandboxRecoveryDraftId,
   requestedAgentReadiness,
+  type ReturnedPendingSandboxSend,
   type RequestedAgentReadiness,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  stoppingSandboxLine,
+  couldntStopLine,
+  RETRY,
+  STOP,
+  DETAILS,
+} from "@/lib/sandboxes/sandbox-strings";
+import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
+import { sandboxMutationKeys } from "@/lib/query-keys";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   holdPendingSandboxSendOwnership,
@@ -154,21 +172,43 @@ import {
 /** How often a waiting send re-reads the requested agent's readiness. */
 const READINESS_POLL_MS = 2_000;
 const STOP_INTENT_CODE = "pending-send-stop";
-const stopsInFlight = new Set<string>();
+const STOP_FAILED_CODE = "stop";
+const stopsInFlight = new Map<string, { returned: boolean }>();
 const stopAttention = new Map<
   string,
-  { readonly userId: string | null; readonly giveBack: () => void }
+  {
+    readonly userId: string | null;
+    readonly giveBack: () => ReturnedPendingSandboxSend;
+  }
 >();
 
 /** Attention is local to the requesting mounted strip and never persisted. */
 function returnStoppedPendingSend(id: string): void {
   const attention = stopAttention.get(id);
-  if (
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return;
+  const send = sends[id];
+  const stage = readStagedSandbox(pendingSendSurfaceKey(id)) ?? send.stopStage;
+  const returned =
     attention !== undefined &&
     attention.userId === (useAuthStore.getState().profile?.userId ?? null)
-  )
-    attention.giveBack();
-  else returnPendingSandboxSend(id);
+      ? attention.giveBack()
+      : returnPendingSandboxSendToDraft(id);
+  if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, id)) {
+    const attempt = stopsInFlight.get(id);
+    if (attempt !== undefined) attempt.returned = true;
+    if (stage !== undefined) {
+      recordStoppedSandboxSend(
+        send,
+        stage,
+        stage.target.name.length > 0
+          ? stage.target.name
+          : stagedSandboxFallbackName(send.text),
+        returned,
+      );
+    }
+  }
+  stopAttention.delete(id);
 }
 
 /**
@@ -204,7 +244,14 @@ export function PendingSandboxSendsDriver(): ReactNode {
         .map((send) => send.id),
     ),
   );
-  return ids.map((id) => <OwnedPendingSendDriver key={id} id={id} />);
+  return (
+    <>
+      <StoppedSandboxSendReceipts />
+      {ids.map((id) => (
+        <OwnedPendingSendDriver key={id} id={id} />
+      ))}
+    </>
+  );
 }
 
 /**
@@ -879,7 +926,10 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
     case "credits":
       return "credits";
     case "settings":
-      return failure.code === STOP_INTENT_CODE ? "stop" : "settings";
+      return failure.code === STOP_INTENT_CODE ||
+        failure.code === STOP_FAILED_CODE
+        ? "stop"
+        : "settings";
     case "no-provider":
     case "agent-not-offered":
     case "agent-setup-failed":
@@ -1839,16 +1889,23 @@ export function PendingSandboxSendStrip(props: {
         .map((send) => send.id),
     ),
   );
-  if (ids.length === 0) return null;
   return (
-    <div
-      className="flex w-full flex-col gap-3 px-4 py-3"
-      data-testid="pending-sandbox-sends"
-    >
-      {ids.map((id) => (
-        <PendingSendItem key={id} id={id} tabId={props.tabId} />
-      ))}
-    </div>
+    <>
+      <StoppedSandboxSendReceiptStrip
+        epicId={props.epicId}
+        tabId={props.tabId}
+      />
+      {ids.length > 0 ? (
+        <div
+          className="flex w-full flex-col gap-3 px-4 py-3"
+          data-testid="pending-sandbox-sends"
+        >
+          {ids.map((id) => (
+            <PendingSendItem key={id} id={id} tabId={props.tabId} />
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -1984,20 +2041,63 @@ async function stopPendingSend(
   }
   const boundary =
     usePendingSandboxSendStore.getState().sends[id]?.stopRequestedAt ?? null;
+  const originalSend = usePendingSandboxSendStore.getState().sends[id];
+  const originalStage =
+    readStagedSandbox(pendingSendSurfaceKey(id)) ?? originalSend.stopStage;
   requested();
   void refresh();
-  stopsInFlight.add(id);
+  stopsInFlight.set(id, { returned: false });
   try {
     const outcome = await stop();
-    const host = stoppedHostObservation(outcome);
-    const settled = pendingStopDecision(id, "stop-result", host, boundary);
-    if (settled?.effects.includes("remove")) returnStoppedPendingSend(id);
+    observePendingStopResult(originalSend, originalStage, boundary, outcome);
   } catch {
-    // The mutation owns the line's error. Its existing persisted latch holds
-    // the only message copy, and the row watcher keeps polling for rest.
-    pendingStopDecision(id, "stop-failed", "unknown", boundary);
+    const failed = pendingStopDecision(id, "stop-failed", "unknown", boundary);
+    if (failed?.outcome === "applied") {
+      // Retain the failure on the existing stage across a new mutation observer.
+      useStagedSandboxStore.getState().report(pendingSendSurfaceKey(id), {
+        failure: { kind: "settings", code: STOP_FAILED_CODE },
+      });
+    }
   } finally {
     stopsInFlight.delete(id);
+  }
+}
+
+/** A stop completion either gives back the held copy or points at task-loss recovery. */
+function observePendingStopResult(
+  originalSend: PendingSandboxSend,
+  originalStage: StagedSandbox | undefined,
+  boundary: number | null,
+  outcome: SandboxVerbOutcome,
+): void {
+  const id = originalSend.id;
+  const host = stoppedHostObservation(outcome);
+  const settled = pendingStopDecision(id, "stop-result", host, boundary);
+  if (settled?.effects.includes("remove")) returnStoppedPendingSend(id);
+  else if (
+    settled === null &&
+    stopsInFlight.get(id)?.returned !== true &&
+    host === "resting" &&
+    originalStage !== undefined &&
+    originalSend.userId === (useAuthStore.getState().profile?.userId ?? null)
+  ) {
+    // Task deletion may already have recovered and removed the pending send.
+    // Point at that saved draft; never recreate or return its message twice.
+    const draftId = pendingSandboxRecoveryDraftId(id);
+    if (
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId)
+    ) {
+      recordStoppedSandboxSend(
+        originalSend,
+        originalStage,
+        originalStage.target.name.length > 0
+          ? originalStage.target.name
+          : stagedSandboxFallbackName(originalSend.text),
+        { kind: "landing-draft", draftId },
+      );
+    }
   }
 }
 
@@ -2044,67 +2144,81 @@ function pendingStopDecision(
   );
 }
 
+/** The existing failure projection retains a Stop failure across observer replacement. */
+function isStopFailure(failure: StagedSandboxFailure | null): boolean {
+  return failure?.kind === "settings" && failure.code === STOP_FAILED_CODE;
+}
+
 function PendingStopLine(props: {
+  readonly name: string;
+  readonly sandboxId: string;
   readonly costLine: string;
   readonly pending: boolean;
-  readonly error: Error | null;
+  readonly failed: boolean;
   readonly canWithdraw: boolean;
   readonly stop: () => void;
-  readonly giveBack: () => void;
 }): ReactNode {
   return (
     <div data-testid="sandbox-setup-line" className="flex flex-col gap-2">
       <p className="m-0">{props.costLine}</p>
-      <span>{props.error?.message ?? "Waiting for the sandbox to stop."}</span>
+      <span>
+        {!props.failed || props.pending
+          ? stoppingSandboxLine(props.name)
+          : `${couldntStopLine(props.name)} · ${sandboxSupportReference("stop")}`}
+      </span>
       <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          data-testid="sandbox-setup-stop"
-          disabled={props.pending || !props.canWithdraw}
-          onClick={props.stop}
-        >
-          Stop
-        </Button>
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          data-testid="sandbox-setup-cancel"
-          disabled={!props.canWithdraw}
-          onClick={props.giveBack}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          data-testid="sandbox-setup-choose-another-host"
-          disabled={!props.canWithdraw}
-          onClick={props.giveBack}
-        >
-          Choose another host
-        </Button>
+        {props.canWithdraw ? (
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            data-testid="sandbox-setup-stop"
+            disabled={props.pending}
+            onClick={props.stop}
+          >
+            {props.pending ? STOP : RETRY}
+          </Button>
+        ) : null}
+        {props.failed && !props.pending ? (
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            onClick={() => openSandboxDetails(props.sandboxId)}
+          >
+            {DETAILS}
+          </Button>
+        ) : null}
       </div>
     </div>
   );
 }
 
 /** Model recovery needs an undispatched message and an empty destination draft. */
-function canRecoverPendingSandboxModel(input: {
+function pendingSandboxModelRecovery(input: {
   readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+  readonly tabId: string;
   readonly canWithdraw: boolean;
   readonly draftOccupied: boolean;
-}): boolean {
-  return (
-    input.send.request.kind === "chat" &&
-    input.send.epicConfirmed &&
-    input.send.ended !== true &&
-    input.canWithdraw &&
-    !input.draftOccupied
-  );
+}): (() => void) | null {
+  if (
+    input.send.request.kind !== "chat" ||
+    !input.send.epicConfirmed ||
+    input.send.ended === true ||
+    !input.canWithdraw ||
+    input.draftOccupied
+  )
+    return null;
+  return () => {
+    endSendBackToComposer({
+      send: input.send,
+      stage: input.stage,
+      tabId: input.tabId,
+      restage: false,
+      modelPickerHarnessId: "traycer",
+    });
+  };
 }
 
 function PendingStagedSendItem(props: {
@@ -2121,7 +2235,7 @@ function PendingStagedSendItem(props: {
   const stage = observedStage ?? send.stopStage ?? null;
   const attention = useRef<{
     readonly userId: string | null;
-    readonly giveBack: () => void;
+    readonly giveBack: () => ReturnedPendingSandboxSend;
   } | null>(null);
   useEffect(
     () => () => {
@@ -2133,7 +2247,11 @@ function PendingStagedSendItem(props: {
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
   const retrySend = usePendingStagedSendRetry(send, runner);
-  const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
+  const sandboxId = stage?.createdSandboxId ?? "";
+  const verb = useSandboxVerb(sandboxId);
+  const activeVerbs = useIsMutating({
+    mutationKey: sandboxMutationKeys.verb(sandboxId),
+  });
   const sandboxList = useSandboxList();
   const { openTile } = useEpicTileNavigation();
   const providersOpener = useConfigurationProvidersOpener(
@@ -2203,8 +2321,8 @@ function PendingStagedSendItem(props: {
       <PendingSandboxMessage text={send.text} />
     ) : null;
   }
-  const backToComposer = (restage: boolean): void => {
-    endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
+  const backToComposer = (restage: boolean): ReturnedPendingSandboxSend => {
+    return endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
   };
   const stop = (): void => {
     void stopPendingSend(
@@ -2224,8 +2342,10 @@ function PendingStagedSendItem(props: {
     stage.target.name.length > 0
       ? stage.target.name
       : stagedSandboxFallbackName(send.text);
-  const canChooseModel = canRecoverPendingSandboxModel({
+  const chooseModel = pendingSandboxModelRecovery({
     send,
+    stage,
+    tabId: props.tabId,
     canWithdraw,
     draftOccupied: taskDraftOccupied,
   });
@@ -2236,12 +2356,13 @@ function PendingStagedSendItem(props: {
     >
       {pendingSendState(send, stageBlocker(stage)).blocker === "stop" ? (
         <PendingStopLine
+          name={name}
+          sandboxId={sandboxId}
           costLine={facts.costLine}
-          pending={verb.isPending}
-          error={verb.error}
+          pending={verb.isPending || activeVerbs > 0}
+          failed={verb.error !== null || isStopFailure(stage.failure)}
           canWithdraw={canWithdraw}
           stop={stop}
-          giveBack={() => backToComposer(false)}
         />
       ) : (
         <SandboxSetupLine
@@ -2262,17 +2383,7 @@ function PendingStagedSendItem(props: {
             onOpenTerminal: newHost.onOpenTerminal,
             // The configuration's own Providers, a team's included.
             onOpenProviders: providersOpener(stage.target.configuration),
-            onChooseModel: !canChooseModel
-              ? null
-              : () => {
-                  endSendBackToComposer({
-                    send,
-                    stage,
-                    tabId: props.tabId,
-                    restage: false,
-                    modelPickerHarnessId: "traycer",
-                  });
-                },
+            onChooseModel: chooseModel,
           }}
         />
       )}
@@ -2417,7 +2528,7 @@ function endSendBackToComposer(input: {
   readonly tabId: string;
   readonly restage: boolean;
   readonly modelPickerHarnessId?: GuiHarnessId;
-}): void {
+}): ReturnedPendingSandboxSend {
   const { send } = input;
   if (
     input.modelPickerHarnessId !== undefined &&
@@ -2425,13 +2536,13 @@ function endSendBackToComposer(input: {
       useNewConversationModalStore.getState().draftPatchesByEpicId[send.epicId],
     )
   )
-    return;
+    return { kind: "none" };
   const returned = returnPendingSandboxSend(send.id);
   if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
-    return;
+    return returned;
   // A task that never came to be: its start-task draft holds the message.
   if (send.request.kind === "fork" || returned.kind === "landing-draft") {
-    return;
+    return returned;
   }
   if (input.restage) {
     const key = newConversationSurfaceKey(send.epicId);
@@ -2457,6 +2568,7 @@ function endSendBackToComposer(input: {
     hostId: null,
     modelPickerHarnessId: input.modelPickerHarnessId,
   });
+  return returned;
 }
 
 /**

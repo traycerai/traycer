@@ -467,9 +467,6 @@ function SandboxDefaultsForm(props: {
             />
           ) : null}
         </Button>
-        <span className="text-ui-xs text-muted-foreground">
-          New sandboxes take these; sandboxes you already have keep theirs.
-        </span>
       </div>
     </form>
   );

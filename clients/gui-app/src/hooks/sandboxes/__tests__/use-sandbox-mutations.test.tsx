@@ -223,7 +223,7 @@ describe("useSandboxAutomationOpen", () => {
       settled: true,
     });
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -248,7 +248,7 @@ describe("useSandboxAutomationOpen", () => {
       settled: false,
     });
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -264,7 +264,7 @@ describe("useSandboxAutomationOpen", () => {
       refusal(503, "provider_unavailable"),
     );
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -287,7 +287,7 @@ describe("useSandboxAutomationOpen", () => {
       settled: true,
     });
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -329,7 +329,7 @@ describe("useSandboxAutomationOpen", () => {
         settled: true,
       });
       const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -350,7 +350,7 @@ describe("useSandboxAutomationOpen", () => {
         settled: false,
       });
       const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -370,7 +370,7 @@ describe("useSandboxAutomationOpen", () => {
         settled: true,
       });
       const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -392,7 +392,7 @@ describe("useSandboxAutomationOpen", () => {
       );
       signInAs("user-a");
       const { wrapper, queryClient } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -419,7 +419,7 @@ describe("useSandboxAutomationOpen", () => {
   it("fails with a sign-in message, calling nothing, when no one is signed in", async () => {
     state.binding = null;
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
     await act(async () => {
