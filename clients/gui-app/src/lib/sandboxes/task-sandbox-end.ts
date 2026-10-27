@@ -33,7 +33,7 @@ function taskSandboxEndCause(end: TaskSandboxEnd): string {
 
 /** The same end and timestamp drive the footer and task-authorized Details. */
 export function taskSandboxEndLine(name: string, end: TaskSandboxEnd): string {
-  const when = `${endDate.format(end.destroyedAt)} at ${endTime.format(end.destroyedAt)}`;
+  const when = `${endDate.format(end.destroyedAt)} at ${endTime.format(end.destroyedAt)} UTC`;
   const cause = taskSandboxEndCause(end);
   const by = end.actor === null ? "" : ` ${cause}`;
   const after = end.actor === null && cause.length > 0 ? ` ${cause}` : "";

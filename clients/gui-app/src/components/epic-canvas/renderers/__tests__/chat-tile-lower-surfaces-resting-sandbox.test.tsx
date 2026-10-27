@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { domAnimation, LazyMotion } from "motion/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { OpenChatQueuedPromptItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PICKED_SETTINGS } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 
@@ -21,6 +21,7 @@ const composerProps = vi.hoisted(
       hint: string | null | undefined;
       editingQueueItemId: string | null;
       canCancelEdit: boolean;
+      hasWorkspaceControls: boolean;
     }>,
 );
 vi.mock("@/components/chat/composer/chat-composer", () => ({
@@ -29,12 +30,14 @@ vi.mock("@/components/chat/composer/chat-composer", () => ({
     readonly sendDisabledHint: string | null | undefined;
     readonly editingQueueItemId: string | null;
     readonly onCancelQueueEdit: (() => void) | undefined;
+    readonly workspaceControls: ReactNode;
   }) => {
     composerProps.push({
       sendDisabled: props.sendDisabled,
       hint: props.sendDisabledHint,
       editingQueueItemId: props.editingQueueItemId,
       canCancelEdit: typeof props.onCancelQueueEdit === "function",
+      hasWorkspaceControls: props.workspaceControls !== null,
     });
     return <div data-testid="composer-stub" />;
   },
@@ -161,7 +164,7 @@ function props(
       onSubmitMessage: () => false,
       onSideChat: () => false,
       onSettingsChange: null,
-      workspaceControls: null,
+      workspaceControls: <div data-testid="host-workspace-selector" />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
@@ -196,6 +199,7 @@ function interviewState(
 
 const FRESH_ACCESS = {
   isViewer: false,
+  isCopy: false,
   canAct: false,
   readOnlyNotice: null,
 } as const;
@@ -218,40 +222,60 @@ describe("the composer of a chat on a resting sandbox", () => {
     );
 
     expect(screen.getByTestId("composer-stub")).toBeTruthy();
-    expect(lastComposer()).toMatchObject({ sendDisabled: false, hint: null });
+    expect(lastComposer()).toMatchObject({
+      sendDisabled: false,
+      hint: null,
+      hasWorkspaceControls: true,
+    });
   });
 
   it("still blocks the same non-viewer's send without a resting sandbox", () => {
     render(<ChatLowerInteractionSurfaces {...props(FRESH_ACCESS, null)} />);
 
-    expect(lastComposer()?.sendDisabled).toBe(true);
+    expect(lastComposer()).toMatchObject({
+      sendDisabled: true,
+      hasWorkspaceControls: true,
+    });
     expect(lastComposer()?.hint).not.toBeNull();
   });
 
-  it("mounts the composer for a viewer-shaped chat on a resting sandbox", () => {
-    render(
-      <ChatLowerInteractionSurfaces
-        {...props(
-          {
-            isViewer: true,
-            canAct: false,
-            readOnlyNotice: null,
-            restingSandbox: true,
-          },
-          null,
-        )}
-      />,
-    );
+  it.each([false, true])(
+    "keeps a resting copy's send enabled without live workspace controls (viewer: %s)",
+    (isViewer) => {
+      render(
+        <ChatLowerInteractionSurfaces
+          {...props(
+            {
+              isViewer,
+              isCopy: true,
+              canAct: false,
+              readOnlyNotice: null,
+              restingSandbox: true,
+            },
+            null,
+          )}
+        />,
+      );
 
-    expect(screen.getByTestId("composer-stub")).toBeTruthy();
-    expect(lastComposer()?.sendDisabled).toBe(false);
-  });
+      expect(screen.getByTestId("composer-stub")).toBeTruthy();
+      expect(lastComposer()).toMatchObject({
+        sendDisabled: false,
+        hint: null,
+        hasWorkspaceControls: false,
+      });
+    },
+  );
 
   it("keeps a viewer's read-only surface, with no composer, when the sandbox is not resting", () => {
     render(
       <ChatLowerInteractionSurfaces
         {...props(
-          { isViewer: true, canAct: false, readOnlyNotice: null },
+          {
+            isViewer: true,
+            isCopy: false,
+            canAct: false,
+            readOnlyNotice: null,
+          },
           null,
         )}
       />,
@@ -290,7 +314,10 @@ describe("the composer of a chat on a resting sandbox", () => {
     };
     render(
       <ChatLowerInteractionSurfaces
-        {...props({ ...FRESH_ACCESS, restingSandbox: true }, editing)}
+        {...props(
+          { ...FRESH_ACCESS, isCopy: true, restingSandbox: true },
+          editing,
+        )}
       />,
     );
 
@@ -298,6 +325,7 @@ describe("the composer of a chat on a resting sandbox", () => {
       editingQueueItemId: "queue-edit-1",
       sendDisabled: true,
       canCancelEdit: true,
+      hasWorkspaceControls: false,
     });
     expect(lastComposer()?.hint).not.toBeNull();
   });

@@ -675,7 +675,7 @@ describe("sandbox end footer", () => {
         expect(reason).toContain(
           `e2e-sbx-stop3 was destroyed ${phrase.startsWith("by") ? `${phrase} on` : "on"}`,
         );
-        expect(reason).toContain("Oct 27 at 06:21");
+        expect(reason).toContain("Oct 27 at 06:21 UTC");
         expect(reason).toContain(phrase);
         expect(reason).toContain(FILES);
         expect(reason).not.toContain("isn't available");
@@ -688,7 +688,7 @@ describe("sandbox end footer", () => {
     expect(
       publishedChatLockReason({ ...PUBLISHED, sandboxEnd: END }),
     ).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 after its resting period. Its files are gone; this chat stays readable.",
+      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period. Its files are gone; this chat stays readable.",
     );
   });
 

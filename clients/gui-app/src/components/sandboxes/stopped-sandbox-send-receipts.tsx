@@ -1,5 +1,12 @@
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { use, useCallback, useEffect, useMemo, type ReactNode } from "react";
+import {
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
@@ -187,12 +194,11 @@ function StoppedReceiptOwner(props: {
     busy: pending,
     onRetry: start,
   });
-  return (
-    <ReturnedSendReceipt
-      {...props}
-      startSandbox={{ start, pending, failure }}
-    />
+  const startSandbox = useMemo(
+    () => ({ start, pending, failure }),
+    [start, pending, failure],
   );
+  return <ReturnedSendReceipt {...props} startSandbox={startSandbox} />;
 }
 
 function ReturnedSendReceipt(props: {
@@ -332,17 +338,28 @@ function ReturnedSendReceipt(props: {
     ),
     [receipt, openDraft, startSandbox],
   );
+  const onToastDismissRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     if (props.tabId !== null || obsolete) return;
     const id = `sandbox-stopped:${receipt.id}`;
-    toast(content, {
-      id,
-      duration: Infinity,
-      onDismiss: () => dismissReceipt(receipt.id),
-    });
+    let active = true;
+    onToastDismissRef.current = () => {
+      if (active) dismissReceipt(receipt.id);
+    };
     return () => {
+      // Sonner can deliver this lifetime's dismissal after a new toast opens.
+      active = false;
+      onToastDismissRef.current = undefined;
       toast.dismiss(id);
     };
+  }, [props.tabId, obsolete, receipt.id]);
+  useEffect(() => {
+    if (props.tabId !== null || obsolete) return;
+    toast(content, {
+      id: `sandbox-stopped:${receipt.id}`,
+      duration: Infinity,
+      onDismiss: onToastDismissRef.current,
+    });
   }, [content, props.tabId, obsolete, receipt.id]);
   return obsolete || props.tabId === null ? null : content;
 }

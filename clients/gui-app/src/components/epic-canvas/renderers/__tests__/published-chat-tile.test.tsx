@@ -1632,7 +1632,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
 
     const text = screen.getByTestId("chat-tile-session-view").textContent;
     expect(text).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 after its resting period. Its files are gone; this chat stays readable.",
+      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period. Its files are gone; this chat stays readable.",
     );
     expect(text).not.toContain("owner-host-1");
     expect(text).not.toContain("offline");
