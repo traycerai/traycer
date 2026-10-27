@@ -582,12 +582,13 @@ describe("<BotChannelView /> the channel's typing line", () => {
     );
   });
 
-  it("names the step the trunk's turn has in flight", async () => {
-    const step = commandActivityLabel("Reading the CI log");
+  it("never names the step the trunk's turn has in flight", async () => {
+    const step = commandActivityLabel("gh run view --log-failed");
     await mountAwaitingDirectReply(replying("request-1", step));
 
     const strip = await screen.findByTestId("bot-channel-replying");
-    expect(within(strip).getByText(`Tracy: ${step}`)).toBeTruthy();
+    expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("gh run view");
   });
 
   it("clears when the reply lands, though the trunk is still running", async () => {
@@ -667,7 +668,7 @@ describe("<BotChannelView /> the channel's typing line", () => {
 });
 
 describe("<BotChannelView /> a thread's typing line", () => {
-  it("shows on the closed thread's line, and moves to the panel once the thread is open", async () => {
+  it("shows on the closed thread's line, and moves to the panel once the thread is open, never naming the step", async () => {
     const user = userEvent.setup();
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: false, resolvedAt: null })],
@@ -675,7 +676,12 @@ describe("<BotChannelView /> a thread's typing line", () => {
     mountChannel([threadSummary()]);
     emitActivity({
       trunk: null,
-      threads: { [THREAD_ID]: replying("request-1", null) },
+      threads: {
+        [THREAD_ID]: replying(
+          "request-1",
+          commandActivityLabel("gh run view --log-failed"),
+        ),
+      },
     });
 
     const line = await screen.findByTestId("bot-thread-line");
@@ -693,6 +699,7 @@ describe("<BotChannelView /> a thread's typing line", () => {
     const strip = await within(panel).findByTestId("bot-thread-replying-strip");
     expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-replying")).toBeNull();
+    expect(document.body.textContent).not.toContain("gh run view");
   });
 });
 
