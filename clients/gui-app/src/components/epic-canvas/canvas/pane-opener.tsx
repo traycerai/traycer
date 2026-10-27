@@ -48,6 +48,13 @@ import {
 } from "@/lib/commands/sources/open/search-target";
 import { isFilesResultSubpageId } from "@/lib/commands/sources/open/files-result-subpage";
 import type { CommandContext } from "@/lib/commands/types";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
 
 export interface PaneOpenerProps {
   readonly epicId: string;
@@ -62,6 +69,45 @@ export interface PaneOpenerProps {
 }
 
 export function PaneOpener(props: PaneOpenerProps) {
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  const stages = useStagedSandboxStore((state) => state.bySurface);
+  const hasContent = useEpicCanvasStore((state) =>
+    Object.values(
+      state.canvasByTabId[props.tabId]?.tilesByInstanceId ?? {},
+    ).some((tile) => tile.type !== "blank"),
+  );
+  const hasPendingMessage = usePendingSandboxSendStore((state) =>
+    Object.values(state.sends).some((send) => {
+      if (
+        send.epicId !== props.epicId ||
+        send.userId !== userId ||
+        send.request.kind !== "chat" ||
+        send.delivery !== null ||
+        send.ended === true
+      )
+        return false;
+      const placement = send.request.placement;
+      if (placement === null ? hasContent : placement.paneId !== props.groupId)
+        return false;
+      // A held Stop or uncertain dispatch still owns the pending message.
+      if (
+        send.stopRequested === true ||
+        (send.dispatch !== undefined && send.dispatch !== null)
+      )
+        return true;
+      const failure =
+        (stages[pendingSendSurfaceKey(send.id)] ?? send.stopStage)?.failure ??
+        null;
+      return failure === null || failure.kind === "timed-out";
+    }),
+  );
+  // The pending message already occupies this empty pane. Keep the opener's
+  // input and focus registration unmounted until the send releases it.
+  if (hasPendingMessage) return null;
+  return <AvailablePaneOpener {...props} />;
+}
+
+function AvailablePaneOpener(props: PaneOpenerProps) {
   const { epicId, tabId, groupId, active } = props;
   const router = useCommandPaletteRouter();
   const [query, setQuery] = useState("");
