@@ -4,10 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import type { CodexResetCredit } from "@/components/settings/panels/codex-reset-credit-model";
 import { useConsumeRateLimitResetCreditMutation } from "@/hooks/providers/use-consume-rate-limit-reset-credit-mutation";
-import {
-  useIsFarReset,
-  useResetCountdown,
-} from "@/lib/relative-time";
+import { useIsFarReset, useResetCountdown } from "@/lib/relative-time";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 function resetCreditDescription(
