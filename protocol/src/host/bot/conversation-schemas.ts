@@ -84,11 +84,40 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * otherwise; never set with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
+    /**
+     * `bot.conversation.send@1.1`: a retry. Re-delivers the post whose
+     * request is `requestId`, as it was, to the session it went to; no row
+     * is written and `text` is not read. The bound host refuses with
+     * `REQUEST_NOT_FAILED` unless that request is open and its session is
+     * failed or parked on it. `null` (or absent) for a new post.
+     */
+    redeliver: z
+      .object({ requestId: z.string().min(1).max(255) })
+      .nullable()
+      .default(null),
+    /**
+     * `bot.conversation.send@1.1`: the request of a failed post this one
+     * replaces (an edit sent again). The bound host resolves it as
+     * superseded, so it owes no answer; its row stays. `null` (or absent)
+     * otherwise; never set with `redeliver`.
+     */
+    supersedes: z.string().min(1).max(255).nullable().default(null),
   }),
 );
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
 >;
+
+/** The 1.0 request, frozen by hand: without `redeliver` and `supersedes`. */
+export const botConversationSendRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1).max(255),
+    text: z.string().min(1).max(100_000),
+    threadId: z.string().min(1).max(36).nullable().default(null),
+    announcementId: z.string().min(1).max(255).nullable().default(null),
+  }),
+);
 
 export const botConversationSendDeliverySchema = lazySchema(() =>
   z.enum(["written", "queued"]),

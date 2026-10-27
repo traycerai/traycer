@@ -23,6 +23,7 @@ import {
   botSubscribeClientFrameSchema,
   botSubscribeOpenRequestSchema,
   botSubscribeServerFrameSchema,
+  botSubscribeServerFrameSchemaV10,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -37,6 +38,7 @@ import {
   botConversationListRequestSchema,
   botConversationListResponseSchema,
   botConversationSendRequestSchema,
+  botConversationSendRequestSchemaV10,
   botConversationSendResponseSchema,
   botThreadListRequestSchema,
   botThreadListResponseSchema,
@@ -191,8 +193,32 @@ export const botConversationListV10 = defineRpcContract({
 export const botConversationSendV10 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botConversationSendRequestSchemaV10,
+  responseSchema: botConversationSendResponseSchema,
+});
+
+/**
+ * `bot.conversation.send@1.1` (T69): a send may retry a failed post
+ * (`redeliver`) or replace it (`supersedes`). A 1.0 request is a new post.
+ */
+export const botConversationSendV11 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botConversationSendRequestSchema,
   responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
+  typeof botConversationSendV10,
+  typeof botConversationSendV11
+>({
+  from: botConversationSendV10.schemaVersion,
+  to: botConversationSendV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    redeliver: null,
+    supersedes: null,
+  }),
+  upgradeResponse: (response) => response,
 });
 
 /**
@@ -246,6 +272,18 @@ export const botOnboardingCompleteV10 = defineRpcContract({
 export const botSubscribeV10 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV10,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.1` (T69): an activity entry says why its session is
+ * `failed` or `parked` (`reason`). A 1.0 subscriber's frames carry none.
+ */
+export const botSubscribeV11 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,

@@ -64,12 +64,14 @@ const IDLE: BotSessionActivity = {
   startedAt: null,
   step: null,
   requestId: null,
+  reason: null,
 };
 const REPLYING: BotSessionActivity = {
   state: "replying",
   startedAt: 5_000,
   step: "bun test",
   requestId: null,
+  reason: null,
 };
 
 /** The bot's subscription snapshot carrying `activity`, the row's one source of working. */

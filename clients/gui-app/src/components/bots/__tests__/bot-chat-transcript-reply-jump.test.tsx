@@ -266,6 +266,7 @@ function createReplyJumpStore(
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
+  failedRequest: () => null,
 };
 
 /** The member directory a mounted transcript reads; none by default. */
@@ -463,6 +464,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       openThread: null,
       openAnnouncementThread,
       chooseOption,
+      failedRequest: () => null,
       intro: { botTitle: "Release Bot", directive: null },
     };
   }
@@ -536,6 +538,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openThread: vi.fn(),
       openAnnouncementThread: vi.fn(),
       chooseOption,
+      failedRequest: () => null,
       intro: { botTitle: "Release Bot", directive: null },
     };
   }

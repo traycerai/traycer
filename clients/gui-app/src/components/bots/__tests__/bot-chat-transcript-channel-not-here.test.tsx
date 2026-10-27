@@ -110,6 +110,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   openThread: null,
   openAnnouncementThread: null,
   chooseOption: null,
+  failedRequest: () => null,
   intro: { botTitle: "Release Bot", directive: null },
 };
 
@@ -323,7 +324,11 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
   });
 
   it("leaves a thread's close to the thread's own view", () => {
-    mountTranscript({ kind: "thread", chooseOption: null });
+    mountTranscript({
+      kind: "thread",
+      chooseOption: null,
+      failedRequest: () => null,
+    });
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByTestId("chat-messages-stub")).toBeTruthy();

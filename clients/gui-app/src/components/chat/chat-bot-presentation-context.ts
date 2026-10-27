@@ -17,6 +17,23 @@ export interface ChatBotThreadLine {
 }
 
 /**
+ * What a member can do about a message the bot failed to answer: send it to
+ * the bot again as it is, and, on their own message, put its text back in
+ * the box to edit and send as a new message that replaces it.
+ */
+export interface ChatBotFailedRequest {
+  /** Sends it again; `text` is the message's own. */
+  readonly retry: (text: string) => void;
+  /** `true` while a retry of it is being sent. */
+  readonly retrying: boolean;
+  /**
+   * Puts `text`, the message's own, in the box that replaces it; `null` on
+   * a teammate's message, which only its writer can replace.
+   */
+  readonly edit: ((text: string) => void) | null;
+}
+
+/**
  * How a bot's channel or thread draws its rows (Tracy Bots, decision 41):
  * Slack's message layout - a picture, the sender's name and the time, then
  * the text - for members' messages and the bot's own rows alike, with a
@@ -75,6 +92,18 @@ export interface ChatBotPresentation {
    * nothing can post it.
    */
   readonly chooseOption: ((choice: string) => void) | null;
+  /**
+   * A member's message the bot failed to answer, by its request id and its
+   * writer: its Retry and Edit actions, offered while the session that
+   * failed or parked on it still holds it; `null` for any other request, and
+   * where nothing can.
+   */
+  readonly failedRequest:
+    | ((
+        requestId: string,
+        senderUserId: string | null,
+      ) => ChatBotFailedRequest | null)
+    | null;
 }
 
 export const ChatBotPresentationContext =

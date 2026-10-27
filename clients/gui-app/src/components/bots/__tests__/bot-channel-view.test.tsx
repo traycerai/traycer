@@ -82,7 +82,10 @@ const mocks = vi.hoisted(() => {
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => mocks.state.threadListSupported,
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
@@ -115,6 +118,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
     mutate: mocks.send,
     isPending: mocks.state.sending,
+    variables: { redeliver: null },
   }),
 }));
 vi.mock("@/lib/host-error-toast", () => ({
@@ -140,7 +144,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   >()),
   useChatSessionHandleForContainer: () => null,
 }));
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
 vi.mock("@/components/bots/bot-chat-transcript", () => ({
@@ -345,6 +350,7 @@ function mount(options: MountOptions): {
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenUnderTheHood={onOpenUnderTheHood}
+            onOpenTrunkUnderTheHood={vi.fn()}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -635,6 +641,8 @@ describe("<BotChannelView /> channel", () => {
       text: "Ship it",
       threadId: null,
       announcementId: null,
+      redeliver: null,
+      supersedes: null,
     });
   });
 
