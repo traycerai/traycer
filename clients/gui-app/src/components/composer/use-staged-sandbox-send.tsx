@@ -1,3 +1,4 @@
+import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
   useCallback,
   useEffect,
@@ -361,33 +362,49 @@ export function useStagedSandboxSend(input: {
     stage?.target.configuration.kind === "team",
   );
 
+  const stop = useCallback((): void => {
+    if (surfaceKey === null || stage === null) return;
+    const clearCurrentStage = (): void => {
+      if (
+        readStagedSandbox(surfaceKey)?.clientRequestId === stage.clientRequestId
+      )
+        useStagedSandboxStore.getState().clear(surfaceKey);
+    };
+    if (stage.createdSandboxId === null) clearCurrentStage();
+    else verb.mutate("stop", { onSuccess: clearCurrentStage });
+  }, [stage, surfaceKey, verb]);
+
   const line =
     surfaceKey === null || stage === null || facts === null ? null : (
-      <SandboxSetupLine
-        stage={stage}
-        name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
-        facts={facts}
-        actions={{
-          onKeepWaiting: () => runFromLine(false),
-          onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
-          onChooseAnotherHost: () =>
-            useStagedSandboxStore.getState().clear(surfaceKey),
-          onRetryCreation: () => runFromLine(true),
-          onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
-          onSendAgain,
-          onChangeShape: () => {
-            useStagedSandboxStore.getState().cancel(surfaceKey);
-            openStagedShapeSheet(surfaceKey);
-          },
-          onRetryApplying: newHost.onRetryApplying,
-          onStop: () => {
-            if (stage.createdSandboxId !== null) verb.mutate("stop");
-            useStagedSandboxStore.getState().clear(surfaceKey);
-          },
-          onOpenTerminal: newHost.onOpenTerminal,
-          onOpenProviders: providersOpener(stage.target.configuration),
-        }}
-      />
+      <>
+        <SandboxSetupLine
+          stage={stage}
+          name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
+          facts={facts}
+          actions={{
+            onKeepWaiting: () => runFromLine(false),
+            onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
+            onChooseAnotherHost: () =>
+              useStagedSandboxStore.getState().clear(surfaceKey),
+            onRetryCreation: () => runFromLine(true),
+            onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
+            onSendAgain,
+            onChangeShape: () => {
+              useStagedSandboxStore.getState().cancel(surfaceKey);
+              openStagedShapeSheet(surfaceKey);
+            },
+            onRetryApplying: newHost.onRetryApplying,
+            onStop: stop,
+            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenProviders: providersOpener(stage.target.configuration),
+          }}
+        />
+        <StagedStopFailure
+          stage={stage}
+          fallbackName={fallbackName}
+          onRetry={stop}
+        />
+      </>
     );
 
   return { intercept, line };

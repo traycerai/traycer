@@ -1,3 +1,7 @@
+import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
+import { sandboxMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   afterEach,
   beforeEach,
@@ -8,7 +12,11 @@ import {
   vi,
 } from "vitest";
 import { useEffect } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -67,6 +75,7 @@ import {
 import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
 
 const mocks = vi.hoisted(() => ({
+  runVerb: vi.fn<(verb: SandboxLifecycleVerb) => Promise<SandboxVerbOutcome>>(),
   /** The viewer and the catalogue the setup line's facts are read from. */
   user: null as AuthenticatedUser | null,
   catalogue: null as SandboxCatalogue | null,
@@ -163,7 +172,14 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
-  useSandboxVerb: () => ({ mutate: vi.fn() }),
+  useSandboxVerb: (sandboxId: string) =>
+    useMutation({
+      mutationKey: sandboxMutationKeys.verb(sandboxId),
+      mutationFn: mocks.runVerb,
+      onMutate: () => ({
+        userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+      }),
+    }),
 }));
 vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
   useConfigurationProvidersOpener: () => () => undefined,
@@ -288,6 +304,8 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
 }
 
 beforeEach(() => {
+  mocks.runVerb.mockReset();
+  mocks.runVerb.mockResolvedValue({ kind: "settled", state: "stopped" });
   mocks.user = null;
   mocks.catalogue = null;
   mocks.sandboxes = null;
@@ -387,6 +405,22 @@ describe("useStagedSandboxSend's setup line", () => {
       expect.objectContaining({ taskId: "epic-1" }),
       expect.any(Object),
     );
+  });
+
+  it("keeps the staged sandbox and visible remedies when its standalone Stop fails", async () => {
+    stageCreated("booting", null);
+    mocks.runVerb.mockRejectedValueOnce(new Error("Stop refused"));
+    mount(vi.fn());
+    fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toContain("Couldn't stop api-refactor");
+    expect(
+      within(failure).getByRole("button", { name: "Retry" }),
+    ).toBeDefined();
+    expect(
+      within(failure).getByRole("button", { name: "Details" }),
+    ).toBeDefined();
+    expect(readStagedSandbox(SURFACE)).not.toBeNull();
   });
 
   it("names the sandbox the send creates and counts as a stopwatch", () => {

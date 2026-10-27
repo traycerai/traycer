@@ -1,3 +1,12 @@
+import { StoppedSandboxSendReceiptStrip } from "@/components/sandboxes/stopped-sandbox-send-receipts";
+import {
+  stoppedReceiptPicks,
+  useStoppedSandboxSendReceiptStore,
+  type StoppedSandboxSendReceipt,
+} from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -123,16 +132,22 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
+  useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
   mocks.configuration = { kind: "personal" };
   useAuthStore.setState({
     status: "signed-in",
+    profile: { userId: "u1", userName: "Ada", email: "ada@example.test" },
     contextMetadata: { userId: "u1", username: "ada" },
   });
 });
 afterEach(() => {
   cleanup();
   closeSandboxDetails();
-  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useAuthStore.setState({
+    status: "signed-out",
+    contextMetadata: null,
+    profile: null,
+  });
 });
 
 interface VerbCase {
@@ -270,6 +285,84 @@ async function press(testCase: VerbCase): Promise<HTMLElement> {
 }
 
 describe("sandbox row operations", () => {
+  it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
+    const testCase = CASES.find((entry) => entry.verb === "start");
+    if (testCase === undefined) throw new Error("Expected the Start case");
+    const { answer, binding, client, main } = setup(testCase);
+    await screen.findByRole("region", { name: "build-box" });
+    useNewConversationModalStore.getState().setContent("receipt-epic", {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "keep this draft" }],
+        },
+      ],
+    });
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        "receipt-epic"
+      ]?.draftId ?? null;
+    const receipt: StoppedSandboxSendReceipt = {
+      id: "receipt",
+      kind: "stopped",
+      sandboxId: main.id,
+      name: main.displayName,
+      confirmedAt: Date.now() + 60_000,
+      userId: "u1",
+      epicId: "receipt-epic",
+      returned: {
+        kind: "task",
+        epicId: "receipt-epic",
+        parentId: null,
+        placement: null,
+        draftId,
+      },
+      existingSendIds: new Set(),
+      picks: stoppedReceiptPicks(
+        "receipt-epic",
+        useSurfaceHostSelectionStore.getState().selections,
+        useStagedSandboxStore.getState().bySurface,
+      ),
+    };
+    useStoppedSandboxSendReceiptStore.setState({ receipts: { receipt } });
+    render(
+      <QueryClientProvider client={client}>
+        <StoppedSandboxSendReceiptStrip epicId="receipt-epic" tabId="tab" />
+      </QueryClientProvider>,
+    );
+    const strip = screen.getByTestId("sandbox-stopped-line");
+    await userEvent.click(within(strip).getByRole("button", { name: "Start" }));
+    await act(async () => {
+      answer.resolve({
+        ...refusal(402, "insufficient_credit"),
+        shortfallMc: 210,
+        creditSource: "personal",
+      });
+      await answer.promise;
+    });
+    const alert = await within(strip).findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't start build-box");
+    expect(
+      within(alert).getByRole("button", { name: "Add credits ↗" }),
+    ).toBeDefined();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        "receipt-epic"
+      ]?.draftId,
+    ).toBe(draftId);
+    binding.auth.runSandboxVerb.mockResolvedValue({
+      kind: "ok",
+      settled: true,
+      state: "awake",
+    });
+    await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull(),
+    );
+    expect(toastFromAuthError).not.toHaveBeenCalled();
+  });
+
   it.each<{ source: SandboxCreditSource; pot: string }>([
     { source: "team-allowance", pot: "your pool-e2e-fixture allowance is" },
     { source: "team", pot: "your pool-e2e-fixture credits are" },

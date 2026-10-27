@@ -97,7 +97,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   }),
 }));
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => () => testState.stagedNotice,
+  useStagedSendSignInCheck: () => ({
+    check: () => testState.stagedNotice,
+    beforeSend: () => Promise.resolve(testState.stagedNotice),
+  }),
 }));
 
 vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => {
@@ -787,7 +790,7 @@ describe("new-conversation modal refusals at Send", () => {
     expect(openProviders).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a staged send when its requested agent is not offered, before any create or wake", () => {
+  it("refuses a staged send when its requested agent is not offered, before any create or wake", async () => {
     const chooseModel = vi.fn();
     testState.stagedNotice = refusal(
       chooseModel,
@@ -803,7 +806,9 @@ describe("new-conversation modal refusals at Send", () => {
       testState.bodySubmit?.();
     });
 
-    expect(screen.getByTestId("composer-host-notice").textContent).toContain(
+    expect(
+      (await screen.findByTestId("composer-host-notice")).textContent,
+    ).toContain(
       "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
     );
     expect(testState.createChat).not.toHaveBeenCalled();
@@ -821,7 +826,7 @@ describe("new-conversation modal refusals at Send", () => {
     expect(chooseModel).toHaveBeenCalledTimes(1);
   });
 
-  it("hands the same staged send over when the agent is signed in", () => {
+  it("hands the same staged send over when the agent is signed in", async () => {
     renderModal();
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
@@ -832,9 +837,11 @@ describe("new-conversation modal refusals at Send", () => {
     });
 
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
-    expect(
-      Object.keys(usePendingSandboxSendStore.getState().sends),
-    ).toHaveLength(1);
+    await waitFor(() =>
+      expect(
+        Object.keys(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1),
+    );
   });
 });
 
@@ -1004,7 +1011,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(testState.onSubmitted).not.toHaveBeenCalled();
   });
 
-  it("hands the send to this task and closes, though this host's workspace folder is unresolved", () => {
+  it("hands the send to this task and closes, though this host's workspace folder is unresolved", async () => {
     // The sandbox starts empty: the chip reads Empty sandbox and the
     // workspace controls are hidden.
     testState.workspaceReady = false;
@@ -1019,7 +1026,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
 
     expect(testState.createChat).not.toHaveBeenCalled();
     expect(testState.intercepts).toBe(0);
-    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(testState.onSubmitted).toHaveBeenCalledTimes(1));
     expect(onlyPendingSend()).toMatchObject({
       epicId: "epic-1",
       request: { kind: "chat", parentId: null, placement: null },
@@ -1058,7 +1065,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     ["a new sandbox", NEW_SANDBOX],
   ] as const)(
     "sends to %s on the model the person picked, not the one the toolbar shows",
-    (_label, target) => {
+    async (_label, target) => {
       renderModal();
       act(() => {
         useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, target);
@@ -1068,11 +1075,13 @@ describe("new-conversation modal's send on a staged sandbox", () => {
         testState.bodySubmit?.();
       });
 
-      expect(onlyPendingSend().settings).toMatchObject({
-        harnessId: "codex",
-        model: "gpt-6.1-sol",
-        reasoningEffort: "high",
-      });
+      await waitFor(() =>
+        expect(onlyPendingSend().settings).toMatchObject({
+          harnessId: "codex",
+          model: "gpt-6.1-sol",
+          reasoningEffort: "high",
+        }),
+      );
     },
   );
 

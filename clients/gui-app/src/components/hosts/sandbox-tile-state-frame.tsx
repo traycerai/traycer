@@ -6,6 +6,8 @@ import {
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { cn } from "@/lib/utils";
 import { useIsMutating } from "@tanstack/react-query";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -213,7 +215,7 @@ function SandboxTileOverlayLayer(props: {
             <p className="font-medium text-foreground">{overlay.message}</p>
             {summary !== null ? (
               <SandboxTileWakeButton
-                sandboxId={summary.id}
+                summary={summary}
                 verb={overlay.verb}
                 label={overlay.label}
               />
@@ -273,29 +275,41 @@ function SandboxTileRowMissing(): ReactNode {
 }
 
 function SandboxTileWakeButton(props: {
-  readonly sandboxId: string;
+  readonly summary: SandboxSummary;
   readonly verb: SandboxLifecycleVerb;
   readonly label: string;
 }): ReactNode {
-  const verb = useSandboxVerb(props.sandboxId);
-  const operation = useSandboxOperation(props.sandboxId);
+  const verb = useSandboxVerb(props.summary.id);
+  const operation = useSandboxOperation(props.summary.id);
   const pending = operation?.kind === "pending";
   return (
-    <Button
-      type="button"
-      size="sm"
-      disabled={pending}
-      data-testid="sandbox-tile-overlay-wake"
-      onClick={() => verb.mutate(props.verb)}
-    >
-      {pending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
-      {props.label}
-    </Button>
+    <>
+      <Button
+        type="button"
+        size="sm"
+        disabled={pending}
+        data-testid="sandbox-tile-overlay-wake"
+        onClick={() => verb.mutate(props.verb)}
+      >
+        {pending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        {props.label}
+      </Button>
+      <SandboxOperationFailure
+        sandboxId={props.summary.id}
+        hostId={props.summary.hostId}
+        name={props.summary.displayName}
+        operation={operation?.verb === "destroy" ? null : operation}
+        busy={pending}
+        onRetry={(pressed) => {
+          if (pressed !== "destroy") verb.mutate(pressed);
+        }}
+      />
+    </>
   );
 }

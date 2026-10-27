@@ -10,6 +10,7 @@
  *
  * Real hooks and the real host directory; only the host reads are answered.
  */
+import type { QueryObserverResult } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -55,6 +56,12 @@ const answers = vi.hoisted(() => ({
   providers: undefined as ReadonlyArray<unknown> | undefined,
   catalogue: undefined as SandboxCatalogue | undefined,
   user: null as AuthenticatedUser | null,
+  refetchUser:
+    vi.fn<
+      () => Promise<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >
+    >(),
   catalogueError: false,
   catalogueFetching: false,
   refetchCatalogue: vi.fn<() => Promise<unknown>>(),
@@ -77,7 +84,7 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://billing.test" }),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
-  useAuthUser: () => ({ data: answers.user }),
+  useAuthUser: () => ({ data: answers.user, refetch: answers.refetchUser }),
 }));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://billing.test",
@@ -163,6 +170,8 @@ const PACKS_INSTALLED: ReadonlyArray<ProviderCliState> = [
 
 beforeEach(() => {
   answers.user = null;
+  answers.refetchUser.mockReset();
+  answers.refetchUser.mockResolvedValue({ data: null, isError: false });
   answers.harnesses = CODEX_SIGNED_OUT;
   answers.providers = PACKS_INSTALLED;
   answers.catalogue = undefined;
@@ -459,11 +468,53 @@ function checkFor(harnessId: "codex" | "claude" | null) {
       onOpenTerminalInstead: answers.onOpenTerminalInstead,
       onChooseAnotherHost: answers.onChooseAnotherHost,
     }),
-  ).result.current;
+  ).result.current.check;
 }
 
+const QUOTED_CATALOGUE: SandboxCatalogue = {
+  offeredAgents: ["codex"],
+  providers: [
+    {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 102400,
+        diskDefaultMb: 20480,
+      },
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      shapes: null,
+      dockerInGuest: true,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [
+        {
+          id: "us-east",
+          label: "US East",
+          fromPriceMcPerHour: {
+            awakeMc: 210,
+            suspendedMc: 1,
+            stoppedMc: 1,
+          },
+          pricing: null,
+        },
+      ],
+    },
+  ],
+};
+
 describe("useStagedSendSignInCheck", () => {
-  it("refuses a short team allowance in the existing staged-send gate and keeps the stage", () => {
+  it("shows the advisory short allowance in the existing staged-send gate and keeps the stage", () => {
     answers.user = userWith(
       userSubscription({
         totalPlanCredits: 100,
@@ -474,48 +525,7 @@ describe("useStagedSendSignInCheck", () => {
       }),
       [teamSubscription(0)],
     );
-    const catalogue: SandboxCatalogue = {
-      offeredAgents: ["codex"],
-      providers: [
-        {
-          provider: "tensorlake",
-          os: ["linux"],
-          shape: {
-            cpuMin: 1,
-            cpuMax: 16,
-            cpuStep: 1,
-            memoryPerCpuMinMb: 1024,
-            memoryPerCpuMaxMb: 8192,
-            memoryMinMb: 1024,
-            memoryMaxMb: 65536,
-            memoryStepMb: 512,
-            diskMinMb: 10240,
-            diskMaxMb: 102400,
-            diskDefaultMb: 20480,
-          },
-          suspendFidelity: "memory",
-          stoppedStorage: "snapshot",
-          wakeClass: "resume",
-          shapes: null,
-          dockerInGuest: true,
-          creatable: true,
-          notCreatableReason: null,
-          regions: [
-            {
-              id: "us-east",
-              label: "US East",
-              fromPriceMcPerHour: {
-                awakeMc: 210,
-                suspendedMc: 1,
-                stoppedMc: 1,
-              },
-              pricing: null,
-            },
-          ],
-        },
-      ],
-    };
-    answers.catalogue = catalogue;
+    answers.catalogue = QUOTED_CATALOGUE;
     const stage = stageIn({ kind: "team", teamId: "team-1", teamName: "Acme" });
     const notice = checkFor("codex")(stage);
     expect(notice).toMatchObject({
@@ -528,6 +538,45 @@ describe("useStagedSendSignInCheck", () => {
     ]);
     expect(readStagedSandbox("surface")).toBe(stage);
   });
+
+  it.each([false, true])(
+    "uses a fresh allowance at Send: still short=%s",
+    async (stillShort) => {
+      const user = (credits: number): AuthenticatedUser =>
+        userWith(
+          userSubscription({
+            totalPlanCredits: 100,
+            consumedFromPlan: 0,
+            bonusCredits: 0,
+            consumedFromBonus: 0,
+            bundleRemaining: 0,
+          }),
+          [teamSubscription(credits)],
+        );
+      answers.catalogue = QUOTED_CATALOGUE;
+      answers.user = user(stillShort ? 10 : 0);
+      answers.refetchUser.mockResolvedValue({
+        data: user(stillShort ? 0 : 10),
+        isError: false,
+      });
+      const stage = stageIn({
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+      });
+      const gate = renderHook(() =>
+        useStagedSendSignInCheck({ harnessId: "codex", active: true }),
+      ).result.current;
+      const refusal = await gate.beforeSend(stage);
+      if (stillShort)
+        expect(refusal?.message).toBe(
+          "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+        );
+      else expect(refusal).toBeNull();
+      expect(answers.refetchUser).toHaveBeenCalledOnce();
+      expect(readStagedSandbox("surface")).toBe(stage);
+    },
+  );
 
   it("refuses a picked agent the sandbox launch catalogue does not offer", () => {
     answers.catalogue = { providers: [], offeredAgents: ["traycer"] };

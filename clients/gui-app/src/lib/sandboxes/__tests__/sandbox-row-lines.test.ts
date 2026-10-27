@@ -29,6 +29,7 @@ import {
   sandboxStartedByLabel,
   sandboxSupportReferenceLine,
   type SandboxRowAction,
+  type SandboxPageConfiguration,
   sandboxTodayCost,
   formatSandboxDate,
 } from "@/lib/sandboxes/sandbox-row-lines";
@@ -832,7 +833,12 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
 });
 
 describe("team payer copy", () => {
-  const team = { kind: "team", teamId: "team-a", teamName: "Acme" } as const;
+  const team: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-a",
+    teamName: "Acme",
+    environmentId: null,
+  };
   const summary = sandboxSummaryFixture({
     state: "awake",
     wakePayer: { userId: "payer", displayName: "Priya" },
