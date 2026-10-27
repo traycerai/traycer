@@ -150,7 +150,7 @@ function renderSection(input: {
 }
 
 describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
-  it("states native-config-only scope applies to native config/MCP, not chat turns", () => {
+  it("states the variables are used to set Cursor up, not when it runs", () => {
     // Cursor is the production carrier of this scope, but the copy must be
     // driven by the descriptor — not by providerId === "cursor".
     renderSection({
@@ -160,7 +160,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
 
     expect(
       screen.getByText(
-        /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
+        "Used when Traycer sets Cursor up, not when Cursor runs.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/each time it starts/)).toBeNull();
@@ -173,9 +173,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     });
 
     expect(
-      screen.getByText(
-        /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
-      ),
+      screen.getByText("Used when Traycer sets Codex up, not when Codex runs."),
     ).toBeTruthy();
     expect(screen.queryByText(/each time it starts/)).toBeNull();
   });

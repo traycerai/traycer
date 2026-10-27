@@ -176,9 +176,8 @@ export function ProviderEnvOverridesSection({
           </div>
           {envOverrideScope === "native-config-only" ? (
             <p className="text-ui-xs text-muted-foreground">
-              Applied to native configuration operations, such as MCP setup, but
-              not chat turns. Use Unset to drop a variable inherited from your
-              shell.
+              Used when Traycer sets {providerName} up, not when {providerName}{" "}
+              runs.
             </p>
           ) : (
             <p className="text-ui-xs text-muted-foreground">
