@@ -916,7 +916,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "composer.suggestion.accept",
     label: "Accept suggested reply",
     description:
-      "Fill the empty composer with the suggested reply shown as its placeholder. The message is not sent.",
+      "Fill the empty composer with the suggested reply it is showing. The message is not sent.",
     category: "app",
     kind: "chord",
     // A bare →, the inline-autosuggestion convention. It is only consulted
