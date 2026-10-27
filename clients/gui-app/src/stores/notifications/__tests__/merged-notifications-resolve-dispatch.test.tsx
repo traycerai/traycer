@@ -182,8 +182,11 @@ function chatDone(entryId: string): HostNotificationsCloudFeedRow {
 }
 
 /** A feed as an opened session for the signed-in account holds it. */
-function applyCloudFeed(entryIds: ReadonlyArray<string>): void {
-  useCloudNotificationsStore.setState({ accountId: "user-a" });
+function applyCloudFeed(
+  entryIds: ReadonlyArray<string>,
+  accountId: string,
+): void {
+  useCloudNotificationsStore.setState({ accountId });
   useCloudNotificationsStore.getState().applySnapshot({
     rows: entryIds.map((entryId) =>
       entryId === CHAT_ID || entryId === CHAT_ID_SECOND
@@ -395,7 +398,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
     resetCloudEntityReadDriver();
     useCloudNotificationsStore.getState().reset();
     useCloudNotificationsStore.setState(localWrites);
-    applyCloudFeed([NOTICE_ID, CHAT_ID]);
+    applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
   });
 
   afterEach(() => {
@@ -450,7 +453,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
 
       act(() => {
         useCloudNotificationsStore.getState().reset();
-        applyCloudFeed([OTHER_ID]);
+        applyCloudFeed([OTHER_ID], "user-a");
       });
       act(() => {
         dispatchCase.invoke(actions, row);
@@ -481,7 +484,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
 
         act(() => {
           useCloudNotificationsStore.getState().reset();
-          applyCloudFeed([NOTICE_ID, CHAT_ID]);
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
         });
         act(() => {
           dispatchCase.invoke(actions, row);
@@ -504,13 +507,46 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
 
         act(() => {
           useCloudNotificationsStore.getState().reset();
-          applyCloudFeed([NOTICE_ID, CHAT_ID]);
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
         });
         act(() => {
           dispatchCase.invoke(actions, row);
         });
 
         expectNoCloudDispatch(subject);
+      });
+    }
+
+    if (dispatchCase.kind === "per-entry") {
+      it("refuses A's retained gesture after B's complete feed replacement", () => {
+        const subject = renderSubject(dispatchCase.feedId);
+        const { actions, row } = subject.current();
+        act(() => {
+          signInAs("user-b");
+          useCloudNotificationsStore.getState().reset();
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-b");
+        });
+        act(() => dispatchCase.invoke(actions, row));
+        expectNoCloudDispatch(subject);
+        expect(hostRequestMock).not.toHaveBeenCalled();
+      });
+
+      it("allows B's own gesture after B's complete feed replacement", async () => {
+        const subject = renderSubject(dispatchCase.feedId);
+        act(() => {
+          signInAs("user-b");
+          useCloudNotificationsStore.getState().reset();
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-b");
+        });
+        const { actions, row } = subject.current();
+        act(() => dispatchCase.invoke(actions, row));
+        await waitFor(() => {
+          expect(hostRequestMock).toHaveBeenCalledWith(
+            dispatchCase.rpcMethod,
+            dispatchCase.rpcParams,
+          );
+        });
+        await waitFor(() => expect(subject.queryClient.isMutating()).toBe(0));
       });
     }
 
@@ -765,7 +801,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
           name: "the cloud session is replaced",
           apply: (): void => {
             useCloudNotificationsStore.getState().reset();
-            applyCloudFeed([NOTICE_ID, CHAT_ID]);
+            applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
           },
         },
       ])(
@@ -796,7 +832,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
 
         act(() => {
           useCloudNotificationsStore.getState().reset();
-          applyCloudFeed([NOTICE_ID, CHAT_ID]);
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
         });
         act(() => {
           invoke(actions);
@@ -846,7 +882,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
       await entered;
       act(() => {
         useCloudNotificationsStore.getState().reset();
-        applyCloudFeed([NOTICE_ID, CHAT_ID]);
+        applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
       });
       releaseMark();
       await waitFor(() => {
@@ -884,7 +920,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
         }
         replaced = true;
         useCloudNotificationsStore.getState().reset();
-        applyCloudFeed([NOTICE_ID, CHAT_ID]);
+        applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
         for (const write of Object.values(localWrites)) write.mockClear();
       });
       const subject = renderSubjectWith(
@@ -927,7 +963,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
   describe("entity read expansion", () => {
     it("stops after the first row when the session is replaced mid-expansion", async () => {
       useCloudNotificationsStore.getState().reset();
-      applyCloudFeed([NOTICE_ID, CHAT_ID, CHAT_ID_SECOND]);
+      applyCloudFeed([NOTICE_ID, CHAT_ID, CHAT_ID_SECOND], "user-a");
       let firstStarted: () => void = () => undefined;
       const started = new Promise<void>((resolve) => {
         firstStarted = resolve;
@@ -960,7 +996,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
       await started;
       act(() => {
         useCloudNotificationsStore.getState().reset();
-        applyCloudFeed([NOTICE_ID, CHAT_ID, CHAT_ID_SECOND]);
+        applyCloudFeed([NOTICE_ID, CHAT_ID, CHAT_ID_SECOND], "user-a");
       });
       for (const write of Object.values(localWrites)) write.mockClear();
       completeFirst();
@@ -1014,7 +1050,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
         name: "the cloud session is replaced",
         apply: (): void => {
           useCloudNotificationsStore.getState().reset();
-          applyCloudFeed([NOTICE_ID, CHAT_ID]);
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
         },
       },
     ];
@@ -1056,7 +1092,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
         perEntryReplayAllowed: false,
         apply: () => {
           useCloudNotificationsStore.getState().reset();
-          applyCloudFeed([OTHER_ID]);
+          applyCloudFeed([OTHER_ID], "user-a");
         },
       },
       {
@@ -1064,7 +1100,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
         perEntryReplayAllowed: true,
         apply: () => {
           useCloudNotificationsStore.getState().reset();
-          applyCloudFeed([NOTICE_ID, CHAT_ID]);
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
         },
       },
       {
@@ -1072,6 +1108,15 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
         perEntryReplayAllowed: false,
         apply: () => {
           signInAs("user-b");
+        },
+      },
+      {
+        name: "B's complete feed replaces A's queued gesture",
+        perEntryReplayAllowed: false,
+        apply: () => {
+          signInAs("user-b");
+          useCloudNotificationsStore.getState().reset();
+          applyCloudFeed([NOTICE_ID, CHAT_ID], "user-b");
         },
       },
       {

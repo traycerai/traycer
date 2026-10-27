@@ -258,9 +258,10 @@ interface CloudFeedMutationContext {
   readonly accountId: string | null;
 }
 
-/** Shared with onMutate, but populated only when the RPC actually dispatches.
- * Awaited lifecycle callbacks can span a replacement session. */
 interface CloudFeedMutationScope {
+  /** The gesture owner survives queued dispatch and hook option updates. */
+  readonly originatingAccountId: string | null;
+  /** Shared with onMutate, but populated only at the actual RPC dispatch. */
   current: CloudFeedMutationContext | null;
 }
 
@@ -882,13 +883,14 @@ function cloudAuthorizedNow(): boolean {
   return authorizesCloudCapability(useAuthStore.getState().status);
 }
 
-/** Rows still belong to their opening account during an identity change's
- * commit/effect gap, even for a newly rendered action in the incoming account. */
-function cloudFeedAuthorizedNow(): boolean {
+/** The gesture and current feed must both belong to the live account.
+ * Checking the feed owner also closes an identity change's commit/effect gap. */
+function cloudFeedAuthorizedNow(originatingAccountId: string | null): boolean {
   const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
   return (
     cloudAuthorizedNow() &&
     accountId !== null &&
+    originatingAccountId === accountId &&
     useCloudNotificationsStore.getState().accountId === accountId
   );
 }
@@ -916,6 +918,9 @@ function hostOriginWriteAuthorized(): boolean {
 }
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
+  const originatingAccountId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
   const feedMode = useNotificationFeedMode();
   // See `HeldNotificationFeedModeResult.settling`: partition-dependent unary
   // calls wait while a held `cloud` host is re-negotiating.
@@ -929,9 +934,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     liveFeedModeSettling.current = feedModeSettling;
   }, [feedMode, feedModeSettling]);
   const canMutateCloudEntry = useCallback(
-    (entryId: string): boolean =>
+    (entryId: string, accountId: string | null): boolean =>
       liveFeedMode.current === "cloud" &&
-      cloudFeedAuthorizedNow() &&
+      cloudFeedAuthorizedNow(accountId) &&
       useCloudNotificationsStore.getState().rows[
         cloudNotificationFeedId(entryId)
       ] !== undefined,
@@ -1086,7 +1091,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     (context: CloudFeedMutationContext | null): boolean =>
       context !== null &&
       liveFeedMode.current === "cloud" &&
-      cloudFeedAuthorizedNow() &&
+      cloudFeedAuthorizedNow(context.accountId) &&
       client?.getActiveHostId() === context.hostId &&
       useCloudNotificationsStore.getState().sessionEpoch ===
         context.sessionEpoch &&
@@ -1109,7 +1114,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           "host.notifications.cloudFeed.markRead",
         );
       }
-      if (!canMutateCloudEntry(variables.entryId)) {
+      if (
+        !canMutateCloudEntry(
+          variables.entryId,
+          variables.mutationContext.originatingAccountId,
+        )
+      ) {
         throw new NotificationFeedChangedError(
           "host.notifications.cloudFeed.markRead",
         );
@@ -1142,7 +1152,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     client,
     method: "host.notifications.cloudFeed.resolve",
     mapVariables: (variables) => {
-      if (!canMutateCloudEntry(variables.entryId)) {
+      if (
+        !canMutateCloudEntry(
+          variables.entryId,
+          variables.mutationContext.originatingAccountId,
+        )
+      ) {
         throw new NotificationFeedChangedError(
           "host.notifications.cloudFeed.resolve",
         );
@@ -1183,7 +1198,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         !isCurrentFeed(variables.feed) ||
         liveFeedMode.current !== "cloud" ||
         liveFeedModeSettling.current ||
-        !cloudFeedAuthorizedNow()
+        !cloudFeedAuthorizedNow(variables.mutationContext.originatingAccountId)
       ) {
         throw new NotificationFeedChangedError(
           "host.notifications.cloudFeed.markAllRead",
@@ -1226,7 +1241,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     client,
     method: "host.notifications.cloudFeed.clear",
     mapVariables: (variables) => {
-      if (!canMutateCloudEntry(variables.entryId)) {
+      if (
+        !canMutateCloudEntry(
+          variables.entryId,
+          variables.mutationContext.originatingAccountId,
+        )
+      ) {
         throw new NotificationFeedChangedError(
           "host.notifications.cloudFeed.clear",
         );
@@ -1263,7 +1283,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         !isCurrentFeed(variables.feed) ||
         liveFeedMode.current !== "cloud" ||
         liveFeedModeSettling.current ||
-        !cloudFeedAuthorizedNow()
+        !cloudFeedAuthorizedNow(variables.mutationContext.originatingAccountId)
       ) {
         throw new NotificationFeedChangedError(
           "host.notifications.cloudFeed.clearAll",
@@ -1665,7 +1685,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (
           row.source !== "cloud" ||
           !isActionableNotice(row) ||
-          !canMutateCloudEntry(row.sourceId)
+          !canMutateCloudEntry(row.sourceId, originatingAccountId)
         )
           return;
         // The action has already succeeded. Retire immediately even while
@@ -1675,7 +1695,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           .resolveNoticeLocally(row.sourceId, Date.now());
         cloudResolve.mutate({
           entryId: row.sourceId,
-          mutationContext: { current: null },
+          mutationContext: { originatingAccountId, current: null },
         });
       },
       markAsRead: (target) => {
@@ -1697,7 +1717,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (parsed.source === "cloud") {
           if (
             typeof target === "string" ||
-            !canMutateCloudEntry(parsed.sourceId)
+            !canMutateCloudEntry(parsed.sourceId, originatingAccountId)
           )
             return;
           useCloudNotificationsStore
@@ -1706,7 +1726,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           cloudMarkRead.mutate({
             entryId: target.sourceId,
             bulkFeed: null,
-            mutationContext: { current: null },
+            mutationContext: { originatingAccountId, current: null },
           });
           return;
         }
@@ -1780,7 +1800,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           }
           // The cloud leg, and only it, is gated on the live verdict: the
           // lanes above are local state and the host plane.
-          if (!cloudFeedAuthorizedNow()) return;
+          if (!cloudFeedAuthorizedNow(originatingAccountId)) return;
           if (cloudConnectionState !== "connected" || cloudVersion === null) {
             return;
           }
@@ -1806,12 +1826,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
               if (!isCurrentCloudMutation(fallbackContext)) return;
               // Re-read per entry: this loop outlives the click by one
               // round-trip per row, which is longer than a demotion takes.
-              if (!canMutateCloudEntry(entryId)) return;
+              if (!canMutateCloudEntry(entryId, originatingAccountId)) return;
               try {
                 await cloudMarkRead.mutateAsync({
                   entryId,
                   bulkFeed: renderedFeed,
-                  mutationContext: { current: null },
+                  mutationContext: { originatingAccountId, current: null },
                 });
               } catch {
                 // Each per-entry marker is independent and idempotent. A
@@ -1825,7 +1845,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             .mutateAsync({
               observedVersion: cloudVersion,
               feed: renderedFeed,
-              mutationContext: { current: null },
+              mutationContext: { originatingAccountId, current: null },
             })
             .then(async (result) => {
               if (result.status === "unsupported") {
@@ -1866,7 +1886,10 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         }
       },
       markEntityAsRead: (originHostId, entity) => {
-        if (liveFeedMode.current !== "cloud" || !cloudFeedAuthorizedNow()) {
+        if (
+          liveFeedMode.current !== "cloud" ||
+          !cloudFeedAuthorizedNow(originatingAccountId)
+        ) {
           return;
         }
         const consumptionFeed = captureCurrentFeed();
@@ -1876,18 +1899,19 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // serializes per entry the way `markAllAsRead` does.
         requestCloudEntityRead(originHostId, entity, {
           isActive: () =>
-            isCurrentFeed(consumptionFeed) && cloudFeedAuthorizedNow(),
+            isCurrentFeed(consumptionFeed) &&
+            cloudFeedAuthorizedNow(originatingAccountId),
           markRead: async (entryId) => {
             // Thrown rather than skipped: the driver records a resolved
             // `markRead` as done, and a withdrawn verdict is not done - it is
             // a retry once the session is verified again.
-            if (!canMutateCloudEntry(entryId)) {
+            if (!canMutateCloudEntry(entryId, originatingAccountId)) {
               throw new Error("cloud feed entry unavailable");
             }
             const result = await cloudMarkRead.mutateAsync({
               entryId,
               bulkFeed: consumptionFeed,
-              mutationContext: { current: null },
+              mutationContext: { originatingAccountId, current: null },
             });
             // `unavailable` is a refusal, not a transport failure - the
             // mutation resolves, so the driver has to be told explicitly or it
@@ -1901,11 +1925,14 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         });
       },
       clear: (row) => {
-        if (row.source !== "cloud" || !canMutateCloudEntry(row.sourceId))
+        if (
+          row.source !== "cloud" ||
+          !canMutateCloudEntry(row.sourceId, originatingAccountId)
+        )
           return;
         cloudClear.mutate({
           entryId: row.sourceId,
-          mutationContext: { current: null },
+          mutationContext: { originatingAccountId, current: null },
         });
       },
       clearAll: () => {
@@ -1973,7 +2000,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           });
         }
         if (feedMode !== "cloud" || cloudVersion === null) return;
-        if (!cloudFeedAuthorizedNow()) return;
+        if (!cloudFeedAuthorizedNow(originatingAccountId)) return;
         // Send the version of the snapshot the user is LOOKING AT, not
         // whatever the cloud head has reached by the time this lands. The
         // fan-out then covers exactly the rows on screen, and an entry that
@@ -1982,7 +2009,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         cloudClearAll.mutate({
           observedVersion: cloudVersion,
           feed: renderedFeed,
-          mutationContext: { current: null },
+          mutationContext: { originatingAccountId, current: null },
         });
       },
       loadMoreHost: () => {
@@ -2069,6 +2096,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       captureCurrentFeed,
       renderedFeed,
       canMutateCloudEntry,
+      originatingAccountId,
       cloudConnectionState,
       captureCloudMutationContext,
       isCurrentCloudMutation,
