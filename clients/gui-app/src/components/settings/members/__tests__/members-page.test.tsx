@@ -267,7 +267,7 @@ describe("MembersPage members read", () => {
     });
 
     expect(await screen.findByText("Ada · you")).toBeTruthy();
-    expect(screen.getByText("Priya · u-priya@acme.test")).toBeTruthy();
+    expect(screen.getByText("Priya")).toBeTruthy();
     expect(screen.getByText("Grace")).toBeTruthy();
     expect(screen.getByText("u-noname@acme.test")).toBeTruthy();
     expect(screen.getByText("u-admin@acme.test")).toBeTruthy();
@@ -445,7 +445,7 @@ describe("MembersPage offboarding previews", () => {
     await userEvent.click(
       within(
         await screen
-          .findByText("Priya · u-priya@acme.test")
+          .findByText("Priya")
           .then(() => rowOf("u-priya")),
       ).getByRole("button", { name: "Remove" }),
     );
@@ -493,7 +493,7 @@ describe("MembersPage offboarding previews", () => {
       wrapper: harness.Wrapper,
     });
 
-    await screen.findByText("Priya Shah · u-priya@acme.test");
+    await screen.findByText("Priya Shah");
     await userEvent.click(
       within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
     );
@@ -501,14 +501,16 @@ describe("MembersPage offboarding previews", () => {
     await within(dialog).findByTestId("members-remove-preview-table");
     expect(
       within(dialog).getByRole("heading", {
-        name: "Remove Priya Shah from Acme",
+        name: "Remove Priya Shah (u-priya@acme.test) from Acme",
       }),
     ).toBeTruthy();
     expect(
       within(dialog).getByTestId("members-remove-confirm").textContent,
     ).toBe("Remove Priya");
     expect(dialog.textContent).toContain("Priya Shah's work now");
-    expect(dialog.textContent).not.toContain("u-priya");
+    expect(
+      within(dialog).getByTestId("members-remove-preview-table").textContent,
+    ).not.toContain("u-priya@acme.test");
   });
 
   it("names a member with no name by email everywhere, and shows None. rows and null work as no count", async () => {
@@ -801,7 +803,7 @@ describe("MembersPage pending removal", () => {
       wrapper: harness.Wrapper,
     });
 
-    await screen.findByText("Priya · u-priya@acme.test");
+    await screen.findByText("Priya");
     await userEvent.click(
       within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
     );
@@ -861,7 +863,7 @@ describe("MembersPage pending removal", () => {
       wrapper: harness.Wrapper,
     });
 
-    await screen.findByText("Priya · u-priya@acme.test");
+    await screen.findByText("Priya");
     await userEvent.click(
       within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
     );
@@ -882,7 +884,7 @@ describe("MembersPage pending removal", () => {
 
     phase = "committed";
     await act(() => harness.queryClient.invalidateQueries());
-    expect(await screen.findByText("Grace · u-grace@acme.test")).toBeTruthy();
+    expect(await screen.findByText("Grace")).toBeTruthy();
     expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("pending");
     expect(screen.getByText("Acme · 2 people")).toBeTruthy();
 
@@ -901,7 +903,7 @@ describe("MembersPage refused writes", () => {
   const LAST_ADMIN_LINE = "Promote another admin first.";
 
   async function openRemoveDialog(): Promise<HTMLElement> {
-    await screen.findByText("Priya · u-priya@acme.test");
+    await screen.findByText("Priya");
     await userEvent.click(
       within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
     );

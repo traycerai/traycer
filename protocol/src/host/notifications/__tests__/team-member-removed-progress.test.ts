@@ -77,7 +77,7 @@ describe("a removal's per-host progress", () => {
 
   it("counts a host once all three facts have arrived", () => {
     expect(removalBody([ALL_DONE, ALL_DONE])).toBe(
-      "Sam • Acme • 2 of 2 hosts done",
+      "Sam is no longer in Acme.",
     );
   });
 });
@@ -90,9 +90,9 @@ describe("the notice told to the person removed", () => {
     });
   });
 
-  it("keeps the admins' progress line when the row is not the removed member's", () => {
+  it("names the removed member in the admins' completed row", () => {
     expect(removalPresentation([ALL_DONE], false).body).toBe(
-      "Sam • Acme • 1 of 1 hosts done",
+      "Sam is no longer in Acme.",
     );
   });
 });
