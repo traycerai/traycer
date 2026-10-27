@@ -1618,6 +1618,50 @@ describe("chat find projection", () => {
     expect(countOccurrences(rowSearchText(row), "app")).toBe(2);
   });
 
+  it("uses the unsplit message key for find units when the transcript is not split", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(34, "assistant"),
+      segments: [
+        {
+          id: "assistant-text-before",
+          kind: "text",
+          markdown: "before",
+          isStreaming: false,
+        },
+        {
+          id: "assistant-text-after",
+          kind: "text",
+          markdown: "after",
+          isStreaming: false,
+        },
+      ],
+    };
+    const split = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+      splitLongTurns: true,
+    })[0];
+    const unsplit = buildChatFindRows(
+      [assistant],
+      TILE_INSTANCE_ID,
+      new Set(),
+      {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+        splitLongTurns: false,
+      },
+    )[0];
+    const splitUnit = split.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("assistant-text-after"),
+    );
+    const unsplitUnit = unsplit.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("assistant-text-after"),
+    );
+
+    expect(splitUnit?.rowKey).toBe(`${assistant.id}#assistant-text-after`);
+    expect(unsplitUnit?.rowKey).toBeUndefined();
+  });
+
   // Guard the fix's exception: a synthesized single-special-segment row
   // (setup-card / forked-chat-link) renders that segment's OWN anchor and no
   // content block, so the projection must keep emitting the segment unit.

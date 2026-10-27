@@ -11,7 +11,10 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import {
   applyIndexChange,
   applyRangeResponse,
@@ -84,6 +87,13 @@ function model(id: string): ChatMessageModel {
     sessionAnchor: null,
     steerBadge: null,
   };
+}
+
+function textSegment(
+  id: string,
+  markdown: string,
+): Extract<MessageSegment, { kind: "text" }> {
+  return { id, kind: "text", markdown, isStreaming: false };
 }
 
 function modelWithPersistentMessageId(
@@ -2682,5 +2692,80 @@ describe("visibleOrdinalRange", () => {
       fromOrdinal: 0,
       toOrdinal: 4,
     });
+  });
+
+  it("keeps split assistant parts on one ordinal and appends new part keys", () => {
+    const turnId = "assistant-turn-parts";
+    const firstSegments = [
+      textSegment("text-0", "first block"),
+      textSegment("text-1", "second block"),
+    ];
+    const firstMessage = { ...model(turnId), segments: firstSegments };
+    const window = windowOf({
+      rowCount: 3,
+      spans: [span(1, [turnId])],
+      skeleton: [
+        skeletonEntry("before"),
+        skeletonEntry(turnId),
+        skeletonEntry("after"),
+      ],
+      skeletonComplete: true,
+      invalidated: false,
+    });
+    const expand = (message: ChatMessageModel): readonly TranscriptListRow[] =>
+      transcriptListRows({ window, rendered: [message], splitLongTurns: true });
+    const firstRows = expand(firstMessage);
+    const firstParts = firstRows.filter(
+      (row): row is Extract<TranscriptListRow, { kind: "hydrated" }> =>
+        row.kind === "hydrated",
+    );
+    expect(firstParts.map((row) => row.key)).toEqual([
+      turnId,
+      `${turnId}#text-1`,
+    ]);
+    expect(firstParts.map((row) => row.ordinal)).toEqual([1, 1]);
+    expect(firstParts[0]?.model).toBe(firstMessage);
+    expect(firstParts[0]?.part).toEqual({ index: 0, count: 2 });
+
+    const laterPartIndex = firstRows.findIndex(
+      (row) => row.kind === "hydrated" && row.key === `${turnId}#text-1`,
+    );
+    expect(
+      visibleOrdinalRange(firstRows, laterPartIndex, laterPartIndex + 1),
+    ).toEqual({ fromOrdinal: 1, toOrdinal: 2 });
+
+    // Editing the current text block preserves every existing key; a later
+    // text block adds one key after them without rekeying either part.
+    const grownText = expand({
+      ...firstMessage,
+      segments: [
+        firstSegments[0],
+        textSegment("text-1", "second block with more streamed text"),
+      ],
+    });
+    const grownKeys = grownText
+      .filter((row) => row.kind === "hydrated")
+      .map((row) => row.key);
+    expect(grownKeys).toEqual(firstParts.map((row) => row.key));
+
+    const appended = expand({
+      ...firstMessage,
+      segments: [...firstSegments, textSegment("text-2", "third block")],
+    });
+    expect(
+      appended.filter((row) => row.kind === "hydrated").map((row) => row.key),
+    ).toEqual([...grownKeys, `${turnId}#text-2`]);
+
+    const unsplit = transcriptListRows({
+      window,
+      rendered: [firstMessage],
+      splitLongTurns: false,
+    }).filter(
+      (row): row is Extract<TranscriptListRow, { kind: "hydrated" }> =>
+        row.kind === "hydrated",
+    );
+    expect(unsplit.map((row) => ({ key: row.key, part: row.part }))).toEqual([
+      { key: turnId, part: null },
+    ]);
   });
 });

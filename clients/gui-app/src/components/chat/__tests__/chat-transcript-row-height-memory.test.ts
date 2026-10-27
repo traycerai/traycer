@@ -56,6 +56,28 @@ describe("chat transcript row height memory", () => {
     expect(memory.placeholderHeight(row)).toBe(4100);
   });
 
+  it("estimates the missing share when only a later part has been measured", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const row = entry({
+      rowId: "split-row",
+      role: "assistant",
+      byteLength: 8000,
+    });
+    memory.observeSkeleton([row]);
+
+    memory.recordMeasuredHeight({
+      rowId: row.rowId,
+      partIndex: 1,
+      partCount: 2,
+      ordinal: 0,
+      height: 700,
+    });
+
+    // With no complete-row evidence, the whole-row estimate is capped at
+    // 320px. The missing half reserves 160px beside the measured later part.
+    expect(memory.placeholderHeight(row)).toBe(860);
+  });
+
   it("scales the estimate for an unseen row by the error it has observed", () => {
     const memory = createChatTranscriptRowHeightMemory();
     const measured = assistantRows(4);
@@ -150,6 +172,198 @@ describe("chat transcript row height memory", () => {
     memory.observeSkeleton([...measured, unseen]);
 
     expect(memory.placeholderHeight(unseen)).toBe(561);
+  });
+
+  it("waits for every part before backfilled rows calibrate or enter the average", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const rows = assistantRows(4);
+    const unseen = entry({
+      rowId: "later",
+      role: "assistant",
+      byteLength: 8000,
+    });
+
+    // A hydrated tail can report its part sizes before the skeleton arrives.
+    rows.forEach((row, ordinal) => {
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partIndex: 0,
+        partCount: 2,
+        ordinal,
+        height: 561,
+      });
+    });
+    expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
+    expect(memory.placeholderHeight(null)).toBe(120);
+
+    memory.observeSkeleton([...rows, unseen]);
+
+    // Backfill sees four partial rows, not four calibration samples or exact
+    // row heights.
+    expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
+    expect(memory.placeholderHeight(null)).toBe(120);
+
+    rows.forEach((row, ordinal) => {
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partIndex: 1,
+        partCount: 2,
+        ordinal,
+        height: 561,
+      });
+    });
+
+    // Completion makes each 1122px total exact and supplies the four samples
+    // needed for the unseen row's factor and the unknown-row average.
+    expect(memory.placeholderHeight(rows[0])).toBe(1122);
+    expect(memory.placeholderHeight(unseen)).toBe(1122);
+    expect(memory.placeholderHeight(null)).toBe(1122);
+  });
+
+  it("withdraws complete-row calibration and average when the part count grows", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const rows = assistantRows(4);
+    const unseen = entry({
+      rowId: "later",
+      role: "assistant",
+      byteLength: 8000,
+    });
+    memory.observeSkeleton([...rows, unseen]);
+
+    rows.forEach((row, ordinal) => {
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partIndex: 0,
+        partCount: 1,
+        ordinal,
+        height: 561,
+      });
+    });
+    expect(memory.placeholderHeight(unseen)).toBe(561);
+    expect(memory.placeholderHeight(null)).toBe(561);
+
+    rows.forEach((row, ordinal) => {
+      // The measured sum stays 561, but the new second slot has not reported.
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partIndex: 0,
+        partCount: 2,
+        ordinal,
+        height: 561,
+      });
+    });
+
+    expect(memory.placeholderHeight(rows[0])).toBe(721);
+    expect(memory.placeholderHeight(unseen)).toBe(UNCALIBRATED);
+    expect(memory.placeholderHeight(null)).toBe(120);
+
+    rows.forEach((row, ordinal) => {
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partIndex: 1,
+        partCount: 2,
+        ordinal,
+        height: 561,
+      });
+    });
+
+    // Finishing the newly appended slots restores exact whole-row evidence.
+    expect(memory.placeholderHeight(rows[0])).toBe(1122);
+    expect(memory.placeholderHeight(unseen)).toBe(1122);
+    expect(memory.placeholderHeight(null)).toBe(1122);
+  });
+
+  it("does not let an incomplete tall part raise the calibrated ceiling", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const complete = assistantRows(4);
+    const partial = entry({
+      rowId: "partial-tall",
+      role: "assistant",
+      byteLength: 8000,
+    });
+    const unseen = entry({
+      rowId: "later-long",
+      role: "assistant",
+      byteLength: 100_000,
+    });
+    memory.observeSkeleton([...complete, partial, unseen]);
+
+    complete.forEach((row, ordinal) => {
+      memory.recordMeasuredHeight({
+        rowId: row.rowId,
+        partIndex: 0,
+        partCount: 1,
+        ordinal,
+        height: 561,
+      });
+    });
+    memory.recordMeasuredHeight({
+      rowId: partial.rowId,
+      partIndex: 0,
+      partCount: 2,
+      ordinal: 4,
+      height: 5000,
+    });
+
+    // The four complete rows establish a 0.25 factor, whose long-row estimate
+    // is above 3200px. The 5000px partial part is not evidence to raise that
+    // ceiling, so the calibrated placeholder remains at 3200px.
+    expect(memory.placeholderHeight(unseen)).toBe(3200);
+    expect(memory.placeholderHeight(null)).toBe(561);
+  });
+
+  it("prunes dropped parts on shrink and replaces a reused slot", () => {
+    const memory = createChatTranscriptRowHeightMemory();
+    const rows = assistantRows(4);
+    const unseen = entry({
+      rowId: "later-longer",
+      role: "assistant",
+      byteLength: 16_000,
+    });
+    const row = rows[0];
+    memory.observeSkeleton([...rows, unseen]);
+
+    rows.forEach((measuredRow, ordinal) => {
+      for (const [partIndex, height] of [100, 200, 300].entries()) {
+        memory.recordMeasuredHeight({
+          rowId: measuredRow.rowId,
+          partIndex,
+          partCount: 3,
+          ordinal,
+          height,
+        });
+      }
+    });
+    expect(memory.placeholderHeight(row)).toBe(600);
+    expect(memory.placeholderHeight(unseen)).toBe(1188);
+    expect(memory.placeholderHeight(null)).toBe(600);
+
+    // Slot 2 is dropped when the turn redraws with two parts. Slot 1 remains
+    // valid; the complete-only unknown average and role factor now include
+    // this row's corrected 300px total.
+    memory.recordMeasuredHeight({
+      rowId: row.rowId,
+      partIndex: 0,
+      partCount: 2,
+      ordinal: 0,
+      height: 100,
+    });
+    expect(memory.placeholderHeight(row)).toBe(300);
+    expect(memory.placeholderHeight(unseen)).toBe(1040);
+    expect(memory.placeholderHeight(null)).toBe(525);
+
+    // A same-count report replaces the retained slot instead of adding it a
+    // second time, and updates both pooled estimates from the new total.
+    memory.recordMeasuredHeight({
+      rowId: row.rowId,
+      partIndex: 1,
+      partCount: 2,
+      ordinal: 0,
+      height: 250,
+    });
+    expect(memory.placeholderHeight(row)).toBe(350);
+    expect(memory.placeholderHeight(unseen)).toBe(1064);
+    expect(memory.placeholderHeight(null)).toBe(538);
   });
 
   it("counts a row once however many times the skeleton is re-observed", () => {

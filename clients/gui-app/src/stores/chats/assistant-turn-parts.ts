@@ -73,27 +73,6 @@ export interface TranscriptRowPart {
 }
 
 /**
- * Interned so a row rebuilt per streaming token hands the same part object
- * back, and the row components' `memo` boundary is not invalidated by it.
- */
-const partsByCount = new Map<number, readonly TranscriptRowPart[]>();
-
-export function transcriptRowPart(
-  index: number,
-  count: number,
-): TranscriptRowPart {
-  let parts = partsByCount.get(count);
-  if (parts === undefined) {
-    parts = Array.from({ length: count }, (_unused, at) => ({
-      index: at,
-      count,
-    }));
-    partsByCount.set(count, parts);
-  }
-  return parts[index];
-}
-
-/**
  * Whether this segment draws an item of its own whatever the reader's settings
  * and whatever line the chat negotiated - see the module doc for why the
  * answer has to be settings-blind.

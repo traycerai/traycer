@@ -80,6 +80,17 @@ export function queryMountedChatMessageRoot(
   return null;
 }
 
+/** Resolve the mounted list item for one part, using selector-safe comparison. */
+export function queryMountedChatRowRoot(
+  scroller: ParentNode,
+  rowKey: string,
+): HTMLElement | null {
+  for (const row of scroller.querySelectorAll<HTMLElement>("[data-row-key]")) {
+    if (row.dataset.rowKey === rowKey) return row;
+  }
+  return null;
+}
+
 /**
  * Every mounted list item of one message, in document order.
  *

@@ -20,7 +20,6 @@ import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-ass
 import {
   assistantTurnPartCuts,
   assistantTurnPartKey,
-  transcriptRowPart,
   type TranscriptRowPart,
 } from "@/stores/chats/assistant-turn-parts";
 
@@ -1454,7 +1453,7 @@ function expandAssistantTurnParts(
         key: assistantTurnPartKey(row.key, cuts, part),
         ordinal: row.ordinal,
         model: row.model,
-        part: transcriptRowPart(part, count),
+        part: { index: part, count },
       });
     }
   }

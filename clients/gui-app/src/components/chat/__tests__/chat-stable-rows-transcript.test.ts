@@ -56,7 +56,7 @@ function hydrated(
   key: string,
   ordinal: number,
   message: ChatMessageModel,
-): TranscriptListRow {
+): Extract<TranscriptListRow, { kind: "hydrated" }> {
   return { kind: "hydrated", key, ordinal, model: message, part: null };
 }
 
@@ -153,6 +153,64 @@ describe("stable transcript list rows", () => {
 
     expect(next.result[0]).not.toBe(previous.result[0]);
     expect(next.result[1]).toBe(previous.result[1]);
+  });
+
+  it("reuses a split row when a newly allocated part descriptor has equal values", () => {
+    const message = model("turn", "");
+    const row = {
+      ...hydrated("turn", 2, message),
+      part: { index: 0, count: 2 },
+    };
+    const previous = computeStableTranscriptListRows(
+      [row],
+      EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
+    );
+    const next = computeStableTranscriptListRows(
+      [{ ...row, part: { index: 0, count: 2 } }],
+      previous,
+    );
+
+    // The same list item is handed back through structural sharing; part
+    // descriptor identity is not a cache contract.
+    expect(next.result[0]).toBe(previous.result[0]);
+  });
+
+  it("does not reuse a split row whose part index changed under its key", () => {
+    const message = model("turn", "");
+    const previous = computeStableTranscriptListRows(
+      [
+        {
+          ...hydrated("turn#text-1", 2, message),
+          part: { index: 1, count: 2 },
+        },
+      ],
+      EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
+    );
+    const next = computeStableTranscriptListRows(
+      [
+        {
+          ...hydrated("turn#text-1", 2, message),
+          part: { index: 0, count: 2 },
+        },
+      ],
+      previous,
+    );
+
+    expect(next.result[0]).not.toBe(previous.result[0]);
+  });
+
+  it("does not reuse a split row whose part count changed", () => {
+    const message = model("turn", "");
+    const previous = computeStableTranscriptListRows(
+      [{ ...hydrated("turn", 2, message), part: { index: 0, count: 2 } }],
+      EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
+    );
+    const next = computeStableTranscriptListRows(
+      [{ ...hydrated("turn", 2, message), part: { index: 0, count: 3 } }],
+      previous,
+    );
+
+    expect(next.result[0]).not.toBe(previous.result[0]);
   });
 });
 
