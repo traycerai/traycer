@@ -19,6 +19,7 @@ import {
   promotePreview,
   restorePreview,
   renameArtifact,
+  replaceTab,
   resizeSplit,
   setActivePane,
   setActiveTab,
@@ -1725,5 +1726,59 @@ describe("adoptHostTerminalProjection", () => {
         adoptHostTerminalProjection(state, TEST_HOST_ID, changed),
       ).not.toBe(state);
     }
+  });
+});
+
+describe("replaceTab (a published copy giving way to its live chat)", () => {
+  it("puts the replacement in the old tab's slot, active and in its history place", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    state = setActiveTab(state, rootPane(state).id, SPEC_B.instanceId);
+    const paneId = rootPane(state).id;
+
+    const next = replaceTab(state, paneId, SPEC_B.instanceId, CHAT_A);
+
+    expectCanvasInvariants(next);
+    const pane = rootPane(next);
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, CHAT_A.id, SPEC_C.id]);
+    expect(pane.activeTabId).toBe(CHAT_A.instanceId);
+    expect(pane.activationHistory[0]).toBe(CHAT_A.instanceId);
+    expect(next.tilesByInstanceId[SPEC_B.instanceId]).toBeUndefined();
+  });
+
+  it("closes the old tab and focuses the open one when the replacement is already open under its host", () => {
+    let state = openPinned(createEmptyCanvas(), CHAT_A);
+    state = splitPaneEmpty(state, rootPane(state).id, "horizontal");
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const secondPaneId = state.activePaneId;
+    state = openTileInPane(state, secondPaneId, SPEC_A, {
+      mode: "permanent",
+      index: null,
+    });
+    // `openTileInPane` mints the tab's instance, so read it off the pane.
+    const [specInstanceId] = paneById(state, secondPaneId).tabInstanceIds;
+
+    const next = replaceTab(state, secondPaneId, specInstanceId, {
+      ...CHAT_A,
+      instanceId: "inst-chat-a-second",
+    });
+
+    expectCanvasInvariants(next);
+    // One chat tab, under its original instance; the pane the replaced tab
+    // emptied is gone and the surviving pane is the active one.
+    expect(
+      collectPanes(next.root).map((pane) => paneTabIds(next, pane)),
+    ).toEqual([[CHAT_A.id]]);
+    expect(next.tilesByInstanceId[CHAT_A.instanceId]).toBe(CHAT_A);
+    expect(next.activePaneId).toBe(rootPane(next).id);
+  });
+
+  it("is a no-op for an instance that is not a tab of the pane", () => {
+    const state = openPinned(createEmptyCanvas(), SPEC_A);
+
+    expect(replaceTab(state, rootPane(state).id, "inst-missing", CHAT_A)).toBe(
+      state,
+    );
   });
 });

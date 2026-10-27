@@ -61,6 +61,22 @@ import {
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import type { PublishedChatSessionHandle } from "@/lib/chats/published-chat-session";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import {
+  recordHostOlderThanDataRefusal,
+  resetHostOlderThanDataRefusalsForTests,
+} from "@/lib/chats/host-older-than-data-refusals";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 
 // A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
 // ever reads `.data` and `.isPending` off this query, and hand-building a
@@ -691,7 +707,7 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     // server declining this viewer the row) even after the owner is back
     // online, so the lock reason must say so honestly instead of repeating
     // the "which is offline" sentence past the point it stopped being true.
-    expect(view.textContent).toContain("not available live from this device");
+    expect(view.textContent).toContain("which lives on Ada's Mac");
     expect(view.textContent).not.toContain("which is offline");
   });
 
@@ -1316,6 +1332,218 @@ describe("PublishedChatTile - offline owner recovery", () => {
     view.rerender(tile(true, true));
     await waitFor(() => {
       expect(statusCalls()).toHaveLength(1);
+    });
+  });
+});
+
+/**
+ * The copy converting ITSELF into the live tile, against the REAL canvas
+ * store and a REAL open-epic session: the tile kind is chosen once at the
+ * tap, so a copy opened while the owner was away used to stay a copy for the
+ * tab's life with no way out but close-and-reopen. The decision is the
+ * sidebar row's own, re-run from inside the tile, plus the proof the row does
+ * not have: the epic's record for this chat under this owner host.
+ */
+describe("PublishedChatTile - conversion to the live tile", () => {
+  const TAB_ID = "tab-1";
+  const EPIC_ID = "epic-1";
+  const REACHABLE_OWNER: MockHostReachability = {
+    status: "reachable",
+    hostLabel: "Ada's Mac",
+  };
+  /** A witness that has heard nothing: its presence is all the hook reads. */
+  const WITNESS: RetainingChatServingWitness = {
+    verdictFor: () => "unknown",
+    subscribe: () => () => undefined,
+    retain: () => () => undefined,
+    reopen: () => undefined,
+    servingFor: () => null,
+  };
+  const noopStreamClientFactory: EpicStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    applyArtifactRoomUpdate: () => undefined,
+    artifactRoomAwareness: () => undefined,
+    retryMigration: () => undefined,
+    close: () => undefined,
+  });
+  let session: OpenedStoreForTest;
+
+  /** The epic's record for the copy's chat, persisted under `hostId`. */
+  function seedChatRecord(hostId: string): void {
+    const chat: ChatProjection = {
+      id: NODE.chatId,
+      title: NODE.name,
+      parentId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      userId: NODE.ownerUserId,
+      ownedByViewer: true,
+      hostId,
+      isTitleEditedByUser: false,
+      docResident: null,
+      settings: null,
+      archivedAt: null,
+    };
+    session.store.setState({
+      chats: { allIds: [chat.id], byId: { [chat.id]: chat } },
+    });
+  }
+
+  /** Opens the copy as a tab the way a row does; returns its pane. */
+  function openPublishedTab(node: PublishedChatTileRef): string {
+    const store = useEpicCanvasStore.getState();
+    store.openEpicTabWithId(TAB_ID, EPIC_ID, "Epic");
+    store.openTileInTab(TAB_ID, node);
+    const root = useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.root;
+    if (root === undefined || root === null) {
+      throw new Error("expected a canvas root");
+    }
+    return collectPanes(root)[0].id;
+  }
+
+  /** Every tab of the tab's canvas, in strip order. */
+  function openTabs(): readonly EpicCanvasTileRef[] {
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+    if (canvas === undefined || canvas.root === null) return [];
+    return collectPanes(canvas.root).flatMap((pane) =>
+      pane.tabInstanceIds.flatMap((instanceId) => {
+        const ref = canvas.tilesByInstanceId[instanceId];
+        return ref === undefined ? [] : [ref];
+      }),
+    );
+  }
+
+  function renderCopy(
+    node: PublishedChatTileRef,
+    paneId: string,
+    witness: RetainingChatServingWitness | null,
+  ): void {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    render(
+      <EpicSessionContext value={session}>
+        <ChatServingWitnessContext value={witness}>
+          <PublishedChatTile
+            node={node}
+            viewTabId={TAB_ID}
+            tileId={paneId}
+            isActive
+            epicId={EPIC_ID}
+          />
+        </ChatServingWitnessContext>
+      </EpicSessionContext>,
+    );
+  }
+
+  beforeEach(() => {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    session = openStoreForTest({
+      epicId: EPIC_ID,
+      userId: NODE.ownerUserId,
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    mockUseHostReachability.mockReturnValue(REACHABLE_OWNER);
+  });
+
+  afterEach(() => {
+    session.dispose();
+    resetHostOlderThanDataRefusalsForTests();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  it("replaces the copy with the live chat tile bound to the owner, in the same slot, once the owner is reachable", async () => {
+    seedChatRecord(NODE.ownerHostId);
+    const paneId = openPublishedTab(NODE);
+
+    renderCopy(NODE, paneId, null);
+
+    await waitFor(() => {
+      expect(openTabs()).toEqual([
+        expect.objectContaining({
+          type: "chat",
+          id: NODE.chatId,
+          hostId: NODE.ownerHostId,
+        }),
+      ]);
+    });
+    // The copy is gone for good: not a closed tile a reopen gesture or
+    // Back/Forward could put back over the live chat.
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[TAB_ID],
+    ).toBeUndefined();
+  });
+
+  it("keeps the copy while the reachable owner refuses the epic's store", () => {
+    seedChatRecord(NODE.ownerHostId);
+    // The tile keys the refusal on the ref's task (the epic, in production).
+    recordHostOlderThanDataRefusal({
+      hostId: NODE.ownerHostId,
+      epicId: NODE.taskId,
+      hostVersion: null,
+      now: 1,
+    });
+    const paneId = openPublishedTab(NODE);
+
+    renderCopy(NODE, paneId, null);
+
+    expect(openTabs()).toEqual([NODE]);
+  });
+
+  it("keeps the copy when the epic holds no record for the chat under that owner", () => {
+    // A record the id matches but another host persisted: a fork clone, or
+    // a cloud-only row - not proof the owner holds this chat live.
+    seedChatRecord("another-host");
+    const paneId = openPublishedTab(NODE);
+
+    renderCopy(NODE, paneId, null);
+
+    expect(openTabs()).toEqual([NODE]);
+  });
+
+  it("keeps the copy when the owner is the host serving it", () => {
+    seedChatRecord(SAME_HOST_NODE.ownerHostId);
+    const paneId = openPublishedTab(SAME_HOST_NODE);
+
+    renderCopy(SAME_HOST_NODE, paneId, null);
+
+    expect(openTabs()).toEqual([SAME_HOST_NODE]);
+  });
+
+  it("converts for an unreachable owner that is a team sandbox at rest, as the row opens it live", async () => {
+    seedChatRecord(NODE.ownerHostId);
+    const sandboxRow = remoteEntry(NODE.ownerHostId, {
+      ...sandboxFacts("team-1"),
+      state: "suspended",
+    });
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) =>
+          hostId === sandboxRow.hostId ? { ...sandboxRow } : null,
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "Team sandbox",
+    });
+    const paneId = openPublishedTab(NODE);
+
+    renderCopy(NODE, paneId, WITNESS);
+
+    await waitFor(() => {
+      expect(openTabs()).toEqual([
+        expect.objectContaining({
+          type: "chat",
+          id: NODE.chatId,
+          hostId: NODE.ownerHostId,
+        }),
+      ]);
     });
   });
 });
