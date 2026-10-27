@@ -65,6 +65,10 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const mocks = vi.hoisted(() => ({
   /** The viewer and the catalogue the setup line's facts are read from. */
@@ -289,6 +293,12 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
 }
 
 beforeEach(() => {
+  // The new host is a known older build with no environment.status; an unrecorded
+  // manifest would hold a real staged run's handoff.
+  resetNegotiatedManifests();
+  recordNegotiatedHostManifest(NEW_HOST, {
+    "epic.createChat": { major: 1, minor: 2 },
+  });
   mocks.user = null;
   mocks.catalogue = null;
   mocks.sandboxes = null;

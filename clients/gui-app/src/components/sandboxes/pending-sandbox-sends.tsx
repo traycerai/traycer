@@ -583,8 +583,7 @@ function executePendingReadiness(input: {
     requested.readiness?.kind !== "ready"
   )
     return;
-  if (current.failure !== null)
-    useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+  clearPendingSandboxFailure(surfaceKey);
   preparePendingReadySend({
     send,
     stage: current,
@@ -973,6 +972,7 @@ function useWatchedSandboxRow(
   const settings = useSandboxSettingsStatus(
     stage?.createdHostId ?? null,
     row.row?.state === "awake",
+    row.row?.lastTransitionAt ?? null,
   );
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
@@ -994,9 +994,8 @@ function useWatchedSandboxRow(
   useEffect(() => {
     if (send === null || decision === null) return;
     projectSandboxBlocker(surfaceKey, decision.state.blocker, row.failure);
-    if (decision.effects.includes("open-terminal") && stage?.failure !== null) {
-      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
-    }
+    if (decision.effects.includes("open-terminal"))
+      clearPendingSandboxFailure(surfaceKey);
     if (decision.effects.includes("wake")) wake(surfaceKey);
     if (decision.effects.includes("end-host")) {
       if (
@@ -1030,6 +1029,12 @@ function useWatchedSandboxRow(
     refetch: row.refetch,
     environment,
   };
+}
+
+function clearPendingSandboxFailure(surfaceKey: string): void {
+  const current = readStagedSandbox(surfaceKey);
+  if (current === null || current.failure === null) return;
+  useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
 }
 
 function returnWatchedSend(send: PendingSandboxSend): void {
@@ -1486,6 +1491,7 @@ function usePendingDispatchLifecycle(
   const settings = useSandboxSettingsStatus(
     dispatch.input.hostId,
     row.row?.state === "awake",
+    row.row?.lastTransitionAt ?? null,
   );
   useEffect(() => {
     let disposed = false;
@@ -1789,6 +1795,7 @@ function PendingDispatchLine(props: {
   const settings = useSandboxSettingsStatus(
     props.dispatch.input.hostId,
     row.row?.state === "awake",
+    row.row?.lastTransitionAt ?? null,
   );
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
@@ -1870,7 +1877,10 @@ function pendingSettingsTitle(
   status: EnvironmentStatusResponseV11 | undefined,
 ): string {
   if (row === null) return "Applying settings…";
-  if (!sandboxSettingsFailed(status?.items ?? []) && row.guestConfigured !== false)
+  if (
+    !sandboxSettingsFailed(status?.items ?? []) &&
+    row.guestConfigured !== false
+  )
     return "Applying settings…";
   return sandboxSettingsFailureLine(
     row.displayName,
@@ -1883,15 +1893,25 @@ function PendingDispatchSettingsDetail(props: {
   readonly row: SandboxSummary | null;
   readonly status: EnvironmentStatusResponseV11 | undefined;
 }): ReactNode {
-  if (!sandboxSettingsFailed(props.status?.items ?? []) && props.row?.guestConfigured !== false)
+  if (
+    !sandboxSettingsFailed(props.status?.items ?? []) &&
+    props.row?.guestConfigured !== false
+  )
     return null;
-  return <div className="flex w-full flex-col gap-1">
-    <p>Compute is charged while it is awake.</p>
-    <p>{sandboxSettingsStepsLine(sandboxSettingsEvidence(
-      props.status?.items ?? [], props.row?.guestConfigured ?? null,
-    ))}</p>
-    <p>Your message waits until they apply.</p>
-  </div>;
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <p>Compute is charged while it is awake.</p>
+      <p>
+        {sandboxSettingsStepsLine(
+          sandboxSettingsEvidence(
+            props.status?.items ?? [],
+            props.row?.guestConfigured ?? null,
+          ),
+        )}
+      </p>
+      <p>Your message waits until they apply.</p>
+    </div>
+  );
 }
 
 /** Repairs a live sandbox without releasing a possibly accepted request. */

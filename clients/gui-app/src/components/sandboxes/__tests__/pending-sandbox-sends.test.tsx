@@ -679,17 +679,6 @@ vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
-// An old host without environment.status: a known absence is the only reading
-// that does not hold a send (an unknown manifest holds it).
-vi.mock(
-  "@traycer-clients/shared/host-transport/negotiated-manifest-registry",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@traycer-clients/shared/host-transport/negotiated-manifest-registry")
-    >()),
-    getNegotiatedHostMethods: () => new Set<string>(),
-  }),
-);
 // The isolated fixtures read the host's settings as ready; a settings hold is
 // exercised by its own test, not by every send.
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
@@ -1062,6 +1051,12 @@ beforeEach(() => {
   mocks.wake.mockReset();
   mocks.wake.mockResolvedValue({ kind: "awake" });
   resetNegotiatedManifests();
+  // The sandbox's host is a known older build: it serves forks and has no
+  // environment.status, which the staged run reads as an unsupported method (an
+  // unrecorded manifest would hold the send).
+  recordNegotiatedHostManifest(SANDBOX_HOST, {
+    "epic.createChat": { major: 1, minor: 2 },
+  });
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
   useInitialChatHandoffStore.getState().resetForTests();
@@ -5562,7 +5557,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         {
           label: "unconfigured",
           row: { guestConfigured: false },
-          remedy: /repair/i,
+          remedy: /settings didn.t apply/i,
         },
       ].map((variant) => [kind, variant.label, variant] as const),
     ),

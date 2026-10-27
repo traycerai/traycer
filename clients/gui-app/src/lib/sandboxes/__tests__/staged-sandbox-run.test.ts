@@ -701,6 +701,13 @@ describe("runStagedSandbox settling", () => {
         () => Promise.resolve(statusOf(null, [])),
       ],
       [
+        "an item with a status this app does not know",
+        () =>
+          Promise.resolve(
+            statusOf(5, [item("variable", "REGION", "some_future_status")]),
+          ),
+      ],
+      [
         "an item still pending",
         () =>
           Promise.resolve(statusOf(5, [item("variable", "REGION", "pending")])),

@@ -26,7 +26,8 @@ export function detailsRecoveryLabel(
 
 /**
  * Retry reruns the setup script, so only a failed setup script offers it.
- * The host re-applies any other item itself; its row shows the reason alone.
+ * Other computer failures offer the setup or installation page when relevant;
+ * raw failure codes remain in the diagnostics export.
  */
 export function recoveryForHost(
   state: string,

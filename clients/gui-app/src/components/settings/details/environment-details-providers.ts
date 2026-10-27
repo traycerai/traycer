@@ -19,7 +19,10 @@ import { recoveryForHost } from "@/components/settings/details/details-copy";
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
 import { sandboxDetailsProvider } from "@/lib/sandboxes/sandbox-details-provider";
 import { hostQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
-import type { SandboxSummary, SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxSummary,
+  SandboxListResponse,
+} from "@traycer/protocol/host/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
@@ -111,19 +114,27 @@ function detailsHistory(history: HistoryResponse): DetailsHistory {
   };
 }
 
-type CurrentEnvironmentStatus = ResponseOfMethod<HostRpcRegistry, "environment.status">;
+type CurrentEnvironmentStatus = ResponseOfMethod<
+  HostRpcRegistry,
+  "environment.status"
+>;
 
 function currentSandboxState(
   previous: string,
   sandbox: SandboxSummary | null,
   status: CurrentEnvironmentStatus | null,
 ): string {
-  if (sandbox?.guestConfigured === false || (status !== null && sandboxSettingsFailed(status.items)))
+  if (
+    sandbox?.guestConfigured === false ||
+    (status !== null && sandboxSettingsFailed(status.items))
+  )
     return "not_applied";
   if (status === null) return previous;
-  const waiting = status.receivedRevision === null || status.items.some(
-    (item) => item.status === "pending" || item.status === "received",
-  );
+  const waiting =
+    status.receivedRevision === null ||
+    status.items.some(
+      (item) => item.status === "pending" || item.status === "received",
+    );
   return waiting ? "received" : "applied";
 }
 
@@ -138,36 +149,67 @@ async function deliveryHostRows(input: {
   const { host, sandbox, context, diagnostics } = input;
   if (sandbox !== null && sandbox.state !== "awake")
     return [{ ...host, name: sandbox.displayName }];
-  const requestStatus = () => context.client.createRequesterForHostId(host.hostId)
-    .request("environment.status", {});
-  const status = await context.queryClient.fetchQuery(queryOptions({
-    queryKey: hostQueryKeys.method<HostRpcRegistry, "environment.status">(host.hostId, "environment.status", {}),
-    queryFn: requestStatus,
-    staleTime: 0,
-    retry: false,
-  })).catch(() => null);
-  const unused = status?.items.filter((item) => item.status === "not_used") ?? [];
+  const requestStatus = () =>
+    context.client
+      .createRequesterForHostId(host.hostId)
+      .request("environment.status", {});
+  const status = await context.queryClient
+    .fetchQuery(
+      queryOptions({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "environment.status">(
+          host.hostId,
+          "environment.status",
+          {},
+        ),
+        queryFn: requestStatus,
+        staleTime: 0,
+        retry: false,
+      }),
+    )
+    .catch(() => null);
+  const unused =
+    status?.items.filter((item) => item.status === "not_used") ?? [];
   const isSandbox = sandbox !== null || unused.length > 0;
-  const state = isSandbox ? currentSandboxState(host.state, sandbox, status) : host.state;
+  const state = isSandbox
+    ? currentSandboxState(host.state, sandbox, status)
+    : host.state;
   const current: DetailsHostStatus = {
     ...host,
     name: sandbox?.displayName ?? host.name,
     state,
     reason: diagnostics ? host.reason : null,
-    recovery: isSandbox && (state === "failed" || state === "not_applied")
-      ? {kind: "apply", hostId: host.hostId}
-      : host.recovery,
+    recovery:
+      isSandbox && (state === "failed" || state === "not_applied")
+        ? { kind: "apply", hostId: host.hostId }
+        : host.recovery,
   };
   if (diagnostics && status !== null)
-    return [current, ...status.items.map((item): DetailsHostStatus => ({
-      ...current, item: item.key, state: item.status, reason: item.code, recovery: null,
-    }))];
-  return [current, ...(input.unusedListed ? [] : unused).map((item): DetailsHostStatus => {
-    const harness = guiHarnessIdSchema.safeParse(item.key.split(":")[0]);
-    const provider = harness.success ? guiHarnessIdToProviderId(harness.data) : null;
-    const label = provider === null ? "Agent" : providerDisplayName(provider);
-    return {...current, item: `${label} key`, state: "not_used", recovery: null};
-  })];
+    return [
+      current,
+      ...status.items.map((item): DetailsHostStatus => ({
+        ...current,
+        item: item.key,
+        state: item.status,
+        reason: item.code,
+        recovery: null,
+      })),
+    ];
+  return [
+    current,
+    ...(input.unusedListed ? [] : unused).map((item): DetailsHostStatus => {
+      const harness = guiHarnessIdSchema.safeParse(item.key.split(":")[0]);
+      const provider = harness.success
+        ? guiHarnessIdToProviderId(harness.data)
+        : null;
+      const label = provider === null ? "Agent" : providerDisplayName(provider);
+      return {
+        ...current,
+        item: `${label} key`,
+        state: "not_used",
+        recovery: null,
+      };
+    }),
+  ];
 }
 
 /** All reads here run inside the drawer's Query, including the fresh export read.
@@ -222,13 +264,18 @@ async function loadEnvironmentDetails(
     const rows = await Promise.all(
       hosts
         .filter((host) => host.state !== "not_used")
-        .map((host) => deliveryHostRows({
-          host,
-          sandbox: sandboxes.find((row) => row.hostId === host.hostId) ?? null,
-          unusedListed: serverUnused.some((item) => item.hostId === host.hostId),
-          context,
-          diagnostics,
-        })),
+        .map((host) =>
+          deliveryHostRows({
+            host,
+            sandbox:
+              sandboxes.find((row) => row.hostId === host.hostId) ?? null,
+            unusedListed: serverUnused.some(
+              (item) => item.hostId === host.hostId,
+            ),
+            context,
+            diagnostics,
+          }),
+        ),
     );
     hosts.splice(0, hosts.length, ...rows.flat(), ...serverUnused);
   }

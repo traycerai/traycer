@@ -896,8 +896,7 @@ export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
             notApplied: z.array(z.string()),
           })
           .nullable()
-          .optional()
-          .default(null),
+          .optional(),
       })
       .catchall(z.unknown()),
 );

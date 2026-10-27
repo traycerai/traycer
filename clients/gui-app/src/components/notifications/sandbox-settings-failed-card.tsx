@@ -29,7 +29,9 @@ export function SandboxSettingsFailedCard(props: {
   return (
     <div className="flex flex-col gap-2 text-ui-xs">
       <p>Compute is charged while it is awake.</p>
-      {evidence === null || evidence === undefined ? null : <p>{sandboxSettingsStepsLine(evidence)}</p>}
+      {evidence === null || evidence === undefined ? null : (
+        <p>{sandboxSettingsStepsLine(evidence)}</p>
+      )}
       {row === undefined || configuration === null ? (
         <SandboxRetryApplyingButton hostId={props.detail.hostId} />
       ) : (

@@ -43,6 +43,7 @@ import {
 } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   sandboxSettingsFailed,
+  sandboxSettingsReady,
   sandboxSettingsSteps,
 } from "@traycer/protocol/host/sandbox-settings";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
@@ -613,8 +614,10 @@ async function settleRow(
 }
 
 /** A connected host must prove configuration delivery before its message is handed off. */
-async function settleSettings(input: SandboxSettlement): Promise<"waiting" | "finished"> {
-  const {surfaceKey, clientRequestId, started, deps} = input;
+async function settleSettings(
+  input: SandboxSettlement,
+): Promise<"waiting" | "finished"> {
+  const { surfaceKey, clientRequestId, started, deps } = input;
   const settings = await deps.readSettings(started.hostId);
   if (!stillCurrent(surfaceKey, clientRequestId)) return "finished";
   if (settings === null) return "waiting";
@@ -628,10 +631,7 @@ async function settleSettings(input: SandboxSettlement): Promise<"waiting" | "fi
   }
   if (
     settings !== "unsupported" &&
-    (settings.receivedRevision === null ||
-      settings.items.some(
-        (item) => item.status === "pending" || item.status === "received",
-      ))
+    (settings.receivedRevision === null || !sandboxSettingsReady(settings.items))
   )
     return "waiting";
   report(surfaceKey, "delivering", deps.now());

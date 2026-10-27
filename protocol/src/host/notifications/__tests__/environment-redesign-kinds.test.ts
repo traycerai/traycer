@@ -353,7 +353,7 @@ describe("the five kinds' copy", () => {
       ),
     ).toEqual({
       title: "Setting not applied",
-      body: "studio • variable:API_BASE could not be applied",
+      body: "studio • A setting could not be applied",
     });
   });
 
@@ -447,19 +447,20 @@ describe("a sandbox's settings notice", () => {
     sandbox: SANDBOX,
   };
 
-  it("carries the sandbox context, defaulting to null when absent", () => {
+  it("carries the sandbox context, absent on a legacy payload", () => {
     expect(
       parseKnownHostNotificationPayloadForKind(
         "environment.apply.failed",
         withSandbox,
       ),
     ).toMatchObject({ sandbox: SANDBOX });
-    expect(
-      parseKnownHostNotificationPayloadForKind(
-        "environment.apply.failed",
-        PAYLOADS["environment.apply.failed"],
-      ),
-    ).toMatchObject({ sandbox: null });
+    const legacy = parseKnownHostNotificationPayloadForKind(
+      "environment.apply.failed",
+      PAYLOADS["environment.apply.failed"],
+    );
+    expect(legacy).toMatchObject(PAYLOADS["environment.apply.failed"]);
+    expect(legacy).not.toBeNull();
+    expect(legacy !== null && "sandbox" in legacy ? legacy.sandbox : undefined).toBeUndefined();
   });
 
   it("titles with the shared line and says the steps in the body, never a raw key or code", () => {

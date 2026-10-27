@@ -214,7 +214,10 @@ export function SandboxRowActions(props: {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2">
-      <SettingsApplyFailure operation={applyingOperation} name={summary.displayName} />
+      <SettingsApplyFailure
+        operation={applyingOperation}
+        name={summary.displayName}
+      />
       {giveAnother === null ? null : (
         <Button
           type="button"
@@ -527,7 +530,9 @@ function SettingsApplyFailure(props: {
   readonly name: string;
 }): ReactNode {
   if (props.operation !== "failed") return null;
-  return <p role="alert" className="text-ui-xs text-destructive">
-    {props.name}'s settings still didn't apply · SBX-0520
-  </p>;
+  return (
+    <p role="alert" className="text-ui-xs text-destructive">
+      {props.name}'s settings still didn't apply · SBX-0520
+    </p>
+  );
 }

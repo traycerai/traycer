@@ -156,15 +156,17 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
                 return client.request("environment.status", {});
               };
               return queryClient
-                .fetchQuery(queryOptions({
-                  queryKey: hostQueryKeys.method<
-                    HostRpcRegistry,
-                    "environment.status"
-                  >(hostId, "environment.status", {}),
-                  queryFn: requestSettings,
-                  staleTime: 0,
-                  retry: false,
-                }))
+                .fetchQuery(
+                  queryOptions({
+                    queryKey: hostQueryKeys.method<
+                      HostRpcRegistry,
+                      "environment.status"
+                    >(hostId, "environment.status", {}),
+                    queryFn: requestSettings,
+                    staleTime: 0,
+                    retry: false,
+                  }),
+                )
                 .catch(() => {
                   const negotiated = getNegotiatedHostMethods(hostId);
                   return negotiated !== null &&

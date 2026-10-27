@@ -977,6 +977,7 @@ function SandboxListRow(props: {
   const settings = useSandboxSettingsStatus(
     props.summary.hostId,
     props.summary.state === "awake",
+    props.summary.lastTransitionAt,
   );
   const summary = sandboxSettingsFailed(settings.data?.items ?? [])
     ? { ...props.summary, guestConfigured: false }
@@ -1090,24 +1091,24 @@ function SandboxRowSessions(props: {
   readonly now: number;
 }): ReactNode {
   return (
-            <p
-              className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
-              data-testid="sandboxes-row-sessions"
-            >
-              {props.report.kind === "live" && props.report.busy ? (
-                <span
-                  aria-hidden
-                  className="size-1.5 shrink-0 rounded-full bg-success"
-                />
-              ) : null}
-              {sandboxSessionsLine(props.report, props.now)}
-              {sandboxSessionPills(props.report).map((pill) => (
-                <SandboxSessionPillBadge
-                  key={pill.key}
-                  pill={pill}
-                  testId="sandboxes-row-session-pill"
-                />
-              ))}
-            </p>
+    <p
+      className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
+      data-testid="sandboxes-row-sessions"
+    >
+      {props.report.kind === "live" && props.report.busy ? (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full bg-success"
+        />
+      ) : null}
+      {sandboxSessionsLine(props.report, props.now)}
+      {sandboxSessionPills(props.report).map((pill) => (
+        <SandboxSessionPillBadge
+          key={pill.key}
+          pill={pill}
+          testId="sandboxes-row-session-pill"
+        />
+      ))}
+    </p>
   );
 }
