@@ -154,19 +154,21 @@ export function findActionMatchForChord(
   chord: ChordString,
 ): ActionChordMatch | null {
   const bindings = useKeybindingStore.getState().bindings;
+  let defaultMatch: ActionChordMatch | null = null;
   for (const id of ACTION_IDS) {
     const meta = ACTION_META[id];
     if (meta.kind !== "chord") continue;
     const binding = bindings[id];
     if (binding === null) continue;
     if (binding === chord) {
-      const terminalPolicy =
-        binding === resolveActionDefaultChord(meta)
-          ? meta.terminalPolicy
-          : "app";
-      return { actionId: id, terminalPolicy };
+      // A newly added default must not displace an existing custom binding.
+      if (binding !== resolveActionDefaultChord(meta)) {
+        return { actionId: id, terminalPolicy: "app" };
+      }
+      defaultMatch ??= { actionId: id, terminalPolicy: meta.terminalPolicy };
     }
   }
+  if (defaultMatch !== null) return defaultMatch;
 
   for (const id of ACTION_IDS) {
     const meta = ACTION_META[id];
