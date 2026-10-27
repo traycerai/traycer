@@ -870,6 +870,7 @@ function InlineUserMessageEditor({
         onDragOver={onDragOver}
         onDrop={onDrop}
         onKeyDown={handleEditorKeyDown}
+        interceptKeyDown={null}
         onFocus={NOOP}
         onBlur={NOOP}
         onEditorReady={reingestPendingImages}

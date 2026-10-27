@@ -486,6 +486,11 @@ export function dispatchAction(
 // have no handler while their bridge is unmounted yet must still be reserved.
 const EXTERNALLY_HANDLED_ACTIONS: ReadonlySet<ActionId> = new Set([
   "composer.dictation.toggle",
+  // Matched by the chat composer's own editor keydown hook, and only while a
+  // suggestion is showing over an empty draft. Its default is a bare →, and a
+  // person may rebind it to Tab: reserved here, either would be swallowed in
+  // every field of the app.
+  "composer.suggestion.accept",
 ]);
 
 export function isExternallyHandled(id: ActionId): boolean {

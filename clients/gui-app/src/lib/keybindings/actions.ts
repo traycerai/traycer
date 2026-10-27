@@ -71,6 +71,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
+  "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
   "model.provider.byDigit",
@@ -906,6 +907,25 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // (split group vertically). The desktop global summon shortcut is checked
     // live by conflict detection rather than hand-avoided here.
     defaultChord: "ctrl+shift+m",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "composer.suggestion.accept": {
+    id: "composer.suggestion.accept",
+    label: "Accept suggested reply",
+    description:
+      "Fill the empty composer with the suggested reply shown as its placeholder. The message is not sent.",
+    category: "app",
+    kind: "chord",
+    // A bare →, the inline-autosuggestion convention. It is only consulted
+    // over an empty composer with a suggestion showing, where → has nothing
+    // else to do; the composer matches it itself (`isExternallyHandled`), so
+    // the provider never reserves the key for every other field in the app.
+    // Not Tab by default: Tab moves focus out of the composer, and a person
+    // who prefers it opts in here.
+    defaultChord: "arrowright",
     secondaryChord: undefined,
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,

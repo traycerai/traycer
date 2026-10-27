@@ -1,6 +1,3 @@
-import { useAuthStore } from "@/stores/auth/auth-store";
-import type { BrowserOwnerInventoryEvidence } from "@traycer/protocol/host/browser/catalog-contracts";
-import { browserCatalogInventory } from "./browser-catalog-inventory";
 import type {
   BrowserViewportIntent,
   BrowserViewportState,
@@ -351,8 +348,6 @@ interface BrowserSessionsCoordinator {
    * calls it, keyed by coordinator.
    */
   captureTabPreview: (tabId: string) => Promise<BrowserTabPreview>;
-  readonly supportsInventory: () => boolean;
-  readonly retirementRevision: (sessionId: string) => number | null;
   upsertConsumer: (
     consumerId: symbol,
     runtime: BrowserSessionsCoordinatorRuntime,
@@ -419,19 +414,6 @@ const TAB_PREVIEW_TIMEOUT_MS = 5_000;
  * is that button never coming back.
  */
 const ATTACH_TAB_TIMEOUT_MS = 10_000;
-
-export function browserSessionsRetirementRevision(
-  key: string,
-  sessionId: string,
-): number | null {
-  return (
-    browserSessionsCoordinators.get(key)?.retirementRevision(sessionId) ?? null
-  );
-}
-
-export function browserSessionsOwnerSupportsInventory(key: string): boolean {
-  return browserSessionsCoordinators.get(key)?.supportsInventory() ?? false;
-}
 
 export function browserSessionsCoordinatorState(
   key: string | null,
@@ -727,13 +709,6 @@ function createBrowserSessionsCoordinator(args: {
   readonly runtime: BrowserSessionsCoordinatorRuntime;
 }): BrowserSessionsCoordinator {
   const pendingCloses: PendingRequests<void> = new Map();
-  const durableAcks = new Map<string, Promise<void>>();
-  const closeIdentities = new Map<
-    string,
-    { readonly sessionId: string; readonly tabId: string }
-  >();
-  let durableInventory = false;
-  const observedInventory = new Map<string, BrowserOwnerInventoryEvidence>();
   const pendingAttaches: PendingRequests<void> = new Map();
   const pendingMoves: PendingRequests<void> = new Map();
   const pendingViewports: PendingRequests<void> = new Map();
@@ -916,25 +891,14 @@ function createBrowserSessionsCoordinator(args: {
     };
   };
 
-  const closeTab = (sessionId: string, tabId: string): Promise<void> => {
-    const requestId = crypto.randomUUID();
-    closeIdentities.set(requestId, { sessionId, tabId });
-    return sendRequestWithId<void>(
+  const closeTab = (sessionId: string, tabId: string): Promise<void> =>
+    sendRequest(pendingCloses, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
+      kind: "closeTab",
+      hasBinaryPayload: false,
       requestId,
-      pendingCloses,
-      ATTACH_TAB_TIMEOUT_MS,
-      (id) => ({
-        kind: "closeTab",
-        hasBinaryPayload: false,
-        requestId: id,
-        sessionId,
-        tabId,
-      }),
-    ).finally(() => {
-      closeIdentities.delete(requestId);
-      durableAcks.delete(requestId);
-    });
-  };
+      sessionId,
+      tabId,
+    }));
 
   const attachTab = (tabId: string): Promise<void> =>
     sendRequest(pendingAttaches, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
@@ -1005,8 +969,6 @@ function createBrowserSessionsCoordinator(args: {
     pendingPresentations.clear();
     const closed = new Error("Browser sessions stream closed.");
     rejectPendingRequests(pendingCloses, closed);
-    durableAcks.clear();
-    closeIdentities.clear();
     rejectPendingRequests(pendingAttaches, closed);
     rejectPendingRequests(pendingMoves, closed);
     rejectPendingRequests(pendingViewports, closed);
@@ -1020,7 +982,6 @@ function createBrowserSessionsCoordinator(args: {
   ): void => {
     const wasLive = lifecycle === "live";
     lifecycle = next;
-    if (next !== "live") durableInventory = false;
     // The PiP store is keyed by epic, and an `independent` stream has no epic
     // to key by. Nothing downstream would break on a sentinel; the store would
     // just grow a bucket no PiP surface ever reads.
@@ -1074,144 +1035,7 @@ function createBrowserSessionsCoordinator(args: {
     }
   };
 
-  const recordOwnerEvidence = (
-    evidence: readonly BrowserOwnerInventoryEvidence[],
-  ): Promise<void> | null => {
-    const userId = runtime.userId;
-    const scope = args.scope;
-    if (
-      userId === null ||
-      useAuthStore.getState().contextMetadata?.userId !== userId ||
-      scope.kind !== "epic"
-    )
-      return null;
-    const inventoryScope = { userId, epicId: scope.epicId };
-    if (browserCatalogInventory.read(inventoryScope).status === "local-only")
-      return null;
-    const matches = evidence.every((entry) => {
-      const value = entry.kind === "live" ? entry.record : entry.deletion;
-      return (
-        value.epicId === scope.epicId && value.hostId === args.owner.hostId
-      );
-    });
-    if (!matches) return null;
-    observeOwnerInventory(observedInventory, evidence);
-    const write = browserCatalogInventory.owner(
-      { userId, epicId: scope.epicId },
-      args.owner.hostId,
-      evidence,
-    );
-    void write.catch(() => {
-      if (browserCatalogInventory.read(inventoryScope).status !== "local-only")
-        patchState({
-          errorMessage: "Could not save browser inventory. Try again.",
-        });
-    });
-    durableInventory = true;
-    notifyBrowserSessionsCoordinator(args.key);
-    return write;
-  };
-
-  const handleInventoryFrame = (
-    frame: BrowserSessionsUxServerFrame,
-  ): boolean => {
-    switch (frame.kind) {
-      case "ownerInventoryUnavailable":
-        if (
-          args.scope.kind === "epic" &&
-          frame.epicId === args.scope.epicId &&
-          frame.hostId === args.owner.hostId
-        ) {
-          durableInventory = true;
-          notifyBrowserSessionsCoordinator(args.key);
-        }
-        return true;
-      case "ownerInventorySnapshot":
-        if (
-          args.scope.kind === "epic" &&
-          frame.inventory.epicId === args.scope.epicId &&
-          frame.inventory.hostId === args.owner.hostId
-        ) {
-          void recordOwnerEvidence(frame.inventory.sessions);
-        }
-        return true;
-      case "ownerInventoryUpdated":
-        void recordOwnerEvidence([frame.evidence]);
-        return true;
-      case "inventoryMutationAck": {
-        const write = recordOwnerEvidence([frame.evidence]);
-        const target = closeIdentities.get(frame.requestId);
-        if (
-          write !== null &&
-          target !== undefined &&
-          evidenceClosesBrowserTab(
-            frame.evidence,
-            target.sessionId,
-            target.tabId,
-          )
-        ) {
-          durableAcks.set(frame.requestId, write);
-        }
-        return true;
-      }
-      default:
-        return false;
-    }
-  };
-
-  const handleDurableCloseAck = (
-    frame: Extract<
-      BrowserSessionsUxServerFrame,
-      { readonly kind: "actionAck" }
-    >,
-  ): boolean => {
-    const scope = args.scope;
-    const pending = pendingCloses.get(frame.requestId);
-    // Independent sessions have no durable catalog, even on a 2.3 stream.
-    if (pending === undefined || !durableInventory || scope.kind !== "epic")
-      return false;
-    const userId = runtime.userId;
-    if (
-      userId === null ||
-      useAuthStore.getState().contextMetadata?.userId !== userId
-    ) {
-      pending.reject(new Error("Sign in to use this browser tab."));
-      return true;
-    }
-    if (
-      browserCatalogInventory.read({ userId, epicId: scope.epicId }).status ===
-      "local-only"
-    )
-      return false;
-    // The 2.3 contract sends inventoryMutationAck before a successful actionAck
-    // on this ordered stream. Success without it is an incomplete close.
-    const durable = durableAcks.get(frame.requestId);
-    durableAcks.delete(frame.requestId);
-    if (!frame.ok || durable === undefined)
-      pending.reject(
-        new Error(frame.reason ?? "Browser close is incomplete. Try again."),
-      );
-    else
-      void durable.then(
-        () => {
-          if (
-            runtime.userId !== userId ||
-            useAuthStore.getState().contextMetadata?.userId !== userId
-          )
-            pending.reject(new Error("Sign in to use this browser tab."));
-          else pending.resolve();
-        },
-        () =>
-          pending.reject(
-            new Error("Could not save browser inventory. Try again."),
-          ),
-      );
-    return true;
-  };
-
   const onFrame = (frame: BrowserSessionsUxServerFrame): void => {
-    if (handleInventoryFrame(frame)) return;
-    if (frame.kind === "actionAck" && handleDurableCloseAck(frame)) return;
     if (
       frame.kind === "sessionCreated" &&
       frame.session.tabs.some((tab) => tab.status === "provisioning")
@@ -1275,8 +1099,6 @@ function createBrowserSessionsCoordinator(args: {
       errorMessage: null,
     });
     lifecycle = "connecting";
-    durableInventory = false;
-    observedInventory.clear();
     session = openBrowserSessionsSession({
       key: {
         scope: args.scope,
@@ -1287,10 +1109,6 @@ function createBrowserSessionsCoordinator(args: {
       browserView: runtime.browserView,
       openTransport: runtime.openTransport,
       callbacks: {
-        onInventoryCapability: (supported) => {
-          durableInventory = supported;
-          notifyBrowserSessionsCoordinator(args.key);
-        },
         onStatus,
         onFrame,
         onTabBound,
@@ -1319,15 +1137,7 @@ function createBrowserSessionsCoordinator(args: {
     owner: args.owner,
     scope: args.scope,
     captureTabPreview,
-    supportsInventory: () => durableInventory,
-    retirementRevision: (sessionId) => {
-      const evidence = observedInventory.get(sessionId);
-      if (evidence === undefined) return null;
-      return evidence.kind === "live"
-        ? evidence.record.inventoryRevision
-        : evidence.deletion.inventoryRevision;
-    },
-    // Starts `connecting`, so there is no failure episode to have swept yet.
+    // Starts connecting, so there is no failure episode to have swept yet.
     sweptSinceFailure: false,
     state: {
       hostId: args.owner.hostId,
@@ -1401,38 +1211,6 @@ function runtimeChanged(
   );
 }
 
-function observeOwnerInventory(
-  observed: Map<string, BrowserOwnerInventoryEvidence>,
-  evidence: readonly BrowserOwnerInventoryEvidence[],
-): void {
-  for (const entry of evidence) {
-    const value = entry.kind === "live" ? entry.record : entry.deletion;
-    const current = observed.get(value.sessionId);
-    const previous =
-      current?.kind === "live" ? current.record : current?.deletion;
-    if (current?.kind === "deleted") continue;
-    if (
-      previous === undefined ||
-      value.inventoryRevision >= previous.inventoryRevision ||
-      entry.kind === "deleted"
-    )
-      observed.set(value.sessionId, entry);
-  }
-}
-
-function evidenceClosesBrowserTab(
-  evidence: BrowserOwnerInventoryEvidence,
-  sessionId: string,
-  tabId: string,
-): boolean {
-  if (evidence.kind === "deleted")
-    return evidence.deletion.sessionId === sessionId;
-  return (
-    evidence.record.sessionId === sessionId &&
-    !evidence.record.tabs.some((tab) => tab.tabId === tabId)
-  );
-}
-
 /**
  * `actionAck` answers every void-result request on this stream, so it routes by
  * REQUEST ID across each pending map rather than assuming a close. Request ids
@@ -1456,27 +1234,16 @@ function handleActionAck(
 type BrowserSessionsMetadataFrame = Extract<
   BrowserSessionsUxServerFrame,
   {
-    readonly kind:
-      | "ownerInventorySnapshot"
-      | "ownerInventoryUnavailable"
-      | "ownerInventoryUpdated"
-      | "inventoryMutationAck"
-      | "viewportState"
-      | "burstStarted"
-      | "burstEnded";
+    readonly kind: "viewportState" | "burstStarted" | "burstEnded";
   }
 >;
 const browserSessionsMetadataKinds: ReadonlySet<string> = new Set([
-  "ownerInventorySnapshot",
-  "ownerInventoryUnavailable",
-  "ownerInventoryUpdated",
-  "inventoryMutationAck",
   "viewportState",
   "burstStarted",
   "burstEnded",
 ]);
 
-/** Metadata has a separate consumer; the legacy runtime reducer claims no durable support. */
+/** Viewport and burst metadata have separate consumers. */
 function isBrowserSessionsMetadataFrame(
   frame: BrowserSessionsUxServerFrame,
 ): frame is BrowserSessionsMetadataFrame {
