@@ -1,8 +1,8 @@
 /**
  * The REAL `useBotUpdateRunSettingsMutation` over a real `HostClient` and
- * `QueryClient`: a run-settings write that the host accepts invalidates every
- * cached `bot.list`, so the bot settings panel re-renders from the row the
- * host now holds (`bot-settings-panel-reseed.test.tsx` pins what the panel
+ * `QueryClient`: a run-settings write that the host accepts invalidates the
+ * cached `bot.list` of every host, not only the one the write went through, so
+ * the bot settings panel re-renders from the row the host now holds (`bot-settings-panel-reseed.test.tsx` pins what the panel
  * does with it).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 describe("useBotUpdateRunSettingsMutation", () => {
-  it("sends the write to its host and invalidates the cached bot lists", async () => {
+  it("sends the write to its host and invalidates every host's cached bot list", async () => {
     const queryClient = createAppQueryClient();
     const sent: BotUpdateRunSettingsRequest[] = [];
     const client = buildClient(queryClient, sent);
@@ -89,7 +89,13 @@ describe("useBotUpdateRunSettingsMutation", () => {
       "bot.list",
       {},
     );
+    const otherHostListKey = hostQueryKeys.method<HostRpcRegistry, "bot.list">(
+      "host-other",
+      "bot.list",
+      {},
+    );
     queryClient.setQueryData(listKey, { bots: [], mainBotIds: {} });
+    queryClient.setQueryData(otherHostListKey, { bots: [], mainBotIds: {} });
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
         {props.children}
@@ -100,6 +106,9 @@ describe("useBotUpdateRunSettingsMutation", () => {
       { wrapper },
     );
     expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(otherHostListKey)?.isInvalidated).toBe(
+      false,
+    );
 
     const request: BotUpdateRunSettingsRequest = {
       botId: BOT.botId,
@@ -114,5 +123,8 @@ describe("useBotUpdateRunSettingsMutation", () => {
 
     expect(sent).toEqual([request]);
     expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherHostListKey)?.isInvalidated).toBe(
+      true,
+    );
   });
 });
