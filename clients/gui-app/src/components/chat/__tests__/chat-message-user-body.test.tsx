@@ -894,6 +894,8 @@ describe("<UserMessageBody /> agent messages", () => {
         </div>,
       );
       const scroller = screen.getByTestId("scroller");
+      const scrollTo = vi.fn();
+      scroller.scrollTo = scrollTo;
       const editor = await screen.findByRole("textbox", {
         name: "Edit message",
       });
@@ -906,8 +908,6 @@ describe("<UserMessageBody /> agent messages", () => {
         writable: true,
         value: 300,
       });
-      const scrollTo = vi.fn();
-      scroller.scrollTo = scrollTo;
       // The scroller's viewport ends at 500; the edited row ends 120px below
       // it. iOS WebKit lands a relative `scrollBy` twice, so the reveal must
       // write the absolute target: the current offset plus the overflow and
