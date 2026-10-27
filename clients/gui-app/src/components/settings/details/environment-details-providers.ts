@@ -186,29 +186,34 @@ async function deliveryHostRows(input: {
   if (diagnostics && status !== null)
     return [
       current,
-      ...status.items.map((item): DetailsHostStatus => ({
-        ...current,
-        item: item.key,
-        state: item.status,
-        reason: item.code,
-        recovery: null,
-      })),
+      ...status.items.map(
+        ({ key: itemKey, status: state, code }): DetailsHostStatus => ({
+          ...current,
+          item: itemKey,
+          state,
+          reason: code,
+          recovery: null,
+        }),
+      ),
     ];
   return [
     current,
-    ...(input.unusedListed ? [] : unused).map((item): DetailsHostStatus => {
-      const harness = guiHarnessIdSchema.safeParse(item.key.split(":")[0]);
-      const provider = harness.success
-        ? guiHarnessIdToProviderId(harness.data)
-        : null;
-      const label = provider === null ? "Agent" : providerDisplayName(provider);
-      return {
-        ...current,
-        item: `${label} key`,
-        state: "not_used",
-        recovery: null,
-      };
-    }),
+    ...(input.unusedListed ? [] : unused).map(
+      ({ key: itemKey }): DetailsHostStatus => {
+        const harness = guiHarnessIdSchema.safeParse(itemKey.split(":")[0]);
+        const provider = harness.success
+          ? guiHarnessIdToProviderId(harness.data)
+          : null;
+        const label =
+          provider === null ? "Agent" : providerDisplayName(provider);
+        return {
+          ...current,
+          item: `${label} key`,
+          state: "not_used",
+          recovery: null,
+        };
+      },
+    ),
   ];
 }
 

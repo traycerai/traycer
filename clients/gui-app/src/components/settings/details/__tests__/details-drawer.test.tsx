@@ -33,6 +33,7 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
+import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretsListResponseV12,
@@ -723,7 +724,7 @@ describe("a sandbox's unused settings", () => {
     at: AT,
     lastReportedAt: AT,
   };
-  const status = {
+  const status = environmentStatusResponseSchemaV11.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -731,6 +732,9 @@ describe("a sandbox's unused settings", () => {
     receivedRevision: 5,
     appliedRevision: 5,
     receiptAgeMs: 0,
+    remoteAccess: "on",
+    pendingUploads: [],
+    setup: null,
     items: [
       {
         kind: "env_override",
@@ -745,7 +749,7 @@ describe("a sandbox's unused settings", () => {
         appliedAs: null,
       },
     ],
-  };
+  });
 
   function mountChip(): TeamPageHarness {
     const harness = mountTeamPage(poolSource("admin"), {

@@ -8,6 +8,8 @@ import {
 } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
+import { hostStatusV19 } from "@traycer/protocol/host/status/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -41,7 +43,7 @@ import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings
 const HOST_ID = mockLocalHostEntry.hostId;
 
 function status(items: readonly { kind: string; status: string }[]) {
-  return {
+  return environmentStatusResponseSchemaV11.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -49,6 +51,9 @@ function status(items: readonly { kind: string; status: string }[]) {
     receivedRevision: 5,
     appliedRevision: 5,
     receiptAgeMs: 0,
+    remoteAccess: "on",
+    pendingUploads: [],
+    setup: null,
     items: items.map((item, index) => ({
       kind: item.kind,
       key: `key-${String(index)}`,
@@ -61,7 +66,7 @@ function status(items: readonly { kind: string; status: string }[]) {
       minimumHostVersion: null,
       appliedAs: null,
     })),
-  };
+  });
 }
 
 const HOST_STATUS = {
@@ -113,16 +118,16 @@ function mount(
     registry: hostRpcRegistry,
     requestId: () => `req-${String(reads)}`,
     handlers: {
-      "host.status": () => {
+      "host.status": async () => {
         const answer =
           hostStatusAnswers[Math.min(probes, hostStatusAnswers.length - 1)];
         probes += 1;
-        return answer();
+        return hostStatusV19.responseSchema.parse(await answer());
       },
-      "environment.status": () => {
+      "environment.status": async () => {
         const answer = answers[Math.min(reads, answers.length - 1)];
         reads += 1;
-        return answer();
+        return environmentStatusResponseSchemaV11.parse(await answer());
       },
     },
   });

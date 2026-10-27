@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
+import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   SandboxCreateRequest,
   SandboxSummary,
@@ -645,18 +646,22 @@ describe("runStagedSandbox settling", () => {
     const statusOf = (
       receivedRevision: number | null,
       items: readonly StatusItem[],
-    ) => ({
-      principal: { kind: "personal" },
-      reachability: "connected",
-      bindingGeneration: 1,
-      desiredRevision: receivedRevision,
-      receivedRevision,
-      appliedRevision: receivedRevision,
-      receiptAgeMs: 0,
-      items,
-    });
+    ) =>
+      environmentStatusResponseSchemaV11.parse({
+        principal: { kind: "personal" },
+        reachability: "connected",
+        bindingGeneration: 1,
+        desiredRevision: receivedRevision,
+        receivedRevision,
+        appliedRevision: receivedRevision,
+        receiptAgeMs: 0,
+        remoteAccess: "on",
+        pendingUploads: [],
+        setup: null,
+        items,
+      });
     const settleWith = async (
-      answer: () => Promise<unknown>,
+      answer: StagedSandboxRunDeps["readSettings"],
     ): Promise<void> => {
       useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
       const { deps } = harness({}, true);

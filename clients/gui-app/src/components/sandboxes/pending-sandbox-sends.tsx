@@ -2190,7 +2190,9 @@ function pendingDispatchLineCopy(
   line: Exclude<PendingSendView["line"], "settings">,
 ): string {
   const message = kind === "message";
-  const copy: Readonly<Record<Exclude<PendingSendView["line"], "settings">, string>> = {
+  const copy: Readonly<
+    Record<Exclude<PendingSendView["line"], "settings">, string>
+  > = {
     hidden: "",
     waiting: "Waiting for the sandbox…",
     creating: message ? "Sending message…" : "Creating agent…",
