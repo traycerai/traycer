@@ -444,6 +444,7 @@ describe("sandboxClockLine, a resting row", () => {
     pendingMillicredits: 0,
     segments: [],
     todayMillicredits,
+    todayAwakeMs: null,
     history: [],
   });
   const line = (
@@ -627,6 +628,7 @@ describe("sandboxTodayCost", () => {
       pendingMillicredits: 0,
       segments: [],
       todayMillicredits,
+      todayAwakeMs: null,
       history: [],
     });
     expect(sandboxTodayCost(awake, cost(3), 0)).toBe("under $0.01 so far");
@@ -774,6 +776,55 @@ describe("the sessions list as pills", () => {
     expect(sandboxSessionPills({ kind: "unknown" })).toEqual([]);
     expect(sandboxSessionPills({ kind: "stale", count: 2, at: 1_000 })).toEqual(
       [],
+    );
+  });
+});
+
+describe("sandboxClockLine, an awake row's day from the ledger", () => {
+  const cost = (
+    todayMillicredits: number,
+    todayAwakeMs: number | null,
+  ): SandboxCost => ({
+    sandboxId: "sbx-1",
+    currentRateMillicreditsPerHour: 120,
+    state: "awake",
+    frozen: false,
+    charged: {
+      computeMillicredits: 0,
+      storageMillicredits: 0,
+      sinceCreatedAt: NOW,
+    },
+    pendingMillicredits: 0,
+    segments: [],
+    todayMillicredits,
+    todayAwakeMs,
+    history: [],
+  });
+  const line = (ledger: SandboxCost): string =>
+    sandboxClockLine({
+      summary: sandboxSummaryFixture({
+        state: "awake",
+        burst: false,
+        lastTransitionAt: NOW - 60_000,
+      }),
+      configuration: { kind: "personal" },
+      cost: ledger,
+      wakeString: null,
+      viewerUserId: null,
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+    });
+
+  it("reads the ledger's awake time, not the time since the last wake, beside the day's cost", () => {
+    const text = line(cost(300, 3_600_000));
+
+    expect(text).toContain("Awake 1 h today");
+    expect(text).toContain("$0.30 today");
+  });
+
+  it("an older server's null duration hides the duration, never the wake's age labelled today, and keeps the label and the cost", () => {
+    expect(line(cost(300, null))).toBe(
+      "Awake · $0.30 today · suspends after 30 idle min",
     );
   });
 });

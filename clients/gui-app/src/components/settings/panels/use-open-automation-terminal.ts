@@ -1,10 +1,36 @@
-import { useMemo } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { v4 as uuidv4 } from "uuid";
 import { useNavigate } from "@tanstack/react-router";
 import type {
   SandboxAutomationOpenTarget,
   SandboxPod,
 } from "@traycer/protocol/host/sandbox-control";
-import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  AutomationTerminalOpenContext,
+  type AutomationTerminalOpen,
+} from "./automation-terminal-open-context";
+import {
+  useAutomationTerminalReadinessFailed,
+  type AutomationTerminalAttempt,
+} from "./use-automation-terminal-readiness";
+import { useFolderlessTerminalLaunch } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
+import { landingPaneAnchorDraftIds } from "@/components/home/terminal-panel/landing-pane-anchor-store";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
+import {
+  adoptPlainTerminalUnary,
+  capturePlainTerminalProjectionBarrier,
+  type PlainTerminalCollection,
+} from "@/lib/terminals/plain-terminal-authority";
+import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-schemas";
+
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
@@ -16,72 +42,230 @@ import {
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
-/**
- * An Automations row's `Open terminal`: a host that is not awake, or not
- * created yet, is started first (`POST /api/sandboxes/automation`, a team's
- * pod by its ordinal), and only once that succeeds is a folderless terminal
- * asked for on the host it answers with, in the start page's terminal panel,
- * and Settings closed onto a new task's tab. A failed start leaves Settings
- * open with the open's error toast. The composer's host and staging are left
- * as they were: Automations takes shells, never an agent's turn. `retry`
- * starts it again and opens nothing: a failed start's Retry.
- */
-export function useOpenAutomationTerminal(input: {
-  /** The row's host and id; `null` for an Automations host not created yet. */
+const INDEPENDENT_SCOPE: PlainTerminalScope = { kind: "independent" };
+
+interface AutomationTerminalInput {
   readonly existing: {
     readonly hostId: string;
     readonly sandboxId: string;
     readonly awake: boolean;
   } | null;
-  /** The team's environment for a team pod; `null` for Personal's. */
   readonly teamEnvironmentId: string | null;
-}): {
-  readonly run: () => void;
-  readonly retry: () => void;
-  readonly starting: boolean;
-} {
+}
+
+export function useOpenAutomationTerminal(
+  input: AutomationTerminalInput,
+): AutomationTerminalOpen {
+  const shared = useContext(AutomationTerminalOpenContext);
+  const own = useAutomationTerminalOpen(input);
+  return shared !== null &&
+    (input.existing === null || shared.hostId === input.existing.hostId)
+    ? shared
+    : own;
+}
+
+function useAutomationTerminalOpen(
+  input: AutomationTerminalInput,
+): AutomationTerminalOpen {
   const { existing, teamEnvironmentId } = input;
-  const open = useSandboxAutomationOpen();
-  const surfaceKey = useComposerSurfaceHostKey();
+  const open = useSandboxAutomationOpen("inline");
   const { close } = useSystemTabModalActions();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [attempt, setAttempt] = useState<AutomationTerminalAttempt | null>(
+    null,
+  );
+  const currentAttempt = useRef<AutomationTerminalAttempt | null>(null);
+  const dispatched = useRef(false);
+  useEffect(
+    () => () => {
+      currentAttempt.current = null;
+    },
+    [],
+  );
   const podEnvironmentIds = useMemo(
     () => (teamEnvironmentId === null ? [] : [teamEnvironmentId]),
     [teamEnvironmentId],
   );
   const pods = useSandboxTeamPods(podEnvironmentIds);
-  const openTerminal = (hostId: string): void => {
-    const panel = useLandingPanelStore.getState();
-    panel.clearTerminalRequest();
-    panel.requestTerminal(surfaceKey, hostId);
-    close();
-    activateTabIntent(navigate, openNewEpicIntent(), undefined);
-  };
+  const activeAttempt =
+    attempt !== null && settledForStartingAccount(attempt) ? attempt : null;
+  const hostId = activeAttempt === null ? null : activeAttempt.hostId;
+  const client = useHostClientForHostId(hostId);
+  // The directory/list reads negotiate this host's manifest. Unknown support
+  // waits for that answer; a known absence is a retryable opening failure.
+  const createSupport = useHostMethodSupport(hostId, "terminal.plain.create");
+  const readinessFailed = useAutomationTerminalReadinessFailed(activeAttempt);
+  useEffect(() => {
+    if (readinessFailed) currentAttempt.current = null;
+  }, [readinessFailed]);
+  // As in the new-terminal picker, an independent launch has no epic. The
+  // directory query waits for the named host's endpoint and keeps its errors.
+  const launch = useFolderlessTerminalLaunch("", hostId);
+  const list = useAutomationTerminalList(client, activeAttempt);
+  const create = useAutomationPlainTerminalCreate(
+    client,
+    hostId,
+    createSupport,
+  );
+  const failed =
+    open.isError ||
+    readinessFailed ||
+    launch.failed ||
+    list.isError ||
+    create.isError ||
+    createSupport === false;
+  const starting =
+    open.isPending ||
+    (attempt !== null &&
+      (!failed ||
+        launch.bindings.isFetching ||
+        list.isFetching ||
+        create.isPending));
+  const { mutateAsync: createTerminal } = create;
+  useEffect(() => {
+    if (
+      attempt === null ||
+      attempt.hostId === null ||
+      currentAttempt.current !== attempt ||
+      !settledForStartingAccount(attempt) ||
+      failed ||
+      createSupport !== true ||
+      dispatched.current ||
+      launch.target === null ||
+      launch.bindings.isFetching ||
+      !list.isSuccess ||
+      list.isFetching ||
+      client?.getActiveHostId() !== attempt.hostId
+    )
+      return;
+    dispatched.current = true;
+    const scopeKey = hostQueryKeys.plainTerminals(
+      attempt.hostId,
+      INDEPENDENT_SCOPE,
+    );
+    const barrier = capturePlainTerminalProjectionBarrier(
+      queryClient.getQueryData<PlainTerminalCollection>(scopeKey),
+    );
+    void createTerminal({
+      terminalId: attempt.terminalId,
+      scope: INDEPENDENT_SCOPE,
+      cwd: launch.target.cwd,
+      cols: 80,
+      rows: 24,
+    }).then(
+      ({ terminal }) => {
+        if (
+          currentAttempt.current !== attempt ||
+          !settledForStartingAccount(attempt)
+        )
+          return;
+        queryClient.setQueryData<PlainTerminalCollection>(scopeKey, (current) =>
+          adoptPlainTerminalUnary(current, terminal, barrier),
+        );
+        const panel = useLandingPanelStore.getState();
+        const instanceId = `landing-terminal-${uuidv4()}`;
+        panel.clearTerminalRequest();
+        panel.addTab({
+          kind: "terminal",
+          instanceId,
+          sessionId: terminal.record.terminalId,
+          hostId: terminal.record.hostId,
+          cwd: terminal.record.launch.cwd,
+          name: terminalSessionTitle({
+            title: terminal.record.manualTitle,
+            activeProcessName: terminal.runtime.activeProcessName,
+            currentCwd: terminal.record.launch.cwd,
+            taskHome: null,
+          }),
+          titleSource:
+            terminal.record.manualTitle === null ? "default" : "manual",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        });
+        panel.revealPanel({
+          landingPageIds: landingPaneAnchorDraftIds(),
+          everyPage: true,
+          instanceId,
+        });
+        focusTerminalInstance(instanceId);
+        currentAttempt.current = null;
+        setAttempt(null);
+        close();
+        activateTabIntent(navigate, openNewEpicIntent(), undefined);
+      },
+      () => undefined,
+    );
+  }, [
+    attempt,
+    client,
+    close,
+    createTerminal,
+    createSupport,
+    failed,
+    launch.bindings.isFetching,
+    launch.target,
+    list.isFetching,
+    list.isSuccess,
+    navigate,
+    queryClient,
+  ]);
   const target = (): SandboxAutomationOpenTarget | null =>
     automationOpenTarget(
-      existing === null ? null : existing.sandboxId,
+      attempt?.sandboxId ?? existing?.sandboxId ?? null,
       teamEnvironmentId,
       teamEnvironmentId === null ? [] : (pods.get(teamEnvironmentId) ?? []),
     );
   const run = (): void => {
-    if (existing !== null && existing.awake) {
-      openTerminal(existing.hostId);
+    if (
+      currentAttempt.current !== null &&
+      (starting || currentAttempt.current !== attempt)
+    )
+      return;
+    open.reset();
+    create.reset();
+    dispatched.current = false;
+    const next = newAutomationTerminalAttempt(
+      input,
+      attempt,
+      readinessFailed,
+      failed,
+    );
+    currentAttempt.current = next;
+    setAttempt(next);
+    if (next.hostId !== null) {
+      if (attempt?.hostId === next.hostId) {
+        void launch.bindings.refetch();
+        void list.refetch();
+      }
       return;
     }
-    const startingAccount = { userId: signedInUserId() };
-    // A failed start is the open's own error toast; Settings stays open.
     void open.mutateAsync(target()).then(
       (opened) => {
-        if (!settledForStartingAccount(startingAccount)) return;
-        openTerminal(opened.sandbox.hostId);
+        if (currentAttempt.current !== next || !settledForStartingAccount(next))
+          return;
+        const ready = {
+          ...next,
+          hostId: opened.sandbox.hostId,
+          sandboxId: opened.sandbox.id,
+        };
+        currentAttempt.current = ready;
+        setAttempt(ready);
       },
       () => undefined,
     );
   };
+  // A failed sandbox row's existing Retry starts it without asking for a shell.
   const retry = (): void => {
     open.mutate(target());
   };
-  return { run, retry, starting: open.isPending };
+  return {
+    run,
+    retry,
+    starting,
+    failed: failed || attempt?.retried === true,
+    hostId,
+  };
 }
 
 /**
@@ -97,4 +281,71 @@ function automationOpenTarget(
   if (teamEnvironmentId === null) return null;
   const pod = pods.find((candidate) => candidate.sandbox.id === sandboxId);
   return { environmentId: teamEnvironmentId, ordinal: pod?.ordinal ?? null };
+}
+
+/** A fresh wire list, isolated from the authority accumulator's cache slot. */
+function useAutomationTerminalList(
+  client: HostClient<HostRpcRegistry> | null,
+  attempt: AutomationTerminalAttempt | null,
+) {
+  return useHostQuery<HostRpcRegistry, "terminal.plain.list">({
+    client: attempt === null || attempt.hostId === null ? null : client,
+    method: "terminal.plain.list",
+    params: { scope: INDEPENDENT_SCOPE },
+    // Authority observers store a projection accumulator in the ordinary
+    // list slot. This one-shot read must not replace it with a wire response.
+    cacheKeyIdentity: ["automation-open", attempt?.terminalId ?? null],
+    options: { retry: false, staleTime: 0 },
+  });
+}
+
+/** A host-created terminal must answer for the exact host and id requested. */
+function useAutomationPlainTerminalCreate(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  support: boolean | null,
+) {
+  return useHostMutation<HostRpcRegistry, "terminal.plain.create">({
+    client,
+    method: "terminal.plain.create",
+    mapVariables: (request) => {
+      if (support !== true) {
+        throw new Error("The host does not support terminal creation.");
+      }
+      return request;
+    },
+    resolveResponse: (response, request) => {
+      if (
+        response.terminal.record.hostId !== hostId ||
+        response.terminal.record.terminalId !== request.terminalId
+      ) {
+        throw new Error(
+          "The terminal response did not match the requested host and terminal.",
+        );
+      }
+      return Promise.resolve(response);
+    },
+    options: { mutationKey: terminalMutationKeys.plainCreate(hostId ?? "") },
+  });
+}
+
+/** Retry keeps the logical id, but starts a new observation boundary and wake. */
+function newAutomationTerminalAttempt(
+  input: AutomationTerminalInput,
+  previous: AutomationTerminalAttempt | null,
+  readinessFailed: boolean,
+  retried: boolean,
+): AutomationTerminalAttempt {
+  return {
+    userId: signedInUserId(),
+    startedAt: Date.now(),
+    sandboxId: previous?.sandboxId ?? input.existing?.sandboxId ?? null,
+    knownSandbox: input.existing !== null,
+    retried,
+    terminalId: previous?.terminalId ?? `landing-term-${uuidv4()}`,
+    hostId: readinessFailed
+      ? null
+      : (previous?.hostId ??
+        (input.existing?.awake === true ? input.existing.hostId : null)),
+  };
 }

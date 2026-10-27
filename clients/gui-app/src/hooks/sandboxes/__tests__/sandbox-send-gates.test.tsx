@@ -16,6 +16,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   hostRpcRegistry,
+  type GuiHarnessId,
   type GuiHarnessOption,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
@@ -64,7 +65,7 @@ const answers = vi.hoisted(() => ({
     vi.fn<(address: { configurationId: string; pageId: string }) => void>(),
   onOpenTerminalInstead: vi.fn<() => void>(),
   onChooseAnotherHost: vi.fn<() => void>(),
-  openForHarness: vi.fn<(harnessId: "traycer") => void>(),
+  openForHarness: vi.fn<(harnessId: GuiHarnessId) => void>(),
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
