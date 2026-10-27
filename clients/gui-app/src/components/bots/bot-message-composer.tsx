@@ -107,12 +107,14 @@ export function BotMessageComposer(props: {
       },
       {
         onSuccess: (response) => {
-          // The box is cleared, and the edit ended, only while it still holds
-          // what was sent: an edit the person opened since keeps its draft.
-          if ((currentEditRef.current?.requestId ?? null) === supersedes) {
-            setText("");
-            if (supersedes !== null) onEditEnd();
+          // The box is cleared, the edit ended and the send's delivery said,
+          // only while it still holds what was sent: an edit the person
+          // opened since keeps its draft, with nothing said under it.
+          if ((currentEditRef.current?.requestId ?? null) !== supersedes) {
+            return;
           }
+          setText("");
+          if (supersedes !== null) onEditEnd();
           setLastDelivery(response.delivery);
         },
         onError: failure.fail,

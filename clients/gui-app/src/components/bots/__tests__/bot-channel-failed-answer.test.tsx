@@ -689,11 +689,14 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       await hold.promise;
     });
 
+    // The box is held while A's send is in flight, and released once it lands.
     await waitFor(() => {
-      expect(screen.getByTestId("bot-channel-composer-queued")).toBeTruthy();
+      expect(box.disabled).toBe(false);
     });
     expect(box.value).toBe(SECOND_TEXT);
     expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    // A's delivery is not said under B's unsent draft.
+    expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
   });
 
   it("leaves the box empty and sends nothing when the person cancels", async () => {

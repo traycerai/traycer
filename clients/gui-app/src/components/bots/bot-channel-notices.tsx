@@ -112,10 +112,12 @@ function SignInAction(props: {
   const { harnessId, hostId } = props;
   const onClick = useCallback(() => {
     const harness = guiHarnessIdSchema.safeParse(harnessId);
+    const focus = useProvidersFocusStore.getState();
     if (harness.success) {
-      useProvidersFocusStore
-        .getState()
-        .setHostHarnessFocus({ harnessId: harness.data, hostId });
+      focus.setHostHarnessFocus({ harnessId: harness.data, hostId });
+    } else {
+      // No earlier action's focus may move Providers off this host.
+      focus.clearFocusHarnessId();
     }
     openSettings({
       section: "providers",

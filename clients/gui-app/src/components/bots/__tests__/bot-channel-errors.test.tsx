@@ -569,6 +569,45 @@ describe("<BotChannelView /> an answer the bot does not give", () => {
     expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
   });
 
+  it("opens Settings on the bot's host with no earlier focus left armed when the harness is not one this client knows", async () => {
+    const user = userEvent.setup();
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-other",
+      profileId: "profile-other",
+      startSignIn: true,
+    });
+    mocks.state.activity = activity(
+      {
+        ...session("failed", "req-1"),
+        reason: {
+          summary: REASON_SUMMARY,
+          code: null,
+          harnessId: "not-a-harness",
+          action: "sign-in",
+        },
+      },
+      {},
+    );
+    mount(null);
+
+    await user.click(
+      within(screen.getByTestId("bot-channel-unanswered")).getByRole("button", {
+        name: "Sign in",
+      }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+    });
+    expect(mocks.openSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(HOST_ID);
+  });
+
   it("says why a parked trunk is held in the warning state, with nothing to sign in to", () => {
     mocks.state.activity = activity(sessionWithReason("parked", "none"), {});
     mount(null);
