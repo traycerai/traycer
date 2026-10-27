@@ -3,7 +3,7 @@ import {
   parseChordString,
   type ChordString,
 } from "@traycer-clients/shared/keybindings/chord-core";
-import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
+import { streamedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
 import type { ActionId } from "@/lib/keybindings/actions";
 
 /**
@@ -71,7 +71,7 @@ export function sandboxForwardedShortcuts(
   bindings: Readonly<Record<ActionId, ChordString | null>>,
   mac: boolean,
 ): readonly ForwardedShortcut[] {
-  return reservedBrowserChordsFor(bindings, { landingSurfaceActive: false })
+  return streamedBrowserChordsFor(bindings, { landingSurfaceActive: false })
     .filter((row) => row.command === null)
     .flatMap((row): ForwardedShortcut[] => {
       const parts = parseChordString(row.token);
