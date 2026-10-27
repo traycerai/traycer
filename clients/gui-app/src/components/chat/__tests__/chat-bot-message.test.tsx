@@ -540,7 +540,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     ).toEqual(["Reply in thread"]);
   });
 
-  it("says a held answer in the warning colour, with Retry alone", () => {
+  it("says a held answer in the warning colour, with Retry alone on the line and on hover", () => {
     renderRow(
       memberPost(OPEN_REQUEST),
       failingWith({
@@ -558,6 +558,12 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(line.getAttribute("data-state")).toBe("parked");
     expect(line.className).toContain("text-warning-foreground");
     expect(line.className).not.toContain("text-destructive");
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Reply in thread"]);
   });
 
   it("says only that it was not answered when the host gave no reason, and holds the line's Retry while one is sent", () => {

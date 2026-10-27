@@ -1026,10 +1026,15 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
     });
     mountChannel(null, memberPost(VIEWER_USER_ID));
 
-    const line = lineOf(screen.getByTestId("bot-member-row"));
+    const row = screen.getByTestId("bot-member-row");
+    const line = lineOf(row);
     expect(line.getAttribute("data-state")).toBe("parked");
     expect(line.className).toContain("text-warning-foreground");
     expect(line.textContent).toBe(`Not answered: ${summary} · Retry`);
+    // The viewer's own post, yet no Edit on hover either: a held answer
+    // offers Retry alone.
+    expect(within(row).getByTestId("bot-message-retry")).toBeTruthy();
+    expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
   });
 
   it("says it under the post a thread opens on, inside the thread, and not above the thread's box", () => {

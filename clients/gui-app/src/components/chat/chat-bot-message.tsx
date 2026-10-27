@@ -133,7 +133,8 @@ export function ChatBotMessage(props: {
 
 /**
  * Why a member's message the bot failed to answer was not answered, and its
- * Retry and Edit bound to the message's text; `null` on any other.
+ * Retry and Edit bound to the message's text; `null` on any other. A held
+ * (parked) answer offers Retry alone, on the line and on hover alike.
  */
 function failedActionsOf(
   message: ChatMessageModel,
@@ -149,13 +150,14 @@ function failedActionsOf(
         );
   if (failed === null) return null;
   const { retry, edit } = failed;
+  const parked = failed.state === "parked";
   return {
     state: failed.state,
     summary: failed.summary,
-    onSignIn: failed.signIn,
+    onSignIn: parked ? null : failed.signIn,
     onRetry: retry === null ? null : () => retry(message.content),
     retrying: failed.retrying,
-    onEdit: edit === null ? null : () => edit(message.content),
+    onEdit: parked || edit === null ? null : () => edit(message.content),
   };
 }
 
@@ -368,7 +370,7 @@ function UnansweredLine(props: {
             onClick: failed.onRetry,
           },
         ]),
-    ...(parked || failed.onEdit === null
+    ...(failed.onEdit === null
       ? []
       : [
           {
@@ -378,7 +380,7 @@ function UnansweredLine(props: {
             onClick: failed.onEdit,
           },
         ]),
-    ...(parked || failed.onSignIn === null
+    ...(failed.onSignIn === null
       ? []
       : [
           {
