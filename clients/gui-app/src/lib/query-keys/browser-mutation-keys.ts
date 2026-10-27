@@ -1,6 +1,4 @@
 export const browserMutationKeys = {
-  catalogRead: (hostId: string | null, userId: string | null, epicId: string) =>
-    ["browser.catalog.read", hostId, userId, epicId] as const,
   createOnDevice: (epicId: string) =>
     ["browser.createOnDevice", epicId] as const,
   setViewport: (hostId: string, sessionId: string, tabId: string) =>

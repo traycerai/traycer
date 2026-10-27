@@ -33,6 +33,19 @@ export const hostQueryKeys = {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ) => [...hostQueryKeys.scope(hostId), method, params] as const,
+  browserCatalog: (
+    hostId: string | null,
+    epicId: string,
+    userId: string | null,
+  ) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "browser.catalog.read">(
+        hostId,
+        "browser.catalog.read",
+        { epicId },
+      ),
+      userId,
+    ] as const,
   plainTerminals: (hostId: string, scope: PlainTerminalScope) =>
     hostQueryKeys.method<HostRpcRegistry, "terminal.plain.list">(
       hostId,
@@ -221,4 +234,23 @@ export function isEpicTaskContextsQueryKey(
   queryKey: readonly unknown[],
 ): boolean {
   return queryKey[0] === "host" && queryKey[2] === EPIC_TASK_CONTEXTS_METHOD;
+}
+
+/** The same viewer/task inventory may have been read through several hosts. */
+export function isBrowserCatalogQueryKey(
+  queryKey: readonly unknown[],
+  userId: string,
+  epicId: string,
+): boolean {
+  const methodIndex = queryKey[1] === "browser.catalog.read" ? 1 : 2;
+  const params = queryKey[methodIndex + 1];
+  return (
+    queryKey[0] === "host" &&
+    queryKey[methodIndex] === "browser.catalog.read" &&
+    typeof params === "object" &&
+    params !== null &&
+    "epicId" in params &&
+    params.epicId === epicId &&
+    queryKey[methodIndex + 2] === userId
+  );
 }

@@ -38,21 +38,6 @@ vi.mock("@/stores/epics/canvas/canvas-browser-storage", () => ({
   retireCanvasBrowserStorage: () => retireCanvasBrowserStorage(),
 }));
 
-const { clearBrowserCatalogInventory, BROWSER_CATALOG_DB_NAME } = vi.hoisted(
-  () => ({
-    clearBrowserCatalogInventory: vi.fn<() => Promise<void>>(() =>
-      Promise.resolve(),
-    ),
-    BROWSER_CATALOG_DB_NAME: "traycer-gui-app:browser-catalog-v1",
-  }),
-);
-vi.mock("@/lib/browser-view/sessions/browser-catalog-inventory", () => ({
-  BROWSER_CATALOG_DB_NAME,
-  browserCatalogInventory: {
-    clear: () => clearBrowserCatalogInventory(),
-  },
-}));
-
 // The real module reaches `idb-keyval` on first use, which jsdom has no
 // native support for. Mocked wholesale; the wipe's OWN handling of it
 // (calling it, tolerating its rejection, and deleting its fixed db name
@@ -168,8 +153,6 @@ beforeEach(() => {
   resetTabRecoveryHistory.mockResolvedValue(undefined);
   retireCanvasBrowserStorage.mockReset();
   retireCanvasBrowserStorage.mockResolvedValue(undefined);
-  clearBrowserCatalogInventory.mockReset();
-  clearBrowserCatalogInventory.mockResolvedValue(undefined);
   clearAppearanceCache.mockClear();
   clearAppearanceCache.mockResolvedValue(undefined);
 
@@ -416,7 +399,6 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         VIEW_REPLICA_DB_NAME,
         "traycer-gui-app:tab-recovery",
         CANVAS_BROWSER_DB_NAME,
-        BROWSER_CATALOG_DB_NAME,
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
@@ -699,79 +681,6 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     await clearAllPersistedStores({ hostClear: null });
 
     expect(deleted).toContain(CANVAS_BROWSER_DB_NAME);
-  });
-
-  it("waits for the browser catalog clear before sweeping, deleting databases and reloading", async () => {
-    const order: string[] = [];
-    let markClearStarted: () => void = () => undefined;
-    const clearStarted = new Promise<void>((resolve) => {
-      markClearStarted = resolve;
-    });
-    let finishClear: () => void = () => undefined;
-    const clearGate = new Promise<void>((resolve) => {
-      finishClear = resolve;
-    });
-    clearBrowserCatalogInventory.mockImplementation(() => {
-      order.push("catalog-clear");
-      markClearStarted();
-      return clearGate;
-    });
-    vi.spyOn(localStorageMock, "removeItem").mockImplementation(() => {
-      order.push("sweep");
-    });
-    const value = {
-      databases: vi.fn(() => Promise.resolve([])),
-      deleteDatabase: vi.fn((name: string) => {
-        order.push(`delete:${name}`);
-        const { request, fire } = fakeDeleteRequest();
-        queueMicrotask(fire);
-        return request;
-      }),
-    };
-    Object.defineProperty(globalThis, "indexedDB", {
-      configurable: true,
-      writable: true,
-      value,
-    });
-    reloadSpy.mockImplementation(() => {
-      order.push("reload");
-    });
-
-    const wiping = clearAllPersistedStores({ hostClear: null });
-    await clearStarted;
-    expect(order).toEqual(["catalog-clear"]);
-    expect(value.deleteDatabase).not.toHaveBeenCalled();
-    expect(reloadSpy).not.toHaveBeenCalled();
-
-    finishClear();
-    await wiping;
-
-    expect(order.indexOf("catalog-clear")).toBeLessThan(order.indexOf("sweep"));
-    expect(order.indexOf("sweep")).toBeLessThan(
-      order.indexOf(`delete:${BROWSER_CATALOG_DB_NAME}`),
-    );
-    expect(order.indexOf(`delete:${BROWSER_CATALOG_DB_NAME}`)).toBeLessThan(
-      order.indexOf("reload"),
-    );
-  });
-
-  it("stops before the storage sweep, database deletion and reload when browser catalog clear fails", async () => {
-    const { deleted } = installIndexedDB({
-      databases: () => Promise.resolve([]),
-    });
-    const removeItem = vi.spyOn(localStorageMock, "removeItem");
-    clearBrowserCatalogInventory.mockRejectedValueOnce(
-      new Error("browser catalog clear failed"),
-    );
-
-    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
-      "browser catalog clear failed",
-    );
-
-    expect(clearBrowserCatalogInventory).toHaveBeenCalledTimes(1);
-    expect(removeItem).not.toHaveBeenCalled();
-    expect(deleted).toEqual([]);
-    expect(reloadSpy).not.toHaveBeenCalled();
   });
 
   it("retires queued canvas saves before the canvas database is deleted", async () => {
