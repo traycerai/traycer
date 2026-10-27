@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useIsMutating, useQueryClient } from "@tanstack/react-query";
@@ -70,6 +71,10 @@ import {
   useGuiHarnessesQueryForClient,
   useGuiHarnessModelsQueryForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  ChatOpencodeLineContext,
+  useChatOpencodeLine,
+} from "@/hooks/harnesses/chat-opencode-line-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
@@ -103,6 +108,10 @@ import {
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  chatOpencodeLine,
+  isOpencodeFamilyHarness,
+} from "@/lib/chat/opencode-line";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
@@ -355,7 +364,20 @@ function ActivePendingSendDriver(props: { readonly id: string }): ReactNode {
   if (send === null || stage === null || send.ended === true) {
     return null;
   }
-  return <PendingSendDelivery send={send} stage={stage} />;
+  if (
+    send.request.kind === "message" &&
+    isOpencodeFamilyHarness(send.settings.harnessId) &&
+    stage.createdHostId !== null
+  )
+    return (
+      <PendingMessageLineDelivery
+        send={send}
+        stage={stage}
+        chatId={send.request.chatId}
+        hostId={send.request.hostId ?? stage.createdHostId}
+      />
+    );
+  return <PendingSendDelivery send={send} stage={stage} chatLineReady />;
 }
 
 /** Runs only an undispatched send; its captured intent survives older terminal records. */
@@ -426,16 +448,57 @@ function usePendingSendRecovery(
   }, [id, send, stage]);
 }
 
+interface PendingSendDeliveryProps {
+  readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+}
+
+/** Read the bound chat's current line, including when its tile is closed. */
+function PendingMessageLineDelivery(
+  props: PendingSendDeliveryProps & {
+    readonly chatId: string;
+    readonly hostId: string;
+  },
+): ReactNode {
+  const { send, stage, chatId, hostId } = props;
+  const handle = useChatSessionHandleForContainer(
+    send.epicId,
+    chatId,
+    hostId,
+    stage.phase === "handoff",
+  );
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      handle === null ? () => undefined : handle.store.subscribe(listener),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    () => handle?.store.getState().chat ?? null,
+    [handle],
+  );
+  const chat = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  return (
+    <ChatOpencodeLineContext
+      value={chat === null ? null : chatOpencodeLine(chat)}
+    >
+      <PendingSendDelivery
+        send={send}
+        stage={stage}
+        chatLineReady={chat !== null}
+      />
+    </ChatOpencodeLineContext>
+  );
+}
+
 /**
  * Once the sandbox is up and its host connected: waits for the agent the
  * person asked for to be ready there, then hands it the message. An agent
  * that cannot run there, or whose install failed, is said on the line in
  * place; the message is never moved to another agent.
  */
-function PendingSendDelivery(props: {
-  readonly send: PendingSandboxSend;
-  readonly stage: StagedSandbox;
-}): ReactNode {
+function PendingSendDelivery(
+  props: PendingSendDeliveryProps & { readonly chatLineReady: boolean },
+): ReactNode {
   const { send, stage } = props;
   const runner = useStagedSandboxRunner();
   const surfaceKey = pendingSendSurfaceKey(send.id);
@@ -448,6 +511,7 @@ function PendingSendDelivery(props: {
     send,
     stage,
     sandbox.environment,
+    props.chatLineReady,
   );
   const event = sandboxObservation(stageBlocker(stage), environment);
   const plan = transitionPendingSend(
@@ -700,6 +764,7 @@ function usePendingDeliveryReadiness(
   send: PendingSandboxSend,
   stage: StagedSandbox | null,
   sandbox: PendingSendFacts,
+  chatLineReady: boolean,
 ): {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly requested: PendingAgentReadiness;
@@ -707,11 +772,16 @@ function usePendingDeliveryReadiness(
   readonly environment: PendingSendFacts;
 } {
   const client = useHostClientForHostId(stage?.createdHostId ?? null);
-  const active = stage?.phase === "handoff" && send.request.kind !== "terminal";
+  const opencodeLine = useChatOpencodeLine();
+  const active =
+    stage?.phase === "handoff" &&
+    send.request.kind !== "terminal" &&
+    chatLineReady;
   const requested = useRequestedAgentOnHost(
     active ? client : null,
     active,
     send.settings.harnessId,
+    opencodeLine,
   );
   const needsModel = send.settings.model.length === 0;
   const model = useDefaultModelOnHost(
@@ -751,6 +821,7 @@ function useRequestedAgentOnHost(
   client: HostClient<HostRpcRegistry> | null,
   active: boolean,
   harnessId: GuiHarnessId,
+  opencodeLine: OpencodeLine | null,
 ): PendingAgentReadiness {
   const activity = { enabled: active, subscribed: active };
   const harnesses = useGuiHarnessesQueryForClient(client, activity);
@@ -761,7 +832,7 @@ function useRequestedAgentOnHost(
         harnessId,
         harnesses.data?.harnesses,
         providerRows,
-        null,
+        opencodeLine,
       )
     : null;
   const profiles = useMemo(() => {
@@ -791,6 +862,7 @@ function useDefaultModelOnHost(
   sendId: string,
   hostId: string | null,
 ): PendingDefaultModel {
+  const opencodeLine = useChatOpencodeLine();
   const models = useGuiHarnessModelsQueryForClient(client, harnessId, null, {
     // Observe the shared cache; only the kernel's fetch-model effect reads it.
     enabled: false,
@@ -800,7 +872,7 @@ function useDefaultModelOnHost(
     client === null
       ? null
       : (findDefaultModel(models.data?.models ?? [])?.slug ?? null);
-  const identity = `${sendId}:${hostId ?? ""}:${harnessId}`;
+  const identity = `${sendId}:${hostId ?? ""}:${harnessId}:${opencodeLine ?? ""}`;
   const [completed, setCompleted] = useState<string | null>(null);
   const reading = useRef<string | null>(null);
   const refetchModels = models.refetch;
@@ -2225,7 +2297,12 @@ function PendingDispatchRemedy(props: {
   );
   const openLink = useOpenLink();
   if (props.failure === "settings" && props.row !== null)
-    return <SandboxRetryApplyingButton hostId={props.row.hostId} />;
+    return (
+      <SandboxRetryApplyingButton
+        hostId={props.row.hostId}
+        guestSetupFailed={props.row.guestConfigured === false}
+      />
+    );
   return (
     <Button
       type="button"
@@ -2865,6 +2942,8 @@ function PendingStagedSendItem(props: {
             onSendAgain: () => retrySend("send-again"),
             onChangeShape: () => backToComposer(true),
             onRetryApplying: newHost.onRetryApplying,
+            onRepairSetup: newHost.onRepairSetup,
+            repairSetupPending: newHost.repairSetupPending,
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
@@ -3106,10 +3185,12 @@ function endSendBackToComposer(input: {
 export function SandboxReadyLineForChat(props: {
   readonly chatId: string;
 }): ReactNode {
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
   const delivered = usePendingSandboxSendStore(
     (state) =>
       Object.values(state.sends).find(
-        (send) => send.delivery?.chatId === props.chatId,
+        (send) =>
+          send.userId === userId && send.delivery?.chatId === props.chatId,
       ) ?? null,
   );
   const sandboxId = delivered?.delivery?.sandboxId ?? null;

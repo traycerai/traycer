@@ -58,6 +58,10 @@ const hookState = vi.hoisted(() => ({
 
 const surfaceHostOpenedTabMock = vi.hoisted(() => vi.fn());
 
+vi.mock("@/hooks/browser/use-browser-catalog-inventory", () => ({
+  useBrowserCatalogInventory: () => undefined,
+}));
+
 vi.mock("@/lib/browser-view/tiles/surface-host-opened-tab", () => ({
   surfaceHostOpenedTab: surfaceHostOpenedTabMock,
 }));

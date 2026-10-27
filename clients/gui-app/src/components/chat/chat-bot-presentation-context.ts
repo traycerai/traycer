@@ -17,18 +17,30 @@ export interface ChatBotThreadLine {
 }
 
 /**
- * What a member can do about a message the bot failed to answer: send it to
- * the bot again as it is, and, on their own message, put its text back in
- * the box to edit and send as a new message that replaces it.
+ * A message the bot failed to answer, or whose answer is held: why, and what
+ * a member can do about it: send it to the bot again as it is, on their own
+ * message put its text back in the box to edit and send as a new message
+ * that replaces it, and sign in where that is the fix.
  */
 export interface ChatBotFailedRequest {
-  /** Sends it again; `text` is the message's own. */
-  readonly retry: (text: string) => void;
+  /** `failed`: the answer errored; `parked`: it is held and has not started. */
+  readonly state: "failed" | "parked";
+  /** Why, in the words the agent chat's error row uses; `null` when the host gave no reason. */
+  readonly summary: string | null;
+  /** Opens the provider's sign-in on the bot's host; `null` unless signing in is the fix. */
+  readonly signIn: (() => void) | null;
+  /**
+   * Sends it again; `text` is the message's own. `null` where it cannot be
+   * sent again: a host that cannot re-deliver, or a message whose text is not
+   * loaded yet.
+   */
+  readonly retry: ((text: string) => void) | null;
   /** `true` while a retry of it is being sent. */
   readonly retrying: boolean;
   /**
    * Puts `text`, the message's own, in the box that replaces it; `null` on
-   * a teammate's message, which only its writer can replace.
+   * a teammate's message, which only its writer can replace, and wherever
+   * Retry is `null`.
    */
   readonly edit: ((text: string) => void) | null;
 }
@@ -94,9 +106,8 @@ export interface ChatBotPresentation {
   readonly chooseOption: ((choice: string) => void) | null;
   /**
    * A member's message the bot failed to answer, by its request id and its
-   * writer: its Retry and Edit actions, offered while the session that
-   * failed or parked on it still holds it; `null` for any other request, and
-   * where nothing can.
+   * writer: why, and its actions, while the session that failed or parked on
+   * it still holds it; `null` for any other request.
    */
   readonly failedRequest:
     | ((

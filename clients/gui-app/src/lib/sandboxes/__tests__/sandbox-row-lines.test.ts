@@ -41,6 +41,7 @@ interface MatrixCase {
   readonly summary: Partial<SandboxSummary>;
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
   readonly primary: SandboxRowAction | null;
   readonly menu: readonly SandboxRowAction[];
 }
@@ -60,6 +61,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "awake" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "suspend",
     menu: AWAKE_MENU,
   },
@@ -68,6 +70,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "awake", burst: true },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "keep",
     menu: AWAKE_MENU,
   },
@@ -76,6 +79,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "stopped", burst: true },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "start",
     menu: ["rename", "idle-settings", "destroy"],
   },
@@ -88,6 +92,7 @@ const MATRIX: readonly MatrixCase[] = [
     },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "suspend",
     menu: AWAKE_MENU,
   },
@@ -96,6 +101,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "suspended" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "resume",
     menu: ["open-tab", "open-terminal", "rename", "idle-settings", "destroy"],
   },
@@ -104,6 +110,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "stopped" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "start",
     menu: ["rename", "idle-settings", "destroy"],
   },
@@ -112,6 +119,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "suspended", frozen: true },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "resume-paying",
     menu: ["rename", "destroy"],
   },
@@ -120,6 +128,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "suspended", frozen: true },
     unreachable: false,
     frozenNeedsOwnCredits: true,
+    settingsFailed: false,
     primary: "add-credits",
     menu: ["rename", "destroy"],
   },
@@ -128,6 +137,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "failed" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "retry",
     menu: ["destroy"],
   },
@@ -137,6 +147,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "failed", burst: true },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: null,
     menu: ["destroy"],
   },
@@ -145,6 +156,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "awake" },
     unreachable: true,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "stop",
     menu: ["rename", "destroy"],
   },
@@ -153,6 +165,17 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "awake", guestConfigured: false },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
+    primary: "retry-applying",
+    menu: ["open-terminal", "rename", "stop", "destroy"],
+  },
+  {
+    // The guest is fine; the environment's settings are what did not apply.
+    name: "awake, environment settings did not apply",
+    summary: { state: "awake", guestConfigured: true },
+    unreachable: false,
+    frozenNeedsOwnCredits: false,
+    settingsFailed: true,
     primary: "retry-applying",
     menu: ["open-terminal", "rename", "stop", "destroy"],
   },
@@ -161,6 +184,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "awake", kind: "automation" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "open-terminal",
     menu: ["rename"],
   },
@@ -169,6 +193,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "stopped", kind: "automation" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: "open-terminal",
     menu: ["rename"],
   },
@@ -177,6 +202,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "suspending" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: null,
     menu: ["destroy"],
   },
@@ -185,6 +211,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "resuming" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
+    settingsFailed: false,
     primary: null,
     menu: [],
   },
@@ -197,6 +224,7 @@ describe("sandboxRowActions (Flow 6 matrix)", () => {
         summary: sandboxSummaryFixture(row.summary),
         unreachable: row.unreachable,
         frozenNeedsOwnCredits: row.frozenNeedsOwnCredits,
+        settingsFailed: row.settingsFailed,
       }),
     ).toEqual({ primary: row.primary, menu: row.menu });
   });
@@ -208,6 +236,7 @@ describe("sandboxRowActions, the Automations row", () => {
       summary: sandboxSummaryFixture({ kind: "automation", ...summary }),
       unreachable: false,
       frozenNeedsOwnCredits: false,
+      settingsFailed: false,
     });
 
   it.each(["awake", "released", "starting", "creating"] as const)(

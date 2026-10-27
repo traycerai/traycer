@@ -2,11 +2,7 @@ import { measureProvisioningRow } from "@/lib/browser-view/sessions/browser-open
 import { useDraggable } from "@dnd-kit/core";
 import { Bot, Moon, TriangleAlert, X } from "lucide-react";
 import { useLayoutEffect, useMemo } from "react";
-import type {
-  BrowserSessionInfo,
-  BrowserTabDriver,
-  BrowserTabInfo,
-} from "@traycer/protocol/host/browser/contracts";
+import type { BrowserTabDriver } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -32,11 +28,17 @@ import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/bro
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
+import type {
+  BrowserSidebarSession,
+  BrowserSidebarTab,
+} from "./use-browser-tab-rows";
+
 interface BrowserTabRowProps {
+  readonly unavailable: boolean;
   readonly epicId: string;
   readonly viewTabId: string;
-  readonly session: BrowserSessionInfo;
-  readonly tab: BrowserTabInfo;
+  readonly session: BrowserSidebarSession;
+  readonly tab: BrowserSidebarTab;
   readonly identity: SettledTabIdentity;
   readonly secondaryLabel: string | null;
   readonly chatById: ReadonlyMap<
@@ -45,12 +47,12 @@ interface BrowserTabRowProps {
   >;
   readonly duplicateTitles: ReadonlySet<string>;
   readonly onOpenTab: (
-    session: BrowserSessionInfo,
-    tab: BrowserTabInfo,
+    session: BrowserSidebarSession,
+    tab: BrowserSidebarTab,
   ) => void;
   readonly onOpenTabPermanently: (
-    session: BrowserSessionInfo,
-    tab: BrowserTabInfo,
+    session: BrowserSidebarSession,
+    tab: BrowserSidebarTab,
   ) => void;
   readonly onOpenDrivingChat: (
     driver: BrowserTabDriver,
@@ -60,7 +62,7 @@ interface BrowserTabRowProps {
 }
 
 function browserTabStateLabel(
-  status: BrowserTabInfo["status"],
+  status: BrowserSidebarTab["status"],
   isClosing: boolean,
 ): string {
   if (status === "crashed") return ", failed";
@@ -138,9 +140,10 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
   } = useDraggable({
     id: getPaneScopedDndId(
       viewTabId,
-      getBrowserTileDragId(session.sessionId, tab.tabId),
+      getBrowserTileDragId(session.hostId, session.sessionId, tab.tabId),
     ),
     data: dragData,
+    disabled: props.unavailable,
   });
 
   const stateLabel = browserTabStateLabel(tab.status, isClosing);
@@ -173,6 +176,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
             {...listeners}
             type="button"
             aria-label={`${title}, ${identity.url}${stateLabel}`}
+            disabled={props.unavailable}
             aria-keyshortcuts="Shift+Enter"
             className="flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 pr-1 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
             onClick={() => onOpenTab(session, tab)}
@@ -218,7 +222,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
           type="button"
           variant="muted-destructive"
           size="icon-xs"
-          disabled={isClosing}
+          disabled={isClosing || props.unavailable}
           aria-label={closeAriaLabel}
           data-testid={`epic-browser-sidebar-close-${tab.tabId}`}
           className={cn(
