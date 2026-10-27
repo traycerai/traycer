@@ -291,6 +291,7 @@ import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-metho
 import {
   deriveWorktreeBindingWorkspaceAvailability,
   effectiveMissingWorktreePaths,
+  WORKSPACE_COMPOSER_READY,
   type WorkspaceComposerAvailability,
 } from "@/lib/composer/workspace-composer-availability";
 import { useChatSendGateWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
@@ -428,20 +429,16 @@ interface ChatTileSessionViewProps {
   readonly isActive: boolean;
   readonly currentEpicId: string;
   /**
-   * Why this surface's composer is locked, when the reason is not a viewer's
-   * permission. `null` on every live tile - the ordinary path is untouched.
+   * Why this surface's composer is locked, apart from viewer permissions.
+   * Resting copies have no lock notice because they can enqueue a message.
    */
   readonly readOnlyNotice: string | null;
   /**
    * Whether this view is driven by a live `chat.subscribe` session, as opposed
    * to a published copy's synthesized state.
    *
-   * Explicit rather than inferred from `readOnlyNotice === null`, which does
-   * discriminate the two today by coincidence: that field is a composer-lock
-   * REASON, and the day a live tile grows one, refusal recording would go
-   * silently dead. Nothing else on the props or the handle says which kind of
-   * session this is - the synthesized state is deliberately shaped to look
-   * like a loaded one, since for rendering the transcript it is.
+   * Independent of `readOnlyNotice`: a resting copy can send a message without
+   * becoming a live session or gaining authority on its serving host.
    */
   readonly isLiveSession: boolean;
   /**
@@ -939,7 +936,10 @@ function ChatDeadTileBannerWithOffer(
   const sandboxState = useChatSandboxState(
     props.epicId,
     props.sourceHostId,
-    false,
+    // These reasons come from a reachable host's answer, so an awake sandbox
+    // must keep the missing-history explanation and its Clone offer.
+    props.reason === "chat-not-visible" ||
+      props.reason === "chat-not-on-this-host",
   );
   const reason =
     sandboxState.kind === "destroyed" ? "sandbox-destroyed" : props.reason;
@@ -2010,6 +2010,7 @@ function useChatTileSessionViewModel(
   composerHighlightGeneration: number,
 ) {
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
+  const isCopy = !props.isLiveSession;
   const viewModelHostId = useTabHostId();
   const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
   // Surface visibility for the stream-flush coordinator's tiered flush rate:
@@ -2324,13 +2325,15 @@ function useChatTileSessionViewModel(
   // when the epic has at least one workspace folder (the chat then runs local
   // against it). The workspace selector itself stays owner-scoped to the
   // chat's binding so sibling chat folders do not appear in this chip.
-  const workspaceAvailability = useChatWorkspaceAvailability(
+  const workspaceAvailability = useChatWorkspaceAvailability({
+    isCopy,
     currentEpicId,
-    state.worktreeBinding,
-    state.snapshotLoaded,
-    effectiveMissingPaths,
-  );
+    worktreeBinding: state.worktreeBinding,
+    snapshotLoaded: state.snapshotLoaded,
+    missingWorktreePaths: effectiveMissingPaths,
+  });
   const activationQueries = chatTileActivationQueryPolicy({
+    isCopy,
     readOnlyNotice: props.readOnlyNotice,
     surfaceVisible,
     surfaceFocused,
@@ -2341,8 +2344,8 @@ function useChatTileSessionViewModel(
   });
   // Pair the missing-folder send-disable with an on-focus / pane-activation
   // re-check so restoring a deleted folder clears the disable without a send or
-  // reload. A locked published copy has no send gate to recover, so its retained
-  // surface never enables this activation query.
+  // reload. A copy's workspace belongs to its owner, so its serving host never
+  // enables this activation query.
   useChatMissingWorktreeFocusRefresh({
     handle,
     epicId: currentEpicId,
@@ -3589,13 +3592,15 @@ function useChatTileSessionViewModel(
   const updateChatRunSettingsMutateAsync = updateChatRunSettings.mutateAsync;
   const persistChatRunSettings = useCallback(
     (settings: ChatRunSettings): void => {
+      // Copy settings stay local until the pending message reaches its owner.
+      if (isCopy) return;
       enqueuePersistChatRunSettings(updateChatRunSettingsMutateAsync, {
         epicId: currentEpicId,
         chatId: node.id,
         settings,
       });
     },
-    [currentEpicId, node.id, updateChatRunSettingsMutateAsync],
+    [isCopy, currentEpicId, node.id, updateChatRunSettingsMutateAsync],
   );
   const {
     editQueuedItem,
@@ -3634,8 +3639,9 @@ function useChatTileSessionViewModel(
   // the chat session's `worktreeBinding` (populated from
   // `chat.subscribe`) and the cascading menu drives create / import /
   // re-bind through the existing modals.
-  const hostWorkspaceSelector = useMemo(
-    () => (
+  const hostWorkspaceSelector = useMemo(() => {
+    if (isCopy) return null;
+    return (
       <HostWorkspaceSelector
         disabled={false}
         surface={{
@@ -3665,25 +3671,25 @@ function useChatTileSessionViewModel(
           onForkOnNewSandbox: forkChatOnNewSandbox,
         }}
       />
-    ),
-    [
-      activeHostId,
-      currentEpicId,
-      node.id,
-      node.name,
-      state.worktreeBinding,
-      inFlightChatWorktreeIntent,
-      effectiveMissingPaths,
-      state.snapshotLoaded,
-      activeTurnStatus,
-      composerActiveTurnStatus,
-      hasTurnActivity,
-      clearMissingPathsAfterBindingCommit,
-      forkChatOnHost,
-      forkChatOnNewSandbox,
-      viewTabId,
-    ],
-  );
+    );
+  }, [
+    isCopy,
+    activeHostId,
+    currentEpicId,
+    node.id,
+    node.name,
+    state.worktreeBinding,
+    inFlightChatWorktreeIntent,
+    effectiveMissingPaths,
+    state.snapshotLoaded,
+    activeTurnStatus,
+    composerActiveTurnStatus,
+    hasTurnActivity,
+    clearMissingPathsAfterBindingCommit,
+    forkChatOnHost,
+    forkChatOnNewSandbox,
+    viewTabId,
+  ]);
   const usageChip = useMemo(
     () => (
       <ContextUsageChipForChat
@@ -3740,12 +3746,19 @@ function useChatTileSessionViewModel(
 
   const lowerAccess = useMemo(
     () => ({
+      isCopy,
       isViewer: accessFlags.isViewer,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
       restingSandbox: props.restingSandbox !== undefined,
     }),
-    [accessFlags.isViewer, canAct, props.readOnlyNotice, props.restingSandbox],
+    [
+      isCopy,
+      accessFlags.isViewer,
+      canAct,
+      props.readOnlyNotice,
+      props.restingSandbox,
+    ],
   );
 
   // Steer capability is a stable boolean (flips only when the running turn's
@@ -4448,8 +4461,8 @@ function useChatTileComposerSettingsSeeds(input: {
  * `enabled` gate so backgrounded keep-alive chats - including a non-front tab
  * stacked in the same visible pane - don't all re-stat on every window focus;
  * selecting the tab re-enables the query (with `staleTime: 0`) and refetches,
- * which doubles as the surface-activation re-check. Explicit locked copies stay
- * disabled because they have no composer send gate to recover.
+ * which doubles as the surface-activation re-check. Copies stay disabled because
+ * their workspace belongs to the owner, not the host serving the copy.
  */
 function useChatMissingWorktreeFocusRefresh(args: {
   readonly handle: ChatSessionStoreHandle;
@@ -4479,26 +4492,30 @@ function useChatMissingWorktreeFocusRefresh(args: {
   }, [refreshedMissing, refreshMissingWorktreePaths]);
 }
 
-function useChatWorkspaceAvailability(
-  currentEpicId: string,
-  worktreeBinding: WorktreeBinding | null,
-  snapshotLoaded: boolean,
-  missingWorktreePaths: ReadonlyArray<string>,
-): WorkspaceComposerAvailability {
+function useChatWorkspaceAvailability(args: {
+  readonly isCopy: boolean;
+  readonly currentEpicId: string;
+  readonly worktreeBinding: WorktreeBinding | null;
+  readonly snapshotLoaded: boolean;
+  readonly missingWorktreePaths: ReadonlyArray<string>;
+}): WorkspaceComposerAvailability {
   const client = useTabHostClient();
   const epicWorkspaces = useChatSendGateWorkspaceBindingsForClient({
     client,
-    epicId: currentEpicId,
-    enabled: client !== null,
+    epicId: args.currentEpicId,
+    enabled: !args.isCopy && client !== null,
   });
+  // A resting copy sends to its sandbox, whose workspace is checked on delivery.
+  // The serving host's folders cannot determine whether that send is allowed.
+  if (args.isCopy) return WORKSPACE_COMPOSER_READY;
   const epicWorkspaceCount =
     epicWorkspaces.data === undefined ? null : epicWorkspaces.data.rows.length;
 
   return deriveWorktreeBindingWorkspaceAvailability(
-    worktreeBinding,
-    snapshotLoaded,
+    args.worktreeBinding,
+    args.snapshotLoaded,
     { count: epicWorkspaceCount, didResolutionFail: epicWorkspaces.isError },
-    missingWorktreePaths,
+    args.missingWorktreePaths,
   );
 }
 

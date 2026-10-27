@@ -362,6 +362,15 @@ describe("SideStripNavRows", () => {
             hostName: "Sandbox",
             itemKey: "settings",
             reason: "settings_not_applied",
+            sandbox: {
+              sandboxId: "sandbox-settings",
+              operationId: "settings-attempt",
+              name: "Sandbox",
+              configurationName: "Development",
+              attemptId: "settings-attempt",
+              applied: [],
+              notApplied: ["settings"],
+            },
           },
         },
       ];

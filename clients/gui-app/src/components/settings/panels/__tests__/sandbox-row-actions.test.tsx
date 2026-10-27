@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   SandboxCreateRequest,
+  SandboxPod,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
@@ -119,10 +120,43 @@ vi.mock(
     useSandboxCreate: () => ({ mutate: createMutate, isPending: false }),
   }),
 );
+type SettingsOutcome = {
+  readonly settingsApplied: boolean;
+  readonly guestConfigured: boolean;
+  readonly guestConfigFailureReason: string | null;
+};
+type SettingsMutate = (
+  variables: Record<string, never>,
+  callbacks: { readonly onSuccess: (outcome: SettingsOutcome) => void },
+) => void;
+// The guest-only repair retires nothing, so its caller may pass no callback.
+type LegacyMutate = (
+  variables: Record<string, never>,
+  callbacks:
+    | { readonly onSuccess: (outcome: SettingsOutcome) => void }
+    | undefined,
+) => void;
+// The combined retry and the legacy guest-only repair are the network
+// boundary; whether the host negotiated the combined retry is the gate.
+const settings = vi.hoisted(() => ({
+  retry: vi.fn<SettingsMutate>(),
+  legacy: vi.fn<LegacyMutate>(),
+  retrySupported: { value: false },
+  legacySupported: { value: false },
+}));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
   () => ({
-    useSandboxRepairGuestConfigurationOnHost: () => mutation(),
+    useSandboxRepairGuestConfigurationOnHost: () => ({
+      mutate: settings.retry,
+      isPending: false,
+    }),
+    useSandboxRepairGuestSetupOnHost: () => ({
+      mutate: settings.legacy,
+      isPending: false,
+    }),
+    useSandboxRetryApplyingSupported: () => settings.retrySupported.value,
+    useSandboxGuestSetupRepairSupported: () => settings.legacySupported.value,
     useSandboxSettingsOperation: () => null,
   }),
 );
@@ -222,6 +256,10 @@ beforeEach(() => {
     contextMetadata: { userId: "u1", username: "ada" },
   });
   createMutate.mockClear();
+  settings.retry.mockReset();
+  settings.legacy.mockReset();
+  settings.retrySupported.value = false;
+  settings.legacySupported.value = false;
   runStagedSandbox.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
@@ -286,6 +324,7 @@ describe("<SandboxRowActions />", () => {
         configuration={{ kind: "personal" }}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />,
     );
 
@@ -316,6 +355,7 @@ describe("<SandboxRowActions />", () => {
         configuration={{ kind: "personal" }}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />,
     );
 
@@ -359,6 +399,7 @@ describe("<SandboxRowActions />", () => {
           configuration={{ kind: "personal" }}
           unreachable={false}
           frozenNeedsOwnCredits={false}
+          settingsFailed={false}
         />,
       );
 
@@ -389,6 +430,7 @@ describe("<SandboxRowActions />", () => {
         configuration={{ kind: "personal" }}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />,
     );
 
@@ -438,6 +480,7 @@ describe("<SandboxRowActions />", () => {
         configuration={{ kind: "personal" }}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />,
     );
 
@@ -472,6 +515,7 @@ describe("<SandboxRowActions />", () => {
           configuration={{ kind: "personal" }}
           unreachable={false}
           frozenNeedsOwnCredits={false}
+          settingsFailed={false}
         />,
       );
 
@@ -491,6 +535,7 @@ describe("<SandboxRowActions />", () => {
         configuration={{ kind: "personal" }}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />,
     );
     const press = async (): Promise<{
@@ -616,6 +661,7 @@ describe("<SandboxRowActions />", () => {
           configuration={configuration}
           unreachable={false}
           frozenNeedsOwnCredits={false}
+          settingsFailed={false}
         />,
       );
     }
@@ -849,6 +895,188 @@ describe("<SandboxRowActions />", () => {
       expectNothingFiledOrClosed();
     });
 
+    describe("a failed team pod's Retry reads the pod list first", () => {
+      /** Ordinal 2 is the clicked row's pod; any other is a different sandbox on its own host. */
+      function podAt(ordinal: number): SandboxPod {
+        const clicked = automationsRow("failed", "env-acme");
+        return {
+          sandbox:
+            ordinal === 2
+              ? clicked
+              : {
+                  ...clicked,
+                  id: `sbx-pod-${ordinal}`,
+                  hostId: `host-pod-${ordinal}`,
+                },
+          ordinal,
+          liveShells: 0,
+          headroom: 1,
+        };
+      }
+
+      function answerWith(pods: readonly SandboxPod[]) {
+        return {
+          kind: "ok",
+          automation: { available: true, sandbox: null, pods },
+        };
+      }
+
+      function renderFailedPod(): QueryClient {
+        const client = new QueryClient({
+          defaultOptions: { queries: { retry: false } },
+        });
+        renderAutomations(client, automationsRow("failed", "env-acme"), TEAM);
+        return client;
+      }
+
+      beforeEach(() => {
+        automation.openSandboxAutomation.mockResolvedValue({
+          kind: "ok",
+          sandbox: automationsRow("awake", "env-acme"),
+          settled: true,
+        });
+      });
+
+      it("stays pending through a cold lookup, then wakes the clicked ordinal once and opens no terminal", async () => {
+        let answer: (result: unknown) => void = () => undefined;
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledWith(
+            "env-acme",
+          );
+        });
+
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+        expect(
+          screen.getByTestId<HTMLButtonElement>("sandbox-row-retry").disabled,
+        ).toBe(true);
+
+        answer(answerWith([podAt(2)]));
+        await waitFor(() => {
+          expect(automation.openSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+        expect(automation.openSandboxAutomation).toHaveBeenCalledWith({
+          environmentId: "env-acme",
+          ordinal: 2,
+        });
+        await waitFor(() => {
+          expect(automation.openSandboxAutomation).toHaveResolved();
+        });
+        expectNothingFiledOrClosed();
+      });
+
+      it("shows a failed lookup on the row without waking, and Retry refetches then wakes the exact pod", async () => {
+        let answer: (result: unknown) => void = () => undefined;
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        answer({ kind: "network-error", detail: "offline" });
+        const alert = await screen.findByRole("alert");
+        expect(alert.textContent).toContain(
+          "Couldn't look up this host. Try again.",
+        );
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+
+        automation.getSandboxAutomation.mockImplementation(() =>
+          Promise.resolve(answerWith([podAt(1), podAt(2)])),
+        );
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+
+        await waitFor(() => {
+          expect(automation.openSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+        // The Retry asked for a fresh lookup before it woke; the wake's own
+        // refresh may read once more.
+        expect(
+          automation.getSandboxAutomation.mock.calls.length,
+        ).toBeGreaterThanOrEqual(2);
+        expect(automation.openSandboxAutomation).toHaveBeenCalledWith({
+          environmentId: "env-acme",
+          ordinal: 2,
+        });
+        expectNothingFiledOrClosed();
+      });
+
+      it("says the host is gone when the settled list lacks the pod, and wakes nothing", async () => {
+        const row = automationsRow("failed", "env-acme");
+        let answer: (result: unknown) => void = () => undefined;
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        );
+        renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+        answer(
+          answerWith([{ ...podAt(1), sandbox: { ...row, id: "sbx-other" } }]),
+        );
+
+        expect(
+          await screen.findByText("This host no longer exists."),
+        ).toBeTruthy();
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+        expectNothingFiledOrClosed();
+      });
+
+      it("wakes nothing when the account changes before the cold lookup answers, and shows the new account no old state", async () => {
+        const answers: Array<(result: unknown) => void> = [];
+        automation.getSandboxAutomation.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              answers.push(resolve);
+            }),
+        );
+        const client = renderFailedPod();
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(1);
+        });
+        await userEvent.click(screen.getByTestId("sandbox-row-retry"));
+
+        act(() => {
+          useAuthStore.setState({
+            status: "signed-in",
+            contextMetadata: { userId: "u2", username: "grace" },
+          });
+        });
+        await waitFor(() => {
+          expect(automation.getSandboxAutomation).toHaveBeenCalledTimes(2);
+        });
+        for (const answer of answers) answer(answerWith([podAt(2)]));
+        await waitFor(() => {
+          expect(client.isFetching()).toBe(0);
+        });
+
+        expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(
+          screen.getByTestId<HTMLButtonElement>("sandbox-row-retry").disabled,
+        ).toBe(false);
+        expectNothingFiledOrClosed();
+      });
+    });
+
     it("closes Settings onto the reserved pane while the start is still pending", async () => {
       let finishStart: (result: {
         kind: "ok";
@@ -903,6 +1131,7 @@ describe("<SandboxRowActions />", () => {
         configuration={{ kind: "personal" }}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />,
     );
 
@@ -916,5 +1145,294 @@ describe("<SandboxRowActions />", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
       "host-build",
     );
+  });
+});
+
+describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
+  const REPAIR_METHOD = "host.sandbox.repairGuestConfiguration";
+  const applied: SettingsOutcome = {
+    settingsApplied: true,
+    guestConfigured: true,
+    guestConfigFailureReason: null,
+  };
+  const notApplied: SettingsOutcome = {
+    settingsApplied: false,
+    guestConfigured: true,
+    guestConfigFailureReason: null,
+  };
+
+  function renderFailed(
+    overrides: Partial<SandboxSummary>,
+    settingsFailed: boolean,
+    onSettingsApplied: () => void,
+  ): void {
+    renderRow(
+      <SandboxRowActions
+        summary={sandboxSummaryFixture({
+          id: "sbx-failed",
+          hostId: "host-failed",
+          burst: false,
+          guestConfigured: false,
+          ...overrides,
+        })}
+        configuration={{ kind: "personal" }}
+        unreachable={false}
+        frozenNeedsOwnCredits={false}
+        settingsFailed={settingsFailed}
+        onSettingsApplied={onSettingsApplied}
+      />,
+    );
+  }
+
+  async function menuItems(): Promise<readonly string[]> {
+    await userEvent.click(
+      screen.getByRole("button", { name: /^More actions for/ }),
+    );
+    const menu = await screen.findByTestId("sandbox-row-menu-content");
+    return within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent);
+  }
+
+  describe("on a host that negotiated the combined retry", () => {
+    beforeEach(() => {
+      settings.retrySupported.value = true;
+      recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
+    });
+
+    it("offers Retry applying with the awake sandbox's own Open terminal, Stop, Choose another host and Details", () => {
+      renderFailed({ state: "awake" }, false, vi.fn());
+
+      expect(
+        screen.getByRole("button", { name: "Retry applying" }),
+      ).toBeTruthy();
+      for (const name of [
+        "Open terminal",
+        "Stop",
+        "Choose another host",
+        "Details",
+      ]) {
+        expect(screen.getByRole("button", { name })).toBeTruthy();
+      }
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
+
+    it("offers Retry applying for an environment-only failure whose guest is fine", () => {
+      renderFailed({ state: "awake", guestConfigured: true }, true, vi.fn());
+
+      expect(
+        screen.getByRole("button", { name: "Retry applying" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
+
+    it("still reaches Destroy from an awake sandbox whose settings did not apply", async () => {
+      renderFailed({ state: "awake" }, false, vi.fn());
+
+      expect(await menuItems()).toContain("Destroy");
+    });
+
+    it("retires the notice only when the combined outcome says the settings applied", async () => {
+      const onSettingsApplied = vi.fn();
+      renderFailed({ state: "awake" }, false, onSettingsApplied);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Retry applying" }),
+      );
+      expect(settings.retry).toHaveBeenCalledTimes(1);
+      const [variables, callbacks] = settings.retry.mock.calls[0];
+      expect(variables).toEqual({});
+
+      callbacks.onSuccess(notApplied);
+      expect(onSettingsApplied).not.toHaveBeenCalled();
+
+      callbacks.onSuccess({ ...applied, guestConfigured: false });
+      expect(onSettingsApplied).toHaveBeenCalledTimes(1);
+    });
+
+    it("never reads the guest-only repair as settings applied", async () => {
+      const onSettingsApplied = vi.fn();
+      renderFailed({ state: "awake" }, false, onSettingsApplied);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Retry applying" }),
+      );
+      settings.retry.mock.calls[0][1].onSuccess({
+        settingsApplied: false,
+        guestConfigured: true,
+        guestConfigFailureReason: null,
+      });
+
+      expect(onSettingsApplied).not.toHaveBeenCalled();
+      expect(settings.legacy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("on a host without the combined retry", () => {
+    beforeEach(() => {
+      settings.retrySupported.value = false;
+      settings.legacySupported.value = true;
+      recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
+    });
+
+    it("offers Repair setup, never Retry applying, for a guest that really failed", () => {
+      renderFailed({ state: "awake" }, false, vi.fn());
+
+      expect(screen.getByRole("button", { name: "Repair setup" })).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("runs the guest-only repair and never retires the settings notice, whatever it answers", async () => {
+      const onSettingsApplied = vi.fn();
+      renderFailed({ state: "awake" }, false, onSettingsApplied);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Repair setup" }),
+      );
+      expect(settings.retry).not.toHaveBeenCalled();
+      expect(settings.legacy).toHaveBeenCalledTimes(1);
+      const [variables, callbacks] = settings.legacy.mock.calls[0];
+      expect(variables).toEqual({});
+
+      callbacks?.onSuccess(notApplied);
+      callbacks?.onSuccess(applied);
+      expect(onSettingsApplied).not.toHaveBeenCalled();
+    });
+
+    it("offers no guest repair for an environment-only failure whose guest is fine", () => {
+      renderFailed({ state: "awake", guestConfigured: true }, true, vi.fn());
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("offers no guest repair while the guest fact is unknown", () => {
+      renderFailed({ state: "awake", guestConfigured: null }, true, vi.fn());
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("offers no repair when the repair method is present but its version is not known to be 1.0", () => {
+      settings.legacySupported.value = false;
+      recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
+      renderFailed({ state: "awake" }, false, vi.fn());
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("offers no repair when the host has no repair method at all", () => {
+      settings.legacySupported.value = false;
+      recordNegotiatedHostMethods("host-failed", ["terminal.plain.create"]);
+      renderFailed({ state: "awake" }, false, vi.fn());
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
+  });
+
+  describe("keeps the lifecycle's own actions", () => {
+    beforeEach(() => {
+      settings.retrySupported.value = true;
+      recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
+    });
+
+    it("starts a stopped sandbox and cannot stop or open a terminal on it", async () => {
+      renderFailed({ state: "stopped" }, false, vi.fn());
+
+      expect(screen.getByRole("button", { name: "Start" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open terminal" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+      const items = await menuItems();
+      expect(items).not.toContain("Stop");
+      expect(items).toContain("Destroy");
+    });
+
+    it("offers neither Stop nor Open terminal on a sandbox being destroyed", () => {
+      renderFailed({ state: "destroying" }, false, vi.fn());
+
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open terminal" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("still resumes a suspended sandbox", async () => {
+      renderFailed({ state: "suspended" }, false, vi.fn());
+
+      expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(await menuItems()).toContain("Destroy");
+    });
+
+    it("still offers Give it another period on a stopped sandbox near its destroy time", () => {
+      renderFailed(
+        {
+          state: "stopped",
+          destroyAfterRestingMinutes: 60,
+          destroyAt: Date.now() + 1_000,
+        },
+        false,
+        vi.fn(),
+      );
+
+      expect(screen.getByTestId("sandbox-row-give-another")).toBeTruthy();
+    });
+  });
+
+  describe("on a sandbox whose settings applied", () => {
+    it("keeps the full awake menu and Suspend", async () => {
+      renderFailed({ state: "awake", guestConfigured: true }, false, vi.fn());
+
+      expect(screen.getByRole("button", { name: "Suspend" })).toBeTruthy();
+      expect(await menuItems()).toEqual([
+        "Open a tab",
+        "Open terminal",
+        "Rename",
+        "Idle settings…",
+        "Stop",
+        "Details",
+        "Destroy",
+      ]);
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("keeps Stop as the primary of an unreachable awake sandbox", () => {
+      renderRow(
+        <SandboxRowActions
+          summary={sandboxSummaryFixture({
+            id: "sbx-unreachable",
+            hostId: "host-failed",
+            state: "awake",
+            burst: false,
+            guestConfigured: true,
+          })}
+          configuration={{ kind: "personal" }}
+          unreachable
+          frozenNeedsOwnCredits={false}
+          settingsFailed={false}
+        />,
+      );
+
+      expect(screen.getByTestId("sandbox-row-stop")).toBeTruthy();
+    });
   });
 });

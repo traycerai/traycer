@@ -4,6 +4,7 @@ import type {
   HostNotificationKind,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
+import type { EnvironmentNotificationDetail } from "@/lib/notifications/environment-notification-detail";
 
 export type NotificationAttentionTier = "blocking" | "failure";
 
@@ -15,18 +16,22 @@ export interface NotificationLifecycleInput {
   readonly resolvedAt: number | null;
   readonly hostKind?: HostNotificationKind | null;
   readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
+  readonly environmentDetail?: EnvironmentNotificationDetail | null;
 }
 
 export type NotificationLifecycleClassification =
   | { readonly section: "attention"; readonly tier: NotificationAttentionTier }
   | { readonly section: "recent" };
 
-/** The producer decides actionability; reading a notice does not do its action. */
+/** Reading does not complete a notice's action. Details-only apply failures
+ * instead use the ordinary acknowledgement lifecycle. */
 export function isActionableNotice(row: NotificationLifecycleInput): boolean {
   return (
     row.severity === "needs_action" &&
     ((row.sandboxNotice ?? null) !== null ||
-      row.hostKind === "environment.apply.failed")
+      (row.hostKind === "environment.apply.failed" &&
+        row.environmentDetail?.kind === "environment_apply_failed" &&
+        (row.environmentDetail.sandbox ?? null) !== null))
   );
 }
 
@@ -46,8 +51,10 @@ export function classifyNotificationLifecycle(
       : { section: "recent" };
   }
   if (row.severity === "needs_action") {
+    const tier =
+      row.hostKind === "environment.apply.failed" ? "failure" : "blocking";
     return row.readAt === null
-      ? { section: "attention", tier: "blocking" }
+      ? { section: "attention", tier }
       : { section: "recent" };
   }
   if (row.severity === "failure") {

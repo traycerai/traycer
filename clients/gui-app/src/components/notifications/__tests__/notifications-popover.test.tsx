@@ -910,6 +910,7 @@ describe("NotificationsPopover", () => {
     __resetHostNotificationsStoreForTests();
     __resetAppLocalNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
+    useCloudNotificationsStore.setState({ accountId: "user-popover" });
     notificationFeedMode.value = "local";
     resetPopoverFilters();
     activeHostIdRef.value = mockLocalHostEntry.hostId;

@@ -15,6 +15,13 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
+  useHostClientForHostId: (hostId: string | null) =>
+    requireTeamHostClient().createRequesterForHostId(hostId),
+}));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -49,6 +56,10 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
@@ -70,6 +81,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   resetTeamPageHarness();
   useAuthStore.setState({ contextMetadata: null });
   hoisted.recover.mockReset();
@@ -714,6 +726,83 @@ describe("the Secrets header's Details", () => {
   });
 });
 
+describe("a history-reported unused setting", () => {
+  const unusedHost = (reason: string | null) => ({
+    hostId: "host-sbx",
+    hostName: "Build box",
+    state: "not_used",
+    reason,
+    at: AT,
+    lastReportedAt: AT,
+  });
+
+  function mountUnused(reason: string | null): TeamPageHarness {
+    return mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({ hostStates: [unusedHost(reason)] }),
+    });
+  }
+
+  it("names a known harness key by its product, never by the raw key", async () => {
+    const harness = mountUnused("claude:ANTHROPIC_API_KEY");
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Claude Code key · not used on sandboxes");
+    expect(document.body.textContent).not.toMatch(/ANTHROPIC_API_KEY|claude:/);
+  });
+
+  it("keeps an already-friendly label as it is", async () => {
+    const harness = mountUnused("Claude Code key");
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Claude Code key · not used on sandboxes");
+  });
+
+  it("uses a generic label for an unknown harness instead of exposing its key", async () => {
+    const harness = mountUnused("future_harness:PRIVATE_KEY");
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Agent key · not used on sandboxes");
+    expect(document.body.textContent).not.toMatch(/future_harness|PRIVATE_KEY/);
+  });
+
+  it("falls back to a generic key label when the host names no setting, never printing null", async () => {
+    const harness = mountUnused(null);
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const row = await screen.findByText(/not used on sandboxes/);
+    expect(row.textContent).toBe("Agent key · not used on sandboxes");
+    expect(document.body.textContent).not.toMatch(/\bnull\b/);
+  });
+
+  it("keeps the raw key in the diagnostics export for support", async () => {
+    const harness = mountUnused("claude:ANTHROPIC_API_KEY");
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    await screen.findByText(/not used on sandboxes/);
+
+    await user.click(
+      await screen.findByRole("tab", { name: "Export diagnostics" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
+    const exported = await savedExport();
+
+    expect(exported).toMatchObject({
+      status: {
+        hosts: [
+          {
+            item: "Claude Code key",
+            reason: "claude:ANTHROPIC_API_KEY",
+          },
+        ],
+      },
+    });
+  });
+});
+
 describe("a sandbox's unused settings", () => {
   const HOST_ID = mockLocalHostEntry.hostId;
   const sandboxHost = {
@@ -751,10 +840,13 @@ describe("a sandbox's unused settings", () => {
     ],
   });
 
-  function mountChip(): TeamPageHarness {
+  function mountChip(
+    guestConfigured: boolean | null,
+    delivered: typeof status,
+  ): TeamPageHarness {
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => history({ hostStates: [sandboxHost] }),
-      "environment.status": () => status,
+      "environment.status": () => delivered,
     });
     harness.queryClient.setQueryDefaults(sandboxQueryKeys.listAll(), {
       gcTime: Number.POSITIVE_INFINITY,
@@ -765,6 +857,7 @@ describe("a sandbox's unused settings", () => {
           hostId: HOST_ID,
           displayName: "Build box",
           state: "awake",
+          guestConfigured,
         }),
       ],
     });
@@ -772,7 +865,7 @@ describe("a sandbox's unused settings", () => {
   }
 
   it("lists each unused key as a named row under the sandbox, never printing the variable or a reason", async () => {
-    const harness = mountChip();
+    const harness = mountChip(null, status);
     openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
 
     const row = await screen.findByText(/key · not used on sandboxes/);
@@ -784,6 +877,97 @@ describe("a sandbox's unused settings", () => {
       /ANTHROPIC_API_KEY|permission_denied/,
     );
     expect(harness.paramsOf("environment.status")).toHaveLength(1);
+  });
+
+  describe("the recovery for a sandbox whose settings did not apply", () => {
+    function advertiseRepair(minor: number): void {
+      recordNegotiatedHostManifest(HOST_ID, {
+        "host.sandbox.repairGuestConfiguration": { major: 1, minor },
+      });
+    }
+
+    // The guest is fine; only a settings item failed to apply.
+    const environmentFailed = environmentStatusResponseSchemaV11.parse({
+      ...status,
+      items: [
+        {
+          ...status.items[0],
+          key: "VAR",
+          kind: "variable",
+          status: "failed",
+          code: "permission_denied",
+        },
+      ],
+    });
+
+    async function openDelivery(
+      guestConfigured: boolean | null,
+      delivered: typeof status,
+    ) {
+      const harness = mountChip(guestConfigured, delivered);
+      openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+      await screen.findByText("Build box", { exact: true });
+    }
+
+    it("offers Repair setup, not Retry applying, for a guest that really failed on a 1.0 host", async () => {
+      advertiseRepair(0);
+      await openDelivery(false, status);
+
+      expect(
+        await screen.findByRole("button", { name: "Repair setup" }),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("offers Retry applying for a guest that really failed on a host with the combined retry", async () => {
+      advertiseRepair(1);
+      await openDelivery(false, status);
+
+      expect(
+        await screen.findByRole("button", { name: "Retry applying" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
+
+    it("offers nothing on a host whose repair version is unknown", async () => {
+      await openDelivery(false, status);
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Retry applying" }),
+      ).toBeNull();
+    });
+
+    it("never offers Repair setup when only an environment item failed and the guest is configured", async () => {
+      advertiseRepair(0);
+      await openDelivery(true, environmentFailed);
+      // The row did read as not applied, so the missing button is the rule's.
+      expect(
+        (await screen.findAllByText(/Not applied/)).length,
+      ).toBeGreaterThan(0);
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
+
+    it("never offers Repair setup when only an environment item failed and the guest is unknown", async () => {
+      advertiseRepair(0);
+      await openDelivery(null, environmentFailed);
+      // The row did read as not applied, so the missing button is the rule's.
+      expect(
+        (await screen.findAllByText(/Not applied/)).length,
+      ).toBeGreaterThan(0);
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
+
+    it("never offers Repair setup for a guest whose state is unknown", async () => {
+      advertiseRepair(0);
+      await openDelivery(null, status);
+
+      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
+    });
   });
 
   it("shows only the drawer's no-access state once history is refused, even with the sandbox cached", async () => {
@@ -819,7 +1003,7 @@ describe("a sandbox's unused settings", () => {
   });
 
   it("keeps the raw item key in the diagnostics export only", async () => {
-    const harness = mountChip();
+    const harness = mountChip(null, status);
     const user = userEvent.setup();
     openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
     await screen.findByText(/not used on sandboxes/);

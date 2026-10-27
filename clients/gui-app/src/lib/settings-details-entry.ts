@@ -13,10 +13,16 @@ export interface DetailsSubject {
 
 export type DetailsReaderScope = "full" | "own" | "status_only";
 
-export interface DetailsRecovery {
-  readonly kind: "repair" | "install" | "retry" | "overview" | "apply";
-  readonly hostId: string;
-}
+export type DetailsRecovery =
+  | {
+      readonly kind: "repair" | "install" | "retry" | "overview";
+      readonly hostId: string;
+    }
+  | {
+      readonly kind: "apply";
+      readonly hostId: string;
+      readonly guestSetupFailed: boolean | null;
+    };
 
 /** Metadata only: never add values, tokens, credentials or arbitrary payloads.
  * Host names and actor labels must already be authorized by the provider.

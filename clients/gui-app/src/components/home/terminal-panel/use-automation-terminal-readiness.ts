@@ -33,7 +33,9 @@ export function useAutomationTerminalReadinessFailed(
   ) {
     setSeenTerminalId(attempt.terminalId);
   }
-  if (attempt === null || attempt.sandboxId === null) return false;
+  // Until open accepts, a list can still describe the state before the wake.
+  if (attempt === null || attempt.hostId === null || attempt.sandboxId === null)
+    return false;
   const observed = decodePendingSandboxObservation(
     {
       createdAt: attempt.startedAt,

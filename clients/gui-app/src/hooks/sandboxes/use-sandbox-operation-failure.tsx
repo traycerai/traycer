@@ -55,7 +55,7 @@ export function useSandboxOperationFailure(
   const message =
     creditFailure === null
       ? sandboxVerbFailureLine(operation.verb, props.name, operation.reference)
-      : `Couldn't ${operation.verb} ${props.name} · ${sandboxCreditShortLine(configuration, creditFailure.creditSource ?? null, creditFailure.shortfallMc, true)}`;
+      : `Couldn't ${operation.verb} ${props.name} · ${sandboxCreditShortLine(configuration, creditFailure.creditSource ?? null, creditFailure.shortfallMc, { waking: true, context: "clause" })}`;
   return (
     <div
       role="alert"

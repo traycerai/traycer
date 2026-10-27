@@ -991,11 +991,9 @@ function SandboxListRow(props: {
   readonly viewerUserId: string | null;
   readonly highlighted: boolean;
 }): ReactNode {
-  const { configuration, viewerUserId } = props;
-  const settings = useSandboxSettingsStatus(props.summary);
-  const summary = sandboxSettingsFailed(settings.data?.items ?? [])
-    ? { ...props.summary, guestConfigured: false }
-    : props.summary;
+  const { summary, configuration, viewerUserId } = props;
+  const settings = useSandboxSettingsStatus(summary);
+  const settingsFailed = sandboxSettingsFailed(settings.data?.items ?? []);
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
   const sessions = useSandboxSessionReport(summary.hostId, awake);
@@ -1056,7 +1054,9 @@ function SandboxListRow(props: {
             <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             <span>
               {sandboxClockLine({
-                summary,
+                summary: settingsFailed
+                  ? { ...summary, guestConfigured: false }
+                  : summary,
                 configuration,
                 cost: props.cost,
                 wakeString: wake,
@@ -1066,7 +1066,7 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
-          {awake && summary.guestConfigured === false ? (
+          {awake && (settingsFailed || summary.guestConfigured === false) ? (
             <div className="text-ui-xs text-muted-foreground">
               <p>Compute is charged while it is awake.</p>
               <p>
@@ -1093,6 +1093,7 @@ function SandboxListRow(props: {
           configuration,
           viewerUserId,
         )}
+        settingsFailed={settingsFailed}
       />
     </li>
   );

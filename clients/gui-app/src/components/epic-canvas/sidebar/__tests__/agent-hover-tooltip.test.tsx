@@ -999,7 +999,7 @@ describe("AgentHoverTooltip host section", () => {
     const details = await screen.findByTestId("task-sandbox-end-details");
     expect(details.textContent).toContain("team-box");
     expect(details.textContent).toContain("Oct 27");
-    expect(details.textContent).toContain("06:21");
+    expect(details.textContent).toContain("06:21 UTC");
     expect(details.textContent).toContain("Ada");
     expect(details.textContent).toContain("Its files are gone");
     // A destroyed host has no sandbox row to open: the viewer's sandbox

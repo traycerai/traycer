@@ -37,6 +37,13 @@ interface SandboxDestroyContext {
   readonly userId: string | null;
 }
 
+interface SandboxDestroyOptions {
+  readonly binding: HostRuntimeBinding<HostRpcRegistry> | null;
+  readonly queryClient: QueryClient;
+  readonly runnerHost: IRunnerHost;
+  readonly feedback: "toast" | "batch";
+}
+
 /** A batch retry retains its idle-only constraint and confirming account. */
 export type SandboxDestroyRequest = void | {
   readonly idleOnly: true;
@@ -84,17 +91,20 @@ export function useSandboxDestroy(
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
   const mutation = useMutation(
-    sandboxDestroyMutationOptions(sandbox, binding, queryClient, runnerHost),
+    sandboxDestroyMutationOptions(sandbox, {
+      binding,
+      queryClient,
+      runnerHost,
+      feedback: "toast",
+    }),
   );
   return useAccountFencedMutation(mutation);
 }
 
-/** Shared by single-row Destroy and every individually observed batch target. */
+/** Shared per-row state; the batch owns its feedback and refreshes together. */
 export function sandboxDestroyMutationOptions(
   sandbox: Pick<SandboxSummary, "id" | "hostId" | "displayName">,
-  binding: HostRuntimeBinding<HostRpcRegistry> | null,
-  queryClient: QueryClient,
-  runnerHost: IRunnerHost,
+  { binding, queryClient, runnerHost, feedback }: SandboxDestroyOptions,
 ): UseMutationOptions<
   boolean,
   Error,
@@ -156,7 +166,7 @@ export function sandboxDestroyMutationOptions(
       throw new SandboxOperationError(result);
     },
     onSuccess: (_data, _variables, context) => {
-      if (!settledForStartingAccount(context)) return;
+      if (feedback === "batch" || !settledForStartingAccount(context)) return;
       void context.directory?.refresh();
       requestFleetRefresh(runnerHost);
       void queryClient.invalidateQueries({
@@ -164,7 +174,7 @@ export function sandboxDestroyMutationOptions(
       });
     },
     onError: (error, _variables, context) => {
-      if (!settledForStartingAccount(context)) return;
+      if (feedback === "batch" || !settledForStartingAccount(context)) return;
       if (error instanceof SandboxDestroySkippedError) {
         void queryClient.invalidateQueries({
           queryKey: authQueryKeys.registeredHostsAll(),

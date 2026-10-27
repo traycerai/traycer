@@ -501,6 +501,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -528,6 +529,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -547,6 +549,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -594,6 +597,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -631,6 +635,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -675,6 +680,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       onSnapshot,
     );
@@ -699,6 +705,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       onSnapshot,
     );
@@ -735,6 +742,7 @@ describe("cloud notifications store", () => {
     const closeOld = openCloudNotificationsStream(
       reconnectEngine,
       oldClient,
+      "user-a",
       null,
       null,
     );
@@ -745,6 +753,7 @@ describe("cloud notifications store", () => {
     const closeReplacement = openCloudNotificationsStream(
       reconnectEngine,
       replacementClient,
+      "user-a",
       null,
       null,
     );
@@ -774,5 +783,95 @@ describe("cloud notifications store", () => {
 
     closeOld();
     closeReplacement();
+  });
+  describe("session owner", () => {
+    it("stamps the opening account and clears it on reset", () => {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      expect(useCloudNotificationsStore.getState().accountId).toBe("user-a");
+
+      close();
+      useCloudNotificationsStore.getState().reset();
+
+      expect(useCloudNotificationsStore.getState().accountId).toBeNull();
+    });
+
+    it("opens a different account on a fresh session without the previous account's rows", () => {
+      const oldClient = new ControlledWsStreamClient();
+      const closeOld = openCloudNotificationsStream(
+        reconnectEngine,
+        oldClient,
+        "user-a",
+        null,
+        null,
+      );
+      oldClient.sessions[0].emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [cloudRow("entry-a", 1, "host-a")],
+        summary,
+      });
+      const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+
+      const newClient = new ControlledWsStreamClient();
+      const closeNew = openCloudNotificationsStream(
+        reconnectEngine,
+        newClient,
+        "user-b",
+        null,
+        null,
+      );
+
+      const state = useCloudNotificationsStore.getState();
+      expect(state.accountId).toBe("user-b");
+      expect(state.rows).toEqual({});
+      expect(state.sessionEpoch).toBeGreaterThan(epochBefore);
+
+      oldClient.sessions[0].emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 6,
+        rows: [cloudRow("entry-a-late", 2, "host-a")],
+        summary,
+      });
+      expect(useCloudNotificationsStore.getState().rows).toEqual({});
+      closeOld();
+      closeNew();
+    });
+
+    it("keeps the session when the same account reopens", () => {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+      close();
+
+      const reopened = openCloudNotificationsStream(
+        reconnectEngine,
+        new ControlledWsStreamClient(),
+        "user-a",
+        null,
+        null,
+      );
+
+      expect(useCloudNotificationsStore.getState().sessionEpoch).toBe(
+        epochBefore,
+      );
+      reopened();
+    });
   });
 });

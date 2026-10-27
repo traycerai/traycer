@@ -12,8 +12,9 @@ import {
   sandboxEgressSubscribeClientFrameSchemaV10,
   sandboxEgressSubscribeServerFrameSchemaV10,
   sandboxEgressSubscribeV10,
-  sandboxRepairGuestConfigurationResponseSchema,
+  sandboxRepairGuestConfigurationUpgradeV10ToV11,
   sandboxRepairGuestConfigurationV10,
+  sandboxRepairGuestConfigurationV11,
 } from "@traycer/protocol/host/sandbox-egress";
 
 const BASE = { id: "evt-1", at: 1_791_000_000_000, untrusted: false };
@@ -232,7 +233,7 @@ describe("sandbox egress contracts", () => {
     });
   });
 
-  it("declares the repair unary at 1.0", () => {
+  it("declares the repair unary at 1.0 and 1.1", () => {
     expect(sandboxRepairGuestConfigurationV10.method).toBe(
       "host.sandbox.repairGuestConfiguration",
     );
@@ -240,32 +241,113 @@ describe("sandbox egress contracts", () => {
       major: 1,
       minor: 0,
     });
+    expect(sandboxRepairGuestConfigurationV11.method).toBe(
+      "host.sandbox.repairGuestConfiguration",
+    );
+    expect(sandboxRepairGuestConfigurationV11.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
   });
 
-  it("parses a configured and a failed repair response", () => {
+  it("keeps the shipped 1.0 request the exact empty guest-only object", () => {
+    const request = sandboxRepairGuestConfigurationV10.requestSchema;
+    expect(request.parse({})).toEqual({});
+    // An unknown key is stripped, never carried: 1.0 has no operation id.
+    expect(request.parse({ operationId: "op-1" })).toEqual({});
+  });
+
+  it("keeps the shipped 1.0 response guest-only", () => {
+    const response = sandboxRepairGuestConfigurationV10.responseSchema;
     expect(
-      sandboxRepairGuestConfigurationResponseSchema.parse({
-        guestConfigured: true,
-        guestConfigFailureReason: null,
-      }),
+      response.parse({ guestConfigured: true, guestConfigFailureReason: null }),
     ).toEqual({ guestConfigured: true, guestConfigFailureReason: null });
     expect(
-      sandboxRepairGuestConfigurationResponseSchema.parse({
+      response.parse({
         guestConfigured: false,
         guestConfigFailureReason: "trust files",
+        settingsApplied: true,
       }),
     ).toEqual({
       guestConfigured: false,
       guestConfigFailureReason: "trust files",
     });
   });
+
+  it("requires a nullable, bounded operation id in the 1.1 request", () => {
+    const request = sandboxRepairGuestConfigurationV11.requestSchema;
+    expect(() => request.parse({})).toThrow();
+    expect(request.parse({ operationId: "op-1" })).toEqual({
+      operationId: "op-1",
+    });
+    expect(request.parse({ operationId: null })).toEqual({ operationId: null });
+    expect(() => request.parse({ operationId: "" })).toThrow();
+    expect(() => request.parse({ operationId: "x".repeat(129) })).toThrow();
+  });
+
+  it("reports settingsApplied apart from guestConfigured in the 1.1 response", () => {
+    const response = sandboxRepairGuestConfigurationV11.responseSchema;
+    // The guest is configured but the environment layer did not apply.
+    expect(
+      response.parse({
+        guestConfigured: true,
+        guestConfigFailureReason: null,
+        settingsApplied: false,
+      }),
+    ).toEqual({
+      guestConfigured: true,
+      guestConfigFailureReason: null,
+      settingsApplied: false,
+    });
+    expect(
+      response.parse({
+        guestConfigured: true,
+        guestConfigFailureReason: null,
+        settingsApplied: true,
+      }).settingsApplied,
+    ).toBe(true);
+    expect(() =>
+      response.parse({
+        guestConfigured: true,
+        guestConfigFailureReason: null,
+      }),
+    ).toThrow();
+  });
+
+  it("upgrades a 1.0 request to a null operation id and a 1.0 response to settingsApplied false, never inventing success", () => {
+    expect(
+      sandboxRepairGuestConfigurationUpgradeV10ToV11.upgradeRequest({}),
+    ).toEqual({ operationId: null });
+    for (const guestConfigured of [true, false]) {
+      const upgraded =
+        sandboxRepairGuestConfigurationUpgradeV10ToV11.upgradeResponse({
+          guestConfigured,
+          guestConfigFailureReason: guestConfigured ? null : "prove",
+        });
+      expect(upgraded).toEqual({
+        guestConfigured,
+        guestConfigFailureReason: guestConfigured ? null : "prove",
+        settingsApplied: false,
+      });
+      expect(() =>
+        sandboxRepairGuestConfigurationV11.responseSchema.parse(upgraded),
+      ).not.toThrow();
+    }
+  });
 });
 
 describe("sandbox egress registry facts", () => {
   it("registers the repair verb in the unary registry off the released floor", () => {
     const entry = hostRpcRegistry["host.sandbox.repairGuestConfiguration"];
+    expect(entry[1].latestMinor).toBe(1);
     expect(entry[1].versions[0].contract).toBe(
       sandboxRepairGuestConfigurationV10,
+    );
+    expect(entry[1].versions[1].contract).toBe(
+      sandboxRepairGuestConfigurationV11,
+    );
+    expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
+      sandboxRepairGuestConfigurationUpgradeV10ToV11,
     );
     expect(entry.degrade).toEqual({ kind: "unsupported" });
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(

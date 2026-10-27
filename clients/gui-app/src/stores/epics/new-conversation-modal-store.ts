@@ -81,7 +81,10 @@ export interface NewConversationModalDraftPatch {
   readonly ownerHostId: string | null;
 }
 
-/** A give-back must preserve text and any intervening settings or workspace choice. */
+/**
+ * A give-back must preserve text and any intervening settings or workspace choice.
+ * A remembered caret alone can come from autofocus and does not occupy the draft.
+ */
 export function isNewConversationDraftOccupied(
   draft: NewConversationModalDraftPatch | undefined,
 ): boolean {
@@ -90,8 +93,7 @@ export function isNewConversationDraftOccupied(
     ((draft.content !== null && !isEmptyLandingDraftContent(draft.content)) ||
       draft.settings !== null ||
       draft.workspace !== null ||
-      draft.composerMode !== null ||
-      draft.selection !== null)
+      draft.composerMode !== null)
   );
 }
 

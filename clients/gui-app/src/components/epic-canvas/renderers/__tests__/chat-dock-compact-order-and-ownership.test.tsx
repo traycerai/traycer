@@ -212,7 +212,12 @@ function surfacesProps(patch: {
     chatId: CHAT_ID,
     hostId: HOST_ID,
     runtime: { snapshotLoaded: true },
-    access: { isViewer: false, canAct: true, readOnlyNotice: null },
+    access: {
+      isViewer: false,
+      isCopy: false,
+      canAct: true,
+      readOnlyNotice: null,
+    },
     turn: {
       activeTurnStatus: null,
       steerCapable: false,

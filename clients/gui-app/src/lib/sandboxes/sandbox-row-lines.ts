@@ -360,21 +360,23 @@ export function sandboxShapeAndCostLine(
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
   const shape = sandboxShapeLine(summary);
-  if (summary.priceMcPerHour === null) return shape;
   const creator = agentCreatorClause(summary);
-  if (creator !== null) {
-    return `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake · ${creator}`;
+  const teamNonPayer =
+    configuration.kind === "team" && summary.wakePayer?.userId !== viewerUserId;
+  const resting = summary.state === "suspended" || summary.state === "stopped";
+  const wakeWarning =
+    teamNonPayer && resting ? "waking it makes you the payer" : null;
+  if (summary.priceMcPerHour === null) {
+    return joinParts(shape, wakeWarning, wakeWarning === null ? null : creator);
   }
-  const rate = `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
-  if (
-    configuration.kind === "team" &&
-    summary.wakePayer?.userId !== viewerUserId
-  ) {
-    const resting =
-      summary.state === "suspended" || summary.state === "stopped";
-    return resting ? `${rate} · waking it makes you the payer` : rate;
-  }
-  return `${shape} · ${costLine(summary.priceMcPerHour.awakeMc, configurationCopy(configuration))}`;
+  const cost =
+    creator !== null || teamNonPayer
+      ? `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          configurationCopy(configuration),
+        );
+  return joinParts(shape, cost, wakeWarning, creator);
 }
 
 /** `created by Planner for Sandbox setup`, on an agent sandbox. */
@@ -926,6 +928,7 @@ export type SandboxRowAction =
   | "keep"
   | "retry"
   | "retry-applying"
+  | "repair-setup"
   | "resume-paying"
   | "add-credits"
   | "open-tab"
@@ -953,6 +956,7 @@ export function sandboxRowActions(input: {
   readonly unreachable: boolean;
   /** A frozen row's remedy is the viewer's own top-up. */
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const actions = matrixRowActions(input);
   if (!input.summary.burst || actions.primary !== "retry") return actions;
@@ -963,6 +967,7 @@ function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const { summary } = input;
   // Open terminal starts a released Automations host first, in every state
@@ -1006,7 +1011,7 @@ function matrixRowActions(input: {
       if (input.unreachable) {
         return { primary: "stop", menu: ["rename", "destroy"] };
       }
-      if (summary.guestConfigured === false) {
+      if (summary.guestConfigured === false || input.settingsFailed) {
         return {
           primary: "retry-applying",
           menu: ["open-terminal", "rename", "stop", "destroy"],
@@ -1027,42 +1032,33 @@ function matrixRowActions(input: {
   return NO_ROW_ACTIONS;
 }
 
+const SANDBOX_ROW_ACTION_LABEL = {
+  suspend: "Suspend",
+  resume: "Resume",
+  start: "Start",
+  stop: "Stop",
+  keep: "Keep this sandbox",
+  retry: "Retry",
+  "retry-applying": "Retry applying",
+  "repair-setup": "Repair setup",
+  "add-credits": "Add credits ↗",
+  "open-tab": "Open a tab",
+  "open-terminal": "Open terminal",
+  rename: "Rename",
+  "idle-settings": "Idle settings…",
+  destroy: "Destroy",
+} satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
+
 export function sandboxRowActionLabel(
   action: SandboxRowAction,
   configuration: SandboxPageConfiguration,
 ): string {
-  switch (action) {
-    case "suspend":
-      return "Suspend";
-    case "resume":
-      return "Resume";
-    case "start":
-      return "Start";
-    case "stop":
-      return "Stop";
-    case "keep":
-      return "Keep this sandbox";
-    case "retry":
-      return "Retry";
-    case "retry-applying":
-      return "Retry applying";
-    case "resume-paying":
-      return configuration.kind === "team"
-        ? `Resume using my ${configuration.teamName} credits`
-        : "Resume using my credits";
-    case "add-credits":
-      return "Add credits ↗";
-    case "open-tab":
-      return "Open a tab";
-    case "open-terminal":
-      return "Open terminal";
-    case "rename":
-      return "Rename";
-    case "idle-settings":
-      return "Idle settings…";
-    case "destroy":
-      return "Destroy";
+  if (action === "resume-paying") {
+    return configuration.kind === "team"
+      ? `Resume using my ${configuration.teamName} credits`
+      : "Resume using my credits";
   }
+  return SANDBOX_ROW_ACTION_LABEL[action];
 }
 
 // ── Give it another <period> ────────────────────────────────────────────────

@@ -36,11 +36,15 @@ export function SandboxSettingsFailedCard(props: {
       {row === undefined || configuration === null ? (
         <SandboxRetryApplyingButton
           hostId={props.detail.hostId}
+          guestSetupFailed={
+            row === undefined ? null : row.guestConfigured === false
+          }
           onApplied={props.onSettingsApplied}
         />
       ) : (
         <SandboxRowActions
-          summary={{ ...row, guestConfigured: false }}
+          summary={row}
+          settingsFailed
           configuration={configuration}
           unreachable={false}
           frozenNeedsOwnCredits={false}
