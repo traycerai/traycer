@@ -121,6 +121,73 @@ function renderActionsWithNewCache() {
   return renderActions(createQueryClient());
 }
 
+const staleRecord: BrowserCatalogRecord = {
+  ...record,
+  sessionId: "session-stale",
+  tabs: [
+    { tabId: "tab-closed", title: "Closed", url: "https://a.example" },
+    { tabId: "tab-kept", title: "Kept", url: "https://b.example" },
+  ],
+};
+
+function staleCatalog(): BrowserCatalogReadResponse {
+  return {
+    kind: "available",
+    snapshot: { version: 1, records: [staleRecord] },
+  };
+}
+
+function renderCatalogReader(
+  read: () => BrowserCatalogReadResponse | Promise<BrowserCatalogReadResponse>,
+) {
+  let reads = 0;
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `catalog-read-${String(reads)}`,
+      handlers: {
+        "browser.catalog.read": () => {
+          reads += 1;
+          return read();
+        },
+      },
+    }),
+  });
+  const context = createRequestContextFixture({ origin: "renderer" });
+  spine.setRequestContext(context);
+  mocks.userId.mockReturnValue(context.identity.userId);
+  mocks.liveUserId.mockReturnValue(context.identity.userId);
+  const readerClient = spine.createRequester(mockLocalHostEntry);
+  const queryClient = createQueryClient();
+  const { result } = renderHook(
+    () => ({
+      actions: useBrowserCatalogActions("epic-1"),
+      inventory: useBrowserCatalogInventory({ epicId: "epic-1", readerClient }),
+    }),
+    { wrapper: wrapper(queryClient) },
+  );
+  return {
+    result,
+    queryClient,
+    reads: () => reads,
+    closeStaleTab: () =>
+      act(() =>
+        result.current.actions.closeTab(
+          { ...identity, sessionId: "session-stale" },
+          "tab-closed",
+        ),
+      ),
+    tabIds: () =>
+      result.current.inventory.records.flatMap((entry) =>
+        entry.tabs.map((tab) => tab.tabId),
+      ),
+  };
+}
+
 describe("useBrowserCatalogActions", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -279,63 +346,34 @@ describe("useBrowserCatalogActions", () => {
   });
 
   it("keeps a closed tab gone when the next catalog read still lists it", async () => {
-    const staleRecord: BrowserCatalogRecord = {
-      ...record,
-      sessionId: "session-stale",
-      tabs: [
-        { tabId: "tab-closed", title: "Closed", url: "https://a.example" },
-        { tabId: "tab-kept", title: "Kept", url: "https://b.example" },
-      ],
-    };
-    const read = vi.fn((): BrowserCatalogReadResponse => ({
-      kind: "available",
-      snapshot: { version: 1, records: [staleRecord] },
-    }));
-    const spine = new HostClient<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      invalidator: { invalidateHostScope: () => undefined },
-      findHostById: (hostId) =>
-        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-      messenger: new MockHostMessenger<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => `catalog-read-${String(read.mock.calls.length)}`,
-        handlers: { "browser.catalog.read": read },
-      }),
-    });
-    const context = createRequestContextFixture({ origin: "renderer" });
-    spine.setRequestContext(context);
-    mocks.userId.mockReturnValue(context.identity.userId);
-    mocks.liveUserId.mockReturnValue(context.identity.userId);
-    const readerClient = spine.createRequester(mockLocalHostEntry);
-    const queryClient = createQueryClient();
-    const { result } = renderHook(
-      () => ({
-        actions: useBrowserCatalogActions("epic-1"),
-        inventory: useBrowserCatalogInventory({
-          epicId: "epic-1",
-          readerClient,
+    const reader = renderCatalogReader(staleCatalog);
+    await waitFor(() => expect(reader.tabIds()).toHaveLength(2));
+
+    await reader.closeStaleTab();
+    await waitFor(() => expect(reader.reads()).toBe(2));
+    await waitFor(() => expect(reader.queryClient.isFetching()).toBe(0));
+
+    expect(reader.tabIds()).toEqual(["tab-kept"]);
+    reader.queryClient.clear();
+  });
+
+  it("keeps a closed tab gone when the first catalog read was in flight during the close", async () => {
+    let answer: (response: BrowserCatalogReadResponse) => void = () =>
+      undefined;
+    const reader = renderCatalogReader(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
         }),
-      }),
-      { wrapper: wrapper(queryClient) },
     );
-    await waitFor(() =>
-      expect(result.current.inventory.records[0]?.tabs).toHaveLength(2),
-    );
+    await waitFor(() => expect(reader.reads()).toBe(1));
 
-    await act(async () => {
-      await result.current.actions.closeTab(
-        { ...identity, sessionId: "session-stale" },
-        "tab-closed",
-      );
-    });
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await reader.closeStaleTab();
+    act(() => answer(staleCatalog()));
+    await waitFor(() => expect(reader.queryClient.isFetching()).toBe(0));
 
-    expect(
-      result.current.inventory.records.flatMap((entry) =>
-        entry.tabs.map((tab) => tab.tabId),
-      ),
-    ).toEqual(["tab-kept"]);
-    queryClient.clear();
+    expect(reader.reads()).toBe(1);
+    expect(reader.tabIds()).toEqual(["tab-kept"]);
+    reader.queryClient.clear();
   });
 });
