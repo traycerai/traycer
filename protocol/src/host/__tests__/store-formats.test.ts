@@ -562,7 +562,10 @@ describe("taskStoreFormatReadBy", () => {
     ["1.5.0-rc.1", 4],
     ["1.5.0-rc.2", 4],
     ["1.5.0", 4],
-    ["1.6.0", 4],
+    ["1.5.1", 4],
+    ["1.5.2-rc.1", 4],
+    ["1.5.2", 5],
+    ["1.6.0", 5],
   ])("%s reads task store format %s", (version, reads) => {
     expect(taskStoreFormatReadBy(version)).toBe(reads);
   });
@@ -600,19 +603,33 @@ describe("taskStoreFloorBlock", () => {
   });
 
   it("caps the on-disk format at the newest known before comparing", () => {
-    expect(taskStoreFloorBlock("1.5.0", 5)).toBeNull();
-    expect(taskStoreFloorBlock("1.4.2", 5)).toEqual({
+    expect(taskStoreFloorBlock("1.5.2", 6)).toBeNull();
+    expect(taskStoreFloorBlock("1.4.2", 6)).toEqual({
       targetReads: 2,
-      onDisk: 5,
+      onDisk: 6,
     });
   });
 
+  /**
+   * The format-5 row, through the floor: a release inside the format-4 era
+   * is blocked by a format-5 disk, which is the whole reason the row exists
+   * - a 1.5.0 host does not read the positioned byte storage tables and
+   * would fold past the durable holds they carry.
+   */
+  it("blocks a format-4 era target over a format-5 store", () => {
+    expect(taskStoreFloorBlock("1.5.0", 5)).toEqual({
+      targetReads: 4,
+      onDisk: 5,
+    });
+    expect(taskStoreFloorBlock("1.5.2", 5)).toBeNull();
+  });
+
   it("types the newest format as the table's last row", () => {
-    const ok: NewestTaskStoreFormat = 4;
-    // @ts-expect-error 5 is not the newest format the table knows
-    const tooNew: NewestTaskStoreFormat = 5;
+    const ok: NewestTaskStoreFormat = 5;
+    // @ts-expect-error 6 is not the newest format the table knows
+    const tooNew: NewestTaskStoreFormat = 6;
     expect(ok).toBe(NEWEST_TASK_STORE_FORMAT);
-    expect(tooNew).toBe(5);
+    expect(tooNew).toBe(6);
   });
 
   it("names the host's refusal reason", () => {

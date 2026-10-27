@@ -1866,7 +1866,7 @@ describe("the task store floor", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not refuse a rollback inside 1.5.0 and opens no task store", async () => {
+  it("does not refuse a rollback inside the newest era and opens no task store", async () => {
     const dbPath = taskStoreDbPathFor(hostHome);
     await mkdir(dirname(dbPath), { recursive: true });
     await writeFile(dbPath, "not a sqlite file", "utf8");
@@ -1874,7 +1874,7 @@ describe("the task store floor", () => {
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+        rollbackInput(logger, { targetVersion: "1.5.2" }),
       ),
     ).resolves.toBeUndefined();
     expect(
@@ -1991,18 +1991,37 @@ describe("the task store floor", () => {
     ).toBe(false);
   });
 
-  it("caps an on-disk 5: 1.5.0-rc.1 passes, 1.4.2 still refuses naming 5", async () => {
-    await writeTaskStoreDb(5, false);
+  it("caps an on-disk 6: 1.5.2 passes, 1.4.2 still refuses naming 6", async () => {
+    await writeTaskStoreDb(6, false);
     const logger = fakeLogger();
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+        rollbackInput(logger, { targetVersion: "1.5.2" }),
       ),
     ).resolves.toBeUndefined();
 
     const err = await refusalOf(rollbackInput(logger, {}));
-    expect(err.details?.onDiskTaskStore).toBe(5);
+    expect(err.details?.onDiskTaskStore).toBe(6);
     expect(err.details?.targetTaskStore).toBe(2);
+  });
+
+  /**
+   * The format-5 era, through the CLI: a 1.5.0 host reads 4, so a
+   * format-5 task store blocks it. It is the one behaviour the new era row
+   * adds here - before it, 4 was the newest format the table knew and such
+   * a target opened no task store at all.
+   */
+  it("refuses a format-4 era target over a format-5 task store", async () => {
+    await writeTaskStoreDb(5, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+    );
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(4);
+    expect(err.details?.onDiskTaskStore).toBe(5);
   });
 });
