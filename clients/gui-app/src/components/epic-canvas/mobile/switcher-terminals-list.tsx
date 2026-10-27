@@ -160,6 +160,7 @@ function SwitcherTerminalRow(props: {
 
   return (
     <SwitcherListRow
+      disabled={false}
       icon={<Terminal className="size-4 shrink-0 text-muted-foreground" />}
       label={label}
       secondaryLabel={

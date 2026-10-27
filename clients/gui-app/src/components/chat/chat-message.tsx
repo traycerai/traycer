@@ -249,7 +249,13 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // own sessions (trunk, thread forks) provide no presentation and keep the
   // transcript's.
   if (botPresentation !== null && message.role !== "system") {
-    return <ChatBotMessage message={message} presentation={botPresentation} />;
+    return (
+      <ChatBotMessage
+        message={message}
+        presentation={botPresentation}
+        hoverActions
+      />
+    );
   }
   if (message.role === "assistant") {
     return renderAssistantMessage(props);

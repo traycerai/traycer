@@ -1,5 +1,6 @@
 import {
   browserSessionsServerFrameSchema,
+  browserSessionsServerFrameV23Schema,
   type BrowserSessionsClientFrame,
   type BrowserSessionsOpenRequest,
   type BrowserSessionsServerFrame,
@@ -33,6 +34,7 @@ export interface BrowserSessionsStreamCallbacks {
    * callback so a consumer has a single place to correlate against.
    */
   readonly onServerFrame: (frame: BrowserSessionsServerFrame) => void;
+  readonly onInventoryCapability?: (supported: boolean) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -81,6 +83,7 @@ export class BrowserSessionsStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: BrowserSessionsStreamCallbacks;
   private closed: boolean;
+  private inventoryCapability: boolean | null = null;
 
   constructor(options: BrowserSessionsStreamClientOptions) {
     const { wsStreamClient, callbacks, ...openRequest } = options;
@@ -91,8 +94,14 @@ export class BrowserSessionsStreamClient {
       this.handleServerFrame(envelope);
     });
     this.session.onStatusChange((status, reason) => {
+      this.inventoryCapability = null;
       this.callbacks.onConnectionStatus(status, reason);
     });
+  }
+
+  private supportsInventoryRevisions(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 2 && version.minor >= 3;
   }
 
   supportsDemandPlacement(): boolean {
@@ -122,7 +131,7 @@ export class BrowserSessionsStreamClient {
         frame.kind === "electronViewportResult")
     ) {
       if (frame.kind === "setViewport")
-        this.callbacks.onServerFrame({
+        this.deliverFrame({
           kind: "actionAck",
           hasBinaryPayload: false,
           requestId: frame.requestId,
@@ -147,7 +156,7 @@ export class BrowserSessionsStreamClient {
     // out its timeout with no answer at all. Answering here instead keeps the
     // one guarantee every request frame on this stream has: exactly one
     // `actionAck`, and a refusal carries the reason a user is shown.
-    this.callbacks.onServerFrame({
+    this.deliverFrame({
       kind: "actionAck",
       hasBinaryPayload: false,
       requestId: projected.requestId,
@@ -182,17 +191,29 @@ export class BrowserSessionsStreamClient {
         this.warnMalformedFrame(envelope, parsedV10.error.issues);
         return;
       }
-      this.callbacks.onServerFrame(
-        liftBrowserSessionsServerFrameFromV10(parsedV10.data),
-      );
+      this.deliverFrame(liftBrowserSessionsServerFrameFromV10(parsedV10.data));
       return;
     }
-    const parsed = browserSessionsServerFrameSchema.safeParse(envelope);
+    const version = this.session.getNegotiatedSchemaVersion();
+    const schema =
+      version?.major === 2 && version.minor >= 3
+        ? browserSessionsServerFrameV23Schema
+        : browserSessionsServerFrameSchema;
+    const parsed = schema.safeParse(envelope);
     if (!parsed.success) {
       this.warnMalformedFrame(envelope, parsed.error.issues);
       return;
     }
-    this.callbacks.onServerFrame(parsed.data);
+    this.deliverFrame(parsed.data);
+  }
+
+  private deliverFrame(frame: BrowserSessionsServerFrame): void {
+    const supported = this.supportsInventoryRevisions();
+    if (this.inventoryCapability !== supported) {
+      this.inventoryCapability = supported;
+      this.callbacks.onInventoryCapability?.(supported);
+    }
+    this.callbacks.onServerFrame(frame);
   }
 
   /**

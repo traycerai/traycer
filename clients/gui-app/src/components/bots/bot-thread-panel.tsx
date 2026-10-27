@@ -3,63 +3,73 @@ import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  BotMessageFrame,
-  type FailedMessageActions,
-} from "@/components/chat/chat-bot-message";
-import { BotAvatar, MemberAvatar } from "@/components/bots/bot-avatars";
-import { TextSegment } from "@/components/chat/segments/text-segment";
+import { ChatBotMessage } from "@/components/chat/chat-bot-message";
+import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import {
   BotMessageComposer,
   type BotComposerEdit,
 } from "@/components/bots/bot-message-composer";
-import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
-import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
+import {
+  useBotSendFailure,
+  type BotSendFailure,
+} from "@/hooks/bots/use-bot-send-failure";
+import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
-import { ChannelPostText } from "@/components/bots/bot-channel-post-text";
+import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import { failedOn, useBotActivity } from "@/hooks/bots/use-bot-activity";
+import {
+  failedOn,
+  failedOnRequest,
+  useBotActivity,
+} from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
-import type { ChatBotFailedRequest } from "@/components/chat/chat-bot-presentation-context";
+import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentation-context";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import { threadOriginRow } from "@/lib/bots/reply-row";
+import { cn } from "@/lib/utils";
 
 /**
  * The open post's thread as the channel's thread list has it: listed; not
  * listed yet, as a just-posted thread is until the next read; not opened
- * yet, a question or proposal nobody has replied under; or unknown, because
- * the read failed.
+ * yet, a question, proposal or direct post nobody has replied under; or
+ * unknown, because the read failed.
  */
 export type BotThreadPanelThread =
   | { readonly kind: "listed"; readonly thread: BotThreadSummary }
   | { readonly kind: "pending" }
-  | {
-      readonly kind: "unopened";
-      readonly conversationId: string;
-      readonly announcementId: string;
-    }
+  | { readonly kind: "unopened" }
   | { readonly kind: "failed"; readonly retry: () => void };
 
 /**
  * A thread of a bot's channel, in Slack's thread panel (Tracy Bots): the
  * header names the thread and its channel and says what the thread has cost,
- * the post it answers sits on top, then the replies - the thread record in
- * the ordinary message list - and a box that replies in the thread.
+ * the post it opens on sits on top, as the channel draws it, in every state
+ * (decision 90), then the replies - the thread record in the ordinary message
+ * list - and a box that replies in the thread. With no reply yet, the box
+ * follows the post.
  *
  * "Under the hood" opens the transcript of the bot's session that runs the
  * thread, read-only, in the bot's under-the-hood view.
  *
  * A message of the thread the bot failed to answer is retried as it is, or
- * edited in the thread's box; the post the thread answers is edited in the
+ * edited in the thread's box; the post the thread opens on is edited in the
  * channel's box (`onEditPost`), since its replacement is a new post.
  */
 export function BotThreadPanel(props: {
   readonly botId: string;
+  /** The host serving the tab: reads and sends go to it. */
   readonly hostId: string;
+  /** The host that runs the bot, where a signed-out provider is signed in again; `null` when none does. */
+  readonly boundHostId: string | null;
   readonly botTitle: string;
+  /** The channel the thread's post is in. */
+  readonly conversationId: string;
+  /** The post the thread opens on, by its message id. */
+  readonly originMessageId: string;
   readonly thread: BotThreadPanelThread;
   /** The viewer's own name for their posts, as the channel shows them. */
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
@@ -68,17 +78,11 @@ export function BotThreadPanel(props: {
   readonly onOpenUnderTheHood: (sessionChatId: string) => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
 }): ReactNode {
-  const {
-    botId,
-    hostId,
-    botTitle,
-    anchorSenderLabel,
-    resolveMember,
-    onClose,
-    onOpenUnderTheHood,
-    onEditPost,
-  } = props;
+  const { botTitle, onClose, onOpenUnderTheHood } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
+  // A send from the panel that fails, a retry of its post included, says so
+  // in the panel's box.
+  const sendFailure = useBotSendFailure();
   return (
     <section
       aria-label="Thread"
@@ -128,16 +132,8 @@ export function BotThreadPanel(props: {
           <X aria-hidden="true" />
         </Button>
       </header>
-      <ThreadPanelBody
-        botId={botId}
-        hostId={hostId}
-        botTitle={botTitle}
-        thread={props.thread}
-        anchorSenderLabel={anchorSenderLabel}
-        resolveMember={resolveMember}
-        onOpenUnderTheHood={onOpenUnderTheHood}
-        onEditPost={onEditPost}
-      />
+      <ThreadOrigin {...props} sendFailure={sendFailure} />
+      <ThreadPanelBody {...props} sendFailure={sendFailure} />
     </section>
   );
 }
@@ -145,15 +141,128 @@ export function BotThreadPanel(props: {
 type ThreadPanelBodyProps = {
   readonly botId: string;
   readonly hostId: string;
+  readonly boundHostId: string | null;
   readonly botTitle: string;
+  readonly conversationId: string;
+  readonly originMessageId: string;
   readonly thread: BotThreadPanelThread;
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
-  readonly onOpenUnderTheHood: (sessionChatId: string) => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
+  readonly sendFailure: BotSendFailure;
 };
 
-/** Under the header: the thread, a box that starts one, or why neither shows. */
+/**
+ * The post the thread opens on, drawn by the row the channel draws it with,
+ * nothing on hover: its writer, its time and its text, read from the
+ * channel's row (fetched when the channel has not loaded it), and the line
+ * under it while the bot failed to answer it, whose Retry posts it again in
+ * the channel and whose Edit hands it to the channel's box. Until the
+ * channel's row is there its text is not known, so the line says why with no
+ * Retry or Edit. Nothing while the post is neither loaded nor listed.
+ */
+function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
+  const {
+    botId,
+    hostId,
+    boundHostId,
+    botTitle,
+    conversationId,
+    originMessageId,
+    anchorSenderLabel,
+    resolveMember,
+    onEditPost,
+    sendFailure,
+  } = props;
+  const client = useTabHostClient();
+  const activity = useBotActivity(botId);
+  const failedOnPost = useCallback(
+    (requestId: string) => failedOnRequest(activity, requestId),
+    [activity],
+  );
+  const failedRequest = useBotFailedRequest({
+    client,
+    hostId,
+    boundHostId,
+    botId,
+    conversationId,
+    threadId: null,
+    failedOn: failedOnPost,
+    onEdit: onEditPost,
+    failure: sendFailure,
+  });
+  const loadedPresentation = useMemo(
+    () => originPresentation(botTitle, failedRequest),
+    [botTitle, failedRequest],
+  );
+  const unloadedPresentation = useMemo(
+    () =>
+      originPresentation(botTitle, (requestId, senderUserId) => {
+        const failed = failedRequest(requestId, senderUserId);
+        return failed === null ? null : { ...failed, retry: null, edit: null };
+      }),
+    [botTitle, failedRequest],
+  );
+  const anchor =
+    props.thread.kind === "listed" ? props.thread.thread.anchor : null;
+  const senderAvatarUrl = useCallback(
+    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
+    [resolveMember],
+  );
+  return (
+    <ChannelPost
+      botId={botId}
+      hostId={hostId}
+      conversationId={conversationId}
+      messageId={originMessageId}
+      fetchCold
+    >
+      {(post) => {
+        const origin = threadOriginRow({
+          post,
+          anchor,
+          senderLabel: anchorSenderLabel,
+          senderAvatarUrl,
+        });
+        return origin === null ? null : (
+          <div
+            className="shrink-0 px-2 pt-2"
+            data-testid="bot-thread-anchor"
+            data-loaded={origin.loaded ? "true" : "false"}
+          >
+            <ChatBotMessage
+              message={origin.row}
+              presentation={
+                origin.loaded ? loadedPresentation : unloadedPresentation
+              }
+              hoverActions={false}
+            />
+          </div>
+        );
+      }}
+    </ChannelPost>
+  );
+}
+
+/** The origin's row: no thread to open, no jump, no options to pick. */
+function originPresentation(
+  botTitle: string,
+  failedRequest: ChatBotPresentation["failedRequest"],
+): ChatBotPresentation {
+  return {
+    botTitle,
+    scrollToMessage: null,
+    replyFollowsPost: null,
+    repliedPost: null,
+    threadLine: null,
+    openThread: null,
+    openAnnouncementThread: null,
+    chooseOption: null,
+    failedRequest,
+  };
+}
+
+/** Under the post: the thread, a box that starts one, or why neither shows. */
 function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   const { thread } = props;
   if (thread.kind === "listed") {
@@ -163,12 +272,13 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     return (
       <UnopenedThread
         botId={props.botId}
-        conversationId={thread.conversationId}
-        announcementId={thread.announcementId}
+        conversationId={props.conversationId}
+        announcementId={props.originMessageId}
+        sendFailure={props.sendFailure}
       />
     );
   }
-  return <UnlistedThread thread={thread} />;
+  return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
 }
 
 /** A question, proposal or direct post nobody has replied under yet. */
@@ -176,36 +286,33 @@ function UnopenedThread(props: {
   readonly botId: string;
   readonly conversationId: string;
   readonly announcementId: string;
+  readonly sendFailure: BotSendFailure;
 }): ReactNode {
-  const sendFailure = useBotSendFailure();
   return (
-    <>
-      <p
-        className="flex-1 px-4 py-3 text-ui-sm text-muted-foreground"
-        data-testid="bot-thread-unopened"
-      >
-        Reply to start a thread. The bot answers there.
-      </p>
-      <BotMessageComposer
-        botId={props.botId}
-        conversationId={props.conversationId}
-        threadId={null}
-        announcementId={props.announcementId}
-        placeholder="Reply…"
-        label="Reply in a new thread"
-        testId="bot-thread-composer"
-        failure={sendFailure}
-        edit={null}
-        onEditEnd={noEdit}
-      />
-    </>
+    <BotMessageComposer
+      botId={props.botId}
+      conversationId={props.conversationId}
+      threadId={null}
+      announcementId={props.announcementId}
+      placeholder="Reply…"
+      label="Reply in a new thread"
+      testId="bot-thread-composer"
+      failure={props.sendFailure}
+      edit={null}
+      onEditEnd={noEdit}
+    />
   );
 }
 
 /** A box that never edits: a thread nobody has replied in has nothing to edit. */
 function noEdit(): void {}
 
-/** The anchor, the replies and the box of a listed thread. */
+/**
+ * The rule and reply count, the replies and the box of a listed thread. A
+ * thread with no reply yet draws neither the count nor room for replies, so
+ * its box follows the post; its transcript stays subscribed, and takes the
+ * room once a reply is listed.
+ */
 function ListedThread(
   props: Omit<ThreadPanelBodyProps, "thread"> & {
     readonly thread: BotThreadSummary;
@@ -214,22 +321,20 @@ function ListedThread(
   const {
     botId,
     hostId,
+    boundHostId,
     botTitle,
     thread,
-    anchorSenderLabel,
     resolveMember,
-    onOpenUnderTheHood,
-    onEditPost,
+    sendFailure,
   } = props;
   const client = useTabHostClient();
   const { mutate: send, isPending: sending } =
     useBotConversationSendMutation(client);
-  const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
-  const { threadId, conversationId, anchor } = thread;
+  const { threadId, conversationId } = thread;
   // The thread's own session answers in it; its running turn is the
-  // thread's typing line, and an answer it holds or fails the notice under
-  // the last row and Retry and Edit on the message.
+  // thread's typing line, and an answer it holds or fails is said on the
+  // message, with Retry and Edit.
   const activity = useBotActivity(botId)?.threads[threadId] ?? null;
   const failedInThread = useCallback(
     (requestId: string) => failedOn(activity, requestId),
@@ -240,22 +345,12 @@ function ListedThread(
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
+    boundHostId,
     botId,
     conversationId,
     threadId,
     failedOn: failedInThread,
     onEdit: setEdit,
-    failure: sendFailure,
-  });
-  // The post is the channel's: retried as a post, edited in the channel.
-  const failedPost = useBotFailedRequest({
-    client,
-    hostId,
-    botId,
-    conversationId,
-    threadId: null,
-    failedOn: failedInThread,
-    onEdit: onEditPost,
     failure: sendFailure,
   });
   // A reply's option, clicked, is the person's next message in the thread:
@@ -294,35 +389,12 @@ function ListedThread(
       threadId,
     ],
   );
+  const hasReplies = thread.replyCount > 0;
   return (
     <>
-      <div className="flex shrink-0 flex-col gap-2 px-2 pt-2">
-        {anchor === null ? null : (
-          <ChannelPostText
-            botId={botId}
-            hostId={hostId}
-            conversationId={conversationId}
-            messageId={anchor.messageId}
-            fetchCold
-          >
-            {(text) => (
-              <ThreadAnchor
-                anchor={anchor}
-                failed={failedPost(anchor.requestId, anchor.senderUserId)}
-                text={text}
-                botTitle={botTitle}
-                senderLabel={anchorSenderLabel(anchor.senderUserId)}
-                avatarUrl={
-                  anchor.senderUserId === null
-                    ? null
-                    : (resolveMember(anchor.senderUserId)?.avatarUrl ?? null)
-                }
-              />
-            )}
-          </ChannelPostText>
-        )}
+      {hasReplies ? (
         <div
-          className="flex items-center gap-3 px-2 text-ui-xs text-muted-foreground"
+          className="flex shrink-0 items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
           data-testid="bot-thread-reply-count"
         >
           <span className="shrink-0">
@@ -332,27 +404,26 @@ function ListedThread(
           </span>
           <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
         </div>
+      ) : null}
+      <div
+        className={cn("flex min-h-0 flex-col", hasReplies && "flex-1")}
+        data-testid="bot-thread-replies"
+        data-has-replies={hasReplies ? "true" : "false"}
+      >
+        <BotChatTranscript
+          botId={botId}
+          chatId={thread.threadId}
+          hostId={hostId}
+          title={botTitle}
+          instanceId={`bot-thread:${thread.threadId}`}
+          surface={surface}
+          resolveMember={resolveMember}
+        />
       </div>
-      <BotChatTranscript
-        botId={botId}
-        chatId={thread.threadId}
-        hostId={hostId}
-        title={botTitle}
-        instanceId={`bot-thread:${thread.threadId}`}
-        surface={surface}
-        resolveMember={resolveMember}
-      />
       <BotReplyingStrip
         botTitle={botTitle}
         activity={activity}
         testId="bot-thread-replying-strip"
-      />
-      <BotUnansweredNotice
-        botTitle={botTitle}
-        hostId={hostId}
-        activity={activity}
-        onOpenUnderTheHood={() => onOpenUnderTheHood(thread.sessionChatId)}
-        testId="bot-thread-unanswered"
       />
       <BotMessageComposer
         botId={botId}
@@ -370,114 +441,47 @@ function ListedThread(
   );
 }
 
-/** A thread the list cannot show yet: waited for, or failed to read. */
+/**
+ * A thread the list cannot show yet: waited for, or failed to read. With no
+ * box here, a retry of the post above that the host refuses is said here.
+ */
 function UnlistedThread(props: {
   readonly thread: BotThreadPanelThread;
+  readonly sendFailure: BotSendFailure;
 }): ReactNode {
+  const sendFailed = props.sendFailure.failed ? (
+    <div className="shrink-0 px-4 pt-2">
+      <BotSendFailedNotice testId="bot-thread-send-failed" />
+    </div>
+  ) : null;
   if (props.thread.kind === "failed") {
     return (
-      <div className="p-4">
-        <BotReadFailure
-          message="Couldn't load this thread."
-          onRetry={props.thread.retry}
-          testId="bot-thread-error"
+      <>
+        {sendFailed}
+        <div className="p-4">
+          <BotReadFailure
+            message="Couldn't load this thread."
+            onRetry={props.thread.retry}
+            testId="bot-thread-error"
+          />
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      {sendFailed}
+      <div
+        className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
+        aria-busy="true"
+        data-testid="bot-thread-loading"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
         />
       </div>
-    );
-  }
-  return (
-    <div
-      className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
-      aria-busy="true"
-      data-testid="bot-thread-loading"
-    >
-      <AgentSpinningDots
-        className={undefined}
-        testId={undefined}
-        variant={undefined}
-      />
-    </div>
+    </>
   );
-}
-
-/**
- * The post the thread answers, drawn as the channel draws it, its text read
- * from the channel's row (`null` while the channel has not loaded it): a
- * member's post, or the bot's own question or proposal.
- */
-function ThreadAnchor(props: {
-  readonly anchor: NonNullable<BotThreadSummary["anchor"]>;
-  /** The post's Retry and Edit while the thread's session failed on it. */
-  readonly failed: ChatBotFailedRequest | null;
-  readonly text: string | null;
-  readonly botTitle: string;
-  readonly senderLabel: string;
-  readonly avatarUrl: string | null;
-}): ReactNode {
-  const { anchor, failed, text, botTitle, senderLabel, avatarUrl } = props;
-  if (anchor.senderUserId === null) {
-    return (
-      <BotMessageFrame
-        avatar={<BotAvatar size="lg" />}
-        name={botTitle}
-        app
-        sentAt={anchor.sentAt}
-        instanceId={anchor.messageId}
-        testId="bot-thread-anchor"
-        replyInThread={null}
-        failed={null}
-      >
-        {text === null ? null : (
-          <TextSegment
-            findUnitId={null}
-            markdown={text}
-            isStreaming={false}
-            nextStepActions={null}
-          />
-        )}
-      </BotMessageFrame>
-    );
-  }
-  return (
-    <BotMessageFrame
-      avatar={
-        <MemberAvatar
-          userId={anchor.senderUserId}
-          name={senderLabel}
-          avatarUrl={avatarUrl}
-          size="lg"
-        />
-      }
-      name={senderLabel}
-      app={false}
-      sentAt={anchor.sentAt}
-      instanceId={anchor.messageId}
-      testId="bot-thread-anchor"
-      replyInThread={null}
-      failed={failedAnchorActions(failed, text)}
-    >
-      {text === null ? null : (
-        <TextSegment
-          findUnitId={null}
-          markdown={text}
-          isStreaming={false}
-          nextStepActions={null}
-        />
-      )}
-    </BotMessageFrame>
-  );
-}
-
-/** The post's Retry, and Edit on the viewer's own, bound to its text. */
-function failedAnchorActions(
-  failed: ChatBotFailedRequest | null,
-  text: string | null,
-): FailedMessageActions | null {
-  if (failed === null || text === null) return null;
-  const { edit } = failed;
-  return {
-    onRetry: () => failed.retry(text),
-    retrying: failed.retrying,
-    onEdit: edit === null ? null : () => edit(text),
-  };
 }

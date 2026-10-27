@@ -15,7 +15,7 @@ export type { BotActivity, BotSessionActivity };
  * id - as `bot.subscribe` carries it from the host the bot's tab is bound
  * to. Every read of what a bot is doing goes through here: the channel's and
  * a thread's typing lines, the closed threads' lines, the Tracy entry and
- * the notice after a turn fails. It joins the bot's one subscription on that
+ * the line under a message the bot failed to answer. It joins the bot's one subscription on that
  * host, so a reader outside the tab (the Tracy entry) sees what the tab
  * sees; a host that does not run the bot serves what the bot's host wrote
  * to the environment room (T65). `null` while the bot has no tab, before the
@@ -86,28 +86,31 @@ function startedBefore(a: BotSessionActivity, b: BotSessionActivity): boolean {
 }
 
 /**
- * Whether one of the bot's sessions, its trunk or a thread's, failed or
- * parked answering `requestId` and still holds it: what Retry and Edit are
- * offered on.
+ * The one of the bot's sessions, its trunk or a thread's, that failed or
+ * parked answering `requestId` and still holds it: what the line under the
+ * message reads, and what Retry and Edit are offered on. `null` for none.
  */
 export function failedOnRequest(
   activity: BotActivity | null,
   requestId: string,
-): boolean {
-  if (activity === null) return false;
-  if (failedOn(activity.trunk, requestId)) return true;
-  return Object.values(activity.threads).some((thread) =>
-    failedOn(thread, requestId),
+): BotSessionActivity | null {
+  if (activity === null) return null;
+  return (
+    failedOn(activity.trunk, requestId) ??
+    Object.values(activity.threads).find(
+      (thread) => failedOn(thread, requestId) !== null,
+    ) ??
+    null
   );
 }
 
-/** Whether `session` failed or parked answering `requestId`. */
+/** `session` when it failed or parked answering `requestId`, else `null`. */
 export function failedOn(
   session: BotSessionActivity | null,
   requestId: string,
-): boolean {
-  return (
-    (session?.state === "failed" || session?.state === "parked") &&
+): BotSessionActivity | null {
+  return (session?.state === "failed" || session?.state === "parked") &&
     session.requestId === requestId
-  );
+    ? session
+    : null;
 }
