@@ -1165,7 +1165,7 @@ describe("<SandboxesSettingsPanel />", () => {
       await act(async () => { await client.invalidateQueries({ queryKey: sandboxQueryKeys.listAll() }); });
       expect(within(dialog).getByRole("heading").textContent).toBe("Destroy 2 idle sandboxes?");
       fireEvent.click(within(dialog).getByRole("button", { name: "Destroy 2" }));
-      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id], [second.id]]));
+      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id, true], [second.id, true]]));
     });
 
     it("destroys only the kept Stopped row matching Kind, Started by and search", async () => {
@@ -1186,7 +1186,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(dialog).getByRole("heading").textContent).toBe("Destroy 1 idle sandbox?");
       expect(within(dialog).getByTestId("sandbox-destroy-all-idle-targets").textContent).toBe("keep-match");
       fireEvent.click(within(dialog).getByRole("button", { name: "Destroy 1" }));
-      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[kept.id]]));
+      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[kept.id, true]]));
     });
 
     it("requires the running target's typed name before destroying any target", async () => {
@@ -1203,7 +1203,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
       fireEvent.change(input, { target: { value: "idle-a" } });
       fireEvent.click(confirm);
-      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id]]));
+      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id, true]]));
     });
 
     it("rechecks each target and skips one that wakes, loses authority, or becomes Automations", async () => {
@@ -1216,7 +1216,7 @@ describe("<SandboxesSettingsPanel />", () => {
       await choose("state", "suspended");
       const dialog = await confirmIdle();
       fireEvent.click(within(dialog).getByRole("button", { name: "Destroy 4" }));
-      await waitFor(() => expect(binding.auth.destroySandbox).toHaveBeenCalledWith(first.id));
+      await waitFor(() => expect(binding.auth.destroySandbox).toHaveBeenCalledWith(first.id, true));
       binding.auth.listSandboxes.mockResolvedValue({ kind: "ok", response: { sandboxes: [
         { ...second, state: "awake" }, { ...changed, kind: "automation" },
       ] } });
@@ -1224,7 +1224,7 @@ describe("<SandboxesSettingsPanel />", () => {
       await waitFor(() => expect(dialog.textContent).toContain("idle-lost · no longer available to destroy, left as it is"));
       expect(dialog.textContent).toContain("idle-b · no longer idle, left as it is");
       expect(dialog.textContent).toContain("idle-changed · no longer available to destroy, left as it is");
-      expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id]]);
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id, true]]);
     });
 
     it("shows per-row pending and failure, and retries only failed targets after the list grows", async () => {
@@ -1246,7 +1246,7 @@ describe("<SandboxesSettingsPanel />", () => {
       binding.auth.listSandboxes.mockResolvedValue({ kind: "ok", response: { sandboxes: [first, second, newcomer] } });
       await act(async () => { await client.invalidateQueries({ queryKey: sandboxQueryKeys.listAll() }); });
       fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
-      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id], [second.id], [second.id]]));
+      await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id, true], [second.id, true], [second.id, true]]));
     });
 
     it("sends the idle precondition and renders a lost server CAS as that target's skip", async () => {
@@ -1275,7 +1275,7 @@ describe("<SandboxesSettingsPanel />", () => {
       binding.auth.listSandboxes.mockResolvedValue({ kind: "ok", response: { sandboxes: [{ ...first, state: "awake" }] } });
       fireEvent.click(within(rowOf(first.id)).getByRole("button", { name: "Retry" }));
       await waitFor(() => expect(rowOf(first.id).textContent).toContain("Skipped idle-a"));
-      expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id]]);
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id, true]]);
     });
   });
 

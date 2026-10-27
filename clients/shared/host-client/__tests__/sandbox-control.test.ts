@@ -567,7 +567,7 @@ describe("destroySandboxViaHttp", () => {
 
   it("DELETEs the sandbox and reads 200 as settled, 202 as still destroying", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
+    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false)).toEqual({
       kind: "ok",
       settled: true,
     });
@@ -576,7 +576,7 @@ describe("destroySandboxViaHttp", () => {
     expect(init?.method).toBe("DELETE");
 
     stubFetch(async () => jsonResponse(202, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
+    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false)).toEqual({
       kind: "ok",
       settled: false,
     });
@@ -586,7 +586,7 @@ describe("destroySandboxViaHttp", () => {
     // An empty id would otherwise DELETE the collection.
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
     for (const id of UNSAFE_IDS) {
-      expect(await destroySandboxViaHttp(BASE, BEARER, null, id)).toEqual(
+      expect(await destroySandboxViaHttp(BASE, BEARER, null, id, false)).toEqual(
         INVALID_ID_RESULT,
       );
     }
@@ -596,7 +596,7 @@ describe("destroySandboxViaHttp", () => {
   it("hands a 404 sandbox_not_found to the caller as a typed refusal", async () => {
     stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
     expect(
-      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1"),
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
     ).toMatchObject({
       kind: "refused",
       status: 404,

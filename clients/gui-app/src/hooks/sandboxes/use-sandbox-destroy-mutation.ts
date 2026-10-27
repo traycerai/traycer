@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -131,7 +132,7 @@ export function sandboxDestroyMutationOptions(
           actor: { userId: viewer, displayName: null },
         });
       }
-      const result = await binding.auth.destroySandbox(sandboxId);
+      const result = await binding.auth.destroySandbox(sandboxId, request !== undefined);
       // `404 sandbox_not_found` resolves too: the user's intent ("this
       // sandbox should not exist") already holds - destroyed from another
       // window, or by its own idle timer.
@@ -146,6 +147,10 @@ export function sandboxDestroyMutationOptions(
       if (request !== undefined && (result.kind === "unauthorized" ||
         (result.kind === "refused" && result.status === 403))) {
         throw new SandboxDestroySkippedError("authority");
+      }
+      if (request !== undefined && result.kind === "refused" &&
+        result.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT) {
+        throw new SandboxDestroySkippedError("idle");
       }
       throw new SandboxOperationError(result);
     },
