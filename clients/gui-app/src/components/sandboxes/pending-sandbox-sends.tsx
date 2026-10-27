@@ -2225,7 +2225,12 @@ function PendingDispatchRemedy(props: {
   );
   const openLink = useOpenLink();
   if (props.failure === "settings" && props.row !== null)
-    return <SandboxRetryApplyingButton hostId={props.row.hostId} />;
+    return (
+      <SandboxRetryApplyingButton
+        hostId={props.row.hostId}
+        guestSetupFailed={props.row.guestConfigured === false}
+      />
+    );
   return (
     <Button
       type="button"
@@ -2865,6 +2870,8 @@ function PendingStagedSendItem(props: {
             onSendAgain: () => retrySend("send-again"),
             onChangeShape: () => backToComposer(true),
             onRetryApplying: newHost.onRetryApplying,
+            onRepairSetup: newHost.onRepairSetup,
+            repairSetupPending: newHost.repairSetupPending,
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,

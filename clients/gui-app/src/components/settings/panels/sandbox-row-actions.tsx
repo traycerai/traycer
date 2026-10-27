@@ -43,7 +43,10 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import {
+  useSandboxGuestSetupRepairSupported,
   useSandboxRepairGuestConfigurationOnHost,
+  useSandboxRepairGuestSetupOnHost,
+  useSandboxRetryApplyingSupported,
   useSandboxSettingsOperation,
 } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
@@ -95,6 +98,7 @@ export function SandboxRowActions(props: {
   readonly configuration: SandboxPageConfiguration;
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
   readonly onSettingsApplied?: () => void;
 }): ReactNode {
   const { summary, configuration } = props;
@@ -110,11 +114,11 @@ export function SandboxRowActions(props: {
   // accepted instead of making a second sandbox.
   const [retryKey, setRetryKey] = useState(() => uuidv4());
   const repair = useSandboxRepairGuestConfigurationOnHost(summary.hostId);
+  const repairGuestSetup = useSandboxRepairGuestSetupOnHost(summary.hostId);
   const applyingOperation = useSandboxSettingsOperation(summary.hostId);
   const openLink = useOpenLink();
   const runnerHost = useRunnerHost();
   const openOnLanding = useOpenSandboxOnLanding();
-  const chooseAnother = useChooseAnotherHost();
   const openAutomationTerminal = useOpenAutomationTerminal({
     existing: {
       hostId: summary.hostId,
@@ -131,12 +135,16 @@ export function SandboxRowActions(props: {
     summary,
     unreachable: props.unreachable,
     frozenNeedsOwnCredits: props.frozenNeedsOwnCredits,
+    settingsFailed: props.settingsFailed,
   });
+  const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
   const busy =
     pendingVerb !== null ||
     patch.isPending ||
     create.isPending ||
+    repair.isPending ||
+    repairGuestSetup.isPending ||
     applyingOperation === "pending" ||
     openAutomationTerminal.starting;
 
@@ -200,10 +208,11 @@ export function SandboxRowActions(props: {
         {},
         {
           onSuccess: (outcome) => {
-            if (outcome.guestConfigured) props.onSettingsApplied?.();
+            if (outcome.settingsApplied) props.onSettingsApplied?.();
           },
         },
       ),
+    "repair-setup": () => repairGuestSetup.mutate({}),
     "open-tab": () =>
       openOnLanding(summary, configuration, { terminal: false }),
     "open-terminal": () =>
@@ -262,99 +271,67 @@ export function SandboxRowActions(props: {
         </Button>
       )}
       <SandboxRowPrimaryAction
-        primary={actions.primary}
+        primary={primary}
         pendingVerb={pendingVerb}
         configuration={configuration}
         busy={busy}
         dialogOpen={dialog !== null}
         run={run}
       />
-      {summary.guestConfigured === false ? (
-        <>
+      <SandboxRowSettingsFailureActions
+        summary={summary}
+        configuration={configuration}
+        settingsFailed={props.settingsFailed}
+        menu={actions.menu}
+        pendingVerb={pendingVerb}
+        busy={busy}
+        run={run}
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => run("open-terminal")}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`More actions for ${summary.displayName}`}
+            data-testid="sandbox-row-menu"
           >
-            Open terminal
+            <MoreHorizontal className="size-3.5" aria-hidden />
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => run("stop")}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
+          {actions.menu
+            .filter((action) => pendingVerb === null && action !== "destroy")
+            .map((action) => (
+              <DropdownMenuItem
+                key={action}
+                disabled={busy}
+                data-testid={`sandbox-row-menu-${action}`}
+                onSelect={() => run(action)}
+              >
+                {sandboxRowActionLabel(action, configuration)}
+              </DropdownMenuItem>
+            ))}
+          <DropdownMenuItem
+            data-testid="sandbox-row-menu-details"
+            onSelect={() => openSandboxDetails(summary.id)}
           >
-            Stop
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={chooseAnother}
-          >
-            Choose another host
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => openSandboxDetails(summary.id)}
-          >
-            Details
-          </Button>
-        </>
-      ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`More actions for ${summary.displayName}`}
-              data-testid="sandbox-row-menu"
-            >
-              <MoreHorizontal className="size-3.5" aria-hidden />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            data-testid="sandbox-row-menu-content"
-          >
-            {actions.menu
-              .filter((action) => pendingVerb === null && action !== "destroy")
-              .map((action) => (
-                <DropdownMenuItem
-                  key={action}
-                  disabled={busy}
-                  data-testid={`sandbox-row-menu-${action}`}
-                  onSelect={() => run(action)}
-                >
-                  {sandboxRowActionLabel(action, configuration)}
-                </DropdownMenuItem>
-              ))}
-            <DropdownMenuItem
-              data-testid="sandbox-row-menu-details"
-              onSelect={() => openSandboxDetails(summary.id)}
-            >
-              {DETAILS}
-            </DropdownMenuItem>
-            {pendingVerb === null && actions.menu.includes("destroy") ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  data-testid="sandbox-row-menu-destroy"
-                  onSelect={() => run("destroy")}
-                >
-                  {sandboxRowActionLabel("destroy", configuration)}
-                </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+            {DETAILS}
+          </DropdownMenuItem>
+          {pendingVerb === null && actions.menu.includes("destroy") ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                data-testid="sandbox-row-menu-destroy"
+                onSelect={() => run("destroy")}
+              >
+                {sandboxRowActionLabel("destroy", configuration)}
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
@@ -403,6 +380,69 @@ export function SandboxRowActions(props: {
         onOpenChange={(open) => setDialog(open ? "idle" : null)}
       />
     </div>
+  );
+}
+
+function useSandboxSettingsPrimaryAction(
+  summary: SandboxSummary,
+  primary: SandboxRowAction | null,
+): SandboxRowAction | null {
+  const retryApplyingSupported = useSandboxRetryApplyingSupported(
+    summary.hostId,
+  );
+  const repairGuestSetupSupported = useSandboxGuestSetupRepairSupported(
+    summary.hostId,
+  );
+  if (primary !== "retry-applying" || retryApplyingSupported) return primary;
+  return summary.guestConfigured === false && repairGuestSetupSupported
+    ? "repair-setup"
+    : null;
+}
+
+function SandboxRowSettingsFailureActions(props: {
+  readonly summary: SandboxSummary;
+  readonly configuration: SandboxPageConfiguration;
+  readonly settingsFailed: boolean;
+  readonly menu: readonly SandboxRowAction[];
+  readonly pendingVerb: SandboxRowVerb | null;
+  readonly busy: boolean;
+  readonly run: (action: SandboxRowAction) => void;
+}): ReactNode {
+  const chooseAnother = useChooseAnotherHost();
+  if (!props.settingsFailed && props.summary.guestConfigured !== false)
+    return null;
+  const actions =
+    props.pendingVerb === null
+      ? props.menu.filter(
+          (action) => action === "open-terminal" || action === "stop",
+        )
+      : [];
+  return (
+    <>
+      {actions.map((action) => (
+        <Button
+          key={action}
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.busy}
+          onClick={() => props.run(action)}
+        >
+          {sandboxRowActionLabel(action, props.configuration)}
+        </Button>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={chooseAnother}>
+        Choose another host
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => openSandboxDetails(props.summary.id)}
+      >
+        Details
+      </Button>
+    </>
   );
 }
 

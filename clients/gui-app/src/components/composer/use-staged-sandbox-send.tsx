@@ -21,6 +21,9 @@ import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import {
   useSandboxRepairGuestConfigurationOnHost,
   useSandboxSettingsOperation,
+  useSandboxRetryApplyingSupported,
+  useSandboxGuestSetupRepairSupported,
+  useSandboxRepairGuestSetupOnHost,
 } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -422,6 +425,8 @@ export function useStagedSandboxSend(input: {
               openStagedShapeSheet(surfaceKey);
             },
             onRetryApplying: newHost.onRetryApplying,
+            onRepairSetup: newHost.onRepairSetup,
+            repairSetupPending: newHost.repairSetupPending,
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
@@ -685,13 +690,23 @@ export function useNewHostActions(
   terminal: StagedSandboxTerminal | null,
   run: (fresh: boolean) => void,
 ): {
-  readonly onRetryApplying: () => void;
+  readonly onRetryApplying: (() => void) | null;
+  readonly onRepairSetup: (() => void) | null;
+  readonly repairSetupPending: boolean;
   readonly applyingPending: boolean;
   readonly applyingError: boolean;
   readonly onOpenTerminal: (() => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
   const operation = useSandboxSettingsOperation(createdHostId ?? "");
+  const retrySupported = useSandboxRetryApplyingSupported(createdHostId ?? "");
+  const guestRepairSupported = useSandboxGuestSetupRepairSupported(
+    createdHostId ?? "",
+  );
+  const guestRepair = useSandboxRepairGuestSetupOnHost(createdHostId ?? "");
+  const row = useSandboxList().data?.sandboxes.find(
+    (sandbox) => sandbox.hostId === createdHostId,
+  );
   const terminalTarget = useFolderlessTerminalTarget(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
@@ -699,34 +714,42 @@ export function useNewHostActions(
   return {
     applyingPending: operation === "pending",
     applyingError: operation === "failed",
-    onRetryApplying: () => {
-      if (
-        surfaceKey === null ||
-        createdHostId === null ||
-        operation === "pending"
-      )
-        return;
-      const origin = readStagedSandbox(surfaceKey);
-      if (origin === null) return;
-      repair.mutate(
-        {},
-        {
-          // The wait resumes only for the stage the repair was for: another
-          // pick made meanwhile is created by its own send, never by this.
-          onSuccess: () => {
-            const current = readStagedSandbox(surfaceKey);
-            if (
-              current === null ||
-              current.clientRequestId !== origin.clientRequestId ||
-              current.createdHostId !== createdHostId
-            ) {
-              return;
-            }
-            run(false);
-          },
-        },
-      );
-    },
+    onRepairSetup:
+      guestRepairSupported && row?.guestConfigured === false
+        ? () => guestRepair.mutate({})
+        : null,
+    repairSetupPending: guestRepair.isPending,
+    onRetryApplying: retrySupported
+      ? () => {
+          if (
+            surfaceKey === null ||
+            createdHostId === null ||
+            operation === "pending"
+          )
+            return;
+          const origin = readStagedSandbox(surfaceKey);
+          if (origin === null) return;
+          repair.mutate(
+            {},
+            {
+              // The wait resumes only for the stage the repair was for: another
+              // pick made meanwhile is created by its own send, never by this.
+              onSuccess: (outcome) => {
+                if (!outcome.settingsApplied) return;
+                const current = readStagedSandbox(surfaceKey);
+                if (
+                  current === null ||
+                  current.clientRequestId !== origin.clientRequestId ||
+                  current.createdHostId !== createdHostId
+                ) {
+                  return;
+                }
+                run(false);
+              },
+            },
+          );
+        }
+      : null,
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null

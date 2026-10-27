@@ -92,7 +92,12 @@ function DetailsHostRecovery(props: {
   const recovery = props.host.recovery;
   if (recovery === null) return null;
   if (recovery.kind === "apply")
-    return <SandboxRetryApplyingButton hostId={props.host.hostId} />;
+    return (
+      <SandboxRetryApplyingButton
+        hostId={props.host.hostId}
+        guestSetupFailed={recovery.guestSetupFailed}
+      />
+    );
   return (
     <Button
       type="button"

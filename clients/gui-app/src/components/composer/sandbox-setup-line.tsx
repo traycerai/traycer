@@ -153,7 +153,10 @@ export interface SandboxSetupLineActions {
   /** The shape sheet: Change shape or region, Choose a smaller shape. */
   readonly onChangeShape: (() => void) | null;
   /** Repairs the settings on the new host, then waits again. */
-  readonly onRetryApplying: () => void;
+  readonly onRetryApplying: (() => void) | null;
+  /** Guest-only repair on an older host; it does not acknowledge settings. */
+  readonly onRepairSetup: (() => void) | null;
+  readonly repairSetupPending?: boolean;
   readonly applyingPending?: boolean;
   readonly applyingError?: boolean;
   readonly onStop: (() => void) | null;
@@ -720,12 +723,20 @@ function ProgressBranchButtons(props: {
     return (
       <>
         {props.view.stage.createdSandboxId === null ? null : (
-          <LineButton
-            label={RETRY_APPLYING}
-            testId="sandbox-setup-retry-applying"
-            onClick={actions.onRetryApplying}
-            pending={actions.applyingPending}
-          />
+          <>
+            <LineButton
+              label={RETRY_APPLYING}
+              testId="sandbox-setup-retry-applying"
+              onClick={actions.onRetryApplying}
+              pending={actions.applyingPending}
+            />
+            <LineButton
+              label="Repair setup"
+              testId="sandbox-setup-repair-setup"
+              onClick={actions.onRepairSetup}
+              pending={actions.repairSetupPending}
+            />
+          </>
         )}
         <LineButton
           label={OPEN_TERMINAL}

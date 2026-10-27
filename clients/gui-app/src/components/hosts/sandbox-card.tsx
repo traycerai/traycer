@@ -595,6 +595,7 @@ function SandboxSecretsSection(props: {
           key={summary.hostId}
           hostId={summary.hostId}
           awake={awake}
+          guestConfigured={summary.guestConfigured}
           routeAddresses={sandboxRouteAddresses(grantsSummary)}
         />
       )}
@@ -764,6 +765,7 @@ function SandboxSecretsLive(props: {
   readonly hostId: string;
   readonly awake: boolean;
   readonly routeAddresses: ReadonlyMap<string, string>;
+  readonly guestConfigured: boolean | null | undefined;
 }): ReactNode {
   const events = useSandboxEgressEvents(props.awake ? props.hostId : null);
   const lines = sandboxCardEgressEventLines(events);
@@ -787,7 +789,12 @@ function SandboxSecretsLive(props: {
           ))}
         </ul>
       )}
-      {props.awake ? <SandboxRepairAction hostId={props.hostId} /> : null}
+      {props.awake ? (
+        <SandboxRepairAction
+          hostId={props.hostId}
+          guestConfigured={props.guestConfigured}
+        />
+      ) : null}
     </>
   );
 }
@@ -825,14 +832,17 @@ function SandboxEgressEventRow(props: {
  * Re-applies the sandbox's setup (trust files, host aliases, environment, git)
  * and refetches it. Offered only on a host that serves the verb.
  */
-function SandboxRepairAction(props: { readonly hostId: string }): ReactNode {
+function SandboxRepairAction(props: {
+  readonly hostId: string;
+  readonly guestConfigured: boolean | null | undefined;
+}): ReactNode {
   const supported = useHostSupportsMethod(
     props.hostId,
     "host.sandbox.repairGuestConfiguration",
   );
   const repair = useSandboxRepairGuestConfiguration();
   const list = useSandboxList();
-  if (!supported) return null;
+  if (!supported || props.guestConfigured !== false) return null;
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button

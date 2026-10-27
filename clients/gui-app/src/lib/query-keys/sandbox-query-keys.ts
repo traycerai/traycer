@@ -152,6 +152,9 @@ export const sandboxMutationKeys = {
   // A host RPC, not a control-plane call: the sandbox host repairs itself.
   repairGuestConfiguration: () =>
     ["host.sandbox.repairGuestConfiguration"] as const,
+  // Guest-only fallback stays outside the combined settings operation key.
+  repairGuestSetupOn: (hostId: string) =>
+    ["host.sandbox.repairGuestConfiguration", hostId, "guest-only"] as const,
   // Per host: Settings' `Retry applying` on one listed sandbox.
   repairGuestConfigurationOn: (hostId: string) =>
     ["host.sandbox.repairGuestConfiguration", hostId] as const,

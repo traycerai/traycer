@@ -292,6 +292,7 @@ vi.mock(
         configuration: SandboxPageConfiguration;
         unreachable: boolean;
         frozenNeedsOwnCredits: boolean;
+        settingsFailed: boolean;
       }) => {
         if (mocks.realActions) return <original.SandboxRowActions {...props} />;
         const { primary } = sandboxRowActions(props);
