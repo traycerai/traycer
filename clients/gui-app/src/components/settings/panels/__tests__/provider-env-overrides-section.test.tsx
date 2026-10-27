@@ -173,9 +173,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     });
 
     expect(
-      screen.getByText(
-        "Used when Traycer sets Codex up, not when Codex runs.",
-      ),
+      screen.getByText("Used when Traycer sets Codex up, not when Codex runs."),
     ).toBeTruthy();
     expect(screen.queryByText(/each time it starts/)).toBeNull();
   });
