@@ -7,14 +7,20 @@ import {
   type ReactNode,
 } from "react";
 import { SendHorizontal } from "lucide-react";
-import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendDelivery,
+  BotConversationSendResponse,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
-import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
+import {
+  BotQueuedNotice,
+  BotSendFailedNotice,
+} from "@/components/bots/bot-channel-notices";
 
 const MESSAGE_MAX = 100_000;
 
@@ -54,6 +60,15 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
+  /**
+   * The host accepted `text`, what the box held, and the box was cleared.
+   * Answers whether the owner says the send's delivery itself, where the
+   * person now looks; the box says it only when it does not.
+   */
+  readonly onSent: (
+    response: BotConversationSendResponse,
+    text: string,
+  ) => boolean;
 }): ReactNode {
   const {
     botId,
@@ -66,6 +81,7 @@ export function BotMessageComposer(props: {
     failure,
     edit,
     onEditEnd,
+    onSent,
   } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
@@ -107,15 +123,17 @@ export function BotMessageComposer(props: {
       },
       {
         onSuccess: (response) => {
-          // The box is cleared, the edit ended and the send's delivery said,
-          // only while it still holds what was sent: an edit the person
-          // opened since keeps its draft, with nothing said under it.
+          // The box is cleared, the edit ended, the send's delivery said and
+          // the send reported, only while it still holds what was sent: an
+          // edit the person opened since keeps its draft, with nothing said
+          // under it.
           if ((currentEditRef.current?.requestId ?? null) !== supersedes) {
             return;
           }
           setText("");
           if (supersedes !== null) onEditEnd();
-          setLastDelivery(response.delivery);
+          const deliverySaid = onSent(response, trimmed);
+          setLastDelivery(deliverySaid ? null : response.delivery);
         },
         onError: failure.fail,
       },
@@ -225,15 +243,7 @@ function ComposerStatus(props: {
     return <BotSendFailedNotice testId={`${props.testId}-send-failed`} />;
   }
   if (!props.queued) return null;
-  return (
-    <p
-      role="status"
-      className="text-ui-xs text-muted-foreground"
-      data-testid={`${props.testId}-queued`}
-    >
-      Saved. The bot will read it.
-    </p>
-  );
+  return <BotQueuedNotice testId={`${props.testId}-queued`} />;
 }
 
 /** A failed message loaded into the box to be edited and sent again. */
