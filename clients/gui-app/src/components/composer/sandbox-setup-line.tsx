@@ -41,7 +41,6 @@ import {
   STEP_DELIVERING,
   STEP_RESUMING,
   STOP,
-  START_NEW_WORK_ON_ANOTHER_HOST,
   configurationLabel,
   couldntResumeLine,
   couldntStartLine,
@@ -204,13 +203,6 @@ function SandboxRefusalLine(props: {
   const configuration = props.stage.target.configuration;
   const billingUrl = useConfigurationBillingUrl(configuration);
   const openLink = useOpenLink();
-  const chooseAnother = (
-    <LineButton
-      label={CHOOSE_ANOTHER_HOST}
-      testId="sandbox-refusal-choose-another-host"
-      onClick={actions.onChooseAnotherHost}
-    />
-  );
   let sentence: string;
   let remedies: ReactNode;
   switch (failure.kind) {
@@ -226,7 +218,6 @@ function SandboxRefusalLine(props: {
             testId="sandbox-refusal-add-credits"
             onClick={() => void openLink(billingUrl, "account", null)}
           />
-          {chooseAnother}
           {props.facts.smallerShapeAffordable ? (
             <LineButton
               label={CHOOSE_A_SMALLER_SHAPE}
@@ -240,14 +231,11 @@ function SandboxRefusalLine(props: {
     case "unverified":
       sentence = COULDNT_VERIFY_BALANCE;
       remedies = (
-        <>
-          <LineButton
-            label={RETRY}
-            testId="sandbox-refusal-retry"
-            onClick={actions.onRetry}
-          />
-          {chooseAnother}
-        </>
+        <LineButton
+          label={RETRY}
+          testId="sandbox-refusal-retry"
+          onClick={actions.onRetry}
+        />
       );
       break;
     case "shape":
@@ -256,32 +244,26 @@ function SandboxRefusalLine(props: {
         props.facts.shapeLabel,
       );
       remedies = (
-        <>
-          <LineButton
-            label={CHANGE_SHAPE_OR_REGION}
-            testId="sandbox-refusal-change-shape"
-            onClick={actions.onChangeShape}
-          />
-          {chooseAnother}
-        </>
+        <LineButton
+          label={CHANGE_SHAPE_OR_REGION}
+          testId="sandbox-refusal-change-shape"
+          onClick={actions.onChangeShape}
+        />
       );
       break;
     case "unavailable":
       sentence = SANDBOXES_UNAVAILABLE;
       remedies = (
-        <>
-          <LineButton
-            label={RETRY}
-            testId="sandbox-refusal-retry"
-            onClick={actions.onRetry}
-          />
-          {chooseAnother}
-        </>
+        <LineButton
+          label={RETRY}
+          testId="sandbox-refusal-retry"
+          onClick={actions.onRetry}
+        />
       );
       break;
     case "refused":
       sentence = failure.message;
-      remedies = chooseAnother;
+      remedies = null;
       break;
     case "no-provider":
     case "agent-not-offered":
@@ -293,8 +275,6 @@ function SandboxRefusalLine(props: {
           failure={failure}
           label={label}
           actions={actions}
-          sandboxId={props.stage.createdSandboxId}
-          chooseAnother={chooseAnother}
         />
       );
       break;
@@ -303,14 +283,11 @@ function SandboxRefusalLine(props: {
       // Kept: the draft is still there, and Retry hands it to the sandbox.
       sentence = readyButNotSentLine(props.name);
       remedies = (
-        <>
-          <LineButton
-            label={RETRY}
-            testId="sandbox-refusal-send-again"
-            onClick={actions.onSendAgain}
-          />
-          {chooseAnother}
-        </>
+        <LineButton
+          label={RETRY}
+          testId="sandbox-refusal-send-again"
+          onClick={actions.onSendAgain}
+        />
       );
       break;
   }
@@ -323,6 +300,11 @@ function SandboxRefusalLine(props: {
     >
       <span className="text-foreground/85">{sentence}</span>
       {remedies}
+      <SandboxFailureExitActions
+        stage={props.stage}
+        actions={actions}
+        prefix="sandbox-refusal"
+      />
     </div>
   );
 }
@@ -355,10 +337,8 @@ function SandboxAgentRefusalRemedies(props: {
   readonly failure: AgentRefusalFailure;
   readonly label: string;
   readonly actions: SandboxSetupLineActions;
-  readonly sandboxId: string | null;
-  readonly chooseAnother: ReactNode;
 }): ReactNode {
-  const { failure, actions, label, sandboxId } = props;
+  const { failure, actions, label } = props;
   return (
     <>
       {failure.kind === "agent-not-offered" &&
@@ -381,18 +361,39 @@ function SandboxAgentRefusalRemedies(props: {
           onClick={actions.onOpenProviders}
         />
       ) : null}
-      {actions.onOpenTerminal === null ? null : (
-        <LineButton
-          label={OPEN_TERMINAL_INSTEAD}
-          testId="sandbox-refusal-open-terminal"
-          onClick={actions.onOpenTerminal}
-        />
-      )}
-      {props.chooseAnother}
+    </>
+  );
+}
+
+/** Shared exits never change a sandbox when the person withdraws the message. */
+function SandboxFailureExitActions(props: {
+  readonly stage: StagedSandbox;
+  readonly actions: SandboxSetupLineActions;
+  readonly prefix: "sandbox-refusal" | "sandbox-setup";
+}): ReactNode {
+  const { actions } = props;
+  const sandboxId = props.stage.createdSandboxId;
+  return (
+    <>
+      <LineButton
+        label={OPEN_TERMINAL_INSTEAD}
+        testId={`${props.prefix}-open-terminal`}
+        onClick={actions.onOpenTerminal}
+      />
+      <LineButton
+        label={CHOOSE_ANOTHER_HOST}
+        testId={`${props.prefix}-choose-another-host`}
+        onClick={actions.onChooseAnotherHost}
+      />
+      <LineButton
+        label={CANCEL_THE_MESSAGE}
+        testId={`${props.prefix}-cancel`}
+        onClick={actions.onCancel}
+      />
       {sandboxId === null ? null : (
         <LineButton
           label={DETAILS}
-          testId="sandbox-refusal-details"
+          testId={`${props.prefix}-details`}
           onClick={() => openSandboxDetails(sandboxId)}
         />
       )}
@@ -578,7 +579,7 @@ function ProgressDetail(props: {
         failure={failure}
         resuming={resuming}
         configuration={configuration}
-        onOpenTerminal={props.actions.onOpenTerminal}
+        onOpenTerminal={failure === null ? props.actions.onOpenTerminal : null}
       />
       <div className="flex flex-wrap gap-2">
         <ProgressBranchButtons view={props.view} actions={props.actions} />
@@ -629,30 +630,33 @@ function ProgressBranchButtons(props: {
   if (failure?.kind === "settings") {
     return (
       <>
-        {props.view.stage.createdSandboxId === null ? (
-          <LineButton
-            label={CANCEL_AND_KEEP_THE_DRAFT}
-            testId="sandbox-setup-cancel"
-            onClick={actions.onCancel}
-          />
-        ) : (
+        {props.view.stage.createdSandboxId === null ? null : (
           <LineButton
             label={RETRY_APPLYING}
             testId="sandbox-setup-retry-applying"
             onClick={actions.onRetryApplying}
           />
         )}
-        {actions.onOpenTerminal === null ? null : (
-          <LineButton
-            label={OPEN_TERMINAL}
-            testId="sandbox-setup-open-terminal"
-            onClick={actions.onOpenTerminal}
-          />
-        )}
+        <SandboxFailureExitActions
+          stage={props.view.stage}
+          actions={actions}
+          prefix="sandbox-setup"
+        />
+      </>
+    );
+  }
+  if (failure?.kind === "timed-out") {
+    return (
+      <>
         <LineButton
-          label={CHOOSE_ANOTHER_HOST}
-          testId="sandbox-setup-choose-another-host"
-          onClick={actions.onChooseAnotherHost}
+          label={KEEP_WAITING}
+          testId="sandbox-setup-keep-waiting"
+          onClick={actions.onKeepWaiting}
+        />
+        <SandboxFailureExitActions
+          stage={props.view.stage}
+          actions={actions}
+          prefix="sandbox-setup"
         />
       </>
     );
@@ -711,18 +715,11 @@ function FailedButtons(props: {
           onClick={actions.onRetryCreation}
         />
       )}
-      <LineButton
-        label={resuming ? START_NEW_WORK_ON_ANOTHER_HOST : CHOOSE_ANOTHER_HOST}
-        testId="sandbox-setup-choose-another-host"
-        onClick={actions.onChooseAnotherHost}
+      <SandboxFailureExitActions
+        stage={props.stage}
+        actions={actions}
+        prefix="sandbox-setup"
       />
-      {resuming ? null : (
-        <LineButton
-          label={CANCEL_THE_MESSAGE}
-          testId="sandbox-setup-cancel"
-          onClick={actions.onCancel}
-        />
-      )}
       <LineButton
         label={COPY_SUPPORT_REFERENCE}
         testId="sandbox-setup-copy-reference"

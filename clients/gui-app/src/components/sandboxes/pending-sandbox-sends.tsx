@@ -79,7 +79,10 @@ import {
   isNewConversationDraftOccupied,
   useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
-import { recordStoppedSandboxSend } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import {
+  recordCancelledSandboxSend,
+  recordStoppedSandboxSend,
+} from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -2347,7 +2350,16 @@ function PendingStagedSendItem(props: {
           facts={facts}
           actions={{
             onKeepWaiting: () => retrySend("keep-waiting"),
-            onCancel: () => backToComposer(false),
+            onCancel: () => {
+              const returned = backToComposer(false);
+              if (
+                !Object.hasOwn(
+                  usePendingSandboxSendStore.getState().sends,
+                  send.id,
+                )
+              )
+                recordCancelledSandboxSend(send, returned);
+            },
             onChooseAnotherHost: () => backToComposer(false),
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
