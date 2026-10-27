@@ -155,6 +155,7 @@ function warning(
   };
 }
 function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+  useCloudNotificationsStore.setState({ accountId: "resting-user" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
     summary: { totalCount: rows.length, unreadCount: 0, attentionCount: 0 },

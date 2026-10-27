@@ -179,6 +179,7 @@ function notice(
   };
 }
 function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+  useCloudNotificationsStore.setState({ accountId: "settings-user" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
     summary: { totalCount: rows.length, unreadCount: 0, attentionCount: 0 },
