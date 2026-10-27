@@ -30,6 +30,7 @@ import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { applyHostAllocatorEnv } from "../service/host-allocator-env";
 import { withHostNodeOptions } from "../service/host-node-options";
 import {
+  HOST_READY_EXTENDED_TIMEOUT_MS,
   RESTART_EXIT_CODE,
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
@@ -105,7 +106,9 @@ import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
   isProcessAlive,
   ownProcessStartIdentityAsync,
+  type PublishedProcessIdentityVerdict,
 } from "../store/process-identity";
+import type { HostPidMetadata } from "../host/pid-metadata";
 import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
@@ -299,6 +302,42 @@ export const YIELDED_INCUMBENT_EXIT_WAIT_MS =
 
 /** Liveness poll interval during `YIELDED_INCUMBENT_EXIT_WAIT_MS`. */
 export const YIELDED_INCUMBENT_EXIT_POLL_MS = 250;
+
+/**
+ * How old the lock an incumbent holds must be before "alive, but publishing
+ * no pid.json" reads as WEDGED rather than as a slow boot.
+ *
+ * A host writes pid.json when its RPC listener binds, and removes it first
+ * thing in teardown. So a pid that outlives `YIELDED_INCUMBENT_EXIT_WAIT_MS`
+ * and is named by pid.json is a serving host - the never-evict policy's
+ * case. One that is NOT named is either still booting (slow first exec of a
+ * freshly downloaded binary) or stuck past its own exit: on 2026-10-26 a
+ * staging host parked in Node's exit path after its force-exit watchdog had
+ * fired, held the lock and the ports for 2h47m, and every supervisor that
+ * came by yielded to it and left. Nothing on the machine would ever end it.
+ *
+ * The two are told apart by the lock's age. Desktop's readiness wait gives
+ * a booting host at most `HOST_READY_EXTENDED_TIMEOUT_MS` to publish; a
+ * lock older than that with no pid.json is a host nobody is still waiting
+ * for. Reused, not restated, so a slower boot ceiling widens this too.
+ */
+export const STALE_INCUMBENT_LOCK_AGE_MS = HOST_READY_EXTENDED_TIMEOUT_MS;
+
+/**
+ * Grace after SIGTERM to a wedged incumbent before SIGKILL. The same
+ * derivation as `RACED_STOP_KILL_GRACE_MS`: a host that can still run its
+ * shutdown handler is bounded by its own force-exit watchdog, and anything
+ * shorter would SIGKILL a host moments from a clean exit.
+ */
+export const STALE_INCUMBENT_KILL_GRACE_MS =
+  SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+
+/**
+ * How long a SIGKILL is given to take before the supervisor concludes the
+ * pid cannot be ended from here (a different user's process, or a kernel
+ * holding it in an uninterruptible wait) and leaves it as before.
+ */
+export const STALE_INCUMBENT_REAP_WAIT_MS = STOP_EXIT_GRACE_MARGIN_MS;
 
 /**
  * Upper bound on the per-attempt Layer 0 frame read.
@@ -708,6 +747,12 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // Liveness of the pid a child's Layer 0 decline named. Injected so the
   // yielded-incumbent wait can be scripted without a real process to watch.
   readonly isProcessAlive: (pid: number) => boolean;
+  // Signals the pid a child's Layer 0 decline named, once that pid has been
+  // judged WEDGED (alive past the wait, publishing no pid.json, holding a
+  // lock older than the boot ceiling). Injected so the eviction can be
+  // scripted without a real process to kill. The one path on which this
+  // supervisor signals a process that is not its own child.
+  readonly signalProcess: (pid: number, signal: "SIGTERM" | "SIGKILL") => void;
   // Consecutive relaunches allowed before the supervisor gives up and hands
   // the machine back to launchd / systemd / the next logon. A dependency
   // rather than a bare constant so a test can state which behaviour it is
@@ -883,6 +928,11 @@ const defaultRunDeps: RunHostStartDeps = {
   hasStopIntent: actionableStopIntentReason,
   readStopIntentIdentity,
   isProcessAlive,
+  // On Windows `process.kill` with either name is TerminateProcess; the grace
+  // between the two then costs a wait and nothing else.
+  signalProcess: (pid, signal) => {
+    process.kill(pid, signal);
+  },
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
   resumeCrashReports: resumeHostCrashReports,
@@ -3085,11 +3135,12 @@ export async function runHostStart(
       // could relaunch the host from under the desktop's own kickstart.
       const yieldedTo =
         attemptProbeContext === null
-          ? await yieldedIncumbentPid(layer0FrameRead, attemptId)
+          ? await yieldedIncumbent(layer0FrameRead, attemptId)
           : null;
       if (yieldedTo !== null) {
         const settlement = await settleYieldedIncumbent({
-          pid: yieldedTo,
+          pid: yieldedTo.pid,
+          lockStartedAt: yieldedTo.startedAt,
           attemptId,
           deps,
           logger,
@@ -3173,15 +3224,16 @@ function withFrameDeadline(
 }
 
 /**
- * The pid a child's Layer 0 decline named, or `null` when the child did not
- * decline, named no pid (`held-retry-window`: a held flock nothing attests,
- * so there is no process to wait on), or left no readable frame. Total: a
- * rejected read answers `null`, which is today's behaviour.
+ * The pid a child's Layer 0 decline named, with the time the lock holder
+ * recorded when it took the lock, or `null` when the child did not decline,
+ * named no pid (`held-retry-window`: a held flock nothing attests, so there
+ * is no process to wait on), or left no readable frame. Total: a rejected
+ * read answers `null`, which is today's behaviour.
  */
-async function yieldedIncumbentPid(
+async function yieldedIncumbent(
   frameRead: Promise<Layer0FrameRead>,
   attemptId: string,
-): Promise<number | null> {
+): Promise<{ readonly pid: number; readonly startedAt: string } | null> {
   let read: Layer0FrameRead;
   try {
     read = await withFrameDeadline(
@@ -3194,22 +3246,29 @@ async function yieldedIncumbentPid(
   if (read.kind !== "frame" || read.frame.attemptId !== attemptId) return null;
   if (read.frame.layer0 !== "declined") return null;
   const evidence = read.frame.incumbentEvidence;
-  return evidence.kind === "pid-metadata" ? evidence.pid : null;
+  return evidence.kind === "pid-metadata"
+    ? { pid: evidence.pid, startedAt: evidence.startedAt }
+    : null;
 }
 
 type YieldedIncumbentSettlement =
   | { readonly kind: "relaunch" }
   | { readonly kind: "exit"; readonly code: number }
-  // The incumbent outlived the wait: a serving host, left alone as today.
+  // The incumbent outlived the wait and is serving, booting, or could not be
+  // ended: left alone as today.
   | { readonly kind: "leave-incumbent" };
 
 /**
  * What a clean exit that yielded to `pid` turns into: a relaunch once that pid
- * is gone, an exit when a stop landed meanwhile (with `restart` owing its
- * comeback, as everywhere else), or nothing when the pid outlived the wait.
+ * is gone - on its own, or evicted because it was wedged - an exit when a
+ * stop landed meanwhile (with `restart` owing its comeback, as everywhere
+ * else), or nothing when the pid outlived the wait and is a host worth
+ * leaving alone.
  */
 async function settleYieldedIncumbent(input: {
   readonly pid: number;
+  // The lock holder's own `startedAt`, as the child's frame reported it.
+  readonly lockStartedAt: string;
   readonly attemptId: string;
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
@@ -3231,6 +3290,7 @@ async function settleYieldedIncumbent(input: {
   );
   const waited = await awaitYieldedIncumbentExit({
     pid,
+    waitMs: YIELDED_INCUMBENT_EXIT_WAIT_MS,
     deps: input.deps,
     isShuttingDown: input.isShuttingDown,
     shutdownRequested: input.shutdownRequested,
@@ -3246,16 +3306,66 @@ async function settleYieldedIncumbent(input: {
     return { kind: "exit", code: exitCodeForRequestedStop(latchedBy) };
   }
   if (waited === "still-alive") {
+    // Alive past the bound. Serving, booting or wedged - and only the last
+    // may be ended from here. See `STALE_INCUMBENT_LOCK_AGE_MS`.
+    const standing = await classifyLiveIncumbent({
+      pid,
+      lockStartedAt: input.lockStartedAt,
+      deps: input.deps,
+      environment,
+    });
+    if (standing.kind !== "wedged") {
+      logger.warn(
+        "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+        {
+          environment,
+          attemptId,
+          incumbentPid: pid,
+          waitMs: YIELDED_INCUMBENT_EXIT_WAIT_MS,
+          standing: standing.kind,
+          ...(standing.kind === "booting" ? { lockAgeMs: standing.ageMs } : {}),
+          ...(standing.kind === "serving" ? { verdict: standing.verdict } : {}),
+        },
+      );
+      return { kind: "leave-incumbent" };
+    }
     logger.warn(
-      "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+      "Host supervisor evicting a wedged incumbent - alive past the wait, publishing no pid.json, holding a lock older than the boot ceiling",
       {
         environment,
         attemptId,
         incumbentPid: pid,
-        waitMs: YIELDED_INCUMBENT_EXIT_WAIT_MS,
+        lockAgeMs: standing.ageMs,
+        lockAgeCeilingMs: STALE_INCUMBENT_LOCK_AGE_MS,
+        graceMs: STALE_INCUMBENT_KILL_GRACE_MS,
       },
     );
-    return { kind: "leave-incumbent" };
+    const evicted = await evictWedgedIncumbent({
+      pid,
+      attemptId,
+      deps: input.deps,
+      logger,
+      environment,
+      isShuttingDown: input.isShuttingDown,
+      shutdownRequested: input.shutdownRequested,
+    });
+    if (evicted === "shutdown") {
+      const latchedBy = await input.resolveShutdownReason();
+      logger.info("Host supervisor not relaunching - shutting down", {
+        environment,
+        reason: "yielded-to-incumbent",
+        observed: "during-eviction",
+        stopReason: latchedBy,
+      });
+      return { kind: "exit", code: exitCodeForRequestedStop(latchedBy) };
+    }
+    if (evicted === "still-alive") {
+      logger.warn(
+        "Host supervisor leaving a live incumbent in place - it survived SIGKILL",
+        { environment, attemptId, incumbentPid: pid },
+      );
+      return { kind: "leave-incumbent" };
+    }
   }
   const announced = await input.deps.hasStopIntent(
     environment,
@@ -3273,9 +3383,124 @@ async function settleYieldedIncumbent(input: {
   }
   logger.info(
     "Host supervisor relaunching after the incumbent it yielded to exited",
-    { environment, attemptId, incumbentPid: pid },
+    { environment, attemptId, incumbentPid: pid, evicted: waited !== "exited" },
   );
   return { kind: "relaunch" };
+}
+
+type LiveIncumbentStanding =
+  // pid.json names the pid and the identity check does not rule it out.
+  | {
+      readonly kind: "serving";
+      readonly verdict: PublishedProcessIdentityVerdict;
+    }
+  // No pid.json for it, but the lock is young enough to be a boot in progress
+  // (or its age cannot be read). The next supervisor cycle looks again.
+  | { readonly kind: "booting"; readonly ageMs: number | null }
+  // No pid.json for it and the lock is older than any boot is allowed to be.
+  | { readonly kind: "wedged"; readonly ageMs: number };
+
+/**
+ * What a pid that outlived `YIELDED_INCUMBENT_EXIT_WAIT_MS` is. Decided from
+ * records that exist today - pid.json and the lock holder's `startedAt` -
+ * and biased toward leaving: an unreadable pid.json, an identity verdict
+ * that cannot rule the record out, or an unparseable lock time all read as
+ * "not wedged". Only the combination the incident showed - no record for
+ * the pid, a lock older than the boot ceiling - earns an eviction.
+ */
+async function classifyLiveIncumbent(input: {
+  readonly pid: number;
+  readonly lockStartedAt: string;
+  readonly deps: RunHostStartDeps;
+  readonly environment: Environment;
+}): Promise<LiveIncumbentStanding> {
+  const teardown = input.deps.lifecycle.teardown;
+  let record: HostPidMetadata | null;
+  try {
+    record = await teardown.readPidMetadata(input.environment);
+  } catch {
+    // Cannot tell; the next cycle may.
+    return { kind: "booting", ageMs: null };
+  }
+  if (record !== null && record.pid === input.pid) {
+    let verdict: PublishedProcessIdentityVerdict;
+    try {
+      verdict = await teardown.verifyPublishedInstance(
+        record.pid,
+        record.processStartIdentity,
+      );
+    } catch {
+      verdict = "indeterminate";
+    }
+    // `mismatch` is the one verdict that says the record belongs to an
+    // EARLIER process with this pid, so the live one is not the publisher.
+    // `dead` contradicts the liveness poll that got us here and is treated
+    // as the inconclusive answer it is.
+    if (verdict !== "mismatch") return { kind: "serving", verdict };
+  }
+  const startedAtMs = Date.parse(input.lockStartedAt);
+  if (Number.isNaN(startedAtMs)) return { kind: "booting", ageMs: null };
+  const ageMs = Date.now() - startedAtMs;
+  return ageMs >= STALE_INCUMBENT_LOCK_AGE_MS
+    ? { kind: "wedged", ageMs }
+    : { kind: "booting", ageMs };
+}
+
+/**
+ * End a wedged incumbent: SIGTERM, the host's own force-exit bound as grace,
+ * then SIGKILL and a short reap wait. Answers `exited` once the pid is gone,
+ * `still-alive` when even SIGKILL did not take (the never-evict answer then
+ * stands), or `shutdown` when a stop latched meanwhile - the signal already
+ * sent is not withdrawn, since a host judged wedged is one nothing else will
+ * end. A signal that cannot be delivered (`ESRCH`: already gone; `EPERM`:
+ * not ours to end) is answered by the liveness poll that follows it.
+ */
+async function evictWedgedIncumbent(input: {
+  readonly pid: number;
+  readonly attemptId: string;
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly isShuttingDown: () => boolean;
+  readonly shutdownRequested: Promise<void>;
+}): Promise<"exited" | "still-alive" | "shutdown"> {
+  const { deps, logger, environment, attemptId, pid } = input;
+  const signal = (name: "SIGTERM" | "SIGKILL"): void => {
+    try {
+      deps.signalProcess(pid, name);
+    } catch (error) {
+      logger.warn("Host supervisor could not signal the wedged incumbent", {
+        environment,
+        attemptId,
+        incumbentPid: pid,
+        signal: name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  signal("SIGTERM");
+  const afterTerm = await awaitYieldedIncumbentExit({
+    pid,
+    waitMs: STALE_INCUMBENT_KILL_GRACE_MS,
+    deps,
+    isShuttingDown: input.isShuttingDown,
+    shutdownRequested: input.shutdownRequested,
+  });
+  if (afterTerm !== "still-alive") return afterTerm;
+  logger.warn("Host supervisor escalating the wedged incumbent to SIGKILL", {
+    environment,
+    attemptId,
+    incumbentPid: pid,
+    graceMs: STALE_INCUMBENT_KILL_GRACE_MS,
+  });
+  signal("SIGKILL");
+  return awaitYieldedIncumbentExit({
+    pid,
+    waitMs: STALE_INCUMBENT_REAP_WAIT_MS,
+    deps,
+    isShuttingDown: input.isShuttingDown,
+    shutdownRequested: input.shutdownRequested,
+  });
 }
 
 /**
@@ -3289,21 +3514,20 @@ function exitCodeForRequestedStop(reason: StopIntentReason | null): number {
 
 /**
  * Wait for the pid a child yielded to, polling liveness, for at most
- * `YIELDED_INCUMBENT_EXIT_WAIT_MS`. Counted in polls rather than wall clock
- * so an injected no-op `sleep` runs the whole wait deterministically; in
- * production each poll is a real `YIELDED_INCUMBENT_EXIT_POLL_MS` sleep.
- * Abandoned, not merely re-checked, when a shutdown signal latches - the same
- * reason the backoff races `shutdownRequested`.
+ * `waitMs`. Counted in polls rather than wall clock so an injected no-op
+ * `sleep` runs the whole wait deterministically; in production each poll is
+ * a real `YIELDED_INCUMBENT_EXIT_POLL_MS` sleep. Abandoned, not merely
+ * re-checked, when a shutdown signal latches - the same reason the backoff
+ * races `shutdownRequested`.
  */
 async function awaitYieldedIncumbentExit(input: {
   readonly pid: number;
+  readonly waitMs: number;
   readonly deps: RunHostStartDeps;
   readonly isShuttingDown: () => boolean;
   readonly shutdownRequested: Promise<void>;
 }): Promise<"exited" | "still-alive" | "shutdown"> {
-  const polls = Math.ceil(
-    YIELDED_INCUMBENT_EXIT_WAIT_MS / YIELDED_INCUMBENT_EXIT_POLL_MS,
-  );
+  const polls = Math.ceil(input.waitMs / YIELDED_INCUMBENT_EXIT_POLL_MS);
   for (let poll = 0; poll < polls; poll += 1) {
     if (input.isShuttingDown()) return "shutdown";
     if (!input.deps.isProcessAlive(input.pid)) return "exited";
