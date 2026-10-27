@@ -1,3 +1,4 @@
+import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import {
   MutationObserver as QueryMutationObserver,
   type QueryClient,
@@ -323,8 +324,6 @@ function fail(surfaceKey: string, failure: StagedSandboxFailure): void {
 
 /** What the surface's send adds to the create. */
 export interface StagedRunRequest {
-  /** The name a create falls back to when the sheet set none. */
-  readonly fallbackName: string;
   /** The task the action belongs to; `null` before one exists. */
   readonly taskId: string | null;
   /**
@@ -374,7 +373,7 @@ async function startTarget(
   target: StagedSandboxTarget,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, fallbackName, taskId } = run;
+  const { surfaceKey, clientRequestId, taskId } = run;
   if (target.kind === "existing") {
     useStagedSandboxStore.getState().report(surfaceKey, {
       createdSandboxId: target.sandboxId,
@@ -400,13 +399,18 @@ async function startTarget(
     fail(surfaceKey, { kind: "unavailable" });
     return null;
   }
+  // Give an older persisted blank stage one name, retained across retries.
+  const name = stagedSandboxName(target.name);
+  if (name !== target.name) {
+    useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
+  }
   const request: SandboxCreateRequest = {
     os: target.shape.os,
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
     diskMb: target.shape.diskMb,
     region: target.shape.region,
-    displayName: target.name.length > 0 ? target.name : fallbackName,
+    displayName: name,
     idleMinutes: target.shape.idleMinutes,
     burst: false,
     createdByHostId: null,

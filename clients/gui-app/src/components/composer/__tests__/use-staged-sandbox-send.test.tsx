@@ -403,7 +403,7 @@ describe("useStagedSandboxSend's setup line", () => {
         idleMinutes: 30,
         destroyAfterRestingMinutes: 10_080,
       },
-      name: "",
+      name: "sandbox-ab12",
       wakeString: null,
     });
     mount(vi.fn());
@@ -415,7 +415,7 @@ describe("useStagedSandboxSend's setup line", () => {
 
     expect(
       screen.getByTestId("sandbox-setup-line-toggle").textContent,
-    ).toContain("Starting sandbox·fix-the-login-bug·0:08");
+    ).toContain("Starting sandbox·sandbox-ab12·0:08");
   });
 
   it("starts each send under its own idempotency key", () => {
@@ -1287,7 +1287,6 @@ describe("openLandingStagedTerminal", () => {
 
     expect(runner).toHaveBeenCalledTimes(1);
     expect(runner).toHaveBeenCalledWith(SURFACE, true, {
-      fallbackName: stagedSandboxFallbackName(""),
       taskId: null,
       resume: false,
     });

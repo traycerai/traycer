@@ -396,19 +396,22 @@ describe("sandboxClockLine", () => {
     expect(sandboxSupportReferenceLine("zzz", "sbx_1")).toBe("sbx_1");
   });
 
-  it("reads Destroying… alone for a row mid-destroy, whatever it was before", () => {
-    expect(
-      sandboxClockLine({
-        summary: sandboxSummaryFixture({ state: "destroying" }),
-        configuration: { kind: "personal" },
-        cost: null,
-        wakeString: null,
-        viewerUserId: null,
-        reachability: { unreachable: false, lastContactAt: null },
-        now: NOW,
-      }),
-    ).toBe("Destroying…");
-  });
+  it.each([false, true])(
+    "reads the server's destroy before reachability or frozen=%s",
+    (frozen) => {
+      expect(
+        sandboxClockLine({
+          summary: sandboxSummaryFixture({ state: "destroying", frozen }),
+          configuration: { kind: "personal" },
+          cost: null,
+          wakeString: null,
+          viewerUserId: null,
+          reachability: { unreachable: true, lastContactAt: NOW - 60_000 },
+          now: NOW,
+        }),
+      ).toBe("Destroying · pending");
+    },
+  );
 
   it("names no last contact when the host has none on record (0)", () => {
     const line = (lastContactAt: number) =>

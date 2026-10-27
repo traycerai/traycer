@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { Bot, Clock, ListFilter, Search, Server, Workflow } from "lucide-react";
 import type {
   SandboxAutomationResponse,
   SandboxCatalogue,
+  SandboxListResponse,
   SandboxCost,
   SandboxSummary,
   UserSandboxCost,
@@ -48,6 +50,7 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
 import {
@@ -548,6 +551,7 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
           <SandboxListRow
             key={row.id}
             summary={row}
+            list={list}
             configuration={configuration}
             cost={
               costs.data?.sandboxes.find((cost) => cost.sandboxId === row.id) ??
@@ -873,6 +877,7 @@ const STATE_BADGE: Record<
   awake: "success",
   suspended: "muted",
   stopped: "muted",
+  destroying: "info",
   frozen: "warning",
   failed: "destructive",
 };
@@ -961,6 +966,7 @@ function UnstartedAutomationsRow(props: {
 
 function SandboxListRow(props: {
   readonly summary: SandboxSummary;
+  readonly list: UseQueryResult<SandboxListResponse | null>;
   readonly configuration: SandboxPageConfiguration;
   readonly cost: SandboxCost | null;
   readonly viewerUserId: string | null;
@@ -972,13 +978,11 @@ function SandboxListRow(props: {
   const sessions = useSandboxSessionReport(summary.hostId, awake);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
-  // The control plane says awake and the host does not answer: Stop is the
-  // way to end its meter without the guest.
-  const unreachable =
-    awake &&
-    summary.guestConfigured !== false &&
-    sessions.failed &&
-    sessions.report.kind !== "live";
+  const unreachable = useSandboxRowUnreachable(
+    summary,
+    sessions.failed && sessions.report.kind !== "live",
+    props.list,
+  );
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
