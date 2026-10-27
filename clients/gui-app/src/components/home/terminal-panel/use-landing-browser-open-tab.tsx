@@ -5,9 +5,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useIsMutating, useMutation } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
@@ -267,11 +268,11 @@ export function useLandingBrowserOpenTab(args: {
       releaseLandingBrowserOpen(context.hold);
     },
   });
-  const isOpening = useIsMutating({ mutationKey: openTabKey }) > 0;
+  const isOpening = useIsMutatingOf({ mutationKey: openTabKey }) > 0;
   const mutate = openMutation.mutate;
   const open = useCallback(
     (request: LandingBrowserOpenRequest) => {
-      // `isOpening` is RENDERED state: `useIsMutating` publishes through the
+      // `isOpening` is RENDERED state: `useIsMutatingOf` publishes through the
       // query cache's subscription, so two `open()` calls in one tick both read
       // the value from the render they were dispatched in - `false` - and both
       // reach the mutation. Only a ref moves within the tick.

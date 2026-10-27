@@ -129,6 +129,9 @@ const mocks = vi.hoisted(() => {
       cancelQueries: vi.fn(() => Promise.resolve()),
       fetchQuery: vi.fn(),
       getQueryData: vi.fn(() => mocks.plainCollection),
+      // `useIsMutatingOf` reads the cache through this mocked export, so it
+      // must see the real client's cache that the panel's `useMutation` writes.
+      getMutationCache: () => testQueryClient.getMutationCache(),
     },
     onChangeListeners: [] as Array<
       (event: {
@@ -492,11 +495,12 @@ function panelUi() {
 
 /**
  * A REAL client, unlike the hand-rolled `mocks.queryClient` the panel's own
- * `useQueryClient()` reads. The panel opens browser tabs through `useMutation`
- * / `useIsMutating`, and those resolve the client through react-query's own
- * internal reference rather than through this suite's mocked export - so the
- * fake never reaches them and they need a provider. Re-made per test, because
- * `useIsMutating` counts across the whole client.
+ * `useQueryClient()` reads. The panel opens browser tabs through `useMutation`,
+ * which resolves the client through react-query's own internal reference
+ * rather than through this suite's mocked export - so the fake never reaches
+ * it and it needs a provider. `useIsMutatingOf` does read the mocked export,
+ * which hands it this client's mutation cache. Re-made per test, because the
+ * pending count spans the whole client.
  */
 let testQueryClient = new QueryClient();
 

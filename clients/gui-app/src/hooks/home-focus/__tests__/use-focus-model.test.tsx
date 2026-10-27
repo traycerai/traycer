@@ -170,18 +170,41 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => connectableHostsMock,
 }));
 
+const authStoreMock = vi.hoisted(() => {
+  type Listener = (next: AuthStoreState, previous: AuthStoreState) => void;
+  type AuthStoreState = {
+    contextMetadata: { userId: string; username: string } | null;
+    status: string;
+    cloudVerdictLoss: string | null;
+    shareableTeams: readonly object[];
+  };
+  const state: AuthStoreState = {
+    contextMetadata: { userId: "user-1", username: "user" },
+    status: "signed-in",
+    cloudVerdictLoss: null,
+    shareableTeams: [],
+  };
+  const listeners = new Set<Listener>();
+  return {
+    state,
+    subscribe: (listener: Listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+});
+
 vi.mock("@/stores/auth/auth-store", () => ({
-  useAuthStore: function useAuthStoreMock<T>(
-    selector: (state: {
-      contextMetadata: { userId: string; username: string } | null;
-      status: string;
-    }) => T,
-  ): T {
-    return selector({
-      contextMetadata: { userId: "user-1", username: "user" },
-      status: "signed-in",
-    });
-  },
+  useAuthStore: Object.assign(
+    function useAuthStoreMock<T>(
+      selector: (state: typeof authStoreMock.state) => T,
+    ): T {
+      return selector(authStoreMock.state);
+    },
+    { subscribe: authStoreMock.subscribe },
+  ),
   // The title batch's cloud-spend gate. A `signed-in` session authorizes it,
   // which is the state every case here runs in.
   authorizesCloudCapability: (status: string): boolean =>

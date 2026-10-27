@@ -47,6 +47,7 @@ import { useFullscreenPinnedRowKeys } from "@/lib/sandbox/overlay-owner";
 import { ChatTranscriptPlaceholderRow } from "./chat-transcript-placeholder-row";
 import type { ChatTranscriptRowHeightMemory } from "./chat-transcript-row-height-memory";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import type { TranscriptRowPart } from "@/stores/chats/assistant-turn-parts";
 import {
   useChatTimelineFollowLatch,
   type ChatTimelineFollowLatch,
@@ -357,7 +358,11 @@ export const ChatTimeline = memo(function ChatTimeline({
           heightMemory={rowHeightMemory}
         />
       ) : (
-        <ChatTimelineRow message={item.model} />
+        <ChatTimelineRow
+          rowKey={item.key}
+          message={item.model}
+          part={item.part}
+        />
       ),
     [rowHeightMemory],
   );
@@ -378,8 +383,13 @@ export const ChatTimeline = memo(function ChatTimeline({
       // told it to stand at, so recording one would be the memory reading its
       // own estimate back in as evidence for that estimate.
       if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
+        // `rowId` is the ROW and the part is the list item: a long turn is
+        // drawn as several items, and the placeholder that later stands in for
+        // that ordinal stands in for all of them at once.
         rowHeightMemory.recordMeasuredHeight({
-          rowId: info.itemData.key,
+          rowId: info.itemData.model.id,
+          partIndex: info.itemData.part?.index ?? 0,
+          partCount: info.itemData.part?.count ?? 1,
           ordinal: info.itemData.ordinal,
           height: info.size,
         });
@@ -594,6 +604,23 @@ function chatTimelineKeyExtractor(item: TranscriptListRow): string {
  *  multi-paragraph turns; a synthesized `role: "system"` row (the fork
  *  marker, the collapsed setup card) is a single hairline-ruled line, so
  *  reusing that estimate overshoots badly for the pre-measurement paint. */
+/**
+ * The space under one row.
+ *
+ * A turn drawn as several list items has to look exactly like the one it
+ * replaces: the row gap belongs under its LAST part, and the boundaries inside
+ * it carry none. Each part's body already pads itself `py-1` at both ends, so
+ * two adjacent parts meet at 8px - the same `gap-2` the body puts between two
+ * items of one part.
+ */
+function chatTimelineRowBottomPaddingClassName(
+  compact: boolean,
+  part: TranscriptRowPart | null,
+): string {
+  if (part !== null && part.index < part.count - 1) return "pb-0";
+  return compact ? "pb-0.5" : "pb-6";
+}
+
 function chatTimelineRowSizeHintClassName(
   role: ChatMessageModel["role"],
 ): string {
@@ -740,9 +767,13 @@ function useCommittedKeySequenceChanged(
  * reflow on release restores content at the final width.
  */
 const ChatTimelineRow = memo(function ChatTimelineRow({
+  rowKey,
   message,
+  part,
 }: {
+  rowKey: string;
   message: ChatMessageModel;
+  part: TranscriptRowPart | null;
 }) {
   const ctx = use(ChatTimelineRowCtx);
   // A bot's channel or thread stacks its rows as tightly as Slack does; each
@@ -770,10 +801,15 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   return (
     <div
       data-message-id={message.id}
+      data-row-key={rowKey}
       data-navigation-highlighted={highlightRow ? "true" : undefined}
       className={cn(
         "mx-auto w-full rounded-lg transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
-        compact ? "px-4 pb-0.5" : "px-6 pb-6",
+        compact ? "px-4" : "px-6",
+        // The gap BELOW a row, which a split turn's inner boundaries must not
+        // have: each part's own `py-1` meets its neighbour's for exactly the
+        // `gap-2` the turn has between items when it is drawn whole.
+        chatTimelineRowBottomPaddingClassName(compact, part),
         readingWidth.className,
         highlightRow && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
         chatTimelineRowSizeHintClassName(message.role),
@@ -785,6 +821,7 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
         actions={ctx.getMessageActions(message)}
         backgroundToolBlockIds={ctx.backgroundToolBlockIds}
         nextStepActions={ctx.nextStepActions}
+        part={part}
       />
     </div>
   );

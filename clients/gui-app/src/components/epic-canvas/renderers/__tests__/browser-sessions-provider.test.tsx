@@ -74,6 +74,10 @@ const hookState = vi.hoisted(() => ({
 
 const surfaceHostOpenedTabMock = vi.hoisted(() => vi.fn());
 
+vi.mock("@/hooks/browser/use-browser-catalog-inventory", () => ({
+  useBrowserCatalogInventory: () => undefined,
+}));
+
 vi.mock("@/lib/browser-view/tiles/surface-host-opened-tab", () => ({
   surfaceHostOpenedTab: surfaceHostOpenedTabMock,
 }));
@@ -1349,5 +1353,52 @@ describe("BrowserOpenSessionsProvider", () => {
     renderOpenProvider();
 
     expect(publishedOpenHost()).toBe("null");
+  });
+
+  it("publishes this machine's host when the pinned host is dead", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(tabSurfaceKey("browsers", TAB_ID), PINNED_HOST_ID);
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "ready", dead: null },
+        { hostId: PINNED_HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(LOCAL_HOST_ID);
+  });
+
+  // Nothing published sends an open to the tile's own host, as before.
+  it("publishes nothing when this machine's host is dead", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe("null");
+  });
+
+  it("keeps this machine's host through an expected restart", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "restarting-expected", dead: null },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(LOCAL_HOST_ID);
   });
 });

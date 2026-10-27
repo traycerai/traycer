@@ -32,8 +32,8 @@ import {
  *   the app menu's "Close Tab" and retire the app task tab instead.
  * - APP-FORWARDED (`command: null`) - the app must win even over the page.
  *   Main replays the keystroke into the host renderer so the renderer's
- *   existing binding runs. Keep this set SMALL and epic/app-navigation level:
- *   a chord a site may legitimately bind does not belong here.
+ *   existing binding runs. Shared rows cover app navigation; native-only rows
+ *   can also use a tile capability such as local Find.
  *
  * Not listed, deliberately: the zoom chords (Cmd +/-/0), which the guest
  * handler claims for the page's own zoom factor
@@ -60,15 +60,12 @@ import {
  * visible tile registry, so chrome and start pages work before a guest exists
  * or a stream is armed. That route reads the same browser-scoped table.
  *
- * The APP-FORWARDED rows have a streamed equivalent too, and it is the
- * simplest one there could be. Forwarding means main replays the key into the
- * renderer so the renderer's own binding runs - and a streamed tile's renderer
- * is already holding the key, so there is nothing to replay: the only thing in
- * the way was the app registry skipping every action while a tile is armed.
- * `keybinding-provider.tsx` therefore stops skipping exactly the tokens this
- * function returns with a null `command`, and those bindings fire from the
- * registry as they always did. No second list: a row added below is honoured
- * on both halves the moment it appears here.
+ * Shared APP-FORWARDED rows also run while a streamed tile is armed: its
+ * renderer already holds the key, so `keybinding-provider.tsx` exempts the
+ * null-command tokens from `streamedBrowserChordsFor`. Native-only actions
+ * stay with the page there. Find is available in local browser tiles, but not
+ * streamed ones; the provider also checks the actual winning action so a
+ * rebound Find cannot borrow a shared token's exemption.
  *
  * The LANDING rows ride the same mechanism and keep their surface gate, which
  * on the streamed side is what round 7's rule asks for - the gate is in this
@@ -109,6 +106,15 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
   "epic.next",
   "epic.prev",
 ];
+
+const NATIVE_ONLY_FORWARDED_ACTIONS: readonly ActionId[] = [
+  "tile.find.open",
+  "tile.find.next",
+];
+
+export function isNativeOnlyBrowserAction(action: ActionId): boolean {
+  return NATIVE_ONLY_FORWARDED_ACTIONS.includes(action);
+}
 
 /**
  * The Start Page panel's own, forwarded for the surface that created the
@@ -168,11 +174,10 @@ const LEADER_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
  * chord like `mod+1`. Either way ⌘1-⌘9 stay the page's.
  *
  * So a leader expands to its nine real chords, and it expands HERE rather than
- * at either call site. That is what keeps the table single: both halves read
- * the rows this function returns, so a row added above is honoured natively
- * AND streamed with no second edit, whatever its kind. The kind is read from
- * the action's own declaration (`ACTION_META`), so nothing about this has to
- * be restated per action either.
+ * at either call site. Shared rows expand identically for native and streamed
+ * guests. The kind comes from the action's declaration (`ACTION_META`), so it
+ * is not restated per action. Native-only rows use this expansion too, but are
+ * excluded from the streamed policy.
  */
 function forwardedTokensFor(
   action: ActionId,
@@ -198,6 +203,22 @@ export interface ReservedChordSurfaces {
   readonly landingSurfaceActive: boolean;
 }
 
+/** Native guests forward Find as well as the shared app actions. */
+export function reservedBrowserChordsFor(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  surfaces: ReservedChordSurfaces,
+): readonly BrowserViewReservedChord[] {
+  return deriveReservedBrowserChords(bindings, surfaces, true);
+}
+
+/** Streamed guests keep native-only actions with the page. */
+export function streamedBrowserChordsFor(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  surfaces: ReservedChordSurfaces,
+): readonly BrowserViewReservedChord[] {
+  return deriveReservedBrowserChords(bindings, surfaces, false);
+}
+
 /**
  * The policy for one set of bindings on the surfaces currently on screen.
  *
@@ -207,17 +228,21 @@ export interface ReservedChordSurfaces {
  * a browser-scoped row is dropped rather than duplicated: the browser row wins,
  * which is what the rebinding UI already warns will happen.
  */
-export function reservedBrowserChordsFor(
+function deriveReservedBrowserChords(
   bindings: Readonly<Record<ActionId, ChordString | null>>,
   surfaces: ReservedChordSurfaces,
+  includeNativeOnly: boolean,
 ): readonly BrowserViewReservedChord[] {
   const browserScoped = new Set(
     BROWSER_SCOPED_CHORDS.map((reserved) => reserved.token),
   );
   const seen = new Set<string>();
-  const actions = surfaces.landingSurfaceActive
+  const sharedActions = surfaces.landingSurfaceActive
     ? [...APP_FORWARDED_ACTIONS, ...LANDING_FORWARDED_ACTIONS]
     : APP_FORWARDED_ACTIONS;
+  const actions = includeNativeOnly
+    ? [...sharedActions, ...NATIVE_ONLY_FORWARDED_ACTIONS]
+    : sharedActions;
   const forwarded = actions.flatMap((action): BrowserViewReservedChord[] => {
     const chord = bindings[action];
     if (chord === null) return [];

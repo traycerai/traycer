@@ -451,6 +451,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
     <BotChannelView
       botId={BOT_ID}
       hostId={HOST_ID}
+      boundHostId={HOST_ID}
       botTitle="Tracy"
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
@@ -460,7 +461,6 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
         useBotOpenThreadStore.getState().setOpenThread(BOT_ID, open)
       }
       onOpenUnderTheHood={vi.fn()}
-      onOpenTrunkUnderTheHood={vi.fn()}
     />
   );
 }
@@ -607,7 +607,7 @@ describe("<BotChannelView /> the channel's typing line", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
-    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
   it("clears when the bot's stream closes for good with the trunk still replying, and reports no failure", async () => {
@@ -620,7 +620,7 @@ describe("<BotChannelView /> the channel's typing line", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
-    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
   it("keeps replying while the bot's stream reconnects, as the turn may yet be running", async () => {

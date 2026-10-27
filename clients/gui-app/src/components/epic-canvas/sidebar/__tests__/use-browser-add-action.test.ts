@@ -8,15 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -25,12 +17,6 @@ import { BrowserSessionsContext } from "@/components/epic-canvas/renderers/brows
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import {
-  tabSurfaceKey,
-  useSurfaceHostSelectionStore,
-} from "@/stores/host/surface-host-selection-store";
 import { getPipSnapshot, pipStore } from "@/lib/browser-view/pip/pip-store";
 import {
   fakePrepareOpenTab,
@@ -39,30 +25,6 @@ import {
 
 const VIEW_TAB_ID = "view-tab-1";
 const HOST_ID = "host-1";
-
-const boundary = vi.hoisted(() => ({
-  localHostId: null as string | null,
-  sessionsByHostId: new Map<string, BrowserSessionsState>(),
-}));
-
-vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
-  useReactiveLocalHostId: () => boundary.localHostId,
-}));
-
-// The stream boundary: each host's sessions are a fake, keyed by the host the
-// hook is asked for.
-vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
-  useBrowserSessionsForHost: (input: { readonly hostId: string | null }) => {
-    const sessions =
-      input.hostId === null
-        ? undefined
-        : boundary.sessionsByHostId.get(input.hostId);
-    if (sessions === undefined) {
-      throw new Error(`no fake sessions for host ${String(input.hostId)}`);
-    }
-    return sessions;
-  },
-}));
 
 const navigateNested = vi.fn(
   (_epicId: string, _tabId: string, prepare: () => unknown) => prepare(),
@@ -142,15 +104,8 @@ function deferredOpenTab(): {
 function sessionsValue(
   openTab: BrowserSessionsState["openTab"],
 ): BrowserSessionsState {
-  return sessionsForHost(HOST_ID, openTab);
-}
-
-function sessionsForHost(
-  hostId: string,
-  openTab: BrowserSessionsState["openTab"],
-): BrowserSessionsState {
   return {
-    hostId,
+    hostId: HOST_ID,
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
@@ -163,7 +118,7 @@ function sessionsForHost(
     retry: () => undefined,
     openTab,
     prepareOpenTab: fakePrepareOpenTab({
-      hostId: () => hostId,
+      hostId: () => HOST_ID,
       scope: independentScope(),
       openTab,
     }),
@@ -177,8 +132,6 @@ function renderAddAction(
   sessions: BrowserSessionsState,
   onOpened: (() => void) | null,
 ) {
-  if (sessions.hostId === null) throw new Error("panel sessions need a host");
-  boundary.sessionsByHostId.set(sessions.hostId, sessions);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -196,12 +149,9 @@ function renderAddAction(
       ),
     );
   }
-  const hook = renderHook(
-    () => useAddBrowserAction("epic-1", VIEW_TAB_ID, onOpened),
-    {
-      wrapper: Wrapper,
-    },
-  );
+  const hook = renderHook(() => useAddBrowserAction(VIEW_TAB_ID, onOpened), {
+    wrapper: Wrapper,
+  });
   return { ...hook, queryClient };
 }
 
@@ -212,16 +162,10 @@ describe("useAddBrowserAction", () => {
     settingsState.browserPlacement = "split";
     vi.mocked(toast.error).mockClear();
     pipStore.setState({ snapshotByEpicId: {} });
-    boundary.localHostId = null;
-    boundary.sessionsByHostId.clear();
-    useSurfaceHostSelectionStore.getState().resetForTests();
-    useSelectionAuthorityStore.getState().reset();
   });
 
   afterEach(() => {
     cleanup();
-    useSurfaceHostSelectionStore.getState().resetForTests();
-    useSelectionAuthorityStore.getState().reset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     pipStore.setState({ snapshotByEpicId: {} });
   });
@@ -472,122 +416,6 @@ describe("useAddBrowserAction", () => {
     expect(onOpened).toHaveBeenCalledOnce();
   });
 
-  describe("which host the browser opens on", () => {
-    const LOCAL_HOST_ID = "local-host";
-    const PINNED_HOST_ID = "pinned-host";
-
-    function pinPanelTo(hostId: string, pinnedStatus: "ready" | "dead"): void {
-      useSurfaceHostSelectionStore
-        .getState()
-        .setSelection(tabSurfaceKey("browsers", VIEW_TAB_ID), hostId);
-      const pinnedLease: HostLeaseSnapshot =
-        pinnedStatus === "dead"
-          ? { hostId, status: "dead", dead: { reason: "offline" } }
-          : { hostId, status: "ready", dead: null };
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        leases: [
-          { hostId: LOCAL_HOST_ID, status: "ready", dead: null },
-          pinnedLease,
-          { hostId: HOST_ID, status: "ready", dead: null },
-        ],
-      });
-    }
-
-    async function addOnHosts(): Promise<{
-      readonly openTabs: Record<string, Mock<BrowserSessionsState["openTab"]>>;
-    }> {
-      const openTabs: Record<
-        string,
-        Mock<BrowserSessionsState["openTab"]>
-      > = {};
-      for (const hostId of [HOST_ID, LOCAL_HOST_ID, PINNED_HOST_ID]) {
-        const deferred = deferredOpenTab();
-        const openTab = vi.fn(deferred.openTab);
-        openTabs[hostId] = openTab;
-        boundary.sessionsByHostId.set(hostId, sessionsForHost(hostId, openTab));
-      }
-      const panelSessions = boundary.sessionsByHostId.get(HOST_ID);
-      if (panelSessions === undefined) throw new Error("panel host missing");
-      const { result } = renderAddAction(panelSessions, null);
-      act(() => {
-        result.current.add();
-      });
-      await waitFor(() => {
-        expect(
-          Object.values(openTabs).some(
-            (openTab) => openTab.mock.calls.length > 0,
-          ),
-        ).toBe(true);
-      });
-      return { openTabs };
-    }
-
-    it("opens on this machine's host rather than the panel's", async () => {
-      boundary.localHostId = LOCAL_HOST_ID;
-      const { openTabs } = await addOnHosts();
-
-      expect(openBrowserTiles()).toMatchObject([{ hostId: LOCAL_HOST_ID }]);
-      expect(openTabs[LOCAL_HOST_ID]).toHaveBeenCalledOnce();
-      expect(openTabs[HOST_ID]).not.toHaveBeenCalled();
-    });
-
-    it("opens on the panel's pinned host before this machine's", async () => {
-      boundary.localHostId = LOCAL_HOST_ID;
-      pinPanelTo(PINNED_HOST_ID, "ready");
-      const { openTabs } = await addOnHosts();
-
-      expect(openBrowserTiles()).toMatchObject([{ hostId: PINNED_HOST_ID }]);
-      expect(openTabs[PINNED_HOST_ID]).toHaveBeenCalledOnce();
-      expect(openTabs[LOCAL_HOST_ID]).not.toHaveBeenCalled();
-    });
-
-    it("falls through to this machine's host when the pinned host is dead", async () => {
-      boundary.localHostId = LOCAL_HOST_ID;
-      pinPanelTo(PINNED_HOST_ID, "dead");
-      const { openTabs } = await addOnHosts();
-
-      expect(openBrowserTiles()).toMatchObject([{ hostId: LOCAL_HOST_ID }]);
-      expect(openTabs[LOCAL_HOST_ID]).toHaveBeenCalledOnce();
-      expect(openTabs[PINNED_HOST_ID]).not.toHaveBeenCalled();
-    });
-
-    function leaseLocalHost(localLease: HostLeaseSnapshot): void {
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        leases: [localLease, { hostId: HOST_ID, status: "ready", dead: null }],
-      });
-    }
-
-    it("falls through to the panel's host when this machine's host is dead", async () => {
-      boundary.localHostId = LOCAL_HOST_ID;
-      leaseLocalHost({
-        hostId: LOCAL_HOST_ID,
-        status: "dead",
-        dead: { reason: "offline" },
-      });
-      const { openTabs } = await addOnHosts();
-
-      expect(openBrowserTiles()).toMatchObject([{ hostId: HOST_ID }]);
-      expect(openTabs[HOST_ID]).toHaveBeenCalledOnce();
-      expect(openTabs[LOCAL_HOST_ID]).not.toHaveBeenCalled();
-    });
-
-    it("keeps this machine's host through an expected restart", async () => {
-      boundary.localHostId = LOCAL_HOST_ID;
-      leaseLocalHost({
-        hostId: LOCAL_HOST_ID,
-        status: "restarting-expected",
-        dead: null,
-      });
-      const { openTabs } = await addOnHosts();
-
-      expect(openBrowserTiles()).toMatchObject([{ hostId: LOCAL_HOST_ID }]);
-      expect(openTabs[LOCAL_HOST_ID]).toHaveBeenCalledOnce();
-      expect(openTabs[HOST_ID]).not.toHaveBeenCalled();
-    });
-  });
-
   describe("render cost of a real click, flushSync scope included", () => {
     function renderClickHarness(
       openTab: BrowserSessionsState["openTab"],
@@ -602,7 +430,7 @@ describe("useAddBrowserAction", () => {
       });
       function AddButton() {
         counts.addButton += 1;
-        const { add } = useAddBrowserAction("epic-1", VIEW_TAB_ID, onOpened);
+        const { add } = useAddBrowserAction(VIEW_TAB_ID, onOpened);
         return createElement("button", { onClick: add }, "Add browser");
       }
       // Stands in for the mounted sidebar/inventory rows this hook shares a
@@ -623,15 +451,13 @@ describe("useAddBrowserAction", () => {
           String(tileCount),
         );
       }
-      const sessions = sessionsValue(openTab);
-      boundary.sessionsByHostId.set(HOST_ID, sessions);
       render(
         createElement(
           QueryClientProvider,
           { client: queryClient },
           createElement(
             BrowserSessionsContext.Provider,
-            { value: sessions },
+            { value: sessionsValue(openTab) },
             createElement(AddButton),
             createElement(CanvasInventoryPlaceholder),
           ),

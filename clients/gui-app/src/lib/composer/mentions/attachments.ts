@@ -8,6 +8,7 @@ import type {
   WorkspaceEntry,
   WorktreeMentionAttachment,
 } from "@/lib/composer/types";
+import { artifactMentionContextType } from "@traycer/protocol/common/composer-mention-attrs";
 import { createLegacyMentionAttachment, inferPathKind } from "./legacy";
 
 export { createLegacyMentionAttachment, inferPathKind };
@@ -143,7 +144,7 @@ function entityMentionAttachmentFromSuggestion(
 
   return {
     kind: "mention",
-    contextType: entry.artifactType,
+    contextType: artifactMentionContextType(entry.artifactType),
     path: entry.token,
     pathKind: null,
     relPath: null,

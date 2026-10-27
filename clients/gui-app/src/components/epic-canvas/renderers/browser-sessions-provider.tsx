@@ -1,3 +1,5 @@
+import { useBrowserCatalogInventory } from "@/hooks/browser/use-browser-catalog-inventory";
+import { BrowserCatalogContext } from "./browser-catalog-context";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -23,8 +25,9 @@ import {
 } from "./browser-sessions-context";
 
 /**
- * The canvas provider: the epic's inventory on the canvas host, plus the open
- * host's for links clicked under this view tab ({@link BrowserOpenSessionsProvider}).
+ * One catalog query per canvas, alongside the canvas host's live session stream
+ * and the open host's for links clicked under this view tab
+ * ({@link BrowserOpenSessionsProvider}).
  *
  * Every provider here - this one, {@link BrowserSessionsHostProvider} and
  * {@link BrowserSessionsHostBoundary} - acquires the REFCOUNTED coordinator by
@@ -39,23 +42,29 @@ export function BrowserSessionsProvider(props: {
 }) {
   const hostId = useCanvasHostId();
   const hostClient = useEpicSessionHostClient();
+  const catalog = useBrowserCatalogInventory({
+    epicId: props.epicId,
+    readerClient: hostClient,
+  });
   // Fixed for the surface's life (`EpicSurface` provides it), so the branch
   // below never flips and never remounts the children.
   const viewTabId = useEpicViewTabId();
   return (
-    <BrowserSessionsHostProvider
-      hostId={hostId}
-      hostClient={hostClient}
-      scope={{ kind: "epic", epicId: props.epicId }}
-    >
-      {viewTabId === null ? (
-        props.children
-      ) : (
-        <BrowserOpenSessionsProvider epicId={props.epicId} tabId={viewTabId}>
-          {props.children}
-        </BrowserOpenSessionsProvider>
-      )}
-    </BrowserSessionsHostProvider>
+    <BrowserCatalogContext.Provider value={catalog}>
+      <BrowserSessionsHostProvider
+        hostId={hostId}
+        hostClient={hostClient}
+        scope={{ kind: "epic", epicId: props.epicId }}
+      >
+        {viewTabId === null ? (
+          props.children
+        ) : (
+          <BrowserOpenSessionsProvider epicId={props.epicId} tabId={viewTabId}>
+            {props.children}
+          </BrowserOpenSessionsProvider>
+        )}
+      </BrowserSessionsHostProvider>
+    </BrowserCatalogContext.Provider>
   );
 }
 

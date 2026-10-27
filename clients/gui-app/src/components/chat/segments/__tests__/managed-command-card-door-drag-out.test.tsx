@@ -476,7 +476,14 @@ describe("dragging a shell's transcript door onto the canvas", () => {
     });
     await renderHarness(paneId, {
       withViewTab: true,
-      card: <AutonomousResumeSegment triggers={[trigger]} />,
+      card: (
+        <AutonomousResumeSegment
+          variant="card"
+          ending={null}
+          folded={[]}
+          triggers={[trigger]}
+        />
+      ),
     });
     // A remote shell is never in this host's chat-session set, so the door
     // stays enabled without any command ever reaching this chat.

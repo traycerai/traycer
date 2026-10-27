@@ -25,8 +25,9 @@ import { isSurfacePinDeposed } from "@/stores/host/surface-host-selection-store"
  * `useReactiveLocalHostId` keeps it through a death on purpose.
  *
  * `tabHostId` is the site's own host, the one it used before this existed, and
- * it differs by site (the panel's resolved host for its add action, a tile's
- * host for a link clicked in it). `null` asks only for the first two tiers.
+ * it differs by site (the task's host for the Browsers panel's create picker,
+ * which suggests this answer; a tile's host for a link clicked in it). `null`
+ * asks only for the first two tiers.
  */
 export function useBrowserOpenHost(
   tabId: string,

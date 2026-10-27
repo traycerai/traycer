@@ -466,6 +466,7 @@ function BotTabContent(props: {
               <BotChannelView
                 botId={botId}
                 hostId={hostId}
+                boundHostId={snapshot.boundHost.hostId}
                 botTitle={snapshot.bot.title}
                 directive={snapshot.bot.directive}
                 appConversationChatId={snapshot.bot.appConversationChatId}
@@ -473,7 +474,6 @@ function BotTabContent(props: {
                 openThread={openThread}
                 onOpenThread={setOpenThread}
                 onOpenUnderTheHood={openUnderTheHood}
-                onOpenTrunkUnderTheHood={openBotActivity}
               />
             </TabsContent>
             <TabsContent

@@ -19,7 +19,7 @@ import { formatAbsoluteDateTime } from "@/lib/relative-time";
  * 2026-08-11, so each state is pinned separately here.
  */
 describe("publishedChatLockReason", () => {
-  it("names the owning machine and this device when the owner is someone else", () => {
+  it("names the owning machine, and nothing about this device, when the owner is someone else", () => {
     const reason = publishedChatLockReason({
       ownerIsReachable: true,
       ownerRefusesStore: false,
@@ -34,7 +34,9 @@ describe("publishedChatLockReason", () => {
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
-    expect(reason).toContain("not available live from this device");
+    // A copy whose reachable owner holds the chat converts into the live
+    // tile, so the footer no longer says the chat is unavailable live here.
+    expect(reason).not.toContain("not available live from this device");
   });
 
   it("names neither a host nor a second device when the owner IS this host", () => {
@@ -501,7 +503,9 @@ describe("replicaChatLockReason", () => {
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
-    expect(reason).toContain("not available live from this device");
+    // A copy whose reachable owner holds the chat converts into the live
+    // tile, so the footer no longer says the chat is unavailable live here.
+    expect(reason).not.toContain("not available live from this device");
   });
 
   it("drops the other-machine phrasing when the owner IS this host", () => {
