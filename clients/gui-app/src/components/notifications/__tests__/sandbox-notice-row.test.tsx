@@ -402,7 +402,7 @@ describe("a sandbox.notice row in the notification center", () => {
     expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   });
 
-  it("counts settings that did not apply alongside task prompts and sandbox warnings", async () => {
+  it("excludes Details-only settings failures from the task and actionable notice count", async () => {
     const row: HostNotificationsCloudFeedRowV15 = {
       ...noticeRow("entry-settings", WARNING, "needs_action"),
       entry: {
@@ -431,10 +431,10 @@ describe("a sandbox.notice row in the notification center", () => {
     await screen.findByText("Needs attention");
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, 4 need you");
+    ).toBe("Notifications, 3 need you");
     expect(
       screen.getByTestId("notifications-needs-you-count").textContent,
-    ).toBe("4");
+    ).toBe("3");
   });
 
   it("reading Details acknowledges a warning without retiring it", async () => {

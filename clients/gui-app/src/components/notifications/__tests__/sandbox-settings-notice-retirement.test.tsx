@@ -31,7 +31,10 @@ import {
   environmentStatusResponseSchemaV11,
   type EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
-import type { HostNotificationsCloudFeedRowV15 } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEnvironmentApplyFailedPayload,
+  HostNotificationsCloudFeedRowV15,
+} from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { SandboxSettingsNoticeObservers } from "@/components/notifications/sandbox-settings-notice-observers";
@@ -118,6 +121,15 @@ let statusReads: number;
 let resolvedIds: string[];
 let repairSucceeds: boolean;
 
+type EnvironmentApplyFailedRow = HostNotificationsCloudFeedRowV15 & {
+  readonly entry: Extract<
+    HostNotificationsCloudFeedRowV15["entry"],
+    { kind: "environment.apply.failed" }
+  > & {
+    readonly payload: HostNotificationEnvironmentApplyFailedPayload;
+  };
+};
+
 function status(
   operationId: string | null | undefined,
   itemStatus: string,
@@ -153,7 +165,7 @@ function status(
 function notice(
   entryId: string,
   operationId: string,
-): HostNotificationsCloudFeedRowV15 {
+): EnvironmentApplyFailedRow {
   return {
     entryId,
     originHostId: "cloud-settings",
@@ -187,6 +199,12 @@ function notice(
         },
       },
     },
+  };
+}
+function readNotice(row: EnvironmentApplyFailedRow): EnvironmentApplyFailedRow {
+  return {
+    ...row,
+    entry: { ...row.entry, readAt: Date.now() },
   };
 }
 function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
@@ -342,6 +360,85 @@ afterEach(() => {
 });
 
 describe("sandbox settings warnings in the notification center", () => {
+  it("moves a read failed-apply notice without sandbox context to Recent", async () => {
+    const original = notice("non-sandbox-warning", OPERATION_ID);
+    const unread: EnvironmentApplyFailedRow = {
+      ...original,
+      entry: {
+        ...original.entry,
+        readAt: null,
+        payload: { ...original.entry.payload, sandbox: null },
+      },
+    };
+    expect(unread.entry).not.toHaveProperty("resolvedAt");
+    seed([unread]);
+    mount(true);
+    await screen.findByText("Needs attention");
+
+    act(() => seed([readNotice(unread)]));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Needs attention")).toBeNull();
+      const row = screen.getByTestId("notification-entry");
+      const section = row.closest("section");
+      if (section === null) throw new Error("notification has no section");
+      expect(section.textContent).toContain("Recent activity");
+    });
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(screen.getByTestId("environment-apply-failed-card")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Details" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry applying" })).toBeNull();
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications");
+    expect(screen.queryByTestId("notifications-needs-you-count")).toBeNull();
+    expect(auth.auth.listSandboxes).not.toHaveBeenCalled();
+    expect(statusReads).toBe(0);
+    expect(resolvedIds).toEqual([]);
+  });
+
+  it("keeps read sandbox warnings actionable when sandbox identity is unavailable", async () => {
+    const original = notice("unknown-sandbox-identity", OPERATION_ID);
+    const sandbox = original.entry.payload.sandbox;
+    if (sandbox === undefined || sandbox === null)
+      throw new Error("notice fixture has no sandbox context");
+    const unread: EnvironmentApplyFailedRow = {
+      ...original,
+      entry: {
+        ...original.entry,
+        readAt: null,
+        payload: {
+          ...original.entry.payload,
+          sandbox: { ...sandbox, sandboxId: null, operationId: null },
+        },
+      },
+    };
+    expect(unread.entry).not.toHaveProperty("resolvedAt");
+    seed([unread]);
+    mount(true);
+    await screen.findByText("Needs attention");
+
+    act(() => seed([readNotice(unread)]));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("notification-entry")
+          .getAttribute("data-notification-read"),
+      ).toBe("true"),
+    );
+    expect(screen.getByText("Needs attention")).not.toBeNull();
+    expect(
+      await screen.findByRole("button", { name: "Retry applying" }),
+    ).not.toBeNull();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, 1 needs you");
+    expect(statusReads).toBe(0);
+    expect(resolvedIds).toEqual([]);
+  });
+
   it("retires from a fresh successful status for the notice's own operation while the center is closed", async () => {
     currentStatus = status(OPERATION_ID, "applied");
     seed([notice("warning", OPERATION_ID)]);
