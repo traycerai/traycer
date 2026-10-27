@@ -171,7 +171,7 @@ const HOST_ID = "host-bound";
 const CHANNEL_ID = "conversation-channel";
 const THREAD_ID = "thread-1";
 const POST_ID = "post-1";
-const SEND_FAILED = "Couldn't send. Edit and try again.";
+const SEND_FAILED = "Couldn't send. Try again.";
 
 const resolveMember: BotMemberResolver = () => null;
 

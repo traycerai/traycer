@@ -139,14 +139,17 @@ vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatEmptyState } = await import("@/components/chat/chat-empty-state");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
+    // As the real timeline does, a transcript with no row draws the empty state.
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {props.messages.length === 0 ? <ChatEmptyState /> : null}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -460,9 +463,18 @@ describe("<BotThreadPanel /> a listed thread", () => {
     expect(replies.getAttribute("data-has-replies")).toBe("false");
     expect(replies.className).not.toContain("flex-1");
     expect(within(replies).getByTestId("bot-chat-transcript")).toBeTruthy();
+    // The empty thread's transcript draws nothing between the post and the box.
+    expect(replies.textContent).toBe("");
+    expect(screen.queryByText("No replies yet.")).toBeNull();
     expect(screen.getByTestId("bot-thread-anchor").nextElementSibling).toBe(
       replies,
     );
+
+    // The subscription held while empty brings the first reply in.
+    act(() => {
+      mocks.handle?.store.setState({ messages: [botReply(null)] });
+    });
+    expect(within(replies).getByText("Which way should I go?")).toBeTruthy();
     cleanup();
 
     mountPanel(listed("user-teammate"), [botReply(null)]);
@@ -544,7 +556,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     expect(
       (await screen.findByTestId("bot-thread-composer-send-failed"))
         .textContent,
-    ).toBe("Couldn't send. Edit and try again.");
+    ).toBe("Couldn't send. Try again.");
     // The host was asked and refused: a pick that never left would show the same notice.
     expect(sent.map((request) => request.text)).toEqual(["Hold"]);
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
@@ -1123,9 +1135,9 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       );
 
       expect(sent).toHaveLength(1);
-      expect(
-        (await screen.findByTestId("bot-thread-send-failed")).textContent,
-      ).toBe("Couldn't send. Edit and try again.");
+      const notice = await screen.findByTestId("bot-thread-send-failed");
+      expect(notice.textContent).toBe("Couldn't send. Try again.");
+      expect(notice.textContent).not.toContain("Edit");
     },
   );
 

@@ -1484,7 +1484,7 @@ describe("<ChatEmptyState /> in a bot channel", () => {
     expect(screen.queryByText("Start the conversation")).toBeNull();
   });
 
-  it("says an empty thread has no reply yet", () => {
+  it("draws nothing for an empty thread, so its box follows the post it opens on", () => {
     renderEmpty({
       botTitle: "Release Bot",
       scrollToMessage: vi.fn(),
@@ -1497,7 +1497,8 @@ describe("<ChatEmptyState /> in a bot channel", () => {
       failedRequest: null,
     });
 
-    expect(screen.getByText("No replies yet.")).toBeTruthy();
+    expect(document.body.textContent).toBe("");
     expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
+    expect(screen.queryByText("Start the conversation")).toBeNull();
   });
 });

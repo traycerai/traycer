@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 
 /**
- * A send that never reached the conversation: the message is still the
- * person's, back in the box, and sending again is a plain send.
+ * A send that never reached the conversation: a message from the box, which
+ * keeps its text for sending again, an option clicked, or a retry. It names
+ * nothing to edit, since a retry of a teammate's message, or one with no box
+ * beside it, has no edit to make.
  */
 export function BotSendFailedNotice(props: {
   readonly testId: string;
@@ -13,7 +15,7 @@ export function BotSendFailedNotice(props: {
       data-testid={props.testId}
       className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive"
     >
-      Couldn't send. Edit and try again.
+      Couldn't send. Try again.
     </p>
   );
 }

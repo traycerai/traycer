@@ -334,6 +334,8 @@ let sent: ReadonlyArray<BotConversationSendRequest>;
 let boundHostId: string | null;
 /** While set, the host holds each send until it settles, then answers `queued`. */
 let heldSends: Promise<void> | null;
+/** While set, the host refuses every send. */
+let refuseSends: boolean;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
 
 /** The tab's host client, over a messenger whose `bot.conversation.send` records what it is asked. */
@@ -346,6 +348,9 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     handlers: {
       "bot.conversation.send": (params) => {
         sent = [...sent, params];
+        if (refuseSends) {
+          return Promise.reject(new Error("host refused the retry"));
+        }
         const hold = heldSends;
         const response = {
           messageId: "message-new",
@@ -418,6 +423,7 @@ beforeEach(() => {
   sent = [];
   boundHostId = BOUND_HOST_ID;
   heldSends = null;
+  refuseSends = false;
   onOpenThread.mockClear();
   mocks.openSettings.mockClear();
   useProvidersFocusStore.getState().clearFocusHarnessId();
@@ -640,6 +646,26 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
     expect(sent).toHaveLength(1);
     expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
     expect(sent[0].supersedes).toBeNull();
+  });
+
+  it("says a refused Retry of the teammate's post in the channel's box, without asking for an edit there is none to make", async () => {
+    const user = userEvent.setup();
+    refuseSends = true;
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(TEAMMATE_USER_ID));
+
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-unanswered-retry",
+      ),
+    );
+
+    const notice = await screen.findByTestId(
+      "bot-channel-composer-send-failed",
+    );
+    expect(notice.textContent).toBe("Couldn't send. Try again.");
+    expect(notice.textContent).not.toContain("Edit");
+    expect(channelBox().value).toBe("");
   });
 
   it("offers Retry and no Edit on the thread anchor the teammate wrote", () => {
