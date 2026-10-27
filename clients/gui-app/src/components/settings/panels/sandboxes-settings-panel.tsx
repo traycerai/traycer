@@ -1047,7 +1047,7 @@ function SandboxListRow(props: {
             {keptBy === null ? null : <Badge variant="muted">{keptBy}</Badge>}
           </div>
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
-            {sandboxShapeAndCostLine(summary, configuration)}
+            {sandboxShapeAndCostLine(summary, configuration, viewerUserId)}
           </p>
           <p
             className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"

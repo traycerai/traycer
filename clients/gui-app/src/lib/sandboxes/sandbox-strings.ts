@@ -8,6 +8,7 @@
  */
 import type {
   SandboxLifecycleVerb,
+  SandboxCreditSource,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -223,21 +224,6 @@ export function needsCreditsRow(priceMcPerHour: number): string {
   return `from ${formatSandboxDollars(priceMcPerHour)} an hour`;
 }
 
-/**
- * The price clause at a zero or short balance; `Add credits ↗` beside it. A
- * team's sandbox is paid from the team's credits, so the clause names them.
- */
-export function addCreditsPriceClause(
-  configuration: SandboxConfigurationCopy,
-  priceMcPerHour: number,
-): string {
-  const credits =
-    configuration.kind === "personal"
-      ? "credits"
-      : `${configuration.teamName} credits`;
-  return `Add ${credits} to start a sandbox · from ${formatSandboxDollars(priceMcPerHour)} an hour while awake`;
-}
-
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
 // ── The consequences block ────────────────────────────────────────────────
@@ -409,6 +395,39 @@ export function teamAllowanceShortLine(
   }
   const amount = formatSandboxDollarsRequired(shortfallMc);
   return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
+}
+
+/** A spend refusal names the pot checked, with amounts rounded up for top-up. */
+export function sandboxCreditShortLine(
+  configuration: SandboxConfigurationCopy,
+  creditSource: SandboxCreditSource | null,
+  shortfallMc: number | null,
+  waking: boolean,
+): string {
+  if (creditSource === null) {
+    if (!waking) return notEnoughCreditsLine(shortfallMc);
+    if (shortfallMc === null)
+      return "not enough credits to wake this sandbox for an hour.";
+    return `not enough credits. ${formatSandboxDollarsRequired(shortfallMc)} more wakes it for an hour.`;
+  }
+  const source = creditSource;
+  const allowance =
+    configuration.kind === "team" && source === "team-allowance";
+  if (!waking) {
+    if (source === "personal") return notEnoughCreditsLine(shortfallMc);
+    if (allowance)
+      return teamAllowanceShortLine(configuration.teamName, shortfallMc);
+  }
+  const whose = waking ? "your" : "Your";
+  const pot =
+    configuration.kind === "team" && source !== "personal"
+      ? `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`
+      : `${whose} credits`;
+  const action = waking ? "wakes it" : "starts this sandbox";
+  if (shortfallMc === null)
+    return `${pot} ${allowance ? "doesn't" : "don't"} cover an hour of this sandbox.`;
+  const amount = formatSandboxDollarsRequired(shortfallMc);
+  return `${pot} ${allowance ? "is" : "are"} short ${amount}. ${amount} more ${action} for an hour.`;
 }
 
 export const COULDNT_VERIFY_BALANCE = "Couldn't verify your balance.";

@@ -1,9 +1,18 @@
+import type { QueryObserverResult } from "@tanstack/react-query";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import {
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
+import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
   fireEvent,
   render as renderComponent,
   screen,
+  waitFor,
   within,
   type RenderResult,
 } from "@testing-library/react";
@@ -20,7 +29,6 @@ import {
 } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type {
@@ -103,6 +111,14 @@ const testState = vi.hoisted(() => ({
       } | null;
     } | null;
   },
+  refetchAuthUser:
+    vi.fn<
+      () => Promise<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >
+    >(),
+  editorContent: null as JsonContent | null,
+  editContent: null as ComposerBodyProps["onDocumentChange"] | null,
   catalogue: { providers: [] } as SandboxCatalogue | undefined,
   catalogueFetching: false,
   openModelPicker: vi.fn(),
@@ -180,6 +196,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   return {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
+      testState.editContent = props.onDocumentChange;
       testState.startTerminal = props.onStartTerminal;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
@@ -356,8 +373,8 @@ function answerProviders(
   for (const listener of testState.providerListeners) listener();
 }
 
-// The gates' own reads are covered by their hook tests; here the composer's
-// use of their answers is what is under test.
+// Legacy cases supply gate answers; the held-auth cases run the real staged
+// gate against the auth-query boundary to exercise the Send continuation.
 // The Terminal-account line reads the host picker's options for the run's
 // host; with none named it is this computer.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -398,6 +415,7 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
   useRunnerHost: () => ({
+    signInUrl: "https://billing.test",
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths: readonly string[]) =>
@@ -555,7 +573,7 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 // The staged sandbox's send reads the account and the catalogue; this suite
 // has no auth runtime.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
-  useAuthUser: () => ({ data: null }),
+  useAuthUser: () => ({ data: null, refetch: testState.refetchAuthUser }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
@@ -624,6 +642,10 @@ function render(ui: ReactElement): RenderResult {
   });
 }
 
+beforeEach(() => {
+  testState.refetchAuthUser.mockResolvedValue({ data: null, isError: false });
+});
+
 afterEach(() => {
   cleanup();
   useStagedSandboxStore.setState({ bySurface: {} });
@@ -653,6 +675,9 @@ afterEach(() => {
   testState.profileDisabled = false;
   testState.packBlocked = false;
   testState.agentGate = { blocked: false, hint: null, notice: null };
+  testState.editorContent = null;
+  testState.editContent = null;
+  testState.refetchAuthUser.mockReset();
   testState.catalogue = { providers: [] };
   testState.catalogueFetching = false;
   testState.openModelPicker.mockClear();
@@ -745,7 +770,10 @@ function landingComposer(): ReactElement {
 }
 
 /** Types a draft and presses Send, as the person does. */
-function sendFromComposer(): { view: RenderResult; rerender: () => void } {
+async function sendFromComposer(): Promise<{
+  view: RenderResult;
+  rerender: () => void;
+}> {
   const view = render(landingComposer());
   const installEditor = testState.installEditor;
   if (installEditor === null) throw new Error("expected ComposerBody seam");
@@ -754,7 +782,7 @@ function sendFromComposer(): { view: RenderResult; rerender: () => void } {
   if (snapshot === null) throw new Error("expected snapshot seam");
   snapshot();
   view.rerender(landingComposer());
-  fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+  await userEvent.click(screen.getByRole("button", { name: "Submit landing" }));
   return { view, rerender: () => view.rerender(landingComposer()) };
 }
 
@@ -774,6 +802,70 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
+  it.each(["draft", "agent"] as const)(
+    "keeps a changed %s after a held auth refresh, until another Send",
+    async (change) => {
+      testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+      const refreshed =
+        Promise.withResolvers<
+          Pick<
+            QueryObserverResult<AuthenticatedUser | null>,
+            "data" | "isError"
+          >
+        >();
+      testState.refetchAuthUser.mockReturnValue(refreshed.promise);
+      const funded = userWith(
+        userSubscription({
+          totalPlanCredits: 10,
+          consumedFromPlan: 0,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [],
+      );
+      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+      const { rerender } = await sendFromComposer();
+      expect(testState.refetchAuthUser).toHaveBeenCalledOnce();
+      const replacement: JsonContent = {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "draft B" }] },
+        ],
+      };
+      act(() => {
+        if (change === "draft") {
+          testState.editorContent = replacement;
+          testState.editContent?.(replacement, { from: 1, to: 1 });
+        } else testState.pickHarness = "claude";
+      });
+      rerender();
+      await act(async () => {
+        refreshed.resolve({ data: funded, isError: false });
+        await refreshed.promise;
+      });
+      expect(testState.startTask).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(readStagedSandbox("landing:window-test")?.phase).toBe("staged");
+      testState.refetchAuthUser.mockResolvedValue({
+        data: funded,
+        isError: false,
+      });
+      await userEvent.click(
+        screen.getByRole("button", { name: "Submit landing" }),
+      );
+      if (change === "draft") {
+        await waitFor(() => expect(testState.startTask).toHaveBeenCalledOnce());
+        expect(onlyPendingSend().text).toBe("draft B");
+      } else {
+        expect((await screen.findByRole("alert")).textContent).toContain(
+          "Claude Code doesn't run on sandboxes",
+        );
+        expect(testState.startTask).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("lets a staged sandbox take a terminal agent's Start instead of launching it here", () => {
     useStagedSandboxStore.getState().stage("landing:window-test", {
       kind: "new",
@@ -1047,7 +1139,9 @@ describe("LandingComposer direct submit gate", () => {
     if (snapshot === null) throw new Error("expected snapshot seam");
     snapshot();
     view.rerender(draftB);
-    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit landing" }),
+    );
 
     // The send takes the stage as it stands, mid-boot, to its task.
     expect(testState.submit).not.toHaveBeenCalled();
@@ -1207,11 +1301,11 @@ describe("LandingComposer direct submit gate", () => {
     ["provider pack is downloading", "packBlocked", true],
   ] as const)(
     "hands a send to a staged sandbox's task though this host's %s",
-    (_label, gate, value) => {
+    async (_label, gate, value) => {
       testState[gate] = value;
       useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
 
-      sendFromComposer();
+      await sendFromComposer();
 
       expect(testState.submit).not.toHaveBeenCalled();
       expect(testState.startTask).toHaveBeenCalledTimes(1);
@@ -1223,13 +1317,13 @@ describe("LandingComposer direct submit gate", () => {
     },
   );
 
-  it("hands the send of a person with no model to pick yet to the staged sandbox's task", () => {
+  it("hands the send of a person with no model to pick yet to the staged sandbox's task", async () => {
     testState.modelSlug = "";
     testState.pickHarness = "claude";
     testState.pickModel = "";
     useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
 
-    sendFromComposer();
+    await sendFromComposer();
 
     expect(testState.submit).not.toHaveBeenCalled();
     expect(onlyPendingSend().settings).toMatchObject({
@@ -1247,10 +1341,10 @@ describe("LandingComposer direct submit gate", () => {
     ["a stopped sandbox", EXISTING_START],
   ] as const)(
     "sends to %s on the model the person picked, not the one the toolbar shows",
-    (_label, target) => {
+    async (_label, target) => {
       useStagedSandboxStore.getState().stage("landing:window-test", target);
 
-      sendFromComposer();
+      await sendFromComposer();
 
       expect(onlyPendingSend().settings).toEqual({
         harnessId: "codex",
@@ -1264,13 +1358,13 @@ describe("LandingComposer direct submit gate", () => {
     },
   );
 
-  it("moves the composer's stage to the send, create key included, and keeps the composer's own empty", () => {
+  it("moves the composer's stage to the send, create key included, and keeps the composer's own empty", async () => {
     useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
     const clientRequestId = useStagedSandboxStore
       .getState()
       .begin("landing:window-test", false, 1_000, false);
 
-    sendFromComposer();
+    await sendFromComposer();
 
     expect(readStagedSandbox("landing:window-test")).toBeNull();
     expect(onlyPendingStage()).toMatchObject({ clientRequestId });
@@ -1322,12 +1416,12 @@ describe("LandingComposer direct submit gate", () => {
   describe("a staged send where no host here can take a task", () => {
     // No host at all, or only a resting sandbox: the placement refuses a
     // task, and the stage is the host the send needs.
-    it("keeps the draft, takes the stage for its sandbox, and sends the draft on it once it is up", () => {
+    it("keeps the draft, takes the stage for its sandbox, and sends the draft on it once it is up", async () => {
       testState.placementAdmits = false;
       testState.submit.mockReturnValueOnce(null);
       useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
 
-      sendFromComposer();
+      await sendFromComposer();
 
       // Not refused for a host the stage is about to provide, and no task
       // first: the stage carries the send, and the draft keeps the message.
@@ -1375,7 +1469,7 @@ describe("LandingComposer direct submit gate", () => {
       };
     }
 
-    it("refuses an agent that cannot run on the sandbox host with the Providers link, creating nothing and keeping the draft", () => {
+    it("refuses an agent that cannot run on the sandbox host with the Providers link, creating nothing and keeping the draft", async () => {
       const openProviders = vi.fn();
       testState.agentGate = {
         blocked: true,
@@ -1383,7 +1477,7 @@ describe("LandingComposer direct submit gate", () => {
         notice: refusal(openProviders),
       };
 
-      sendFromComposer();
+      await sendFromComposer();
 
       expect(screen.getByRole("alert").textContent).toContain(SENTENCE);
       expect(testState.submit).not.toHaveBeenCalled();
@@ -1400,8 +1494,8 @@ describe("LandingComposer direct submit gate", () => {
       expect(openProviders).toHaveBeenCalledTimes(1);
     });
 
-    it("lets the same send through on a host the gate does not hold", () => {
-      sendFromComposer();
+    it("lets the same send through on a host the gate does not hold", async () => {
+      await sendFromComposer();
 
       expect(screen.queryByRole("alert")).toBeNull();
       expect(testState.submit).toHaveBeenCalledTimes(1);
@@ -1422,7 +1516,7 @@ describe("LandingComposer direct submit gate", () => {
       },
     ] as const)(
       "refuses $agent at Send on a team stage, keeping its chip and draft and creating no task",
-      ({ harnessId, agent, model, providerId }) => {
+      async ({ harnessId, agent, model, providerId }) => {
         testState.pickHarness = harnessId;
         testState.pickModel = model;
         testState.displayedHarness = harnessId;
@@ -1446,7 +1540,7 @@ describe("LandingComposer direct submit gate", () => {
         useStagedSandboxStore.getState().stage("landing:window-test", target);
         const staged = readStagedSandbox("landing:window-test");
 
-        const { rerender } = sendFromComposer();
+        const { rerender } = await sendFromComposer();
         rerender();
 
         const notice = within(screen.getByRole("alert"));
@@ -1495,12 +1589,12 @@ describe("LandingComposer direct submit gate", () => {
       ["existing", EXISTING_RESUME],
     ] as const)(
       "refuses an unoffered agent before create or wake and keeps the %s stage and draft",
-      (_kind, target) => {
+      async (_kind, target) => {
         testState.pickHarness = "claude";
         testState.catalogue = { providers: [], offeredAgents: ["traycer"] };
         useStagedSandboxStore.getState().stage("landing:window-test", target);
 
-        sendFromComposer();
+        await sendFromComposer();
 
         expect(screen.getByRole("alert").textContent).toContain(
           "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
@@ -1534,12 +1628,12 @@ describe("LandingComposer direct submit gate", () => {
       },
     );
 
-    it("keeps the send pending while the catalogue loads and waits for another Send after it settles", () => {
+    it("keeps the send pending while the catalogue loads and waits for another Send after it settles", async () => {
       testState.catalogue = undefined;
       testState.catalogueFetching = true;
       useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
 
-      const { rerender } = sendFromComposer();
+      const { rerender } = await sendFromComposer();
 
       expect(screen.getByRole("status").textContent).toContain(
         "Checking which agents run on sandboxes.",
@@ -1568,7 +1662,9 @@ describe("LandingComposer direct submit gate", () => {
         screen.getByRole("button", { name: "Submit landing" }),
       ).toHaveProperty("disabled", false);
 
-      fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Submit landing" }),
+      );
 
       expect(testState.startTask).toHaveBeenCalledOnce();
       expect(
@@ -1576,10 +1672,10 @@ describe("LandingComposer direct submit gate", () => {
       ).toHaveLength(1);
     });
 
-    it("lets a legacy server without offeredAgents create the sandbox and defer readiness to its host", () => {
+    it("lets a legacy server without offeredAgents create the sandbox and defer readiness to its host", async () => {
       useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
 
-      sendFromComposer();
+      await sendFromComposer();
 
       expect(testState.startTask).toHaveBeenCalledOnce();
       expect(testState.submit).not.toHaveBeenCalled();
@@ -1902,7 +1998,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
-    getJSON: () => DIRTY_CONTENT,
+    getJSON: () => testState.editorContent ?? DIRTY_CONTENT,
     isEmpty: () => false,
     clear: testState.clearEditor,
     setContent: () => undefined,

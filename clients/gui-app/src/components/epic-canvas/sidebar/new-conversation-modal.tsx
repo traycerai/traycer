@@ -1,3 +1,4 @@
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   transitionPendingSend,
   UNKNOWN_PENDING_SEND_FACTS,
@@ -192,7 +193,10 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
-import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
+import {
+  useStagedSendSignInCheck,
+  type StagedSendSignInCheck,
+} from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
@@ -1715,6 +1719,87 @@ export function NewConversationModalBody(props: {
   useLayoutEffect(() => {
     submitTargetRef.current = submitTarget;
   }, [submitTarget]);
+  const stagedSubmitAttempt = useRef<symbol | null>(null);
+  useEffect(
+    () => () => {
+      stagedSubmitAttempt.current = null;
+    },
+    [],
+  );
+
+  const submitStagedSandbox = useCallback(
+    (
+      stagedKey: string,
+      staged: StagedSandbox,
+      captured: JsonContent,
+    ): Promise<void> => {
+      if (stagedSubmitAttempt.current !== null) return Promise.resolve();
+      const attempt = Symbol();
+      stagedSubmitAttempt.current = attempt;
+      const account = signedInUserId();
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const settingsKey = JSON.stringify(settings);
+      const revision =
+        useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+          ?.revision ?? 0;
+
+      // An agent the sandbox does not offer is refused here,
+      // before anything is created or woken; the draft and the chip stay.
+      return stagedSignInCheck
+        .beforeSend(staged)
+        .then((signedOut) => {
+          if (
+            stagedSubmitAttempt.current !== attempt ||
+            readStagedSandbox(stagedKey) !== staged ||
+            signedInUserId() !== account ||
+            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
+              settingsKey ||
+            (useNewConversationModalStore.getState().draftPatchesByEpicId[
+              epicId
+            ]?.revision ?? 0) !== revision
+          )
+            return;
+          if (signedOut !== null) {
+            raiseHostNotice(signedOut);
+            return;
+          }
+          const content = buildSubmittedChatJSONContent(
+            captured,
+            pickerStore.getState().knownSlashCommands,
+          );
+          handStagedSandbox(stagedKey, staged, () => {
+            const handed = handPendingSandboxSend({
+              fromSurfaceKey: stagedKey,
+              epicId,
+              // The pane this modal was opened for, as the ordinary create takes it.
+              request: { kind: "chat", parentId, placement },
+              content,
+              text: composerDisplayPlainText(content),
+              settings,
+              epicConfirmed: true,
+              now: Date.now(),
+            });
+            if (handed !== null) cleanupAfterSubmit();
+          });
+          return;
+        })
+        .finally(() => {
+          stagedSubmitAttempt.current = null;
+        });
+    },
+    [
+      cleanupAfterSubmit,
+      epicId,
+      handStagedSandbox,
+      parentId,
+      pickerStore,
+      placement,
+      raiseHostNotice,
+      stagedSignInCheck,
+      toolbarStore,
+    ],
+  );
+
   /**
    * Submit, with the byte-resolution step in front of it.
    *
@@ -1783,34 +1868,10 @@ export function NewConversationModalBody(props: {
     const stagedKey = stagingSurfaceKey(sandboxStaging);
     const staged = stagedKey === null ? null : readStagedSandbox(stagedKey);
     if (stagedKey !== null && staged !== null && staged.phase !== "handoff") {
-      // An agent the sandbox does not offer is refused here,
-      // before anything is created or woken; the draft and the chip stay.
-      const signedOut = stagedSignInCheck(staged);
-      if (signedOut !== null) {
-        raiseHostNotice(signedOut);
-        return;
-      }
-      const content = buildSubmittedChatJSONContent(
-        captured,
-        pickerStore.getState().knownSlashCommands,
-      );
-      const settings = pickedRunSettings(toolbarStore.getState());
-      handStagedSandbox(stagedKey, staged, () => {
-        const handed = handPendingSandboxSend({
-          fromSurfaceKey: stagedKey,
-          epicId,
-          // The pane this modal was opened for, as the ordinary create takes it.
-          request: { kind: "chat", parentId, placement },
-          content,
-          text: composerDisplayPlainText(content),
-          settings,
-          epicConfirmed: true,
-          now: Date.now(),
-        });
-        if (handed !== null) cleanupAfterSubmit();
-      });
+      void submitStagedSandbox(stagedKey, staged, captured);
       return;
     }
+
     // This host's own gate, after the stage's: a staged sandbox is not this
     // host, and the send runs on it under its own.
     if (
@@ -2108,12 +2169,7 @@ export function NewConversationModalBody(props: {
     });
   }, [
     canSubmit,
-    cleanupAfterSubmit,
-    handStagedSandbox,
     epicId,
-    parentId,
-    pickerStore,
-    placement,
     raiseHostNotice,
     resolvedHostId,
     sandboxAgentRefusal,
@@ -2124,7 +2180,7 @@ export function NewConversationModalBody(props: {
     // received.
     submitTarget,
     setSubmitReentryTick,
-    stagedSignInCheck,
+    submitStagedSandbox,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
     toolbarStore,
@@ -2571,9 +2627,7 @@ function usePlacementAgentGates(input: {
   readonly blocked: boolean;
   readonly refusal: ComposerHostNoticeState | null;
   readonly checking: ComposerHostNoticeState | null;
-  readonly stagedSignInCheck: (
-    stage: StagedSandbox,
-  ) => ComposerHostNoticeState | null;
+  readonly stagedSignInCheck: StagedSendSignInCheck;
 } {
   const { client, hostId, harnessId, active, stagedAhead } = input;
   const packGate = useProviderPackGateForClient(client, harnessId, active);
@@ -2593,7 +2647,7 @@ function usePlacementAgentGates(input: {
     input.stagedSurfaceKey === null
       ? null
       : readStagedSandbox(input.stagedSurfaceKey);
-  const stagedCheck = stage === null ? null : stagedSignInCheck(stage);
+  const stagedCheck = stage === null ? null : stagedSignInCheck.check(stage);
   const checking = stagedCheck?.pending === true ? stagedCheck : null;
   if (!active || stagedAhead) {
     return {

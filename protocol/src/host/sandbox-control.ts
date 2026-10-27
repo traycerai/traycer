@@ -845,6 +845,9 @@ export const sandboxCreateAcceptedSchema: z.ZodType<SandboxCreateAccepted> =
     }),
   );
 
+/** The balance a spend gate checked; absent on older servers. */
+export type SandboxCreditSource = "personal" | "team-allowance" | "team";
+
 /**
  * The control plane's typed refusal body: `{ code, ... }`, the rest per code.
  * Known codes:
@@ -872,6 +875,7 @@ export interface SandboxRefusalBody {
   readonly code: string;
   readonly reason?: string | null;
   readonly shortfallMc?: number | null;
+  readonly creditSource?: SandboxCreditSource | null;
   readonly newRateMcPerHour?: number | null;
   readonly currentAwakeBurnMcPerHour?: number | null;
   /**
@@ -887,6 +891,10 @@ export const sandboxRefusalBodySchema: z.ZodType<SandboxRefusalBody> =
       code: z.string().min(1),
       reason: z.string().nullable().optional(),
       shortfallMc: z.number().nullable().optional(),
+      creditSource: z
+        .enum(["personal", "team-allowance", "team"])
+        .nullable()
+        .optional(),
       newRateMcPerHour: z.number().nullable().optional(),
       currentAwakeBurnMcPerHour: z.number().nullable().optional(),
       message: z.string().nullable().optional(),

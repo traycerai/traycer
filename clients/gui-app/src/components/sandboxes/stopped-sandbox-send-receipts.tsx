@@ -8,6 +8,9 @@ import {
   useSandboxList,
   sandboxListReadSentAt,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSandboxOperationFailure } from "@/hooks/sandboxes/use-sandbox-operation-failure";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import {
   CHOOSE_ANOTHER_HOST,
@@ -29,6 +32,12 @@ import {
   useStoppedSandboxSendReceiptStore,
   type StoppedSandboxSendReceipt,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+
+const FINISHED_RECEIPT_STATES: ReadonlySet<HostSandboxState> = new Set([
+  "awake",
+  "destroyed",
+  "released",
+]);
 
 function receiptScopeKey(
   userId: string | null,
@@ -151,13 +160,37 @@ function StoppedReceiptOwner(props: {
   const start = useCallback((): void => {
     if ((useAuthStore.getState().profile?.userId ?? null) !== receipt.userId)
       return;
-    mutate("start");
-    dismissReceipt(receipt.id);
+    mutate("start", {
+      onSuccess: (outcome) => {
+        if (
+          outcome.kind === "gone" ||
+          (outcome.kind === "settled" && outcome.state === "awake")
+        )
+          dismissReceipt(receipt.id);
+      },
+    });
   }, [mutate, receipt.id, receipt.userId]);
+  const operation = useSandboxOperation(receipt.sandboxId);
+  const row = useSandboxList().data?.sandboxes.find(
+    (sandbox) => sandbox.id === receipt.sandboxId,
+  );
+  const pending =
+    verb.isPending || row?.state === "starting" || row?.state === "resuming";
+  const failure = useSandboxOperationFailure({
+    sandboxId: receipt.sandboxId,
+    name: receipt.name,
+    hostId: row?.hostId,
+    operation:
+      operation?.kind === "failed" && operation.verb === "start"
+        ? operation
+        : null,
+    busy: pending,
+    onRetry: start,
+  });
   return (
     <ReturnedSendReceipt
       {...props}
-      startSandbox={{ start, pending: verb.isPending }}
+      startSandbox={{ start, pending, failure }}
     />
   );
 }
@@ -168,6 +201,7 @@ function ReturnedSendReceipt(props: {
   readonly startSandbox: {
     readonly start: () => void;
     readonly pending: boolean;
+    readonly failure: ReactNode;
   } | null;
 }): ReactNode {
   const { receipt } = props;
@@ -221,7 +255,7 @@ function ReturnedSendReceipt(props: {
       !sandboxList.isError &&
       readAt !== null &&
       readAt > receipt.confirmedAt &&
-      row?.state !== "stopped");
+      (row === undefined || FINISHED_RECEIPT_STATES.has(row.state)));
   useEffect(() => {
     if (obsolete) dismissReceipt(receipt.id);
   }, [obsolete, receipt.id]);
@@ -293,6 +327,7 @@ function ReturnedSendReceipt(props: {
             </>
           )}
         </div>
+        {startSandbox?.failure}
       </div>
     ),
     [receipt, openDraft, startSandbox],

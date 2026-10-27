@@ -1,3 +1,12 @@
+import { StoppedSandboxSendReceiptStrip } from "@/components/sandboxes/stopped-sandbox-send-receipts";
+import {
+  stoppedReceiptPicks,
+  useStoppedSandboxSendReceiptStore,
+  type StoppedSandboxSendReceipt,
+} from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -9,6 +18,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toastFromAuthError } from "@/lib/auth-error-toast";
 import type { ReactNode } from "react";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -24,6 +34,8 @@ import {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
+import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxRowVerb } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
@@ -32,6 +44,7 @@ import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directo
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   entry: null as RemoteHostDirectoryEntry | null,
+  configuration: { kind: "personal" } as SandboxPageConfiguration,
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -120,15 +133,22 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
+  useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
+  mocks.configuration = { kind: "personal" };
   useAuthStore.setState({
     status: "signed-in",
+    profile: { userId: "u1", userName: "Ada", email: "ada@example.test" },
     contextMetadata: { userId: "u1", username: "ada" },
   });
 });
 afterEach(() => {
   cleanup();
   closeSandboxDetails();
-  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useAuthStore.setState({
+    status: "signed-out",
+    contextMetadata: null,
+    profile: null,
+  });
 });
 
 interface VerbCase {
@@ -189,7 +209,7 @@ function Rows(): ReactNode {
     <section key={summary.id} aria-label={summary.displayName}>
       <SandboxRowActions
         summary={summary}
-        configuration={{ kind: "personal" }}
+        configuration={mocks.configuration}
         unreachable={false}
         frozenNeedsOwnCredits={false}
       />
@@ -266,6 +286,162 @@ async function press(testCase: VerbCase): Promise<HTMLElement> {
 }
 
 describe("sandbox row operations", () => {
+  it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
+    const testCase = CASES.find((entry) => entry.verb === "start");
+    if (testCase === undefined) throw new Error("Expected the Start case");
+    const { answer, binding, client, main } = setup(testCase);
+    await screen.findByRole("region", { name: "build-box" });
+    useNewConversationModalStore.getState().setContent("receipt-epic", {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "keep this draft" }],
+        },
+      ],
+    });
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        "receipt-epic"
+      ]?.draftId ?? null;
+    const receipt: StoppedSandboxSendReceipt = {
+      id: "receipt",
+      kind: "stopped",
+      sandboxId: main.id,
+      name: main.displayName,
+      confirmedAt: Date.now() + 60_000,
+      userId: "u1",
+      epicId: "receipt-epic",
+      returned: {
+        kind: "task",
+        epicId: "receipt-epic",
+        parentId: null,
+        placement: null,
+        draftId,
+      },
+      existingSendIds: new Set(),
+      picks: stoppedReceiptPicks(
+        "receipt-epic",
+        useSurfaceHostSelectionStore.getState().selections,
+        useStagedSandboxStore.getState().bySurface,
+      ),
+    };
+    useStoppedSandboxSendReceiptStore.setState({ receipts: { receipt } });
+    render(
+      <QueryClientProvider client={client}>
+        <StoppedSandboxSendReceiptStrip epicId="receipt-epic" tabId="tab" />
+      </QueryClientProvider>,
+    );
+    const strip = screen.getByTestId("sandbox-stopped-line");
+    await userEvent.click(within(strip).getByRole("button", { name: "Start" }));
+    await act(async () => {
+      answer.resolve({
+        ...refusal(402, "insufficient_credit"),
+        shortfallMc: 210,
+        creditSource: "personal",
+      });
+      await answer.promise;
+    });
+    const alert = await within(strip).findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't start build-box");
+    expect(
+      within(alert).getByRole("button", { name: "Add credits ↗" }),
+    ).toBeDefined();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        "receipt-epic"
+      ]?.draftId,
+    ).toBe(draftId);
+    binding.auth.runSandboxVerb.mockResolvedValue({
+      kind: "ok",
+      settled: true,
+      state: "awake",
+    });
+    await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull(),
+    );
+    expect(toastFromAuthError).not.toHaveBeenCalled();
+  });
+
+  it.each<{ source: SandboxCreditSource; pot: string }>([
+    { source: "team-allowance", pot: "your pool-e2e-fixture allowance is" },
+    { source: "team", pot: "your pool-e2e-fixture credits are" },
+    { source: "personal", pot: "your credits are" },
+  ])(
+    "keeps a $source refusal and remedies on the row without a toast",
+    async ({ source, pot }) => {
+      mocks.configuration =
+        source === "personal"
+          ? { kind: "personal" }
+          : {
+              kind: "team",
+              teamId: "team-a",
+              teamName: "pool-e2e-fixture",
+              environmentId: "team-env",
+            };
+      const testCase = CASES.find((entry) => entry.verb === "resume");
+      if (testCase === undefined) throw new Error("Expected the Resume case");
+      const { answer } = setup(testCase);
+      const row = await press(testCase);
+      await act(async () => {
+        answer.resolve({
+          kind: "refused",
+          status: 402,
+          code: "insufficient_credit",
+          reason: "denied",
+          shortfallMc: 210,
+          newRateMcPerHour: 210,
+          currentAwakeBurnMcPerHour: 0,
+          message: null,
+          creditSource: source,
+        });
+        await answer.promise;
+      });
+      const failure = await within(row).findByRole("alert");
+      expect(failure.textContent).toContain(
+        `Couldn't resume build-box · ${pot} short $0.21. $0.21 more wakes it for an hour.`,
+      );
+      expect(
+        within(failure)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["Add credits ↗", "Retry", "Details"]);
+      expect(toastFromAuthError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an unknown credit source generic on a team resume refusal", async () => {
+    mocks.configuration = {
+      kind: "team",
+      teamId: "team-a",
+      teamName: "Acme",
+      environmentId: "team-env",
+    };
+    const testCase = CASES.find((entry) => entry.verb === "resume");
+    if (testCase === undefined) throw new Error("Expected the Resume case");
+    const { answer } = setup(testCase);
+    const row = await press(testCase);
+    await act(async () => {
+      answer.resolve({
+        ...refusal(402, "insufficient_credit"),
+        creditSource: null,
+        shortfallMc: null,
+      });
+      await answer.promise;
+    });
+    const failure = await within(row).findByRole("alert");
+    expect(failure.textContent).toContain(
+      "Couldn't resume build-box · not enough credits to wake this sandbox for an hour.",
+    );
+    expect(
+      within(failure)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Add credits ↗", "Retry", "Details"]);
+    expect(toastFromAuthError).not.toHaveBeenCalled();
+  });
+
   it("shows the Settings dialog's pending operation and its failure on the card too", async () => {
     const { answer, client, main } = setup(SUSPEND_CASE);
     render(
@@ -382,7 +558,7 @@ describe("sandbox row operations", () => {
         <section aria-label="Another view">
           <SandboxRowActions
             summary={main}
-            configuration={{ kind: "personal" }}
+            configuration={mocks.configuration}
             unreachable={false}
             frozenNeedsOwnCredits={false}
           />

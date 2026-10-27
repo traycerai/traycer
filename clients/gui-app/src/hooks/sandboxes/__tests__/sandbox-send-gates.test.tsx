@@ -10,7 +10,15 @@
  *
  * Real hooks and the real host directory; only the host reads are answered.
  */
+import type { QueryObserverResult } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import {
+  teamSubscription,
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -46,12 +54,14 @@ const LAPTOP_HOST = "laptop-host";
 const answers = vi.hoisted(() => ({
   harnesses: undefined as ReadonlyArray<unknown> | undefined,
   providers: undefined as ReadonlyArray<unknown> | undefined,
-  catalogue: undefined as
-    | {
-        readonly offeredAgents?: ReadonlyArray<string>;
-        readonly providers?: ReadonlyArray<unknown>;
-      }
-    | undefined,
+  catalogue: undefined as SandboxCatalogue | undefined,
+  user: null as AuthenticatedUser | null,
+  refetchUser:
+    vi.fn<
+      () => Promise<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >
+    >(),
   catalogueError: false,
   catalogueFetching: false,
   refetchCatalogue: vi.fn<() => Promise<unknown>>(),
@@ -70,6 +80,16 @@ const answers = vi.hoisted(() => ({
   openForHarness: vi.fn<(harnessId: GuiHarnessId) => void>(),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ signInUrl: "https://billing.test" }),
+}));
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: answers.user, refetch: answers.refetchUser }),
+}));
+vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
+  useConfigurationBillingUrl: () => "https://billing.test",
+}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: () => ({
     data:
@@ -149,6 +169,9 @@ const PACKS_INSTALLED: ReadonlyArray<ProviderCliState> = [
 ];
 
 beforeEach(() => {
+  answers.user = null;
+  answers.refetchUser.mockReset();
+  answers.refetchUser.mockResolvedValue({ data: null, isError: false });
   answers.harnesses = CODEX_SIGNED_OUT;
   answers.providers = PACKS_INSTALLED;
   answers.catalogue = undefined;
@@ -274,7 +297,7 @@ describe("useSandboxAgentGate", () => {
   });
 
   it("refuses an agent not offered on sandboxes, with the model picker and other remedies", () => {
-    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
     registerActiveModelPicker({
       toggle: vi.fn(),
       openForHarness: answers.openForHarness,
@@ -302,7 +325,7 @@ describe("useSandboxAgentGate", () => {
   });
 
   it("offers Personal's Providers when Traycer Inference is offered but unavailable", () => {
-    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
     answers.harnesses = [harnessRow("traycer", { available: false })];
     answers.providers = [providerRow("traycer", { status: "installed" })];
 
@@ -329,7 +352,7 @@ describe("useSandboxAgentGate", () => {
   });
 
   it("names the team and opens that team's own Providers on a team's sandbox", () => {
-    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
     answers.harnesses = [harnessRow("traycer", { available: false })];
     answers.providers = [providerRow("traycer", { status: "installed" })];
     const gate = gateOn(TEAM_SANDBOX_HOST, "traycer");
@@ -348,7 +371,7 @@ describe("useSandboxAgentGate", () => {
 
   it("offers no link when the team's environment has not been read", () => {
     answers.environments = [];
-    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
     answers.harnesses = [harnessRow("traycer", { available: false })];
     answers.providers = [providerRow("traycer", { status: "installed" })];
 
@@ -445,12 +468,118 @@ function checkFor(harnessId: "codex" | "claude" | null) {
       onOpenTerminalInstead: answers.onOpenTerminalInstead,
       onChooseAnotherHost: answers.onChooseAnotherHost,
     }),
-  ).result.current;
+  ).result.current.check;
 }
 
+const QUOTED_CATALOGUE: SandboxCatalogue = {
+  offeredAgents: ["codex"],
+  providers: [
+    {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 102400,
+        diskDefaultMb: 20480,
+      },
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      shapes: null,
+      dockerInGuest: true,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [
+        {
+          id: "us-east",
+          label: "US East",
+          fromPriceMcPerHour: {
+            awakeMc: 210,
+            suspendedMc: 1,
+            stoppedMc: 1,
+          },
+          pricing: null,
+        },
+      ],
+    },
+  ],
+};
+
 describe("useStagedSendSignInCheck", () => {
+  it("shows the advisory short allowance in the existing staged-send gate and keeps the stage", () => {
+    answers.user = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [teamSubscription(0)],
+    );
+    answers.catalogue = QUOTED_CATALOGUE;
+    const stage = stageIn({ kind: "team", teamId: "team-1", teamName: "Acme" });
+    const notice = checkFor("codex")(stage);
+    expect(notice).toMatchObject({
+      kind: "refused",
+      message:
+        "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+    });
+    expect(notice?.secondaryActions?.map((action) => action.label)).toEqual([
+      "Choose another host",
+    ]);
+    expect(readStagedSandbox("surface")).toBe(stage);
+  });
+
+  it.each([false, true])(
+    "uses a fresh allowance at Send: still short=%s",
+    async (stillShort) => {
+      const user = (credits: number): AuthenticatedUser =>
+        userWith(
+          userSubscription({
+            totalPlanCredits: 100,
+            consumedFromPlan: 0,
+            bonusCredits: 0,
+            consumedFromBonus: 0,
+            bundleRemaining: 0,
+          }),
+          [teamSubscription(credits)],
+        );
+      answers.catalogue = QUOTED_CATALOGUE;
+      answers.user = user(stillShort ? 10 : 0);
+      answers.refetchUser.mockResolvedValue({
+        data: user(stillShort ? 0 : 10),
+        isError: false,
+      });
+      const stage = stageIn({
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+      });
+      const gate = renderHook(() =>
+        useStagedSendSignInCheck({ harnessId: "codex", active: true }),
+      ).result.current;
+      const refusal = await gate.beforeSend(stage);
+      if (stillShort)
+        expect(refusal?.message).toBe(
+          "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+        );
+      else expect(refusal).toBeNull();
+      expect(answers.refetchUser).toHaveBeenCalledOnce();
+      expect(readStagedSandbox("surface")).toBe(stage);
+    },
+  );
+
   it("refuses a picked agent the sandbox launch catalogue does not offer", () => {
-    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
     registerActiveModelPicker({
       toggle: vi.fn(),
       openForHarness: answers.openForHarness,
@@ -500,7 +629,7 @@ describe("useStagedSendSignInCheck", () => {
   });
 
   it("allows a picked agent present in the catalogue regardless of desktop auth", () => {
-    answers.catalogue = { offeredAgents: ["codex"] };
+    answers.catalogue = { providers: [], offeredAgents: ["codex"] };
     answers.harnesses = [
       harnessRow("codex", { authStatus: "unauthenticated" }),
     ];
@@ -518,7 +647,7 @@ describe("useStagedSendSignInCheck", () => {
   });
 
   it("refuses nothing when no agent is picked", () => {
-    answers.catalogue = { offeredAgents: [] };
+    answers.catalogue = { providers: [], offeredAgents: [] };
 
     expect(checkFor(null)(stageIn({ kind: "personal" }))).toBeNull();
   });

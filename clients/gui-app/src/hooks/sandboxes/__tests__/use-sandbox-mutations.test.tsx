@@ -170,24 +170,19 @@ describe("useSandboxVerb", () => {
     ]);
   });
 
-  it("toasts the typed copy under the verb's own title when the control plane refuses", async () => {
+  it("keeps a refused resume on the row without a toast", async () => {
     state.binding?.auth.runSandboxVerb.mockResolvedValue(
       refusal(402, "sandbox_frozen"),
     );
     const { wrapper } = setup();
     const { result } = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
-
     await act(async () => {
-      await result.current.mutateAsync("resume").catch(() => undefined);
+      await expect(result.current.mutateAsync("resume")).rejects.toThrow(
+        "credits ran out",
+      );
     });
-
-    await waitFor(() => {
-      expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
-    });
-    const [error, title] = state.toastFromAuthError.mock.calls[0];
-    expect(title).toBe("Couldn't resume the sandbox.");
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain("credits ran out");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
   });
 
   it("fails with a sign-in message, calling nothing, when no one is signed in", async () => {
@@ -948,7 +943,7 @@ describe("settling under another account", () => {
       expect(onSuccess).not.toHaveBeenCalled();
     });
 
-    it("control: with the same account throughout, a failed suspend toasts under the verb's title and still runs the settled invalidations", async () => {
+    it("control: with the same account throughout, a failed suspend remains inline and still runs the settled invalidations", async () => {
       const { queryClient, invalidate, pending } = startVerb();
       await waitFor(() => {
         expect(state.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
@@ -957,10 +952,7 @@ describe("settling under another account", () => {
       pending.reject(new Error("the transport threw"));
       await mutationEnded(queryClient);
 
-      expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
-      expect(state.toastFromAuthError.mock.lastCall?.[1]).toBe(
-        "Couldn't suspend the sandbox.",
-      );
+      expect(state.toastFromAuthError).not.toHaveBeenCalled();
       expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
       expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
       expect(invalidatedKeys(invalidate)).toEqual([

@@ -252,8 +252,10 @@ describe("sandbox control plane mirror", () => {
       currentAwakeBurnMcPerHour: 60,
       balanceMc: 50,
       shortfallMc: 70,
+      creditSource: "team-allowance",
     });
     expect(gate.shortfallMc).toBe(70);
+    expect(gate.creditSource).toBe("team-allowance");
     expect(gate.currentAwakeBurnMcPerHour).toBe(60);
     expect(
       sandboxRefusalBodySchema.parse({

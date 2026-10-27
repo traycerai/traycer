@@ -69,7 +69,11 @@ export type StagedSandboxStep =
 
 /** Why the first action stopped short, said on the line or above the draft. */
 export type StagedSandboxFailure =
-  | { readonly kind: "credits"; readonly shortfallMc: number | null }
+  | {
+      readonly kind: "credits";
+      readonly shortfallMc: number | null;
+      readonly creditSource?: "personal" | "team-allowance" | "team" | null;
+    }
   | { readonly kind: "unverified" }
   | { readonly kind: "shape" }
   | { readonly kind: "unavailable" }

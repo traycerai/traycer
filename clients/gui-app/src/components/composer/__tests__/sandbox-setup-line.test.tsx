@@ -185,7 +185,13 @@ describe("withdrawing a message from every refusal or failure", () => {
       const labels = buttonLabels(line);
       // A settings failure's terminal action reads plain "Open terminal".
       const exits = [
-        failure.kind === "settings" ? "Open terminal" : "Open terminal instead",
+        ...(failure.kind === "credits"
+          ? []
+          : [
+              failure.kind === "settings"
+                ? "Open terminal"
+                : "Open terminal instead",
+            ]),
         "Choose another host",
         "Cancel the message",
         "Details",
@@ -220,12 +226,16 @@ describe("SandboxSetupLine's refusal for credits", () => {
   it("offers Add credits, host choice and Cancel on a team's allowance", () => {
     const line = mountRefusal(
       { kind: "team", teamId: "team-1", teamName: "acme" },
-      { kind: "credits", shortfallMc: 120 },
+      { kind: "credits", creditSource: "team-allowance", shortfallMc: 120 },
       false,
       ACTIONS,
     );
 
-    expect(line.textContent).toContain("Your acme allowance is short");
+    expect(
+      within(line).getByText(
+        "Your acme allowance is short $0.12. $0.12 more starts this sandbox for an hour.",
+      ),
+    ).toBeDefined();
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
       "Choose another host",

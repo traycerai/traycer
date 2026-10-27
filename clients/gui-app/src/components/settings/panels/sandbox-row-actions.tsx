@@ -87,8 +87,8 @@ const DIALOG_OF: Partial<Record<SandboxRowAction, RowDialog>> = {
 /**
  * One row's actions, by Flow 6's matrix: the primary button, `Give it another
  * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
- * Interrupting and ending actions confirm in their dialogs; a wake on a team
- * row asks first, as every team wake does.
+ * Interrupting and ending actions confirm in their dialogs; a wake is one click
+ * after the row says who pays.
  */
 export function SandboxRowActions(props: {
   readonly summary: SandboxSummary;
@@ -358,6 +358,7 @@ export function SandboxRowActions(props: {
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
+        configuration={configuration}
         operation={operation}
         busy={busy}
         onRetry={(pressed) => {

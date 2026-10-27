@@ -14,6 +14,7 @@ import {
   type SandboxAutomationOpenTarget,
   type SandboxAutomationResponse,
   type SandboxCatalogue,
+  type SandboxCreditSource,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
   type SandboxLifecycleVerb,
@@ -82,6 +83,7 @@ export type SandboxControlFailure =
       /** The code's own detail (`shape_not_offered`'s bound, the gate's verdict). */
       readonly reason: string | null;
       readonly shortfallMc: number | null;
+      readonly creditSource?: SandboxCreditSource | null;
       readonly newRateMcPerHour: number | null;
       readonly currentAwakeBurnMcPerHour: number | null;
       /** A server-composed sentence for the person, shown verbatim. */
@@ -282,6 +284,7 @@ function failureOf(status: number, body: unknown): SandboxControlFailure {
       code: refusal.data.code,
       reason: refusal.data.reason ?? null,
       shortfallMc: refusal.data.shortfallMc ?? null,
+      creditSource: refusal.data.creditSource ?? null,
       newRateMcPerHour: refusal.data.newRateMcPerHour ?? null,
       currentAwakeBurnMcPerHour: refusal.data.currentAwakeBurnMcPerHour ?? null,
       message: refusal.data.message ?? null,
@@ -688,6 +691,7 @@ export type SandboxWakeOutcome =
   | {
       readonly kind: "credit-gate";
       readonly shortfallMc: number | null;
+      readonly creditSource?: SandboxCreditSource | null;
       readonly burnMcPerHour: number | null;
     }
   | { readonly kind: "wake-not-available" }
@@ -903,6 +907,7 @@ function outcomeOfWakeFailure(
     return {
       kind: "credit-gate",
       shortfallMc: failure.shortfallMc,
+      creditSource: failure.creditSource ?? null,
       burnMcPerHour: failure.currentAwakeBurnMcPerHour,
     };
   }
