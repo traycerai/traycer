@@ -10,6 +10,7 @@ import {
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import {
   CHOOSE_ANOTHER_HOST,
+  returnedSandboxMessageLine,
   stoppedSandboxLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { draftTabIntent } from "@/lib/tab-navigation";
@@ -111,7 +112,48 @@ function StoppedReceipt(props: {
   readonly receipt: StoppedSandboxSendReceipt;
   readonly tabId: string | null;
 }): ReactNode {
+  return props.receipt.kind === "stopped" ? (
+    <StoppedReceiptOwner receipt={props.receipt} tabId={props.tabId} />
+  ) : (
+    <ReturnedSendReceipt {...props} startSandbox={null} />
+  );
+}
+
+/** Capture the host-bound mutation here; a background toast renders outside that provider. */
+function StoppedReceiptOwner(props: {
+  readonly receipt: Extract<
+    StoppedSandboxSendReceipt,
+    { readonly kind: "stopped" }
+  >;
+  readonly tabId: string | null;
+}): ReactNode {
   const { receipt } = props;
+  const verb = useSandboxVerb(receipt.sandboxId);
+  const mutate = verb.mutate;
+  const start = useCallback((): void => {
+    if ((useAuthStore.getState().profile?.userId ?? null) !== receipt.userId)
+      return;
+    mutate("start");
+    dismissReceipt(receipt.id);
+  }, [mutate, receipt.id, receipt.userId]);
+  return (
+    <ReturnedSendReceipt
+      {...props}
+      startSandbox={{ start, pending: verb.isPending }}
+    />
+  );
+}
+
+function ReturnedSendReceipt(props: {
+  readonly receipt: StoppedSandboxSendReceipt;
+  readonly tabId: string | null;
+  readonly startSandbox: {
+    readonly start: () => void;
+    readonly pending: boolean;
+  } | null;
+}): ReactNode {
+  const { receipt } = props;
+  const startSandbox = props.startSandbox;
   const router = use(CommandPaletteRouterContext);
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
   const sends = usePendingSandboxSendStore((state) => state.sends);
@@ -125,11 +167,11 @@ function StoppedReceipt(props: {
     state.drafts.some((draft) => draft.id === returnedDraftId),
   );
   const sandboxList = useSandboxList();
-  const verb = useSandboxVerb(receipt.sandboxId);
   const currentPicks = stoppedReceiptPicks(receipt.epicId, pins, stages);
   const readAt = sandboxListReadSentAt(sandboxList.data);
+  const sandboxId = receipt.kind === "stopped" ? receipt.sandboxId : null;
   const row = sandboxList.data?.sandboxes.find(
-    (sandbox) => sandbox.id === receipt.sandboxId,
+    (sandbox) => sandbox.id === sandboxId,
   );
   const obsolete =
     userId !== receipt.userId ||
@@ -149,7 +191,8 @@ function StoppedReceipt(props: {
         pick.pin !== receipt.picks[key]?.pin ||
         pick.target !== receipt.picks[key]?.target,
     ) ||
-    (!sandboxList.isError &&
+    (receipt.kind === "stopped" &&
+      !sandboxList.isError &&
       readAt !== null &&
       readAt > receipt.confirmedAt &&
       row?.state !== "stopped");
@@ -173,13 +216,6 @@ function StoppedReceipt(props: {
       });
     }
   }, [receipt, router, props.tabId]);
-  const startSandbox = verb.mutate;
-  const start = useCallback(() => {
-    if ((useAuthStore.getState().profile?.userId ?? null) !== receipt.userId)
-      return;
-    startSandbox("start");
-    dismissReceipt(receipt.id);
-  }, [receipt.id, receipt.userId, startSandbox]);
   const content = useMemo(
     () => (
       <div
@@ -187,10 +223,14 @@ function StoppedReceipt(props: {
         className="flex flex-col gap-2 text-ui-xs"
       >
         <span>
-          {stoppedSandboxLine(
-            receipt.name,
-            receipt.returned.kind === "landing-draft",
-          )}
+          {receipt.kind === "stopped"
+            ? stoppedSandboxLine(
+                receipt.name,
+                receipt.returned.kind === "landing-draft",
+              )
+            : returnedSandboxMessageLine(
+                receipt.returned.kind === "landing-draft",
+              )}
         </span>
         <div className="flex flex-wrap gap-2">
           {receipt.returned.kind === "landing-draft" ? (
@@ -203,27 +243,31 @@ function StoppedReceipt(props: {
               Open draft
             </Button>
           ) : null}
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            disabled={verb.isPending}
-            onClick={start}
-          >
-            Start
-          </Button>
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            onClick={openDraft}
-          >
-            {CHOOSE_ANOTHER_HOST}
-          </Button>
+          {startSandbox === null ? null : (
+            <>
+              <Button
+                type="button"
+                variant="link"
+                size="inline-xs"
+                disabled={startSandbox.pending}
+                onClick={startSandbox.start}
+              >
+                Start
+              </Button>
+              <Button
+                type="button"
+                variant="link"
+                size="inline-xs"
+                onClick={openDraft}
+              >
+                {CHOOSE_ANOTHER_HOST}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     ),
-    [receipt, openDraft, verb.isPending, start],
+    [receipt, openDraft, startSandbox],
   );
   useEffect(() => {
     if (props.tabId !== null || obsolete) return;
