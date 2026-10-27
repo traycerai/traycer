@@ -363,7 +363,7 @@ export function CreateBotNoHost(props: {
   if (checking) {
     return (
       <p className="text-ui-xs text-muted-foreground" aria-busy="true">
-        Finding a computer that runs {environmentLabel}&apos;s bots…
+        Finding a host that runs {environmentLabel}&apos;s bots…
       </p>
     );
   }
@@ -372,8 +372,7 @@ export function CreateBotNoHost(props: {
       className="text-ui-xs text-muted-foreground"
       data-testid="create-bot-no-host"
     >
-      This bot needs a computer that runs bots for {environmentLabel}. Set one
-      up in{" "}
+      This bot needs a host that runs bots for {environmentLabel}. Set one up in{" "}
       <Button
         type="button"
         variant="link"
@@ -388,7 +387,7 @@ export function CreateBotNoHost(props: {
       {someUnchecked ? (
         <span data-testid="create-bot-unchecked">
           {" "}
-          Some of your computers couldn&apos;t be checked.{" "}
+          Some of your hosts couldn&apos;t be checked.{" "}
           <Button type="button" variant="link" size="xs" onClick={onRetry}>
             Retry
           </Button>
