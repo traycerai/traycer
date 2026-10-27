@@ -253,9 +253,9 @@ describe("settings search", () => {
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
-  it("opens Browser agent access on Permissions, and Secrets on its own words", () => {
+  it("opens Browser agent access on the Permissions Browser tab, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
-      "permissions#<top>",
+      "permissions#permissions-tab-browser",
     );
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });

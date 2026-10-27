@@ -388,8 +388,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "personal",
   },
   // Whether agents may drive the in-app browser. Not offered in navigation
-  // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is a region of Permissions,
-  // and its route redirects there.
+  // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is the Browser tab of
+  // Permissions, and its route redirects there.
   {
     id: "browser-agent-access",
     label: "Browser agent access",
@@ -533,7 +533,7 @@ export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * path or a deep link still resolves, and they have no search collection.
  * Machine setup left the Environment group with the redesign; Agent
  * definitions became the Agents page's Definitions tab and Browser agent
- * access a region of Permissions.
+ * access the Browser tab of Permissions.
  */
 export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
   new Set(["machine-setup", "agent-definitions", "browser-agent-access"]);

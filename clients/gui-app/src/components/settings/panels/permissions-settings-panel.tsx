@@ -24,6 +24,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
+  PERMISSIONS,
   PERMISSIONS_TABS,
   PERMISSIONS_TAB_GROUPS,
   isPermissionsTab,
@@ -51,15 +52,18 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 
 /**
- * Settings ▸ Permissions: which mode, who reviews, what rules, what happened -
- * one tab per question, in that order.
+ * Settings ▸ Permissions: which mode, who reviews, what rules, what happened,
+ * and whether agents get the in-app browser - one tab per question, in that
+ * order.
  *
- * The page sits in the sidebar's Host group because three of its four tabs are
+ * The page sits in the sidebar's Host group because three of its five tabs are
  * per machine: the judge is stored on the host, the rules are read through it,
  * and the log is the host's own. `HostScopeGate` therefore wraps those three
  * tab BODIES, never the page. Modes is the one app-scoped region - the default
- * mode is one preference for this app - so it renders with no host in scope,
- * and the tab bar above everything is never gated, which is what lets each
+ * mode is one preference for this app - so it renders with no host in scope.
+ * Browser is the configuration's switch, read through the ambient host binding;
+ * its group says for itself when the host cannot answer, so it is not gated
+ * either. The tab bar above everything is never gated, which is what lets each
  * tab's trigger carry a settings-search anchor.
  *
  * The open intent selects a tab, hands a prepared rule to Rules, and names the
@@ -115,28 +119,37 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
   }, [hostId, hostName, windowHostId, setPick]);
   return hostId === null ? (
     <TeamPermissions>
-      <PermissionsBrowserAgentAccess />
+      {/* A team's page has no tab bar, so the Browser tab's search anchor
+          lands on the region itself; the host page never renders this
+          wrapper, so its trigger stays the anchor's one target there. */}
+      <div
+        data-settings-anchor={
+          PERMISSIONS.definitions.browserTab.anchor ?? undefined
+        }
+      >
+        <PermissionsBrowserAgentAccess />
+      </div>
     </TeamPermissions>
   ) : null;
 }
 
 /**
- * The page's Browser agent access region, below its policy. It reads the
+ * The Browser agent access switch: the Browser tab's body on a host pick, and
+ * a region below the policy on a team, whose page has no tabs. It reads the
  * ambient binding, so a Local row's pick re-provides it to that computer.
  */
 function PermissionsBrowserAgentAccess(): ReactNode {
   return (
-    <div className="pt-5">
-      <EnvironmentHostBinding>
-        <BrowserAgentAccessGroup />
-      </EnvironmentHostBinding>
-    </div>
+    <EnvironmentHostBinding>
+      <BrowserAgentAccessGroup />
+    </EnvironmentHostBinding>
   );
 }
 
 const PERSONAL_PERMISSIONS_DESCRIPTION =
   "What your agents may do without asking, on every computer and sandbox.";
 
+/** A machine's Permissions: the five tabs, three of them host-gated. */
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const pick = useEnvironmentPick();
@@ -289,8 +302,14 @@ function HostPermissionsSettingsPanel(): ReactNode {
             />,
           )}
         </TabsContent>
+        <TabsContent
+          value="browser"
+          className="pt-5"
+          {...contentLabel("browser")}
+        >
+          <PermissionsBrowserAgentAccess />
+        </TabsContent>
       </Tabs>
-      <PermissionsBrowserAgentAccess />
     </SettingsPanelShell>
   );
 }
