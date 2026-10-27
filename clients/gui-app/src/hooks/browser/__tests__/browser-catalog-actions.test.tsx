@@ -90,8 +90,8 @@ const record: BrowserCatalogRecord = {
   tabs: [{ tabId: "tab-1", title: "Docs", url: "https://example.com" }],
 };
 
-function catalogData(): BrowserCatalogQueryData {
-  return { scope: "cloud", records: [record], unavailable: false };
+function catalogData(entry: BrowserCatalogRecord): BrowserCatalogQueryData {
+  return { scope: "cloud", records: [entry], unavailable: false };
 }
 
 function createQueryClient(): QueryClient {
@@ -121,23 +121,22 @@ function renderActionsWithNewCache() {
   return renderActions(createQueryClient());
 }
 
-const staleRecord: BrowserCatalogRecord = {
-  ...record,
-  sessionId: "session-stale",
-  tabs: [
-    { tabId: "tab-closed", title: "Closed", url: "https://a.example" },
-    { tabId: "tab-kept", title: "Kept", url: "https://b.example" },
-  ],
-};
-
-function staleCatalog(): BrowserCatalogReadResponse {
-  return {
-    kind: "available",
-    snapshot: { version: 1, records: [staleRecord] },
+function staleCatalog(sessionId: string): BrowserCatalogReadResponse {
+  const stale: BrowserCatalogRecord = {
+    ...record,
+    sessionId,
+    tabs: [
+      { tabId: "tab-closed", title: "Closed", url: "https://a.example" },
+      { tabId: "tab-kept", title: "Kept", url: "https://b.example" },
+    ],
   };
+  return { kind: "available", snapshot: { version: 1, records: [stale] } };
 }
 
+/** Each case closes a tab in its own session: closed tabs are module state
+ * that outlives a test, so a shared session would pre-filter the next case. */
 function renderCatalogReader(
+  sessionId: string,
   read: () => BrowserCatalogReadResponse | Promise<BrowserCatalogReadResponse>,
 ) {
   let reads = 0;
@@ -177,7 +176,7 @@ function renderCatalogReader(
     closeStaleTab: () =>
       act(() =>
         result.current.actions.closeTab(
-          { ...identity, sessionId: "session-stale" },
+          { ...identity, sessionId },
           "tab-closed",
         ),
       ),
@@ -305,26 +304,29 @@ describe("useBrowserCatalogActions", () => {
       "epic-2",
       "user-1",
     );
+    // Its own session: an earlier case already closed session-1's tab-1.
+    const closing = { ...identity, sessionId: "session-cache" };
+    const closingRecord = { ...record, sessionId: closing.sessionId };
     queryClient.setQueryData<BrowserCatalogQueryData>(
       firstReaderKey,
-      catalogData(),
+      catalogData(closingRecord),
     );
     queryClient.setQueryData<BrowserCatalogQueryData>(
       secondReaderKey,
-      catalogData(),
+      catalogData(closingRecord),
     );
     queryClient.setQueryData<BrowserCatalogQueryData>(
       otherTaskKey,
-      catalogData(),
+      catalogData(closingRecord),
     );
     const { result } = renderActions(queryClient);
 
     await act(async () => {
-      await result.current.closeTab(identity, "tab-1");
+      await result.current.closeTab(closing, "tab-1");
     });
 
     expect(mocks.closeTab).toHaveBeenCalledWith(
-      expect.objectContaining({ identity, tabId: "tab-1" }),
+      expect.objectContaining({ identity: closing, tabId: "tab-1" }),
     );
     expect(
       queryClient.getQueryData<BrowserCatalogQueryData>(firstReaderKey)
@@ -340,13 +342,16 @@ describe("useBrowserCatalogActions", () => {
     );
     expect(
       queryClient.getQueryData<BrowserCatalogQueryData>(otherTaskKey)?.records,
-    ).toEqual([record]);
+    ).toEqual([closingRecord]);
     expect(queryClient.getQueryState(otherTaskKey)?.isInvalidated).toBe(false);
     queryClient.clear();
   });
 
   it("keeps a closed tab gone when the next catalog read still lists it", async () => {
-    const reader = renderCatalogReader(staleCatalog);
+    const sessionId = "session-next-read";
+    const reader = renderCatalogReader(sessionId, () =>
+      staleCatalog(sessionId),
+    );
     await waitFor(() => expect(reader.tabIds()).toHaveLength(2));
 
     await reader.closeStaleTab();
@@ -358,9 +363,11 @@ describe("useBrowserCatalogActions", () => {
   });
 
   it("keeps a closed tab gone when the first catalog read was in flight during the close", async () => {
+    const sessionId = "session-in-flight";
     let answer: (response: BrowserCatalogReadResponse) => void = () =>
       undefined;
     const reader = renderCatalogReader(
+      sessionId,
       () =>
         new Promise((resolve) => {
           answer = resolve;
@@ -369,7 +376,7 @@ describe("useBrowserCatalogActions", () => {
     await waitFor(() => expect(reader.reads()).toBe(1));
 
     await reader.closeStaleTab();
-    act(() => answer(staleCatalog()));
+    act(() => answer(staleCatalog(sessionId)));
     await waitFor(() => expect(reader.queryClient.isFetching()).toBe(0));
 
     expect(reader.reads()).toBe(1);
