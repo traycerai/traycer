@@ -91,6 +91,39 @@ export function removeDeletedEpicsFromCloudTaskCaches(
     if (next === response) continue;
     queryClient.setQueryData<ListTasksResponse>(queryKey, next);
   }
+  // Title lookups name the same tasks, so a positive answer cached before the
+  // delete must not keep a deleted task resolvable.
+  setTaskOutcomeInTaskContextsCaches(queryClient, scope, epicIds, {
+    status: "confirmed-absent",
+  });
+}
+
+/**
+ * Overwrites what every cached `epic.getTaskContexts` answer in `scope` says
+ * about `taskIds` with `outcome`: a deletion (`confirmed-absent`) or a loss of
+ * access (`unknown`, `denied`) the window has learned since those answers
+ * were read. Ids an answer does not hold are left out of it.
+ */
+export function setTaskOutcomeInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  taskIds: ReadonlyArray<string>,
+  outcome: TaskContextResult,
+): void {
+  if (taskIds.length === 0) return;
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) => {
+      const held = taskIds.filter((taskId) =>
+        Object.hasOwn(response.tasks, taskId),
+      );
+      if (held.length === 0) return response;
+      const tasks = { ...response.tasks };
+      for (const taskId of held) tasks[taskId] = outcome;
+      return { ...response, tasks };
+    },
+  );
 }
 
 /**

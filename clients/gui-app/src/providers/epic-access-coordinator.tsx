@@ -2,7 +2,10 @@ import { use, useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { QueryClientContext } from "@tanstack/react-query";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  removeDeletedEpicsFromCloudTaskCaches,
+  setTaskOutcomeInTaskContextsCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import { epicAccessToast } from "@/lib/toast/channels";
 import {
   subscribeDeletedEpicNotifications,
@@ -217,6 +220,23 @@ export function EpicAccessCoordinator() {
         return;
       const wasActive = activeEpicIdRef.current === epicId;
       announceEpicLoss(epicId, reason);
+      // A title read before the loss must not keep the task resolvable (a
+      // task chip in a message would still open it).
+      const viewerUserId = useAuthStore.getState().profile?.userId ?? null;
+      if (
+        queryClient !== undefined &&
+        viewerUserId !== null &&
+        reason.kind !== "unavailable"
+      ) {
+        setTaskOutcomeInTaskContextsCaches(
+          queryClient,
+          { hostId: null, userId: viewerUserId },
+          [epicId],
+          reason.kind === "deleted"
+            ? { status: "confirmed-absent" }
+            : { status: "unknown", reason: "denied" },
+        );
+      }
       // A session's own deleted signal is the epic's deletion as its host
       // reports it, which has always cleared the epic on every host.
       if (reason.kind === "deleted") {

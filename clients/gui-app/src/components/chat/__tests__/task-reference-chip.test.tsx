@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
+  TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
@@ -34,6 +35,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TabActivationIntent } from "@/lib/tab-navigation";
 import { queryKeys } from "@/lib/query-keys";
 import {
+  removeDeletedEpicsFromCloudTaskCaches,
+  setTaskOutcomeInTaskContextsCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
+import {
   EpicSessionContext,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
@@ -45,6 +50,17 @@ const HOST_ID = "host-test";
 const USER_ID = "user-test";
 const TASK_ID = "6f1c2a9e-4b7d-4e21-9c3a-1d2e3f4a5b6c";
 const AGENT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+/** The chip's own lookup of `TASK_ID`. */
+const OWN_LOOKUP_KEY = queryKeys.hostTaskReferenceLookup(
+  HOST_ID,
+  USER_ID,
+  TASK_ID,
+);
+/** Another surface's lookup (the tab strip's, over every open tab). */
+const OTHER_LOOKUP_KEY = queryKeys.hostEpicTaskContexts(HOST_ID, USER_ID, [
+  TASK_ID,
+  AGENT_ID,
+]);
 
 const mocks = vi.hoisted(() => {
   const request =
@@ -59,6 +75,10 @@ const mocks = vi.hoisted(() => {
       requestWithSignal: request,
     },
     activateTabIntent: vi.fn<(navigate: unknown, intent: unknown) => void>(),
+    openEpicInBackground:
+      vi.fn<
+        (epicId: string, title: string | undefined, source: string) => void
+      >(),
     records: [] as ReadonlyArray<{
       readonly id: string;
       readonly type: string;
@@ -69,7 +89,6 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => mocks.client,
   useOptionalHostClient: () => mocks.client,
 }));
 
@@ -92,6 +111,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
   activateTabIntent: mocks.activateTabIntent,
+}));
+
+vi.mock("@/lib/commands/actions/open-epic-in-background", () => ({
+  openEpicInBackground: mocks.openEpicInBackground,
 }));
 
 vi.mock("@/components/ui/tooltip-wrapper", () => ({
@@ -304,11 +327,7 @@ describe("a task id in a message", () => {
     const container = renderMarkdown(`Gone: ${TASK_ID}.`);
 
     await waitFor(() => {
-      expect(
-        queryClient.getQueryState(
-          queryKeys.hostEpicTaskContexts(HOST_ID, USER_ID, [TASK_ID]),
-        )?.status,
-      ).toBe("success");
+      expect(queryClient.getQueryState(OWN_LOOKUP_KEY)?.status).toBe("success");
     });
     expect(lookedUpIds()).toEqual([TASK_ID]);
     expect(container.textContent).toBe(`Gone: ${TASK_ID}.`);
@@ -352,12 +371,10 @@ describe("a task id in a message", () => {
     expect(container.querySelector("p")).toBe(paragraph);
   });
 
-  it("is the chip on first render when a task list the window holds names it", () => {
-    mocks.request.mockImplementation(() => new Promise(() => undefined));
-    // Another surface's lookup (the tab strip's, over every open tab) already
-    // answered for this task.
+  it("is the chip on first render when a lookup the window holds names it, and asks nothing", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
     queryClient.setQueryData(
-      queryKeys.hostEpicTaskContexts(HOST_ID, USER_ID, [TASK_ID, AGENT_ID]),
+      OTHER_LOOKUP_KEY,
       lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
     );
     renderMarkdown(`In flight: ${TASK_ID}.`);
@@ -365,6 +382,132 @@ describe("a task id in a message", () => {
     expect(
       screen.getByRole("button", { name: "Ship the release" }),
     ).toBeTruthy();
+    // Let any lookup the chip would start reach the host.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(lookedUpIds()).toEqual([]);
+  });
+
+  it("goes back to text when its own lookup finds the task gone or out of reach, whatever an older lookup says", async () => {
+    const outcomes: ReadonlyArray<TaskContextResult> = [
+      { status: "confirmed-absent" },
+      { status: "unknown", reason: "denied" },
+    ];
+    for (const outcome of outcomes) {
+      queryClient.clear();
+      queryClient.setQueryData(
+        OTHER_LOOKUP_KEY,
+        lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
+      );
+      const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+      expect(
+        screen.getByRole("button", { name: "Ship the release" }),
+      ).toBeTruthy();
+
+      act(() => {
+        queryClient.setQueryData<GetTaskContextsResponse>(OWN_LOOKUP_KEY, {
+          tasks: { [TASK_ID]: outcome },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button")).toBeNull();
+      });
+      expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+      cleanup();
+    }
+  });
+
+  it("goes back to text when the task is deleted or the person loses access to it", async () => {
+    const losses: ReadonlyArray<() => void> = [
+      () => {
+        removeDeletedEpicsFromCloudTaskCaches(
+          queryClient,
+          { hostId: null, userId: USER_ID },
+          [TASK_ID],
+        );
+      },
+      () => {
+        setTaskOutcomeInTaskContextsCaches(
+          queryClient,
+          { hostId: null, userId: USER_ID },
+          [TASK_ID],
+          { status: "unknown", reason: "denied" },
+        );
+      },
+    ];
+    for (const lose of losses) {
+      queryClient.clear();
+      answerLookups({ [TASK_ID]: "Ship the release" });
+      renderMarkdown(`In flight: ${TASK_ID}.`);
+      await screen.findByRole("button", { name: "Ship the release" });
+
+      act(lose);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button")).toBeNull();
+      });
+      cleanup();
+    }
+  });
+
+  it("keeps its lookup for the session, so a row drawn again later is the chip at once and asks nothing more", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      answerLookups({ [TASK_ID]: "Ship the release" });
+      renderMarkdown(`In flight: ${TASK_ID}.`);
+      await screen.findByRole("button", { name: "Ship the release" });
+      cleanup();
+      // Past every title lookup's stale window.
+      vi.setSystemTime(Date.now() + 60 * 60_000);
+
+      renderMarkdown(`In flight: ${TASK_ID}.`);
+
+      expect(
+        screen.getByRole("button", { name: "Ship the release" }),
+      ).toBeTruthy();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(lookedUpIds()).toEqual([TASK_ID]);
+      expect(
+        queryClient.getQueryCache().find({ queryKey: OWN_LOOKUP_KEY })?.gcTime,
+      ).toBe(Infinity);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens the task in a background tab on a Cmd/Ctrl-click or a middle click, and in place on a plain click", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    renderMarkdown(`In flight: ${TASK_ID}.`);
+    const chip = await screen.findByRole("button", {
+      name: "Ship the release",
+    });
+
+    fireEvent.click(chip, { metaKey: true });
+    fireEvent.click(chip, { ctrlKey: true });
+    fireEvent(
+      chip,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    expect(mocks.openEpicInBackground.mock.calls).toEqual([
+      [TASK_ID, "Ship the release", "message_task_chip"],
+      [TASK_ID, "Ship the release", "message_task_chip"],
+      [TASK_ID, "Ship the release", "message_task_chip"],
+    ]);
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+
+    fireEvent.click(chip);
+
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.openEpicInBackground).toHaveBeenCalledTimes(3);
   });
 });
 

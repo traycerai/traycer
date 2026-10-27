@@ -690,6 +690,7 @@ describe("<BotChannelView /> a thread's typing line", () => {
         "Tracy is replying…",
       ),
     ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("gh run view");
 
     await user.click(line);
 

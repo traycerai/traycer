@@ -10,6 +10,8 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import type {
+  GetTaskContextsResponse,
+  ListTaskLight,
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -336,6 +338,42 @@ describe("EpicAccessCoordinator", () => {
     expect(toastInfo).toHaveBeenCalledWith(
       expect.stringContaining("no longer have access"),
       { id: "epic-access:epic-1", cancel: null },
+    );
+  });
+
+  it("marks a revoked task out of reach in the title lookups that named it", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    const handle = registerSession("epic-1");
+    seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
+    const { queryClient } = renderCoordinatorAt("/epics/epic-1/tab-1");
+    const lookupKey = hostQueryKeys.taskReferenceLookup(
+      TEST_HOST_ID,
+      "user-1",
+      "epic-1",
+    );
+    queryClient.setQueryData<GetTaskContextsResponse>(lookupKey, {
+      tasks: {
+        "epic-1": { status: "found", task: listTaskLight("epic-1") },
+      },
+    });
+
+    handle.store.setState({ accessLost: true });
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData<GetTaskContextsResponse>(lookupKey)?.tasks[
+          "epic-1"
+        ],
+      ).toEqual({ status: "unknown", reason: "denied" }),
     );
   });
 
@@ -1328,5 +1366,31 @@ function taskLight(id: string, title: string, repo: string): TaskLight {
       workspaces: [],
       roomInfo: null,
     },
+  };
+}
+
+function listTaskLight(epicId: string): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: "Epic One",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "draft",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "user-1",
+        version: "1.0.0",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    pinned: false,
   };
 }

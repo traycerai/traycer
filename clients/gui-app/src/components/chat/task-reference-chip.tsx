@@ -4,6 +4,7 @@ import {
   useContext,
   useMemo,
   useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -12,8 +13,13 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import {
+  isFoundTaskContext,
+  type TaskContextResult,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
   findCachedTaskContext,
   readEpicTitlesFromCloudTaskCaches,
@@ -22,8 +28,12 @@ import {
   type CloudEpicTasksCacheScope,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
+import { openEpicInBackground } from "@/lib/commands/actions/open-epic-in-background";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { useRegisteredEpicTitles } from "@/lib/epic-selectors";
-import { useOptionalHostClient } from "@/lib/host";
+import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { TASK_REFERENCE_LOOKUP_TAG } from "@/lib/query-keys/host-query-keys";
 import { cn } from "@/lib/utils";
 import {
   authorizesCloudCapability,
@@ -32,8 +42,6 @@ import {
 
 const COMPLETE_TASK_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const NO_TASK_IDS: readonly string[] = [];
 
 /**
  * An id-shaped token that named no agent: a chip with the task's title when it
@@ -59,13 +67,17 @@ function TaskTitleSourcesGate(props: { readonly taskId: string }): ReactNode {
   if (queryClient === undefined || hostClient === null) {
     return referenceIdAsWritten(props.taskId, "text");
   }
-  return <ResolvedTaskReferenceChip taskId={props.taskId} />;
+  return (
+    <ResolvedTaskReferenceChip taskId={props.taskId} hostClient={hostClient} />
+  );
 }
 
 function ResolvedTaskReferenceChip(props: {
   readonly taskId: string;
+  /** The app-wide host: a task is the account's, not one machine's. */
+  readonly hostClient: HostClient<HostRpcRegistry>;
 }): ReactNode {
-  const title = useTaskReferenceTitle(props.taskId);
+  const title = useTaskReferenceTitle(props.taskId, props.hostClient);
   if (title === null) return referenceIdAsWritten(props.taskId, "text");
   return (
     <TooltipWrapper
@@ -86,16 +98,26 @@ function TaskReferenceButton(props: {
   const { taskId, title } = props;
   const navigate = useNavigate();
   const router = useRouter();
-  const openTask = useCallback(() => {
-    openEpicFromList(navigate, taskId, router.state.location.pathname, {
-      title,
-      source: "message_task_chip",
-    });
-  }, [navigate, router, taskId, title]);
+  const openTask = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      // Cmd/Ctrl-click and the middle button open the task in a background
+      // tab, as a task row in History or Home does.
+      if (event.metaKey || event.ctrlKey || event.button === 1) {
+        openEpicInBackground(taskId, title, "message_task_chip");
+        return;
+      }
+      openEpicFromList(navigate, taskId, router.state.location.pathname, {
+        title,
+        source: "message_task_chip",
+      });
+    },
+    [navigate, router, taskId, title],
+  );
   return (
     <button
       type="button"
       onClick={openTask}
+      onAuxClick={onMiddleClick(openTask)}
       className={cn(
         "mx-0.25 inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
         "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
@@ -112,12 +134,21 @@ function TaskReferenceButton(props: {
 }
 
 /**
- * The task's title from what the window already holds - a mounted task's live
- * title, then the task lists and title lookups already cached - else from one
- * lookup by id, which stays cached like every other title lookup. `null` while
- * nothing has answered, and for a task the person cannot open.
+ * The task's title, or `null` while nothing has answered and for a task the
+ * person cannot open.
+ *
+ * What the window already holds comes first: a mounted task's live title, the
+ * cached task lists, and any cached title lookup (the tab strip's, over the
+ * open tabs). Only an id none of them names is looked up, once, under the
+ * chip's own key, which lives for the session; a lookup the chip started is
+ * kept even once something else names the task. That lookup's answer is the
+ * chip's verdict: a task it finds gone or out of reach stays text whatever an
+ * older answer elsewhere still says.
  */
-function useTaskReferenceTitle(taskId: string): string | null {
+function useTaskReferenceTitle(
+  taskId: string,
+  hostClient: HostClient<HostRpcRegistry>,
+): string | null {
   const taskIds = useMemo(() => [taskId], [taskId]);
   const [liveTitle] = useRegisteredEpicTitles(taskIds);
   const queryClient = useQueryClient();
@@ -153,13 +184,56 @@ function useTaskReferenceTitle(taskId: string): string | null {
   const lookupTitle = useSyncExternalStore(subscribeToLookups, () =>
     scope === null ? null : cachedLookupTitle(queryClient, scope, taskId),
   );
-  const known = nonEmptyTitle(liveTitle) ?? listTitle;
-  // The own lookup stays mounted once asked, so its answer is not dropped and
-  // asked for again while the chip is on screen.
-  useEpicGetTaskContexts(known === null ? taskIds : NO_TASK_IDS, userId, {
-    enabled: cloudAuthorized,
+  const windowTitle = nonEmptyTitle(liveTitle) ?? listTitle ?? lookupTitle;
+  const params = useMemo(() => ({ taskIds: [taskId] }), [taskId]);
+  // Disabled, the query still reads its own cached answer, which is how a
+  // lookup the chip started is kept once the window names the task.
+  const ownLookup = useHostQuery<HostRpcRegistry, "epic.getTaskContexts">({
+    client: hostClient,
+    method: "epic.getTaskContexts",
+    params,
+    cacheKeyIdentity:
+      userId === null ? undefined : [userId, TASK_REFERENCE_LOOKUP_TAG],
+    preflight: cloudVerdictPreflight("epic.getTaskContexts"),
+    options: {
+      enabled: cloudAuthorized && userId !== null && windowTitle === null,
+      staleTime: (query) =>
+        verdictOf(query.state.data?.tasks[taskId]) === null ? 0 : Infinity,
+      gcTime: Infinity,
+    },
   });
-  return known ?? lookupTitle;
+  const verdict = verdictOf(ownLookup.data?.tasks[taskId]);
+  if (verdict === null) return windowTitle;
+  if (verdict.kind === "unavailable") return null;
+  return nonEmptyTitle(liveTitle) ?? verdict.title;
+}
+
+type TaskVerdict =
+  | { readonly kind: "found"; readonly title: string | null }
+  | { readonly kind: "unavailable" };
+
+/**
+ * What one answer settles about the task: found, or gone or out of the
+ * person's reach. `null` for an answer that settles nothing (no answer yet, a
+ * failed read, an older host), which is read again on the next mount.
+ */
+function verdictOf(answer: TaskContextResult | undefined): TaskVerdict | null {
+  if (answer === undefined) return null;
+  if (isFoundTaskContext(answer)) {
+    const light = answer.task.epic?.light;
+    return {
+      kind: "found",
+      title:
+        light === null || light === undefined
+          ? null
+          : nonEmptyTitle(light.title),
+    };
+  }
+  if (answer.status === "confirmed-absent") return { kind: "unavailable" };
+  return answer.reason === "denied" ||
+    answer.reason === "not-found-or-not-permitted"
+    ? { kind: "unavailable" }
+    : null;
 }
 
 function cachedLookupTitle(
