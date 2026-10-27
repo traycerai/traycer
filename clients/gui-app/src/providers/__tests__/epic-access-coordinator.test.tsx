@@ -41,6 +41,10 @@ import {
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  taskLossFor,
+  useTaskLossRegister,
+} from "@/stores/epics/task-loss-register-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
@@ -341,7 +345,7 @@ describe("EpicAccessCoordinator", () => {
     );
   });
 
-  it("marks a revoked task out of reach in the title lookups that named it", async () => {
+  it("has the title lookups that named a task whose session lost access read it again, settling nothing", async () => {
     useAuthStore.getState().setSignedIn(
       {
         userId: "user-1",
@@ -366,15 +370,19 @@ describe("EpicAccessCoordinator", () => {
       },
     });
 
+    // A moved room or a failed sign-in raises this as a revoke does.
     handle.store.setState({ accessLost: true });
 
     await waitFor(() =>
-      expect(
-        queryClient.getQueryData<GetTaskContextsResponse>(lookupKey)?.tasks[
-          "epic-1"
-        ],
-      ).toEqual({ status: "unknown", reason: "denied" }),
+      expect(queryClient.getQueryState(lookupKey)?.isInvalidated).toBe(true),
     );
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(lookupKey)?.tasks,
+    ).toEqual({});
+    expect(
+      taskLossFor(useTaskLossRegister.getState(), "user-1", null, "epic-1")
+        ?.loss,
+    ).toBe("recheck");
   });
 
   it("silently closes a deleted background tab without leaving the active epic", async () => {

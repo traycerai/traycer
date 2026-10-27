@@ -15,11 +15,12 @@ import {
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
   isFoundTaskContext,
+  type GetTaskContextsResponse,
   type TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import {
   findCachedTaskContext,
   readEpicTitlesFromCloudTaskCaches,
@@ -39,6 +40,14 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import {
+  clearTaskLoss,
+  currentTaskLossSequence,
+  recordTaskLoss,
+  taskLossFor,
+  useTaskLossRegister,
+  type TaskLoss,
+} from "@/stores/epics/task-loss-register-store";
 
 const COMPLETE_TASK_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -137,13 +146,13 @@ function TaskReferenceButton(props: {
  * The task's title, or `null` while nothing has answered and for a task the
  * person cannot open.
  *
- * What the window already holds comes first: a mounted task's live title, the
- * cached task lists, and any cached title lookup (the tab strip's, over the
- * open tabs). Only an id none of them names is looked up, once, under the
- * chip's own key, which lives for the session; a lookup the chip started is
- * kept even once something else names the task. That lookup's answer is the
- * chip's verdict: a task it finds gone or out of reach stays text whatever an
- * older answer elsewhere still says.
+ * What the window has learned about losing the task comes first: a deletion
+ * or an answer that it is out of reach settles it as text, whatever title is
+ * still held anywhere. Then what the window holds: a mounted task's live
+ * title, the cached task lists, and any cached title lookup (the tab strip's,
+ * over the open tabs). Only an id none of them names is looked up, under the
+ * chip's own key, which lives for the session; the lookup stops once its
+ * answer settles the task, and asks again when the person may have lost it.
  */
 function useTaskReferenceTitle(
   taskId: string,
@@ -155,6 +164,10 @@ function useTaskReferenceTitle(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
+  );
+  const hostId = hostClient.getActiveHostId();
+  const loss = useTaskLossRegister((state) =>
+    taskLossFor(state, userId, hostId, taskId),
   );
   const scope = useMemo<CloudEpicTasksCacheScope | null>(
     () => (userId === null ? null : { hostId: null, userId }),
@@ -185,37 +198,112 @@ function useTaskReferenceTitle(
     scope === null ? null : cachedLookupTitle(queryClient, scope, taskId),
   );
   const windowTitle = nonEmptyTitle(liveTitle) ?? listTitle ?? lookupTitle;
+  const settledLoss = loss !== null && loss.loss !== "recheck";
+  const recheck = loss?.loss === "recheck";
   const params = useMemo(() => ({ taskIds: [taskId] }), [taskId]);
   // Disabled, the query still reads its own cached answer, which is how a
   // lookup the chip started is kept once the window names the task.
-  const ownLookup = useHostQuery<HostRpcRegistry, "epic.getTaskContexts">({
+  const ownLookup = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "epic.getTaskContexts",
+    GetTaskContextsResponse,
+    number
+  >({
     client: hostClient,
     method: "epic.getTaskContexts",
     params,
     cacheKeyIdentity:
       userId === null ? undefined : [userId, TASK_REFERENCE_LOOKUP_TAG],
     preflight: cloudVerdictPreflight("epic.getTaskContexts"),
+    captureRequestContext: currentTaskLossSequence,
+    mapResponse: ({ response, requestContext }) =>
+      userId === null || requestContext === undefined
+        ? response
+        : admitOwnAnswer(response, {
+            userId,
+            hostId,
+            taskId,
+            sentAt: requestContext,
+          }),
     options: {
-      enabled: cloudAuthorized && userId !== null && windowTitle === null,
+      // A settled answer is kept, not re-read on every reconnect: only one
+      // that settles nothing, or a possible loss, asks again.
+      enabled: (query) =>
+        cloudAuthorized &&
+        userId !== null &&
+        !settledLoss &&
+        (recheck ||
+          (verdictOf(query.state.data?.tasks[taskId]) === null &&
+            windowTitle === null)),
       staleTime: (query) =>
         verdictOf(query.state.data?.tasks[taskId]) === null ? 0 : Infinity,
       gcTime: Infinity,
     },
   });
+  if (settledLoss) return null;
   const verdict = verdictOf(ownLookup.data?.tasks[taskId]);
   if (verdict === null) return windowTitle;
-  if (verdict.kind === "unavailable") return null;
+  if (verdict.kind !== "found") return null;
   return nonEmptyTitle(liveTitle) ?? verdict.title;
+}
+
+/**
+ * The chip's own answer as it may be cached. Nothing makes a deleted task
+ * reachable again, and an answer to a read sent before the window learned the
+ * task was out of reach is not admitted for it; a settling answer is
+ * recorded, and one finding the task forgets what was learned before the read
+ * was sent.
+ */
+function admitOwnAnswer(
+  response: GetTaskContextsResponse,
+  read: {
+    readonly userId: string;
+    readonly hostId: string | null;
+    readonly taskId: string;
+    readonly sentAt: number;
+  },
+): GetTaskContextsResponse {
+  const { userId, hostId, taskId, sentAt } = read;
+  const loss = taskLossFor(
+    useTaskLossRegister.getState(),
+    userId,
+    hostId,
+    taskId,
+  );
+  if (
+    loss !== null &&
+    (loss.loss === "gone" || (loss.loss === "denied" && loss.sequence > sentAt))
+  ) {
+    return {
+      ...response,
+      tasks: { ...response.tasks, [taskId]: answerFor(loss.loss) },
+    };
+  }
+  const verdict = verdictOf(response.tasks[taskId]);
+  if (verdict === null) return response;
+  if (verdict.kind === "found") {
+    clearTaskLoss(userId, hostId, taskId, sentAt);
+  } else {
+    recordTaskLoss({ hostId, userId }, [taskId], verdict.kind);
+  }
+  return response;
+}
+
+function answerFor(loss: Exclude<TaskLoss, "recheck">): TaskContextResult {
+  return loss === "gone"
+    ? { status: "confirmed-absent" }
+    : { status: "unknown", reason: "denied" };
 }
 
 type TaskVerdict =
   | { readonly kind: "found"; readonly title: string | null }
-  | { readonly kind: "unavailable" };
+  | { readonly kind: "gone" }
+  | { readonly kind: "denied" };
 
 /**
- * What one answer settles about the task: found, or gone or out of the
- * person's reach. `null` for an answer that settles nothing (no answer yet, a
- * failed read, an older host), which is read again on the next mount.
+ * What one answer settles about the task: found, gone, or out of the person's
+ * reach. `null` for an answer that settles nothing (no answer yet, a failed
+ * read, an older host), which is read again.
  */
 function verdictOf(answer: TaskContextResult | undefined): TaskVerdict | null {
   if (answer === undefined) return null;
@@ -229,10 +317,10 @@ function verdictOf(answer: TaskContextResult | undefined): TaskVerdict | null {
           : nonEmptyTitle(light.title),
     };
   }
-  if (answer.status === "confirmed-absent") return { kind: "unavailable" };
+  if (answer.status === "confirmed-absent") return { kind: "gone" };
   return answer.reason === "denied" ||
     answer.reason === "not-found-or-not-permitted"
-    ? { kind: "unavailable" }
+    ? { kind: "denied" }
     : null;
 }
 

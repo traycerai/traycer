@@ -3,8 +3,8 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { QueryClientContext } from "@tanstack/react-query";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import {
+  recheckTaskContextAnswers,
   removeDeletedEpicsFromCloudTaskCaches,
-  setTaskOutcomeInTaskContextsCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicAccessToast } from "@/lib/toast/channels";
 import {
@@ -220,21 +220,19 @@ export function EpicAccessCoordinator() {
         return;
       const wasActive = activeEpicIdRef.current === epicId;
       announceEpicLoss(epicId, reason);
-      // A title read before the loss must not keep the task resolvable (a
-      // task chip in a message would still open it).
+      // A title read before the loss must not keep the task reachable, but
+      // the signal alone does not say the person lost it (a moved room or a
+      // failed sign-in raise it too): the lookups that named it read again.
       const viewerUserId = useAuthStore.getState().profile?.userId ?? null;
       if (
         queryClient !== undefined &&
         viewerUserId !== null &&
         reason.kind !== "unavailable"
       ) {
-        setTaskOutcomeInTaskContextsCaches(
+        recheckTaskContextAnswers(
           queryClient,
           { hostId: null, userId: viewerUserId },
           [epicId],
-          reason.kind === "deleted"
-            ? { status: "confirmed-absent" }
-            : { status: "unknown", reason: "denied" },
         );
       }
       // A session's own deleted signal is the epic's deletion as its host

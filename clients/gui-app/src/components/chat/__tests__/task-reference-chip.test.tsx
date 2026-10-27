@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
+  ListTasksResponse,
   TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -35,9 +36,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TabActivationIntent } from "@/lib/tab-navigation";
 import { queryKeys } from "@/lib/query-keys";
 import {
+  recheckTaskContextAnswers,
   removeDeletedEpicsFromCloudTaskCaches,
-  setTaskOutcomeInTaskContextsCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  LIST_CLOUD_TASKS_REQUEST,
+  cloudEpicTasksQueryKey,
+} from "@/lib/cloud-epic-tasks-query";
+import { useTaskLossRegister } from "@/stores/epics/task-loss-register-store";
 import {
   EpicSessionContext,
   handleHostIds,
@@ -55,6 +61,12 @@ const OWN_LOOKUP_KEY = queryKeys.hostTaskReferenceLookup(
   HOST_ID,
   USER_ID,
   TASK_ID,
+);
+/** History's first page of tasks. */
+const LIST_KEY = cloudEpicTasksQueryKey(
+  HOST_ID,
+  USER_ID,
+  LIST_CLOUD_TASKS_REQUEST,
 );
 /** Another surface's lookup (the tab strip's, over every open tab). */
 const OTHER_LOOKUP_KEY = queryKeys.hostEpicTaskContexts(HOST_ID, USER_ID, [
@@ -203,6 +215,22 @@ function lookedUpIds(): ReadonlyArray<string> {
 
 let queryClient: QueryClient;
 
+/** The task's deletion as the deleting window publishes it. */
+function deleteTask(): void {
+  removeDeletedEpicsFromCloudTaskCaches(
+    queryClient,
+    { hostId: null, userId: USER_ID },
+    [TASK_ID],
+  );
+}
+
+/** Lets a read the chip would start reach the host, and its answer land. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 function Providers(props: { readonly children: ReactNode }): ReactNode {
   return (
     <StrictMode>
@@ -247,6 +275,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false } },
   });
   mocks.records = [];
+  useTaskLossRegister.setState({ byUserId: {} });
   useAuthStore
     .getState()
     .setSignedIn(
@@ -419,37 +448,158 @@ describe("a task id in a message", () => {
     }
   });
 
-  it("goes back to text when the task is deleted or the person loses access to it", async () => {
-    const losses: ReadonlyArray<() => void> = [
-      () => {
-        removeDeletedEpicsFromCloudTaskCaches(
-          queryClient,
-          { hostId: null, userId: USER_ID },
-          [TASK_ID],
-        );
-      },
-      () => {
-        setTaskOutcomeInTaskContextsCaches(
-          queryClient,
-          { hostId: null, userId: USER_ID },
-          [TASK_ID],
-          { status: "unknown", reason: "denied" },
-        );
-      },
-    ];
-    for (const lose of losses) {
-      queryClient.clear();
-      answerLookups({ [TASK_ID]: "Ship the release" });
-      renderMarkdown(`In flight: ${TASK_ID}.`);
-      await screen.findByRole("button", { name: "Ship the release" });
+  it("goes back to text and asks nothing more once the task is deleted", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    renderMarkdown(`In flight: ${TASK_ID}.`);
+    await screen.findByRole("button", { name: "Ship the release" });
 
-      act(lose);
+    act(() => {
+      deleteTask();
+    });
 
-      await waitFor(() => {
-        expect(screen.queryByRole("button")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("button")).toBeNull();
+    });
+    await settle();
+    expect(lookedUpIds()).toEqual([TASK_ID]);
+  });
+
+  it("draws a task the window lists as its chip with no read, and its raw id once the task is deleted", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    queryClient.setQueryData<ListTasksResponse>(LIST_KEY, {
+      tasks: [listTaskLight(TASK_ID, "Ship the release")],
+      hasMore: false,
+      facets: { repos: [], workspaces: [], ownershipScopes: [] },
+    });
+    const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+    expect(
+      screen.getByRole("button", { name: "Ship the release" }),
+    ).toBeTruthy();
+
+    act(() => {
+      deleteTask();
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    });
+    await settle();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(lookedUpIds()).toEqual([]);
+  });
+
+  it("does not let an answer to a read sent before the deletion make the task reachable again", async () => {
+    let answer: (response: GetTaskContextsResponse) => void = () => undefined;
+    mocks.request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+    await waitFor(() => {
+      expect(lookedUpIds()).toEqual([TASK_ID]);
+    });
+
+    act(() => {
+      deleteTask();
+      answer(
+        lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
+      );
+    });
+    await settle();
+
+    expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    expect(screen.queryByRole("button")).toBeNull();
+
+    // A read after the deletion answering from a page that predates it. The
+    // chip no longer asks, so the read is forced through the query itself.
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    await act(async () => {
+      await queryClient
+        .getQueryCache()
+        .find({ queryKey: OWN_LOOKUP_KEY, exact: true })
+        ?.fetch();
+    });
+    expect(lookedUpIds()).toEqual([TASK_ID, TASK_ID]);
+
+    expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(OWN_LOOKUP_KEY)?.tasks[
+        TASK_ID
+      ],
+    ).toEqual({ status: "confirmed-absent" });
+  });
+
+  it("asks again when the person may have lost the task, and stays the chip when they still reach it", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    renderMarkdown(`In flight: ${TASK_ID}.`);
+    await screen.findByRole("button", { name: "Ship the release" });
+
+    // An open task's session losing access: a moved room raises it as a
+    // revoke does.
+    act(() => {
+      recheckTaskContextAnswers(
+        queryClient,
+        { hostId: null, userId: USER_ID },
+        [TASK_ID],
+      );
+    });
+
+    await waitFor(() => {
+      expect(lookedUpIds()).toEqual([TASK_ID, TASK_ID]);
+    });
+    expect(
+      await screen.findByRole("button", { name: "Ship the release" }),
+    ).toBeTruthy();
+  });
+
+  it("asks again when the person may have lost a task the window lists, and goes back to text when it is out of reach", async () => {
+    mocks.request.mockImplementation(() =>
+      Promise.resolve({
+        tasks: { [TASK_ID]: { status: "unknown", reason: "denied" } },
+      } satisfies GetTaskContextsResponse),
+    );
+    queryClient.setQueryData<ListTasksResponse>(LIST_KEY, {
+      tasks: [listTaskLight(TASK_ID, "Ship the release")],
+      hasMore: false,
+      facets: { repos: [], workspaces: [], ownershipScopes: [] },
+    });
+    const container = renderMarkdown(`In flight: ${TASK_ID}.`);
+    expect(
+      screen.getByRole("button", { name: "Ship the release" }),
+    ).toBeTruthy();
+
+    act(() => {
+      recheckTaskContextAnswers(
+        queryClient,
+        { hostId: null, userId: USER_ID },
+        [TASK_ID],
+      );
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
+    });
+    expect(lookedUpIds()).toEqual([TASK_ID]);
+  });
+
+  it("keeps a settled answer through host reconnects instead of reading it again", async () => {
+    answerLookups({});
+    renderMarkdown(`Gone: ${TASK_ID}.`);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(OWN_LOOKUP_KEY)?.status).toBe("success");
+    });
+
+    // Two reconnects' recovery sweeps over the host's reads.
+    for (let sweep = 0; sweep < 2; sweep += 1) {
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey: ["host", HOST_ID] });
       });
-      cleanup();
     }
+
+    expect(lookedUpIds()).toEqual([TASK_ID]);
   });
 
   it("keeps its lookup for the session, so a row drawn again later is the chip at once and asks nothing more", async () => {

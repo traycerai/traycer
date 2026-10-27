@@ -245,6 +245,26 @@ export const hostQueryKeys = {
 /** Marks a task chip's own lookup apart from the shared title batches. */
 export const TASK_REFERENCE_LOOKUP_TAG = "task-reference";
 
+/** The task a chip's own lookup key reads; `null` for any other key. */
+export function taskReferenceLookupTaskId(
+  queryKey: readonly unknown[],
+): string | null {
+  if (
+    !isEpicTaskContextsQueryKey(queryKey) ||
+    queryKey[5] !== TASK_REFERENCE_LOOKUP_TAG
+  ) {
+    return null;
+  }
+  const params = queryKey[3];
+  if (params === null || typeof params !== "object" || !("taskIds" in params)) {
+    return null;
+  }
+  const taskIds: unknown = params.taskIds;
+  return Array.isArray(taskIds) && typeof taskIds[0] === "string"
+    ? taskIds[0]
+    : null;
+}
+
 /**
  * True for any `epic.getTaskContexts` host query key (any host / user / id set).
  * Used by rename write-through to find batch-title cache entries to patch.
