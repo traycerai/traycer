@@ -363,6 +363,27 @@ describe("sandboxClockLine", () => {
     },
   );
 
+  it("reads an awake row whose settings did not apply as the one shared line", () => {
+    expect(
+      sandboxClockLine({
+        summary: sandboxSummaryFixture({
+          state: "awake",
+          displayName: "Build box",
+          guestConfigured: false,
+          failureCode: "envelope-delivery:x",
+        }),
+        configuration: { kind: "personal" },
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now: NOW,
+      }),
+    ).toBe(
+      "Build box is awake, but Personal's settings didn't apply · SBX-0520",
+    );
+  });
+
   describe("a failed row", () => {
     const failedLine = (failureCode: string | null) =>
       sandboxClockLine({

@@ -46,7 +46,6 @@ import {
   couldntStartLine,
   sandboxCreditShortLine,
   openProvidersLabel,
-  settingsDidntApplyLine,
   shapeNotOfferedLine,
   readyButNotSentLine,
   readySecondsLabel,
@@ -66,6 +65,10 @@ import type {
 import { sandboxAgentDisplayName } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
+import {
+  sandboxSettingsFailureLine,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 
 /** The same ruled setup treatment and counter for a shell waiting on Automations. */
 export function SandboxStartingLine(props: {
@@ -151,6 +154,8 @@ export interface SandboxSetupLineActions {
   readonly onChangeShape: (() => void) | null;
   /** Repairs the settings on the new host, then waits again. */
   readonly onRetryApplying: () => void;
+  readonly applyingPending?: boolean;
+  readonly applyingError?: boolean;
   readonly onStop: (() => void) | null;
   /**
    * A folderless terminal on the new host: Open terminal on the Booting step
@@ -507,7 +512,11 @@ function SandboxProgressLine(props: {
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
-          onClick={props.actions.onStop}
+          onClick={
+            failure?.kind === "settings" && expanded
+              ? null
+              : props.actions.onStop
+          }
         />
       }
       head={
@@ -553,7 +562,11 @@ function progressTitle(view: ProgressView, name: string): string {
     return resuming ? couldntResumeLine(name) : couldntStartLine(name);
   }
   if (failure?.kind === "settings") {
-    return settingsDidntApplyLine(name, view.configuration);
+    return sandboxSettingsFailureLine(
+      name,
+      view.configuration,
+      sandboxSupportReference(failure.code) ?? "SBX-0520",
+    );
   }
   if (view.takingLonger) {
     return resuming ? RESUMING_TAKING_LONGER : STARTING_TAKING_LONGER;
@@ -590,7 +603,9 @@ function ProgressHead(props: {
         {progressTitle(props.view, props.name)}
       </span>
       {namesSandbox ? <HeadPart text={props.name} /> : null}
-      {code === null ? null : <HeadPart text={code} />}
+      {code === null || failure?.kind === "settings" ? null : (
+        <HeadPart text={code} />
+      )}
       {waiting ? (
         <HeadPart text={formatStopwatch(props.elapsedSeconds)} />
       ) : null}
@@ -621,7 +636,9 @@ function ProgressDetail(props: {
       className="mx-auto flex w-full flex-col gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-ui-xs text-muted-foreground"
       data-testid="sandbox-setup-line-detail"
     >
-      <p className="m-0">{props.facts.costLine}</p>
+      {failure?.kind === "settings" ? null : (
+        <p className="m-0">{props.facts.costLine}</p>
+      )}
       {props.view.takingLonger && stage.stepAt !== null ? (
         <TakingLongerDetail
           step={stage.step}
@@ -631,6 +648,21 @@ function ProgressDetail(props: {
         />
       ) : null}
       <FailureSentence failure={failure} resuming={resuming} />
+      {failure?.kind === "settings" ? (
+        <>
+          <p className="m-0">
+            {sandboxSettingsStepsLine(
+              failure.steps ?? { applied: [], notApplied: [] },
+            )}
+          </p>
+          {stage.sendTaken ? (
+            <p className="m-0">Your message waits until they apply.</p>
+          ) : null}
+          {props.actions.applyingError ? (
+            <p role="alert">Settings still didn't apply · SBX-0520</p>
+          ) : null}
+        </>
+      ) : null}
       <SetupSteps
         step={stage.step}
         failure={failure}
@@ -692,13 +724,41 @@ function ProgressBranchButtons(props: {
             label={RETRY_APPLYING}
             testId="sandbox-setup-retry-applying"
             onClick={actions.onRetryApplying}
+            pending={actions.applyingPending}
           />
         )}
-        <SandboxFailureExitActions
-          stage={props.view.stage}
-          actions={actions}
-          prefix="sandbox-setup"
+        <LineButton
+          label={OPEN_TERMINAL}
+          testId="sandbox-setup-open-terminal"
+          onClick={actions.onOpenTerminal}
         />
+        <LineButton
+          label={STOP}
+          testId="sandbox-setup-stop"
+          onClick={actions.onStop}
+        />
+        <LineButton
+          label={CHOOSE_ANOTHER_HOST}
+          testId="sandbox-setup-choose-another-host"
+          onClick={actions.onChooseAnotherHost}
+        />
+        {props.view.stage.sendTaken ? (
+          <LineButton
+            label={CANCEL_THE_MESSAGE}
+            testId="sandbox-setup-cancel"
+            onClick={actions.onCancel}
+          />
+        ) : null}
+        {props.view.stage.createdSandboxId === null ? null : (
+          <LineButton
+            label={DETAILS}
+            testId="sandbox-setup-details"
+            onClick={() => {
+              const sandboxId = props.view.stage.createdSandboxId;
+              if (sandboxId !== null) openSandboxDetails(sandboxId);
+            }}
+          />
+        )}
       </>
     );
   }
@@ -911,6 +971,7 @@ function LineButton(props: {
   readonly label: string;
   readonly testId: string;
   readonly onClick: (() => void) | null;
+  readonly pending?: boolean;
 }): ReactNode {
   if (props.onClick === null) return null;
   return (
@@ -920,8 +981,16 @@ function LineButton(props: {
       size="inline-xs"
       data-testid={props.testId}
       onClick={props.onClick}
+      disabled={props.pending}
     >
       {props.label}
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
     </Button>
   );
 }

@@ -14,7 +14,7 @@ export interface DetailsSubject {
 export type DetailsReaderScope = "full" | "own" | "status_only";
 
 export interface DetailsRecovery {
-  readonly kind: "repair" | "install" | "retry" | "overview";
+  readonly kind: "repair" | "install" | "retry" | "overview" | "apply";
   readonly hostId: string;
 }
 

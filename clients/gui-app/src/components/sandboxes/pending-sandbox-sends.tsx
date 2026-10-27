@@ -1,3 +1,12 @@
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
+import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
+import {
+  sandboxSettingsFailureLine,
+  sandboxSettingsFailed,
+  sandboxSettingsEvidence,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import {
   useCallback,
   useEffect,
@@ -623,8 +632,7 @@ function executePendingReadiness(input: {
     requested.readiness?.kind !== "ready"
   )
     return;
-  if (current.failure !== null)
-    useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+  clearPendingSandboxFailure(surfaceKey);
   preparePendingReadySend({
     send,
     stage: current,
@@ -1010,8 +1018,10 @@ function useWatchedSandboxRow(
     stage?.createdHostId ?? null,
     send === null ? null : send.id,
   );
+  const settings = useSandboxSettingsStatus(row.row);
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
+    settingsReady: settings.ready,
     clientReady: true,
     stageStatus: stage?.phase ?? "missing",
     stageCurrent: stage?.phase === "handoff",
@@ -1029,9 +1039,8 @@ function useWatchedSandboxRow(
   useEffect(() => {
     if (send === null || decision === null) return;
     projectSandboxBlocker(surfaceKey, decision.state.blocker, row.failure);
-    if (decision.effects.includes("open-terminal") && stage?.failure !== null) {
-      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
-    }
+    if (decision.effects.includes("open-terminal"))
+      clearPendingSandboxFailure(surfaceKey);
     if (decision.effects.includes("wake")) wake(surfaceKey);
     if (decision.effects.includes("end-host")) {
       if (
@@ -1039,8 +1048,7 @@ function useWatchedSandboxRow(
           .getState()
           .endDispatch(send.id, null, "terminal-row", environment)
       ) {
-        if (send.stopRequested === true) returnStoppedPendingSend(send.id);
-        else returnPendingSandboxSend(send.id);
+        returnWatchedSend(send);
       }
     }
     if (decision.effects.includes("rehydrate"))
@@ -1049,8 +1057,7 @@ function useWatchedSandboxRow(
       decision.effects.includes("return-message") ||
       decision.effects.includes("remove")
     ) {
-      if (send.stopRequested === true) returnStoppedPendingSend(send.id);
-      else returnPendingSandboxSend(send.id);
+      returnWatchedSend(send);
     }
   }, [
     decision,
@@ -1067,6 +1074,17 @@ function useWatchedSandboxRow(
     refetch: row.refetch,
     environment,
   };
+}
+
+function clearPendingSandboxFailure(surfaceKey: string): void {
+  const current = readStagedSandbox(surfaceKey);
+  if (current === null || current.failure === null) return;
+  useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+}
+
+function returnWatchedSend(send: PendingSandboxSend): void {
+  if (send.stopRequested === true) returnStoppedPendingSend(send.id);
+  else returnPendingSandboxSend(send.id);
 }
 
 /** Persist the kernel's live blocker in the setup line's existing representation. */
@@ -1707,7 +1725,8 @@ function sandboxEnvironment(
     observation: row.observation,
     host,
     frozen: row.row?.frozen ?? false,
-    settingsReady: row.row?.guestConfigured !== false,
+    settingsReady:
+      row.row?.guestConfigured !== false && environment.settingsReady,
   };
 }
 
@@ -1753,6 +1772,7 @@ function usePendingDispatchLifecycle(
   const queryClient = useQueryClient();
   const wakeRequested = useRef(false);
   const [owned, setOwned] = useState(() => ownsPendingSandboxSend(send.id));
+  const settings = useSandboxSettingsStatus(row.row);
   useEffect(() => {
     let disposed = false;
     const ownership = holdPendingSandboxSendOwnership(send.id);
@@ -1767,6 +1787,7 @@ function usePendingDispatchLifecycle(
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
     clientReady: !clientMissing,
+    settingsReady: settings.ready,
     agentReady: true,
     modelReady: true,
     wakeInFlight: false,
@@ -2054,6 +2075,7 @@ function PendingDispatchLine(props: {
     props.id,
   );
   const client = useHostClientForHostId(props.dispatch.input.hostId);
+  const settings = useSandboxSettingsStatus(row.row);
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
@@ -2061,6 +2083,7 @@ function PendingDispatchLine(props: {
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
     clientReady: client !== null,
+    settingsReady: settings.ready,
     inFlight: dispatchesInFlight.has(props.id),
     agentReady: true,
     modelReady: true,
@@ -2070,7 +2093,6 @@ function PendingDispatchLine(props: {
     sandboxObservation(props.dispatch.blocker ?? "none", environment),
     pendingSandboxSendFacts(props.id, environment),
   );
-
   return (
     <div
       className="flex flex-wrap items-center gap-2 text-ui-xs"
@@ -2086,7 +2108,14 @@ function PendingDispatchLine(props: {
           variant={undefined}
         />
       )}
-      <span>{pendingDispatchLineCopy(send.request.kind, view.line)}</span>
+      <span>
+        {view.line === "settings"
+          ? pendingSettingsTitle(row.row, settings.data)
+          : pendingDispatchLineCopy(send.request.kind, view.line)}
+      </span>
+      {view.line === "settings" ? (
+        <PendingDispatchSettingsDetail row={row.row} status={settings.data} />
+      ) : null}
       {view.line === "credits" || view.line === "settings" ? (
         <PendingDispatchRemedy
           id={props.dispatch.delivery.sandboxId}
@@ -2114,12 +2143,56 @@ function PendingDispatchLine(props: {
   );
 }
 
+function pendingSettingsTitle(
+  row: SandboxSummary | null,
+  status: EnvironmentStatusResponseV11 | undefined,
+): string {
+  if (row === null) return "Applying settings…";
+  if (
+    !sandboxSettingsFailed(status?.items ?? []) &&
+    row.guestConfigured !== false
+  )
+    return "Applying settings…";
+  return sandboxSettingsFailureLine(
+    row.displayName,
+    status?.principal?.kind === "team" ? status.principal.teamName : "Personal",
+    "SBX-0520",
+  );
+}
+
+function PendingDispatchSettingsDetail(props: {
+  readonly row: SandboxSummary | null;
+  readonly status: EnvironmentStatusResponseV11 | undefined;
+}): ReactNode {
+  if (
+    !sandboxSettingsFailed(props.status?.items ?? []) &&
+    props.row?.guestConfigured !== false
+  )
+    return null;
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <p>Compute is charged while it is awake.</p>
+      <p>
+        {sandboxSettingsStepsLine(
+          sandboxSettingsEvidence(
+            props.status?.items ?? [],
+            props.row?.guestConfigured ?? null,
+          ),
+        )}
+      </p>
+      <p>Your message waits until they apply.</p>
+    </div>
+  );
+}
+
 function pendingDispatchLineCopy(
   kind: PendingSandboxSendRequest["kind"],
-  line: PendingSendView["line"],
+  line: Exclude<PendingSendView["line"], "settings">,
 ): string {
   const message = kind === "message";
-  const copy: Readonly<Record<PendingSendView["line"], string>> = {
+  const copy: Readonly<
+    Record<Exclude<PendingSendView["line"], "settings">, string>
+  > = {
     hidden: "",
     waiting: "Waiting for the sandbox…",
     creating: message ? "Sending message…" : "Creating agent…",
@@ -2127,7 +2200,6 @@ function pendingDispatchLineCopy(
       ? "Couldn't confirm the message was sent."
       : "Couldn't confirm the agent was created.",
     credits: "Add credits to resume this sandbox.",
-    settings: "Repair the sandbox's settings to continue.",
     "not-sent": "Couldn't resume this sandbox.",
     model: "Waiting for a model…",
     provider: "Waiting for the agent…",
@@ -2152,6 +2224,8 @@ function PendingDispatchRemedy(props: {
     configuration ?? { kind: "personal" },
   );
   const openLink = useOpenLink();
+  if (props.failure === "settings" && props.row !== null)
+    return <SandboxRetryApplyingButton hostId={props.row.hostId} />;
   return (
     <Button
       type="button"
@@ -2165,7 +2239,7 @@ function PendingDispatchRemedy(props: {
         else openSandboxDetails(props.id);
       }}
     >
-      {props.failure === "credits" ? "Add credits" : "Repair settings"}
+      {props.failure === "credits" ? "Add credits" : "Details"}
     </Button>
   );
 }
@@ -2791,6 +2865,8 @@ function PendingStagedSendItem(props: {
             onSendAgain: () => retrySend("send-again"),
             onChangeShape: () => backToComposer(true),
             onRetryApplying: newHost.onRetryApplying,
+            applyingPending: newHost.applyingPending,
+            applyingError: newHost.applyingError,
             onStop: stop,
             onOpenTerminal: newHost.onOpenTerminal,
             // The configuration's own Providers, a team's included.

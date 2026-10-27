@@ -887,6 +887,18 @@ export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
         hostName: z.string(),
         itemKey: z.string().min(1),
         reason: z.string().min(1),
+        sandbox: z
+          .object({
+            sandboxId: z.string().min(1).nullable().optional(),
+            operationId: z.string().min(1).nullable().optional(),
+            name: z.string(),
+            configurationName: z.string(),
+            attemptId: z.string(),
+            applied: z.array(z.string()),
+            notApplied: z.array(z.string()),
+          })
+          .nullable()
+          .optional(),
       })
       .catchall(z.unknown()),
 );

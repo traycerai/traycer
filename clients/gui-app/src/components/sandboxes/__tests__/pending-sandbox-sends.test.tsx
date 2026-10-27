@@ -449,6 +449,24 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   },
 }));
 
+// The staged run reads the sandbox host's environment.status; an older build
+// answers it with the typed unsupported-method error (a network failure would hold).
+vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
+  resolveNamedHostClient: () => ({
+    request: () =>
+      Promise.reject(
+        new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: "Unsupported.",
+          requestId: "request-1",
+          method: "environment.status",
+          fatalDetails: null,
+        }),
+      ),
+  }),
+}));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: (
     client: FakeClient | null,
@@ -720,9 +738,15 @@ vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
+// The isolated fixtures read the host's settings as ready; a settings hold is
+// exercised by its own test, not by every send.
+vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
+  useSandboxSettingsStatus: () => ({ ready: true, data: undefined }),
+}));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
   () => ({
+    useSandboxSettingsOperation: () => null,
     // A repair stays out until the test finishes it, as a slow host would.
     useSandboxRepairGuestConfigurationOnHost: () => ({
       mutate: (
@@ -1103,6 +1127,12 @@ beforeEach(() => {
   mocks.wake.mockReset();
   mocks.wake.mockResolvedValue({ kind: "awake" });
   resetNegotiatedManifests();
+  // The sandbox's host is a known older build: it serves forks and has no
+  // environment.status, which the staged run reads as an unsupported method (an
+  // unrecorded manifest would hold the send).
+  recordNegotiatedHostManifest(SANDBOX_HOST, {
+    "epic.createChat": { major: 1, minor: 2 },
+  });
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
   useInitialChatHandoffStore.getState().resetForTests();
@@ -6014,7 +6044,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         {
           label: "unconfigured",
           row: { guestConfigured: false },
-          remedy: /repair/i,
+          remedy: /settings didn.t apply/i,
         },
       ].map((variant) => [kind, variant.label, variant] as const),
     ),

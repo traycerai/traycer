@@ -12,6 +12,7 @@ import {
   type SandboxSetupLineActions,
   type SandboxSetupLineFacts,
 } from "@/components/composer/sandbox-setup-line";
+import { sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import type {
   StagedSandbox,
@@ -182,8 +183,15 @@ describe("withdrawing a message from every refusal or failure", () => {
         screen.queryByTestId("sandbox-refusal-line") ??
         screen.getByTestId("sandbox-setup-line-detail");
       const labels = buttonLabels(line);
+      // A settings failure's terminal action reads plain "Open terminal".
       const exits = [
-        ...(failure.kind === "credits" ? [] : ["Open terminal instead"]),
+        ...(failure.kind === "credits"
+          ? []
+          : [
+              failure.kind === "settings"
+                ? "Open terminal"
+                : "Open terminal instead",
+            ]),
         "Choose another host",
         "Cancel the message",
         "Details",
@@ -408,5 +416,83 @@ describe("SandboxSetupLine's Stop action", () => {
     expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
     fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
     expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+  });
+});
+
+describe("SandboxSetupLine when the settings did not apply", () => {
+  const STEPS = { applied: ["Secrets"], notApplied: ["Providers"] };
+
+  function mountSettings(sendTaken: boolean, actions: SandboxSetupLineActions) {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          sendTaken,
+          failure: {
+            kind: "settings",
+            code: "envelope-delivery:x",
+            steps: STEPS,
+          },
+        }}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={actions}
+      />,
+    );
+    return screen.getByTestId("sandbox-setup-line-detail");
+  }
+
+  it("says the one shared sentence, then compute first and one step line, never a raw key or code", () => {
+    const detail = mountSettings(false, ACTIONS);
+
+    expect(
+      screen.getByText(
+        "api-refactor is awake, but Personal's settings didn't apply · SBX-0520",
+      ),
+    ).toBeTruthy();
+    const lines = within(detail)
+      .getAllByText(/./, { selector: "p" })
+      .map((line) => line.textContent);
+    expect(lines[0]).toBe("Compute is charged while it is awake.");
+    expect(lines).toContain(sandboxSettingsStepsLine(STEPS));
+    expect(detail.textContent).not.toMatch(
+      /permission_denied|ANTHROPIC_API_KEY|envelope-delivery/,
+    );
+  });
+
+  it("says the message waits only when the send was taken", () => {
+    const waiting = mountSettings(true, ACTIONS);
+    expect(waiting.textContent).toContain(
+      "Your message waits until they apply.",
+    );
+    cleanup();
+
+    const idle = mountSettings(false, ACTIONS);
+    expect(idle.textContent).not.toContain("waits until they apply");
+  });
+
+  it("offers Retry applying, Open terminal, Stop, Choose another host and Details", () => {
+    const detail = mountSettings(true, {
+      ...ACTIONS,
+      onOpenTerminal: vi.fn(),
+    });
+
+    const labels = buttonLabels(detail);
+    for (const label of [
+      "Retry applying",
+      "Open terminal",
+      "Stop",
+      "Choose another host",
+      "Details",
+    ]) {
+      expect(labels).toContain(label);
+    }
+  });
+
+  it("disables Retry applying while a retry is pending", () => {
+    const detail = mountSettings(true, { ...ACTIONS, applyingPending: true });
+
+    const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
+    expect(retry.hasAttribute("disabled")).toBe(true);
   });
 });
