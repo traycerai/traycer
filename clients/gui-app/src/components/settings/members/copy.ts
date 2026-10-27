@@ -277,7 +277,10 @@ export function memberGainedEditing(
   legacyMembers: readonly string[],
 ): boolean {
   const name = memberName(member);
-  return name !== null && legacyMembers.includes(name);
+  return (
+    name !== null &&
+    legacyMembers.some((legacyName) => legacyName.trim() === name.trim())
+  );
 }
 
 /** A member still in the team: accepted, and not being removed. */
