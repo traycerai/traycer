@@ -371,7 +371,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.model", "", "i"],
     "stop-result": ["W.model", "", "i"],
     "stop-failed": ["W.model", "", "i"],
-    rest: ["W.host", "poll+wake", "a"],
+    rest: ["W.model", "poll", "a"],
     awake: ["W.model", "fetch-model+poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -379,7 +379,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     settings: ["W.settings", "poll", "a"],
     "settings-repaired": ["W.model", "", "i"],
     "wake-failed": ["W.wake", "report-not-sent", "a"],
-    "null-client": ["W.host", "poll", "a"],
+    "null-client": ["W.model", "poll", "a"],
     "client-restored": ["W.model", "", "i"],
     "access-lost": ["E", "end-host", "a"],
     "task-deleted": ["E", "end-host", "a"],
@@ -387,9 +387,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["W.model", "", "i"],
     "stage-lost": ["RC", "ret+remove", "a"],
     "account-away": ["W.model", "", "i"],
-    "account-back": ["W.host", "poll", "a"],
-    reload: ["W.host", "poll", "a"],
-    "storage-changed": ["W.host", "poll", "a"],
+    "account-back": ["W.model", "poll", "a"],
+    reload: ["W.model", "poll", "a"],
+    "storage-changed": ["W.model", "poll", "a"],
     "disposition-persisted": ["W.model", "", "i"],
     "recovery-complete": ["W.model", "", "i"],
   },
@@ -423,7 +423,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.provider", "", "i"],
     "stop-result": ["W.provider", "", "i"],
     "stop-failed": ["W.provider", "", "i"],
-    rest: ["W.host", "poll+wake", "a"],
+    rest: ["W.provider", "poll", "a"],
     awake: ["W.none", "prepare", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -431,7 +431,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     settings: ["W.settings", "poll", "a"],
     "settings-repaired": ["W.provider", "", "i"],
     "wake-failed": ["W.wake", "report-not-sent", "a"],
-    "null-client": ["W.host", "poll", "a"],
+    "null-client": ["W.provider", "poll", "a"],
     "client-restored": ["W.provider", "", "i"],
     "access-lost": ["E", "end-host", "a"],
     "task-deleted": ["E", "end-host", "a"],
@@ -439,9 +439,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["W.provider", "", "i"],
     "stage-lost": ["RC", "ret+remove", "a"],
     "account-away": ["W.provider", "", "i"],
-    "account-back": ["W.host", "poll", "a"],
-    reload: ["W.host", "poll", "a"],
-    "storage-changed": ["W.host", "poll", "a"],
+    "account-back": ["W.provider", "poll", "a"],
+    reload: ["W.provider", "poll", "a"],
+    "storage-changed": ["W.provider", "poll", "a"],
     "disposition-persisted": ["W.provider", "", "i"],
     "recovery-complete": ["W.provider", "", "i"],
   },
@@ -491,9 +491,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["W.credits", "", "i"],
     "stage-lost": ["RC", "ret+remove", "a"],
     "account-away": ["W.credits", "", "i"],
-    "account-back": ["W.host", "poll", "a"],
-    reload: ["W.host", "poll", "a"],
-    "storage-changed": ["W.host", "poll", "a"],
+    "account-back": ["W.credits", "poll", "a"],
+    reload: ["W.credits", "poll", "a"],
+    "storage-changed": ["W.credits", "poll", "a"],
     "disposition-persisted": ["W.credits", "", "i"],
     "recovery-complete": ["W.credits", "", "i"],
   },
@@ -543,9 +543,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["W.settings", "", "i"],
     "stage-lost": ["RC", "ret+remove", "a"],
     "account-away": ["W.settings", "", "i"],
-    "account-back": ["W.host", "poll", "a"],
-    reload: ["W.host", "poll", "a"],
-    "storage-changed": ["W.host", "poll", "a"],
+    "account-back": ["W.settings", "poll", "a"],
+    reload: ["W.settings", "poll", "a"],
+    "storage-changed": ["W.settings", "poll", "a"],
     "disposition-persisted": ["W.settings", "", "i"],
     "recovery-complete": ["W.settings", "", "i"],
   },
@@ -907,9 +907,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["S.credits", "", "i"],
     "stage-lost": ["S.credits", "", "i"],
     "account-away": ["S.credits", "", "i"],
-    "account-back": ["S.host", "poll", "a"],
-    reload: ["S.host", "poll", "a"],
-    "storage-changed": ["S.host", "poll", "a"],
+    "account-back": ["S.credits", "poll", "a"],
+    reload: ["S.credits", "poll", "a"],
+    "storage-changed": ["S.credits", "poll", "a"],
     "disposition-persisted": ["S.credits", "", "i"],
     "recovery-complete": ["S.credits", "", "i"],
   },
@@ -959,9 +959,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["S.settings", "", "i"],
     "stage-lost": ["S.settings", "", "i"],
     "account-away": ["S.settings", "", "i"],
-    "account-back": ["S.host", "poll", "a"],
-    reload: ["S.host", "poll", "a"],
-    "storage-changed": ["S.host", "poll", "a"],
+    "account-back": ["S.settings", "poll", "a"],
+    reload: ["S.settings", "poll", "a"],
+    "storage-changed": ["S.settings", "poll", "a"],
     "disposition-persisted": ["S.settings", "", "i"],
     "recovery-complete": ["S.settings", "", "i"],
   },
@@ -1011,9 +1011,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["S.wake", "", "i"],
     "stage-lost": ["S.wake", "", "i"],
     "account-away": ["S.wake", "", "i"],
-    "account-back": ["S.host", "poll", "a"],
-    reload: ["S.host", "poll", "a"],
-    "storage-changed": ["S.host", "poll", "a"],
+    "account-back": ["S.wake", "poll", "a"],
+    reload: ["S.wake", "poll", "a"],
+    "storage-changed": ["S.wake", "poll", "a"],
     "disposition-persisted": ["S.wake", "", "i"],
     "recovery-complete": ["S.wake", "", "i"],
   },
@@ -1167,9 +1167,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["Q.credits", "", "i"],
     "stage-lost": ["Q.credits", "", "i"],
     "account-away": ["Q.credits", "", "i"],
-    "account-back": ["Q.host", "poll", "a"],
-    reload: ["Q.host", "poll", "a"],
-    "storage-changed": ["Q.host", "poll", "a"],
+    "account-back": ["Q.credits", "poll", "a"],
+    reload: ["Q.credits", "poll", "a"],
+    "storage-changed": ["Q.credits", "poll", "a"],
     "disposition-persisted": ["Q.credits", "", "i"],
     "recovery-complete": ["Q.credits", "", "i"],
   },
@@ -1219,9 +1219,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["Q.settings", "", "i"],
     "stage-lost": ["Q.settings", "", "i"],
     "account-away": ["Q.settings", "", "i"],
-    "account-back": ["Q.host", "poll", "a"],
-    reload: ["Q.host", "poll", "a"],
-    "storage-changed": ["Q.host", "poll", "a"],
+    "account-back": ["Q.settings", "poll", "a"],
+    reload: ["Q.settings", "poll", "a"],
+    "storage-changed": ["Q.settings", "poll", "a"],
     "disposition-persisted": ["Q.settings", "", "i"],
     "recovery-complete": ["Q.settings", "", "i"],
   },
@@ -1271,9 +1271,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["Q.client", "", "i"],
     "stage-lost": ["Q.client", "", "i"],
     "account-away": ["Q.client", "", "i"],
-    "account-back": ["Q.host", "poll", "a"],
-    reload: ["Q.host", "poll", "a"],
-    "storage-changed": ["Q.host", "poll", "a"],
+    "account-back": ["Q.client", "poll", "a"],
+    reload: ["Q.client", "poll", "a"],
+    "storage-changed": ["Q.client", "poll", "a"],
     "disposition-persisted": ["Q.client", "", "i"],
     "recovery-complete": ["Q.client", "", "i"],
   },
@@ -1323,9 +1323,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-interrupted": ["Q.wake", "", "i"],
     "stage-lost": ["Q.wake", "", "i"],
     "account-away": ["Q.wake", "", "i"],
-    "account-back": ["Q.host", "poll", "a"],
-    reload: ["Q.host", "poll", "a"],
-    "storage-changed": ["Q.host", "poll", "a"],
+    "account-back": ["Q.wake", "poll", "a"],
+    reload: ["Q.wake", "poll", "a"],
+    "storage-changed": ["Q.wake", "poll", "a"],
     "disposition-persisted": ["Q.wake", "", "i"],
     "recovery-complete": ["Q.wake", "", "i"],
   },
@@ -2568,7 +2568,6 @@ describe("a landing send is handed off unconfirmed", () => {
 describe("a send whose stage has not reached the handoff", () => {
   const ROWS_WAITING = ["W.host", "W.model", "W.provider", "W.none"];
   const OBSERVED = ["awake", "rest", "agent-ready", "reload"] as const;
-  const NEVER = ["prepare", "persist-claim", "dispatch", "fetch-model", "wake"];
   it.each(
     ROWS_WAITING.flatMap((id) =>
       (["staged", "creating"] as const).flatMap((status) =>
@@ -2576,17 +2575,17 @@ describe("a send whose stage has not reached the handoff", () => {
       ),
     ),
   )(
-    "PS.%s.%s.%s runs the stage and polls, and reaches no host",
+    "PS.%s.%s.%s advances only a stage waiting for the host",
     (rowId, status, event) => {
       const transition = run(stateOf("chat", rowId), event, {
         ...factsFor(rowId, event),
         stageStatus: status,
       });
-      expect(transition.effects).toContain("run-stage");
-      expect(transition.effects).toContain("poll");
-      expect(
-        transition.effects.filter((effect) => NEVER.includes(effect)),
-      ).toEqual([]);
+      expect(sortedEffects(transition)).toEqual(
+        rowId === "W.host" || rowId === "W.none"
+          ? ["poll", "run-stage"]
+          : ["poll"],
+      );
     },
   );
 });
@@ -2700,6 +2699,55 @@ describe("an epic that failed to create ends the unconfirmed send directly", () 
     });
     expect(transition.effects).toEqual([]);
     expect(outcomeOf(transition)).toBe("denied-ownership");
+  });
+});
+
+describe("a resting sandbox wakes only for work that can proceed there", () => {
+  const HELD = [
+    "W.provider",
+    "W.model",
+    "W.credits",
+    "W.settings",
+    "W.notsent",
+    "W.wake",
+    "S.credits",
+    "S.settings",
+    "S.wake",
+    "Q.client",
+  ];
+  it.each([
+    "reload",
+    "storage-changed",
+    "account-back",
+    "observe",
+    "null-client",
+  ])(
+    "%s cannot turn a held send into permission to wake on the next row",
+    (event) => {
+      for (const rowId of HELD) {
+        const start = stateOf("chat", rowId);
+        const refreshed = run(start, event, {
+          ...defaultFacts(rowId),
+          clientReady: false,
+        });
+        const resting = run(refreshed.state, "rest", factsFor(rowId, "rest"));
+        expect(resting.state.blocker).toBe(start.blocker);
+        expect(resting.effects).toEqual(["poll"]);
+      }
+    },
+  );
+
+  it("Retry releases a refusal for one wake, then resumes delivery on the awake row", () => {
+    const facts = factsFor("W.notsent", "rest");
+    const retried = run(stateOf("chat", "W.notsent"), "retry", facts);
+    expect(retried.effects).toEqual(["retry", "poll", "wake"]);
+    const waking = run(retried.state, "observe", {
+      ...facts,
+      wakeInFlight: true,
+    });
+    expect(waking.effects).toEqual(["poll"]);
+    const awake = run(waking.state, "awake", { ...facts, host: "awake" });
+    expect(awake.effects).toEqual(["prepare"]);
   });
 });
 

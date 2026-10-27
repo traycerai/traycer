@@ -77,6 +77,7 @@ import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-
 import {
   readStagedSandbox,
   useStagedSandboxStore,
+  type StagedSandboxFailure,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -1238,6 +1239,140 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     } finally {
       restoreLocks();
     }
+  });
+
+  it.each([
+    ["no-provider", CODEX_UNAVAILABLE, { kind: "no-provider" }],
+    [
+      "not offered",
+      CODEX_NOT_OFFERED,
+      { kind: "agent-not-offered", harnessId: "codex" },
+    ],
+    [
+      "offered but off",
+      {
+        harnesses: [harnessRow("codex", { enabled: false, available: false })],
+        providers: [{ ...providerRow("codex", null), enabled: false }],
+      },
+      { kind: "no-provider" },
+    ],
+    ["failed install", CODEX_SETUP_FAILED, { kind: "agent-setup-failed" }],
+  ] as const satisfies ReadonlyArray<
+    readonly [string, HostAnswers, Partial<StagedSandboxFailure>]
+  >)(
+    "keeps a %s message and its remedy without waking when its sandbox suspends",
+    async (_label, answers, failure) => {
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, answers);
+      const view = mount();
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject(failure);
+      });
+
+      // A fresh idle suspension reaches the root driver even with no task open.
+      view.unmount();
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "suspended",
+          }),
+        ],
+        Date.now() + 120_000,
+      );
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      render(
+        <QueryClientProvider client={client}>
+          <PendingSandboxSendsDriver />
+        </QueryClientProvider>,
+      );
+
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(createChatCalls()).toEqual([]);
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "handoff",
+        failure,
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toMatchObject({
+        content: MESSAGE_CONTENT,
+        settings: PICKED_SETTINGS,
+        delivery: null,
+      });
+    },
+  );
+
+  it("wakes once to finish a pack install, then delivers when the requested agent is ready", async () => {
+    seed(SEEDED);
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+    expect(readStagedSandbox(SURFACE)?.failure).toBeNull();
+
+    const awake = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
+    answerSandboxRows([{ ...awake, state: "suspended" }], Date.now() + 120_000);
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
+      expect(stagedRunActive(SURFACE)).toBe(false);
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    expect(createChatCalls()).toEqual([]);
+
+    answerSandboxRows([awake], Date.now() + 120_001);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    await waitForCreateChats(1);
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps a refusal at rest until Retry wakes it once and delivers the saved message", async () => {
+    seed(SEEDED);
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "not-sent" },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const awake = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+    });
+    const fresh = Date.now() + 120_000;
+    answerSandboxRows([{ ...awake, state: "suspended" }], fresh);
+    mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
+    const wake = deferred<{ readonly kind: "awake" } | null>();
+    mocks.wake.mockReturnValue(wake.promise);
+    mount();
+    const line = await screen.findByTestId("sandbox-refusal-line");
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+
+    fireEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    answerSandboxRows([awake], fresh + 1);
+    await act(async () => {
+      wake.resolve({ kind: "awake" });
+      await wake.promise;
+    });
+    await waitForCreateChats(1);
+    await waitFor(() => {
+      expect(stagedRunActive(SURFACE)).toBe(false);
+    });
+    expect(createChatCalls()[0].input.initialMessage).toMatchObject({
+      content: MESSAGE_CONTENT,
+    });
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
   it("delivers the requested agent after its Personal provider is repaired, without a manual retry or a second sandbox", async () => {
