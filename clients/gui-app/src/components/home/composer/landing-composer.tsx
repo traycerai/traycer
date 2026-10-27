@@ -395,12 +395,6 @@ export function LandingComposer(props: LandingComposerProps) {
     profileId,
     chatComposerActive,
   );
-  const reauthGate = useLandingProviderReauthGate(
-    hostClient,
-    harnessId,
-    profileId,
-    chatComposerActive,
-  );
   const mentionRoots = useLandingComposerMentionRoots(draftId);
   useComposerPickerItems({
     pickerStore,
@@ -482,6 +476,13 @@ export function LandingComposer(props: LandingComposerProps) {
     workspaceAvailability,
   );
   const workspaceCanStart = workspaceGate.canStart;
+  // A staged send uses the sandbox's sign-in, so this host owes no sign-in banner.
+  const reauthGate = useLandingProviderReauthGate(
+    hostClient,
+    harnessId,
+    profileId,
+    chatComposerActive && !workspaceGate.stagedAhead,
+  );
   const runnerHost = useRunnerHost();
   const paste = useLandingComposerPaste({
     editorRef,
