@@ -1,3 +1,5 @@
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
   useEffect,
@@ -548,7 +550,7 @@ export function LandingComposer(props: LandingComposerProps) {
   });
   const stagedCatalogueNotice = stagedSandboxCheckingNotice(
     readStagedSandbox(composerSurfaceKey),
-    stagedSignInCheck,
+    stagedSignInCheck.check,
   );
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
     workspaceDisabledHint: workspaceGate.disabledHint,
@@ -812,72 +814,104 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
+  const stagedSubmitAttempt = useRef<symbol | null>(null);
+  useEffect(
+    () => () => {
+      stagedSubmitAttempt.current = null;
+    },
+    [],
+  );
+
   /** Hands this draft to its task, preserving the staged sandbox and owner. */
   const submitStagedSandbox = useCallback(
-    (staged: StagedSandbox): boolean => {
-      // An agent the sandbox does not offer is refused here,
-      // before anything is created or woken; the draft and the chip stay.
-      const signedOut = stagedSignInCheck(staged);
-      if (signedOut !== null) {
-        raiseHostNotice(signedOut);
-        return false;
-      }
+    (staged: StagedSandbox): Promise<boolean> => {
+      if (stagedSubmitAttempt.current !== null) return Promise.resolve(false);
+      const attempt = Symbol();
+      stagedSubmitAttempt.current = attempt;
+      const account = signedInUserId();
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const settingsKey = JSON.stringify(settings);
+      const generation = captureComposerSubmitGeneration(
+        () => runtimeStore.getState().contentRevision,
+      );
       const content = buildSubmittedChatJSONContent(
         editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
         pickerStore.getState().knownSlashCommands,
       );
-      const text = composerDisplayPlainText(content);
-      // No host here can take the task (none at all, or only a resting
-      // sandbox): the sandbox the stage provides comes up first, and this
-      // draft is sent on it then, as the person left it.
-      if (!actions.placementAdmitsTask()) {
-        stagedSend.intercept(text, null);
-        return false;
-      }
-      const settings = pickedRunSettings(toolbarStore.getState());
-      const refusal = actions.startTaskOnStagedSandbox({
-        draftId: draftId ?? createdUnboundDraftIdRef.current,
-        owner,
-        sandboxTeamId:
-          staged.target.configuration.kind === "team"
-            ? staged.target.configuration.teamId
-            : null,
-        text,
-        hand: (epicId) => {
-          const id = handPendingSandboxSend({
-            fromSurfaceKey: composerSurfaceKey,
-            epicId,
-            request: { kind: "chat", parentId: null, placement: null },
-            content,
+
+      // An agent the sandbox does not offer is refused here,
+      // before anything is created or woken; the draft and the chip stay.
+      return stagedSignInCheck
+        .beforeSend(staged)
+        .then((signedOut) => {
+          if (
+            stagedSubmitAttempt.current !== attempt ||
+            readStagedSandbox(composerSurfaceKey) !== staged ||
+            signedInUserId() !== account ||
+            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
+              settingsKey ||
+            !generation.stillCurrent()
+          )
+            return false;
+          if (signedOut !== null) {
+            raiseHostNotice(signedOut);
+            return false;
+          }
+          const text = composerDisplayPlainText(content);
+          // No host here can take the task (none at all, or only a resting
+          // sandbox): the sandbox the stage provides comes up first, and this
+          // draft is sent on it then, as the person left it.
+          if (!actions.placementAdmitsTask()) {
+            stagedSend.intercept(text, null);
+            return false;
+          }
+          const refusal = actions.startTaskOnStagedSandbox({
+            draftId: draftId ?? createdUnboundDraftIdRef.current,
+            owner,
+            sandboxTeamId:
+              staged.target.configuration.kind === "team"
+                ? staged.target.configuration.teamId
+                : null,
             text,
-            settings,
-            // The task is created with the send: the sandbox waits for it.
-            epicConfirmed: false,
-            now: Date.now(),
+            hand: (epicId) => {
+              const id = handPendingSandboxSend({
+                fromSurfaceKey: composerSurfaceKey,
+                epicId,
+                request: { kind: "chat", parentId: null, placement: null },
+                content,
+                text,
+                settings,
+                // The task is created with the send: the sandbox waits for it.
+                epicConfirmed: false,
+                now: Date.now(),
+              });
+              return id === null
+                ? null
+                : {
+                    isCurrent: () =>
+                      usePendingSandboxSendStore.getState().sends[id]
+                        ?.delivery === null,
+                    confirm: () => confirmPendingSandboxSendEpic(id),
+                    giveBack: () => {
+                      const returned = returnPendingSandboxSend(id);
+                      return returned.kind === "landing-draft"
+                        ? returned.draftId
+                        : null;
+                    },
+                  };
+            },
           });
-          return id === null
-            ? null
-            : {
-                isCurrent: () =>
-                  usePendingSandboxSendStore.getState().sends[id]?.delivery ===
-                  null,
-                confirm: () => confirmPendingSandboxSendEpic(id),
-                giveBack: () => {
-                  const returned = returnPendingSandboxSend(id);
-                  return returned.kind === "landing-draft"
-                    ? returned.draftId
-                    : null;
-                },
-              };
-        },
-      });
-      raiseHostNotice(
-        refusal === null
-          ? null
-          : { kind: "refused", message: refusal.message, action: null },
-      );
-      if (refusal === null) setComposerExpanded(false);
-      return refusal === null;
+          raiseHostNotice(
+            refusal === null
+              ? null
+              : { kind: "refused", message: refusal.message, action: null },
+          );
+          if (refusal === null) setComposerExpanded(false);
+          return refusal === null;
+        })
+        .finally(() => {
+          stagedSubmitAttempt.current = null;
+        });
     },
     [
       actions,
@@ -886,6 +920,7 @@ export function LandingComposer(props: LandingComposerProps) {
       owner,
       pickerStore,
       raiseHostNotice,
+      runtimeStore,
       setComposerExpanded,
       stagedSend,
       stagedSignInCheck,
@@ -894,7 +929,7 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   /** Whether the submit went ahead. */
-  const handleSubmit = useCallback((): boolean => {
+  const handleSubmit = useCallback((): boolean | Promise<boolean> => {
     if (!canSubmit) return false;
     // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
     // opens at once and the message waits in it, behind the setup line,
@@ -1177,7 +1212,7 @@ export function LandingComposer(props: LandingComposerProps) {
         // re-validation refuses before any create runs.
         hostId={resolvedHostId}
         terminalLoginSurface={terminalLoginSurface}
-        onSubmit={handleSubmit}
+        onSubmit={() => void handleSubmit()}
         onStartTerminal={handleStartTerminal}
         onDocumentChange={handleDocumentChange}
         onSelectionChange={handleSelectionChange}

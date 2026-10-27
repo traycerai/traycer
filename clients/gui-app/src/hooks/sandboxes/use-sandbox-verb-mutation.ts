@@ -9,7 +9,6 @@ import {
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
-import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import {
@@ -43,13 +42,6 @@ interface SandboxVerbContext {
   /** The account signed in when the verb started. */
   readonly userId: string | null;
 }
-
-const VERB_FAILURE_TITLE: Record<SandboxLifecycleVerb, string> = {
-  suspend: "Couldn't suspend the sandbox.",
-  resume: "Couldn't resume the sandbox.",
-  stop: "Couldn't stop the sandbox.",
-  start: "Couldn't start the sandbox.",
-};
 
 /**
  * `POST /api/sandboxes/:id/{suspend,resume,stop,start}` for one sandbox, the
@@ -119,10 +111,6 @@ export function useSandboxVerb(
       void queryClient.invalidateQueries({
         queryKey: sandboxQueryKeys.costsAll(),
       });
-    },
-    onError: (error, verb, context) => {
-      if (!settledForStartingAccount(context)) return;
-      toastFromAuthError(error, VERB_FAILURE_TITLE[verb]);
     },
   });
   return useAccountFencedMutation(mutation);

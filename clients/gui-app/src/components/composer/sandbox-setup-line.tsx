@@ -44,7 +44,7 @@ import {
   configurationLabel,
   couldntResumeLine,
   couldntStartLine,
-  notEnoughCreditsLine,
+  sandboxCreditShortLine,
   openProvidersLabel,
   shapeNotOfferedLine,
   readyButNotSentLine,
@@ -55,7 +55,6 @@ import {
   enableSandboxInferenceLine,
   stepApplyingSettings,
   takingLongerDetail,
-  teamAllowanceShortLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { cn } from "@/lib/utils";
 import type {
@@ -280,10 +279,12 @@ function SandboxRefusalLine(props: {
   let remedies: ReactNode;
   switch (failure.kind) {
     case "credits":
-      sentence =
-        configuration.kind === "team"
-          ? teamAllowanceShortLine(configuration.teamName, failure.shortfallMc)
-          : notEnoughCreditsLine(failure.shortfallMc);
+      sentence = sandboxCreditShortLine(
+        configuration,
+        failure.creditSource ?? null,
+        failure.shortfallMc,
+        props.stage.target.kind === "existing",
+      );
       remedies = (
         <>
           <LineButton
@@ -448,11 +449,13 @@ function SandboxFailureExitActions(props: {
   const sandboxId = props.stage.createdSandboxId;
   return (
     <>
-      <LineButton
-        label={OPEN_TERMINAL_INSTEAD}
-        testId={`${props.prefix}-open-terminal`}
-        onClick={actions.onOpenTerminal}
-      />
+      {props.stage.failure?.kind === "credits" ? null : (
+        <LineButton
+          label={OPEN_TERMINAL_INSTEAD}
+          testId={`${props.prefix}-open-terminal`}
+          onClick={actions.onOpenTerminal}
+        />
+      )}
       <LineButton
         label={CHOOSE_ANOTHER_HOST}
         testId={`${props.prefix}-choose-another-host`}

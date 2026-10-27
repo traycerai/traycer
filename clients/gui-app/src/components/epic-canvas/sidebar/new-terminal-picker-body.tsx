@@ -216,6 +216,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
               input={consequences}
               onMoveFirst={null}
               onOpenTerminalInstead={null}
+              onChooseAnotherHost={staging?.chooseAnotherHost}
             />
           </div>
         )}

@@ -22,12 +22,14 @@ import {
   sandboxRegionLabel,
   sandboxSessionPills,
   sandboxShapeAndCostLine,
+  sandboxPaidByLabel,
   sandboxRowActions,
   sandboxRowMatches,
   sandboxSessionsLine,
   sandboxStartedByLabel,
   sandboxSupportReferenceLine,
   type SandboxRowAction,
+  type SandboxPageConfiguration,
   sandboxTodayCost,
   formatSandboxDate,
 } from "@/lib/sandboxes/sandbox-row-lines";
@@ -676,6 +678,7 @@ describe("sandboxShapeAndCostLine, an agent sandbox", () => {
     sandboxShapeAndCostLine(
       sandboxSummaryFixture({ ...AGENT_ROW, ...overrides }),
       { kind: "personal" },
+      "viewer",
     );
 
   it("names the agent and its task where the server names them to this viewer", () => {
@@ -853,5 +856,60 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
     expect(line(cost(300, null))).toBe(
       "Awake · $0.30 today · suspends after 30 idle min",
     );
+  });
+});
+
+describe("team payer copy", () => {
+  const team: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-a",
+    teamName: "Acme",
+    environmentId: null,
+  };
+  const summary = sandboxSummaryFixture({
+    state: "awake",
+    wakePayer: { userId: "payer", displayName: "Priya" },
+    priceMcPerHour: { awakeMc: 210, suspendedMc: 1, stoppedMc: 1 },
+  });
+  it("claims the viewer's credits only for the payer", () => {
+    expect(sandboxShapeAndCostLine(summary, team, "payer")).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your Acme credits",
+    );
+    expect(sandboxShapeAndCostLine(summary, team, "other")).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake",
+    );
+    expect(sandboxPaidByLabel(summary, team, "other")).toBe("Paid by Priya");
+    expect(sandboxPaidByLabel(summary, team, "payer")).toBe("Paid by Priya");
+  });
+  it("warns a non-payer before a resting sandbox is woken", () => {
+    expect(
+      sandboxShapeAndCostLine(
+        { ...summary, state: "suspended" },
+        team,
+        "other",
+      ),
+    ).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · waking it makes you the payer",
+    );
+  });
+  it("keeps the incumbent payer's cost line when it rests", () => {
+    expect(
+      sandboxShapeAndCostLine(
+        { ...summary, state: "suspended" },
+        team,
+        "payer",
+      ),
+    ).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your Acme credits",
+    );
+  });
+  it("never substitutes a member for an unavailable payer name", () => {
+    expect(
+      sandboxPaidByLabel(
+        { ...summary, wakePayer: { userId: "payer", displayName: null } },
+        team,
+        "other",
+      ),
+    ).toBeNull();
   });
 });

@@ -1,3 +1,7 @@
+import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
+import { sandboxMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   afterEach,
   beforeEach,
@@ -8,7 +12,11 @@ import {
   vi,
 } from "vitest";
 import { useEffect } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -38,11 +46,11 @@ import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/san
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   openLandingStagedTerminal,
-  stagedSandboxFallbackName,
   startStagedTerminal,
   useStagedSandboxHandoff,
   useStagedSandboxRunner,
   useStagedSandboxSend,
+  stagedSandboxFallbackName,
   type StagedResubmit,
   type StagedSandboxRunner,
   type StagedSandboxSend,
@@ -74,6 +82,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const mocks = vi.hoisted(() => ({
+  runVerb: vi.fn<(verb: SandboxLifecycleVerb) => Promise<SandboxVerbOutcome>>(),
   /** The named host's environment.status answer, as its client throws or returns it. */
   environmentStatus: vi.fn<() => Promise<unknown>>(),
   /** The viewer and the catalogue the setup line's facts are read from. */
@@ -182,7 +191,14 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
-  useSandboxVerb: () => ({ mutate: vi.fn() }),
+  useSandboxVerb: (sandboxId: string) =>
+    useMutation({
+      mutationKey: sandboxMutationKeys.verb(sandboxId),
+      mutationFn: mocks.runVerb,
+      onMutate: () => ({
+        userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+      }),
+    }),
 }));
 vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
   useConfigurationProvidersOpener: () => () => undefined,
@@ -317,6 +333,8 @@ function unsupportedEnvironmentStatus(): HostRpcError {
 }
 
 beforeEach(() => {
+  mocks.runVerb.mockReset();
+  mocks.runVerb.mockResolvedValue({ kind: "settled", state: "stopped" });
   // The host named by the run answers environment.status as an older build does.
   mocks.environmentStatus.mockReset();
   mocks.environmentStatus.mockRejectedValue(unsupportedEnvironmentStatus());
@@ -479,6 +497,22 @@ describe("useStagedSandboxSend's setup line", () => {
     );
   });
 
+  it("keeps the staged sandbox and visible remedies when its standalone Stop fails", async () => {
+    stageCreated("booting", null);
+    mocks.runVerb.mockRejectedValueOnce(new Error("Stop refused"));
+    mount(vi.fn());
+    fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toContain("Couldn't stop api-refactor");
+    expect(
+      within(failure).getByRole("button", { name: "Retry" }),
+    ).toBeDefined();
+    expect(
+      within(failure).getByRole("button", { name: "Details" }),
+    ).toBeDefined();
+    expect(readStagedSandbox(SURFACE)).not.toBeNull();
+  });
+
   it("names the sandbox the send creates and counts as a stopwatch", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, {
@@ -589,6 +623,30 @@ describe("useStagedSandboxSend's line after a refusal", () => {
         "Cancel the message",
       ]);
     });
+  });
+
+  it("keeps an unknown credit source generic on a team staged refusal", () => {
+    stageRefused({ kind: "credits", creditSource: null, shortfallMc: null });
+    const current = readStagedSandbox(SURFACE);
+    if (current === null) throw new Error("Expected the refused stage");
+    useStagedSandboxStore.setState({
+      bySurface: {
+        [SURFACE]: {
+          ...current,
+          target: {
+            ...current.target,
+            configuration: { kind: "team", teamId: "team-1", teamName: "Acme" },
+          },
+        },
+      },
+    });
+    mount(vi.fn());
+    expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
+      "Not enough credits to start this sandbox for an hour.",
+    );
+    expect(
+      screen.getByTestId("sandbox-refusal-line").textContent,
+    ).not.toContain("allowance");
   });
 
   it("retries a create whose answer never came under its own key", () => {

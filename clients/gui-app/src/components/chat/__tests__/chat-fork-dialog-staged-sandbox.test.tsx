@@ -1,3 +1,9 @@
+import type { QueryObserverResult } from "@tanstack/react-query";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
 /**
  * A fork onto a New sandbox the chat host chip picked is handed to the task.
  *
@@ -39,6 +45,13 @@ interface BlockedInput {
 }
 
 const dialogMocks = vi.hoisted(() => ({
+  toolbarStore: null as ComposerToolbarStore | null,
+  refetchAuthUser:
+    vi.fn<
+      () => Promise<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >
+    >(),
   createMutate: vi.fn<(input: unknown, options: unknown) => void>(),
   blocked: { current: false },
   blockedInputs: [] as Array<{
@@ -79,6 +92,10 @@ const dialogMocks = vi.hoisted(() => ({
     | { readonly kind: "personal" }
     | { readonly kind: "team"; readonly teamName: string },
   openProviders: vi.fn<() => void>(),
+}));
+
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null, refetch: dialogMocks.refetchAuthUser }),
 }));
 
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
@@ -257,10 +274,12 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: (props: {
+    readonly store: ComposerToolbarStore;
     readonly openForHarnessRef?: RefObject<
       ((harnessId: GuiHarnessId) => void) | null
     >;
   }) => {
+    dialogMocks.toolbarStore = props.store;
     useImperativeHandle(
       props.openForHarnessRef ?? null,
       () => dialogMocks.openForHarness,
@@ -447,6 +466,25 @@ function forkTarget(): ChatForkDialogTarget {
   };
 }
 
+function ForkRuntimeTestProvider(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      }),
+  );
+  return (
+    <QueryClientProvider client={client}>
+      <HostRuntimeTestProvider>{props.children}</HostRuntimeTestProvider>
+    </QueryClientProvider>
+  );
+}
+
 function renderDialog(): void {
   render(
     <ChatForkDialog
@@ -456,6 +494,7 @@ function renderDialog(): void {
       tabId="tab-test"
       onOpenChange={() => undefined}
     />,
+    { wrapper: ForkRuntimeTestProvider },
   );
 }
 
@@ -504,6 +543,7 @@ function renderStaged(
       tabId="tab-test"
       onOpenChange={dialogMocks.onOpenChange}
     />,
+    { wrapper: ForkRuntimeTestProvider },
   );
 }
 
@@ -516,6 +556,11 @@ function onlyPendingSend(): PendingSandboxSend {
 describe("ChatForkDialog on a New sandbox the chip picked", () => {
   beforeEach(() => {
     dialogMocks.createMutate.mockReset();
+    dialogMocks.refetchAuthUser.mockReset();
+    dialogMocks.refetchAuthUser.mockResolvedValue({
+      data: null,
+      isError: false,
+    });
     dialogMocks.onOpenChange.mockReset();
     dialogMocks.needsOwnHostToast.mockReset();
     dialogMocks.attachCalls.length = 0;
@@ -552,6 +597,46 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     cleanup();
   });
 
+  it("keeps a new agent pick while auth refresh is pending and validates it on the next Fork", async () => {
+    const refreshed =
+      Promise.withResolvers<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >();
+    dialogMocks.refetchAuthUser.mockReturnValue(refreshed.promise);
+    dialogMocks.offeredAgents = ["claude"];
+    renderStaged(NEW_SANDBOX);
+    fillTitle();
+    fireEvent.click(forkButton());
+    await waitFor(() =>
+      expect(dialogMocks.refetchAuthUser).toHaveBeenCalledOnce(),
+    );
+    const toolbar = dialogMocks.toolbarStore;
+    if (toolbar === null) throw new Error("Expected the fork toolbar");
+    act(() =>
+      toolbar.getState().setSelection({
+        harnessId: "codex",
+        modelSlug: "gpt-6.1-sol",
+        profileId: null,
+      }),
+    );
+    await act(async () => {
+      refreshed.resolve({ data: null, isError: false });
+      await refreshed.promise;
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+    expect(toolbar.getState().values.selection.harnessId).toBe("codex");
+    dialogMocks.refetchAuthUser.mockResolvedValue({
+      data: null,
+      isError: false,
+    });
+    fireEvent.click(forkButton());
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Codex doesn't run on sandboxes",
+    );
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+  });
+
   it("opens with the sandbox staged and the host list's staging surface handed to the controls", () => {
     renderStaged(NEW_SANDBOX);
 
@@ -577,6 +662,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: ForkRuntimeTestProvider },
     );
     expect(readStagedSandbox(FORK_SURFACE)).not.toBeNull();
 
@@ -795,7 +881,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     expect(onlyPendingSend().request.kind).toBe("fork");
   });
 
-  it("says a team's sandbox needs the person's own host to be attached from, and hands nothing over, when none can send it", () => {
+  it("says a team's sandbox needs the person's own host to be attached from, and hands nothing over, when none can send it", async () => {
     // Neither the source tab's host nor the app-wide one can send the
     // attachment: both are a team's sandbox, and a team's host would send it
     // with a member's credential.
@@ -810,7 +896,9 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
 
     fireEvent.click(forkButton());
 
-    expect(dialogMocks.needsOwnHostToast).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(dialogMocks.needsOwnHostToast).toHaveBeenCalledTimes(1),
+    );
     expect(dialogMocks.attachCalls).toEqual([]);
     expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
       [],
@@ -818,7 +906,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
   });
 
-  it("hands nothing over while the attach has not answered", () => {
+  it("hands nothing over while the attach has not answered", async () => {
     dialogMocks.attachAnswers = false;
     renderStaged({
       ...NEW_SANDBOX,
@@ -828,7 +916,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
 
     fireEvent.click(forkButton());
 
-    expect(dialogMocks.attachCalls).toHaveLength(1);
+    await waitFor(() => expect(dialogMocks.attachCalls).toHaveLength(1));
     expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
       [],
     );
@@ -845,14 +933,16 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       configuration: { kind: "team", teamId: "team-10", teamName: "Beta" },
     };
 
-    function startPendingAttach(): void {
+    async function startPendingAttach(): Promise<void> {
       dialogMocks.attachAnswers = false;
       renderStaged(TEAM_A);
       fillTitle();
       fireEvent.click(forkButton());
-      expect(dialogMocks.attachCalls).toEqual([
-        { epicId: "epic-test", teamId: "team-9" },
-      ]);
+      await waitFor(() =>
+        expect(dialogMocks.attachCalls).toEqual([
+          { epicId: "epic-test", teamId: "team-9" },
+        ]),
+      );
     }
 
     it.each([
@@ -861,7 +951,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     ] as const)(
       "hands nothing over, for the old or the new stage, when the stage is retargeted to %s and the first attach answers",
       async (_label, retarget, teamId) => {
-        startPendingAttach();
+        await startPendingAttach();
         act(() => {
           useStagedSandboxStore.getState().stage(FORK_SURFACE, retarget);
         });
@@ -900,7 +990,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       },
     );
 
-    it("hands nothing over when the attach answers after the account changed", () => {
+    it("hands nothing over when the attach answers after the account changed", async () => {
       useAuthStore
         .getState()
         .setSignedIn(
@@ -908,7 +998,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
           { userId: "user-1", username: "U" },
           [],
         );
-      startPendingAttach();
+      await startPendingAttach();
       act(() => {
         useAuthStore.getState().setSignedOut();
         useAuthStore
@@ -935,14 +1025,14 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     const NOT_OFFERED =
       "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.";
 
-    it("refuses an unoffered Fork with its own model picker, handing nothing over and keeping the stage and title", () => {
+    it("refuses an unoffered Fork with its own model picker, handing nothing over and keeping the stage and title", async () => {
       dialogMocks.offeredAgents = ["traycer"];
       renderStaged(NEW_SANDBOX);
       fillTitle();
 
       fireEvent.click(forkButton());
 
-      const notice = screen.getByRole("alert");
+      const notice = await screen.findByRole("alert");
       expect(notice.textContent).toContain(NOT_OFFERED);
       expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
         [],
@@ -961,7 +1051,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       expect(dialogMocks.openForHarness).toHaveBeenCalledWith("traycer");
     });
 
-    it("refuses the same unoffered agent on a team sandbox before attaching", () => {
+    it("refuses the same unoffered agent on a team sandbox before attaching", async () => {
       dialogMocks.offeredAgents = ["traycer"];
       dialogMocks.principal = { kind: "team", teamName: "Acme" };
       renderStaged({
@@ -972,7 +1062,9 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
 
       fireEvent.click(forkButton());
 
-      expect(screen.getByRole("alert").textContent).toContain(NOT_OFFERED);
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        NOT_OFFERED,
+      );
       expect(dialogMocks.attachCalls).toEqual([]);
       expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
         [],

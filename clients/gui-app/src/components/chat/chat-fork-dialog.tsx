@@ -1,3 +1,4 @@
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
   useEffect,
@@ -633,7 +634,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     onChooseAnotherHost: () =>
       useStagedSandboxStore.getState().clear(forkSurfaceKey),
   });
-  const stagedCheck = forkStage === null ? null : stagedSignInCheck(forkStage);
+  const stagedCheck =
+    forkStage === null ? null : stagedSignInCheck.check(forkStage);
   const stagedCatalogueNotice =
     stagedCheck?.pending === true ? stagedCheck : null;
   // On a sandbox host an agent that cannot run there is refused at Fork, with
@@ -860,73 +862,102 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     ],
   );
 
+  const stagedSubmitAttempt = useRef<symbol | null>(null);
+  useEffect(
+    () => () => {
+      stagedSubmitAttempt.current = null;
+    },
+    [],
+  );
+
   const submitStagedFork = useCallback(
-    (staged: StagedSandbox, target: ChatForkDialogTarget): void => {
+    (staged: StagedSandbox, target: ChatForkDialogTarget): Promise<void> => {
+      if (stagedSubmitAttempt.current !== null) return Promise.resolve();
+      const attempt = Symbol();
+      stagedSubmitAttempt.current = attempt;
+      const account = signedInUserId();
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const settingsKey = JSON.stringify(settings);
+
       // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the dialog stays as it was.
-      const signedOut = stagedSignInCheck(staged);
-      if (signedOut !== null) {
-        setStagedRefusal(signedOut);
-        return;
-      }
-      const settings = pickedRunSettings(toolbarStore.getState());
-      const ownerUserId = useAuthStore.getState().profile?.userId ?? null;
-      const hand = (): void => {
-        const decision = transitionPendingSend(
-          { kind: "fork", phase: "staged", blocker: "none" },
-          "handoff",
-          {
-            ...UNKNOWN_PENDING_SEND_FACTS,
-            current: true,
-            owns: true,
-            epicConfirmed: true,
-            accountActive:
-              (useAuthStore.getState().profile?.userId ?? null) === ownerUserId,
-            stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
-          },
-        );
-        if (!decision.effects.includes("handoff")) return;
-        const handed = handPendingSandboxSend({
-          fromSurfaceKey: forkSurfaceKey,
-          epicId,
-          request: {
-            kind: "fork",
-            parentId: target.parentId,
-            title: trimmedTitle,
-            forkSource: chatForkSource(target, sourceOwnerUserId),
-            tabId,
-          },
-          content: createEmptyNewConversationContent(),
-          text: trimmedTitle,
-          settings,
-          epicConfirmed: true,
-          now: Date.now(),
+      return stagedSignInCheck
+        .beforeSend(staged)
+        .then((signedOut) => {
+          if (
+            stagedSubmitAttempt.current !== attempt ||
+            readStagedSandbox(forkSurfaceKey) !== staged ||
+            signedInUserId() !== account ||
+            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
+              settingsKey
+          )
+            return;
+          if (signedOut !== null) {
+            setStagedRefusal(signedOut);
+            return;
+          }
+          const ownerUserId = useAuthStore.getState().profile?.userId ?? null;
+          const hand = (): void => {
+            const decision = transitionPendingSend(
+              { kind: "fork", phase: "staged", blocker: "none" },
+              "handoff",
+              {
+                ...UNKNOWN_PENDING_SEND_FACTS,
+                current: true,
+                owns: true,
+                epicConfirmed: true,
+                accountActive:
+                  (useAuthStore.getState().profile?.userId ?? null) ===
+                  ownerUserId,
+                stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
+              },
+            );
+            if (!decision.effects.includes("handoff")) return;
+            const handed = handPendingSandboxSend({
+              fromSurfaceKey: forkSurfaceKey,
+              epicId,
+              request: {
+                kind: "fork",
+                parentId: target.parentId,
+                title: trimmedTitle,
+                forkSource: chatForkSource(target, sourceOwnerUserId),
+                tabId,
+              },
+              content: createEmptyNewConversationContent(),
+              text: trimmedTitle,
+              settings,
+              epicConfirmed: true,
+              now: Date.now(),
+            });
+            if (handed === null) return;
+            clearForkWorkspaces();
+            onOpenChange(false);
+          };
+          const stagedTeamId = stagedTeamToAttach(
+            staged.target.configuration,
+            tabHostTeamId,
+          );
+          if (stagedTeamId === null) {
+            hand();
+            return;
+          }
+          if (attachClient === null) {
+            toastAttachEnvironmentNeedsOwnHost();
+            return;
+          }
+          attachEnvironment.mutate(
+            { epicId, teamId: stagedTeamId },
+            {
+              onSuccess: hand,
+              onError: (error) => {
+                if (isAttachEnvironmentUnsupported(error)) hand();
+              },
+            },
+          );
+        })
+        .finally(() => {
+          stagedSubmitAttempt.current = null;
         });
-        if (handed === null) return;
-        clearForkWorkspaces();
-        onOpenChange(false);
-      };
-      const stagedTeamId = stagedTeamToAttach(
-        staged.target.configuration,
-        tabHostTeamId,
-      );
-      if (stagedTeamId === null) {
-        hand();
-        return;
-      }
-      if (attachClient === null) {
-        toastAttachEnvironmentNeedsOwnHost();
-        return;
-      }
-      attachEnvironment.mutate(
-        { epicId, teamId: stagedTeamId },
-        {
-          onSuccess: hand,
-          onError: (error) => {
-            if (isAttachEnvironmentUnsupported(error)) hand();
-          },
-        },
-      );
     },
     [
       attachClient,
@@ -950,7 +981,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // sandbox, waits for the agent there and forks onto it, through a reload.
     const staged = readStagedSandbox(forkSurfaceKey);
     if (staged !== null && staged.phase !== "handoff") {
-      submitStagedFork(staged, target);
+      void submitStagedFork(staged, target);
       return;
     }
     if (sandboxAgentGate.notice !== null) {
