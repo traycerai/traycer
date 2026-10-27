@@ -221,11 +221,29 @@ function sandboxNoticePresentation(
         title: `${name} was lost`,
         body: "The provider no longer has it; its files could not be kept.",
       };
-    case "destroyed_by_member":
+    case "destroyed_by_member": {
+      const actor = notice.actorName ?? "A member";
+      if (notice.destroyedAt !== undefined) {
+        const time = new Intl.DateTimeFormat("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        }).format(new Date(notice.destroyedAt));
+        return {
+          title: `${actor} destroyed ${name} at ${time}.`,
+          body: [
+            "Its files are gone.",
+            ...(notice.stoppedAgentTaskTitles ?? []).map(
+              (taskTitle) => `Your agent in ${taskTitle} was stopped.`,
+            ),
+          ].join(" "),
+        };
+      }
       return {
-        title: `${notice.actorName ?? "A member"} destroyed ${name}`,
+        title: `${actor} destroyed ${name}`,
         body: SANDBOX_FILES_LINE,
       };
+    }
     case "manual_rest": {
       const done = notice.verb === "suspend" ? "suspended" : "stopped";
       const confirmed = notice.outcome === "confirmed";
