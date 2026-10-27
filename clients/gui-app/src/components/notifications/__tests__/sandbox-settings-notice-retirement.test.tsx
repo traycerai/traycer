@@ -439,6 +439,78 @@ describe("sandbox settings warnings in the notification center", () => {
     expect(resolvedIds).toEqual([]);
   });
 
+  it.each(["failed Stop", "failed settings attempt"])(
+    "keeps a settings warning actionable beside a newer %s",
+    async (kind) => {
+      const warning = notice("warning", OPERATION_ID);
+      const newer: HostNotificationsCloudFeedRowV15 =
+        kind === "failed Stop"
+          ? {
+              entryId: "failed-stop",
+              originHostId: "cloud-settings",
+              coalesceKey: "failed-stop",
+              presentation: { epicTitle: null, chatTitle: null },
+              entry: {
+                id: "failed-stop",
+                updatedAt: warning.entry.updatedAt + 1,
+                readAt: Date.now(),
+                kind: "sandbox.notice",
+                sourceRef: "failed-stop",
+                severity: "info",
+                epicId: null,
+                chatId: null,
+                outcome: "errored",
+                payload: {
+                  kind: "sandbox_notice",
+                  sandboxId: SANDBOX_ID,
+                  sandboxName: "build-box",
+                  notice: {
+                    kind: "manual_rest",
+                    verb: "stop",
+                    outcome: "failed",
+                    byYou: true,
+                    actorName: null,
+                  },
+                },
+              },
+            }
+          : notice("another-warning", "another-operation");
+      const snapshot = [
+        warning,
+        {
+          ...newer,
+          entry: { ...newer.entry, updatedAt: warning.entry.updatedAt + 1 },
+        },
+      ];
+      seed(snapshot);
+      mount(true);
+      await screen.findByTestId("notifications-bell");
+
+      expect(resolution("warning")).toBeNull();
+      await waitFor(() => expect(statusReads).toBe(1));
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(screen.getByText("Needs attention")).not.toBeNull();
+      expect(
+        screen.getAllByRole("button", { name: "Retry applying" }),
+      ).toHaveLength(kind === "failed Stop" ? 1 : 2);
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe(
+        kind === "failed Stop"
+          ? "Notifications, 1 needs you"
+          : "Notifications, 2 need you",
+      );
+
+      act(() => seed([warning]));
+      await screen.findByRole("button", { name: "Retry applying" });
+      expect(resolution("warning")).toBeNull();
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe("Notifications, 1 needs you");
+      expect(resolvedIds).toEqual([]);
+    },
+  );
+
   it("retires from a fresh successful status for the notice's own operation while the center is closed", async () => {
     currentStatus = status(OPERATION_ID, "applied");
     seed([notice("warning", OPERATION_ID)]);

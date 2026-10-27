@@ -290,6 +290,8 @@ function observedRetirementAt(
   newer: number,
   now: number,
 ): number | null {
+  // A later sandbox event does not prove this settings operation applied.
+  if (row.entry.kind === "environment.apply.failed") return null;
   if (newer > row.entry.updatedAt) return newer;
   const notice = sandboxNoticeOf(row);
   return notice?.notice.kind === "resting_warning" &&
