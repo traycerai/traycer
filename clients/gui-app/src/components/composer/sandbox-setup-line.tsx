@@ -286,7 +286,10 @@ function SandboxRefusalLine(props: {
         configuration,
         failure.creditSource ?? null,
         failure.shortfallMc,
-        props.stage.target.kind === "existing",
+        {
+          waking: props.stage.target.kind === "existing",
+          context: "sentence",
+        },
       );
       remedies = (
         <>

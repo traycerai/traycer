@@ -374,15 +374,35 @@ export const USE_THIS_SHAPE = "Use this shape";
 
 // ── Refusals at send ──────────────────────────────────────────────────────
 
+interface SandboxCreditLineOptions {
+  readonly waking: boolean;
+  readonly context: "sentence" | "clause";
+}
+
 /**
  * Short for an hour, Personal: `Not enough credits. $1.20 more starts …`.
  * `null` when the refusal named no amount: the line names none either.
  */
 export function notEnoughCreditsLine(shortfallMc: number | null): string {
+  return notEnoughCreditsText(shortfallMc, {
+    waking: false,
+    context: "sentence",
+  });
+}
+
+/** A refusal without a named pot, built for its caller's sentence context. */
+function notEnoughCreditsText(
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  const { waking, context } = options;
+  const opening =
+    context === "sentence" ? "Not enough credits" : "not enough credits";
   if (shortfallMc === null) {
-    return "Not enough credits to start this sandbox for an hour.";
+    return `${opening} to ${waking ? "wake" : "start"} this sandbox for an hour.`;
   }
-  return `Not enough credits. ${formatSandboxDollarsRequired(shortfallMc)} more starts this sandbox for an hour.`;
+  const action = waking ? "wakes it" : "starts this sandbox";
+  return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
 /** Short for an hour on a team allowance; `null` names no amount. */
@@ -397,35 +417,33 @@ export function teamAllowanceShortLine(
   return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
 }
 
-/** A spend refusal names the pot checked, with amounts rounded up for top-up. */
+/**
+ * A spend refusal names the pot checked, with amounts rounded up for top-up.
+ * Sentence/clause context is independent of whether this starts or wakes.
+ */
 export function sandboxCreditShortLine(
   configuration: SandboxConfigurationCopy,
   creditSource: SandboxCreditSource | null,
   shortfallMc: number | null,
-  waking: boolean,
+  options: SandboxCreditLineOptions,
 ): string {
-  if (creditSource === null) {
-    if (!waking) return notEnoughCreditsLine(shortfallMc);
-    if (shortfallMc === null)
-      return "not enough credits to wake this sandbox for an hour.";
-    return `not enough credits. ${formatSandboxDollarsRequired(shortfallMc)} more wakes it for an hour.`;
+  const { waking, context } = options;
+  if (creditSource === null || (!waking && creditSource === "personal")) {
+    return notEnoughCreditsText(shortfallMc, options);
   }
-  const source = creditSource;
   const allowance =
-    configuration.kind === "team" && source === "team-allowance";
-  if (!waking) {
-    if (source === "personal") return notEnoughCreditsLine(shortfallMc);
-    if (allowance)
-      return teamAllowanceShortLine(configuration.teamName, shortfallMc);
-  }
-  const whose = waking ? "your" : "Your";
+    configuration.kind === "team" && creditSource === "team-allowance";
+  const whose = context === "sentence" ? "Your" : "your";
   const pot =
-    configuration.kind === "team" && source !== "personal"
+    configuration.kind === "team" && creditSource !== "personal"
       ? `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`
       : `${whose} credits`;
-  const action = waking ? "wakes it" : "starts this sandbox";
-  if (shortfallMc === null)
+  if (shortfallMc === null) {
+    if (!waking && allowance)
+      return `${pot} is too short to start this sandbox for an hour.`;
     return `${pot} ${allowance ? "doesn't" : "don't"} cover an hour of this sandbox.`;
+  }
+  const action = waking ? "wakes it" : "starts this sandbox";
   const amount = formatSandboxDollarsRequired(shortfallMc);
   return `${pot} ${allowance ? "is" : "are"} short ${amount}. ${amount} more ${action} for an hour.`;
 }

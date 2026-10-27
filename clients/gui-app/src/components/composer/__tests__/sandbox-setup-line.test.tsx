@@ -208,6 +208,90 @@ describe("withdrawing a message from every refusal or failure", () => {
 });
 
 describe("SandboxSetupLine's refusal for credits", () => {
+  it.each<{
+    creditSource: "personal" | "team-allowance" | "team" | null;
+    shortfallMc: number | null;
+    expected: string;
+  }>([
+    {
+      creditSource: null,
+      shortfallMc: null,
+      expected: "Not enough credits to wake this sandbox for an hour.",
+    },
+    {
+      creditSource: null,
+      shortfallMc: 120,
+      expected: "Not enough credits. $0.12 more wakes it for an hour.",
+    },
+    {
+      creditSource: "personal",
+      shortfallMc: null,
+      expected: "Your credits don't cover an hour of this sandbox.",
+    },
+    {
+      creditSource: "personal",
+      shortfallMc: 120,
+      expected:
+        "Your credits are short $0.12. $0.12 more wakes it for an hour.",
+    },
+    {
+      creditSource: "team-allowance",
+      shortfallMc: null,
+      expected: "Your acme allowance doesn't cover an hour of this sandbox.",
+    },
+    {
+      creditSource: "team-allowance",
+      shortfallMc: 120,
+      expected:
+        "Your acme allowance is short $0.12. $0.12 more wakes it for an hour.",
+    },
+    {
+      creditSource: "team",
+      shortfallMc: null,
+      expected: "Your acme credits don't cover an hour of this sandbox.",
+    },
+    {
+      creditSource: "team",
+      shortfallMc: 120,
+      expected:
+        "Your acme credits are short $0.12. $0.12 more wakes it for an hour.",
+    },
+  ])(
+    "capitalizes a resumed sandbox's $creditSource refusal with shortfall $shortfallMc",
+    ({ creditSource, shortfallMc, expected }) => {
+      const configuration: StageConfiguration = {
+        kind: "team",
+        teamId: "team-1",
+        teamName: "acme",
+      };
+      render(
+        <SandboxSetupLine
+          stage={{
+            ...refused(configuration, {
+              kind: "credits",
+              creditSource,
+              shortfallMc,
+            }),
+            target: {
+              kind: "existing",
+              configuration,
+              name: "api-refactor",
+              sandboxId: "sbx_made_1",
+              hostId: "host-1",
+              verb: "resume",
+            },
+          }}
+          name="api-refactor"
+          facts={facts(false)}
+          actions={ACTIONS}
+        />,
+      );
+
+      const line = screen.getByRole("alert");
+      expect(within(line).getByText(expected)).toBeDefined();
+    },
+  );
+
   it("offers Add credits, host choice and Cancel on Personal", () => {
     const line = mountRefusal(
       { kind: "personal" },
