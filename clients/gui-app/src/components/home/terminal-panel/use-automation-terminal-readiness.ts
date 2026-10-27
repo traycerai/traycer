@@ -13,7 +13,6 @@ export interface AutomationTerminalAttempt {
   readonly sandboxId: string | null;
   readonly startedAt: number;
   readonly knownSandbox: boolean;
-  readonly retried: boolean;
 }
 
 /** A wake ends on fresh control-plane evidence, never an arbitrary deadline. */

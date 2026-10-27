@@ -121,7 +121,6 @@ const mocks = vi.hoisted(() => ({
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
-  observeAutomationOpen: false,
   openAutomation: vi.fn<() => Promise<SandboxAutomationOpened>>(),
   openLink: vi.fn<(url: string, kind: string, event: null) => void>(),
   close: vi.fn(),
@@ -248,52 +247,21 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/components/settings/panels/sandbox-row-actions")
     >()),
-    SandboxRowActions: await (async () => {
-      const { useOpenAutomationTerminal } =
-        await import("@/components/settings/panels/use-open-automation-terminal");
-      function ObservedAutomationOpen(props: {
-        readonly summary: SandboxSummary;
-      }) {
-        const opener = useOpenAutomationTerminal({
-          existing: {
-            hostId: props.summary.hostId,
-            sandboxId: props.summary.id,
-            awake: props.summary.state === "awake",
-          },
-          teamEnvironmentId: null,
-        });
-        return (
-          <button
-            type="button"
-            data-testid="automation-row-terminal-state"
-            disabled={opener.starting}
-          >
-            {opener.starting ? "Opening terminal" : "Open terminal"}
-          </button>
-        );
-      }
-      return (props: {
-        summary: SandboxSummary;
-        configuration: SandboxPageConfiguration;
-        unreachable: boolean;
-        frozenNeedsOwnCredits: boolean;
-      }) => {
-        if (
-          mocks.observeAutomationOpen &&
-          props.summary.kind === "automation"
-        ) {
-          return <ObservedAutomationOpen summary={props.summary} />;
-        }
-        const { primary } = sandboxRowActions(props);
-        return (
-          <span data-testid="row-primary">
-            {primary === null
-              ? ""
-              : sandboxRowActionLabel(primary, props.configuration)}
-          </span>
-        );
-      };
-    })(),
+    SandboxRowActions: (props: {
+      summary: SandboxSummary;
+      configuration: SandboxPageConfiguration;
+      unreachable: boolean;
+      frozenNeedsOwnCredits: boolean;
+    }) => {
+      const { primary } = sandboxRowActions(props);
+      return (
+        <span data-testid="row-primary">
+          {primary === null
+            ? ""
+            : sandboxRowActionLabel(primary, props.configuration)}
+        </span>
+      );
+    },
   }),
 );
 
@@ -449,25 +417,6 @@ function renderPanel(sandboxes: readonly SandboxSummary[]): void {
   renderUi(<SandboxesSettingsPanel />);
 }
 
-function deferredAutomationOpen(): {
-  readonly promise: Promise<SandboxAutomationOpened>;
-  readonly resolve: (value: SandboxAutomationOpened) => void;
-} {
-  let resolvePromise: ((value: SandboxAutomationOpened) => void) | null = null;
-  const promise = new Promise<SandboxAutomationOpened>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return {
-    promise,
-    resolve(value) {
-      if (resolvePromise === null) {
-        throw new Error("the automation open promise has no resolver");
-      }
-      resolvePromise(value);
-    },
-  };
-}
-
 function rowOf(id: string): HTMLElement {
   const found = screen
     .getAllByTestId("sandboxes-row")
@@ -494,7 +443,6 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.report = { kind: "unknown" };
     mocks.costs = null;
     mocks.automation = null;
-    mocks.observeAutomationOpen = false;
     mocks.openAutomation.mockReset();
     mocks.openLink.mockReset();
     mocks.close.mockReset();
@@ -1580,147 +1528,50 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBeNull();
     });
 
-    it("does not navigate or close Settings when the first open settles after Settings unmounts", async () => {
+    it("reserves the first terminal pane and closes Settings before Automations enrollment", () => {
       mocks.automation = NOT_CREATED;
-      const pendingOpen = deferredAutomationOpen();
-      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-a", username: "Account A" },
+      renderPanel([row("sbx-a", {})]);
+      const button = within(unstarted()).getByRole("button", {
+        name: "Open terminal",
       });
-      await withSettingsTabSelected();
-      const panel = renderUi(<SandboxesSettingsPanel />);
-
-      fireEvent.click(
-        within(unstarted()).getByRole("button", { name: "Open terminal" }),
-      );
-
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
+      fireEvent.click(button);
+      const pending = useLandingPanelStore.getState().placeholder;
+      expect(pending?.automation).toMatchObject({
+        existing: null,
+        teamEnvironmentId: null,
       });
-      panel.unmount();
-
-      await act(async () => {
-        pendingOpen.resolve({ sandbox: OPENED, settled: true });
-        await pendingOpen.promise;
+      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(useLandingPanelStore.getState().fallbackLayout).toMatchObject({
+        panelOpen: true,
+        maximized: true,
       });
-
-      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
-      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
-      expect(mocks.openAutomation).toHaveBeenCalledWith(null);
-      expect(mocks.close).not.toHaveBeenCalled();
-      expect(navigations).toHaveLength(0);
-      expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+      // Network work belongs to the pane, which this Settings test does not mount.
+      expect(mocks.openAutomation).not.toHaveBeenCalled();
+      fireEvent.click(button);
+      expect(useLandingPanelStore.getState().placeholder).toBe(pending);
+      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByText("Couldn't open a terminal on Automations."),
+      ).toBeNull();
     });
 
-    it("does not apply a previous account's start after the signed-in account changes", async () => {
+    it("keeps the pane request through row replacement and Settings unmount", () => {
       mocks.automation = NOT_CREATED;
-      const pendingOpen = deferredAutomationOpen();
-      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-a", username: "Account A" },
-      });
-      await withSettingsTabSelected();
       const panel = renderUi(<SandboxesSettingsPanel />);
-
       fireEvent.click(
         within(unstarted()).getByRole("button", { name: "Open terminal" }),
       );
-
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
-      });
-
-      useAuthStore.setState({
-        status: "signed-in",
-        contextMetadata: { userId: "user-b", username: "Account B" },
-      });
-      useLandingPanelStore.getState().addTab({
-        kind: "terminal",
-        instanceId: "account-b-terminal",
-        sessionId: "account-b-session",
-        hostId: "host-account-b",
-        cwd: "/account-b",
-        name: "Account B terminal",
-        titleSource: "default",
-        hostAuthorityAcknowledged: true,
-      });
-      const accountBTabs = [...useLandingPanelStore.getState().tabs];
-      const navigationsBeforeSettlement = [...navigations];
-
-      await act(async () => {
-        pendingOpen.resolve({ sandbox: OPENED, settled: true });
-        await pendingOpen.promise;
-      });
-
-      expect(useLandingPanelStore.getState().tabs).toEqual(accountBTabs);
-      expect(navigations).toEqual(navigationsBeforeSettlement);
-      expect(mocks.close).not.toHaveBeenCalled();
-      panel.unmount();
-    });
-
-    it("keeps the first open alive through the automation result and sandbox-row replacement", async () => {
-      mocks.automation = NOT_CREATED;
-      mocks.observeAutomationOpen = true;
-      const pendingOpen = deferredAutomationOpen();
-      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
-      const panel = renderUi(<SandboxesSettingsPanel />);
-
-      fireEvent.click(
-        within(unstarted()).getByRole("button", { name: "Open terminal" }),
-      );
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
-      });
-
-      // The automation endpoint can report enrollment before the list query
-      // includes its new row. The section scope must survive this empty gate.
+      const pending = useLandingPanelStore.getState().placeholder;
       mocks.automation = { available: true, sandbox: OPENED, pods: [] };
+      mocks.sandboxes = [OPENED];
       panel.rerender(<SandboxesSettingsPanel />);
       expect(
         screen.queryByTestId("sandboxes-row-automations-unstarted"),
       ).toBeNull();
-
-      mocks.sandboxes = [OPENED];
-      panel.rerender(<SandboxesSettingsPanel />);
-      const rowAction = await screen.findByTestId(
-        "automation-row-terminal-state",
-      );
-      expect(rowAction.hasAttribute("disabled")).toBe(false);
-
-      await act(async () => {
-        pendingOpen.resolve({ sandbox: OPENED, settled: true });
-        await pendingOpen.promise;
-      });
-      await waitFor(() => {
-        expect(
-          screen
-            .getByTestId("automation-row-terminal-state")
-            .hasAttribute("disabled"),
-        ).toBe(true);
-      });
-      expect(
-        screen.getByTestId("automation-row-terminal-state").textContent,
-      ).toBe("Opening terminal");
-      expect(mocks.openAutomation).toHaveBeenCalledWith(null);
-    });
-
-    it("files no request and keeps Settings open when the start fails", async () => {
-      mocks.automation = NOT_CREATED;
-      mocks.openAutomation.mockRejectedValue(new Error("refused"));
-      renderPanel([row("sbx-a", {})]);
-
-      fireEvent.click(
-        within(unstarted()).getByRole("button", { name: "Open terminal" }),
-      );
-
-      await waitFor(() => {
-        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
-      });
-      await Promise.resolve();
-      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
-      expect(mocks.close).not.toHaveBeenCalled();
+      expect(useLandingPanelStore.getState().placeholder).toBe(pending);
+      panel.unmount();
+      expect(useLandingPanelStore.getState().placeholder).toBe(pending);
+      expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
     });
   });
 

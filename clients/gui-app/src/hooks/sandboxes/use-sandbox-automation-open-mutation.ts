@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
@@ -69,7 +69,7 @@ export function useSandboxAutomationOpen(
       if (result.kind === "ok") {
         return { sandbox: result.sandbox, settled: result.settled };
       }
-      throw new Error(sandboxFailureMessage(result));
+      throw new SandboxOperationError(result);
     },
     onSettled: (_data, _error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;

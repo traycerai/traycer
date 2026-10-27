@@ -1,3 +1,4 @@
+import type { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { useMemo, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -65,6 +66,17 @@ type TerminalListFixture = {
   readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
   readonly homeCwd: string | null;
 };
+
+vi.mock("@/components/home/terminal-panel/automation-terminal-pane", () => ({
+  AutomationTerminalPane: (
+    props: React.ComponentProps<typeof AutomationTerminalPane>,
+  ) => (
+    <div
+      data-testid="pending-automation"
+      data-host-id={props.request.existing?.hostId}
+    />
+  ),
+}));
 
 const mocks = vi.hoisted(() => {
   const initialPlainAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
@@ -4297,6 +4309,53 @@ describe("<LandingTerminalPanel />", () => {
    * `WebContentsView` is painted over the window, so its presence and its
    * on-screen state are the props the panel decides, not DOM the test can see.
    */
+  it.each(["unknown", "unsupported", "no-active-host"] as const)(
+    "shows the Automations pane while the composer host is %s",
+    async (availability) => {
+      mocks.activeHostId = availability === "no-active-host" ? null : "host-a";
+      mocks.clientActiveHostId = mocks.activeHostId;
+      mocks.probeData = undefined;
+      mocks.freshProbeData = undefined;
+      if (availability === "unsupported") {
+        mocks.probeError = new HostRpcError({
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "unsupported",
+          requestId: "req-unsupported",
+          method: "terminal.list",
+          fatalDetails: null,
+        });
+      }
+      useLandingPanelStore.getState().openAutomationTerminal(
+        {
+          userId: "u1",
+          startedAt: Date.now(),
+          terminalId: "automation-terminal",
+          existing: {
+            hostId: "host-automation",
+            sandboxId: "sbx-automation",
+            awake: false,
+          },
+          teamEnvironmentId: null,
+        },
+        "automation-pane",
+      );
+      render(panelUi());
+      expect(
+        (await screen.findByTestId("pending-automation")).getAttribute(
+          "data-host-id",
+        ),
+      ).toBe("host-automation");
+      expect(
+        screen
+          .getByRole("tab", { name: "Automations" })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
+      expect(testLayout().maximized).toBe(true);
+      expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a live device's browser row when the target host is unsupported", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
