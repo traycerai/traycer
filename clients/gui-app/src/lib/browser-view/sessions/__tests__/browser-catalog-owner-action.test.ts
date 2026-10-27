@@ -1,14 +1,24 @@
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   FakeStreamClient,
   type FakeStreamSession,
 } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { BrowserOwnerInventoryEvidence } from "@traycer/protocol/host/browser/catalog-contracts";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   acquireBrowserSessionsCoordinator,
+  browserSessionsCoordinatorState,
   hasBrowserSessionsCoordinator,
   type BrowserSessionsCoordinatorRuntime,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
@@ -21,6 +31,7 @@ import {
 import {
   coordinatorKey,
   epicScope,
+  independentScope,
   owner,
   sessionInfo,
   tabInfo,
@@ -320,6 +331,49 @@ describe("browser catalog owner actions", () => {
     expect(browserCatalogInventory.read(userScope).records).toEqual([]);
   });
 
+  it("rejects a close whose owner journal committed when the signed-in user changes before the write is acknowledged", async () => {
+    const h = harness();
+    const closing = startClose(h, HOST);
+    await bringOnlineWhenSubscribed(h, { durable: true });
+    const requestId = await sentClose(h);
+
+    const realOwner = browserCatalogInventory.owner.bind(
+      browserCatalogInventory,
+    );
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let committed: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      committed = resolve;
+    });
+    const spy = vi
+      .spyOn(browserCatalogInventory, "owner")
+      .mockImplementation(async (...args) => {
+        await realOwner(...args);
+        committed();
+        await gate;
+      });
+    onTestFinished(() => spy.mockRestore());
+
+    mutationAck(h.latest(), requestId, liveEvidence("session-1", 12));
+    ack(h.latest(), requestId, true, null);
+    await entered;
+    expect(
+      browserCatalogInventory
+        .read(userScope)
+        .records.map((r) => r.inventoryRevision),
+    ).toEqual([12]);
+
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-2", username: "user-2" },
+    });
+    release();
+
+    await expect(closing).rejects.toThrow("Sign in to use this browser tab.");
+  });
+
   it("completes an ordinary close under local-only with no cloud rows and no save error, and keeps the mode across a reload", async () => {
     await browserCatalogInventory.load(userScope);
     await browserCatalogInventory.accept(
@@ -349,6 +403,99 @@ describe("browser catalog owner actions", () => {
     expect(reloaded.browserCatalogInventory.read(userScope).records).toEqual(
       [],
     );
+  });
+
+  it("rejects a local-only close once the signed-in user has changed, journaling nothing", async () => {
+    await browserCatalogInventory.load(userScope);
+    await browserCatalogInventory.accept(
+      userScope,
+      { kind: "local-only" },
+      browserCatalogInventory.epoch(userScope),
+    );
+    const h = harness();
+    const closing = startClose(h, HOST);
+    await bringOnlineWhenSubscribed(h, { durable: true });
+    const requestId = await sentClose(h);
+
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-2", username: "user-2" },
+    });
+    ack(h.latest(), requestId, true, null);
+
+    await expect(closing).rejects.toThrow("Sign in to use this browser tab.");
+    expect(browserCatalogInventory.read(userScope).records).toEqual([]);
+    expect(browserCatalogInventory.read(userScope).pendingCount).toBe(0);
+  });
+
+  describe("a close driven straight through the coordinator", () => {
+    async function closeOn(
+      scope: HostResourceScope,
+      userId: string | null,
+    ): Promise<{
+      readonly closing: Promise<void>;
+      readonly session: FakeStreamSession;
+    }> {
+      const h = harness();
+      const key = coordinatorKey(scope, {
+        hostId: HOST,
+        identityKey: "identity-b",
+      });
+      const release = acquireBrowserSessionsCoordinator({
+        key,
+        consumerId: Symbol("direct"),
+        scope,
+        owner: owner({ hostId: HOST, identityKey: "identity-b" }),
+        runtime: { ...h.runtime, userId },
+        createIfMissing: true,
+      });
+      onTestFinished(release);
+      await vi.waitFor(() =>
+        expect(h.clients.flatMap((client) => client.sessions)).not.toHaveLength(
+          0,
+        ),
+      );
+      const session = h.latest();
+      // The first frame is what advertises the 2.3 capability.
+      session.negotiatedSchemaVersion = { major: 2, minor: 3 };
+      session.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [
+            sessionInfo({
+              sessionId: "session-1",
+              hostId: HOST,
+              scope,
+              tabs: [tabInfo({ tabId: "tab-close" })],
+            }),
+          ],
+        },
+        null,
+      );
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const closing = state.closeTab("session-1", "tab-close");
+      closing.catch(() => undefined);
+      return { closing, session };
+    }
+
+    it("completes an independent close on a 2.3 stream from a plain ACK, since it has no durable catalog", async () => {
+      const { closing, session } = await closeOn(independentScope(), "user-1");
+      const requestId = closeFrameOf(session)?.requestId;
+
+      ack(session, requestId, true, null);
+
+      await expect(closing).resolves.toBeUndefined();
+    });
+
+    it("rejects an epic close on a 2.3 stream that has no signed-in user", async () => {
+      const { closing, session } = await closeOn(epicScope(epicId), null);
+      const requestId = closeFrameOf(session)?.requestId;
+
+      ack(session, requestId, true, null);
+
+      await expect(closing).rejects.toThrow("Sign in to use this browser tab.");
+    });
   });
 
   it("refuses a peer that never advertises durable inventory once the wait ends, without running the action", async () => {

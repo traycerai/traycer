@@ -1166,17 +1166,23 @@ function createBrowserSessionsCoordinator(args: {
     >,
   ): boolean => {
     const scope = args.scope;
+    const pending = pendingCloses.get(frame.requestId);
+    // Independent sessions have no durable catalog, even on a 2.3 stream.
+    if (pending === undefined || !durableInventory || scope.kind !== "epic")
+      return false;
+    const userId = runtime.userId;
     if (
-      runtime.userId !== null &&
-      scope.kind === "epic" &&
-      browserCatalogInventory.read({
-        userId: runtime.userId,
-        epicId: scope.epicId,
-      }).status === "local-only"
+      userId === null ||
+      useAuthStore.getState().contextMetadata?.userId !== userId
+    ) {
+      pending.reject(new Error("Sign in to use this browser tab."));
+      return true;
+    }
+    if (
+      browserCatalogInventory.read({ userId, epicId: scope.epicId }).status ===
+      "local-only"
     )
       return false;
-    const pending = pendingCloses.get(frame.requestId);
-    if (pending === undefined || !durableInventory) return false;
     // The 2.3 contract sends inventoryMutationAck before a successful actionAck
     // on this ordered stream. Success without it is an incomplete close.
     const durable = durableAcks.get(frame.requestId);
@@ -1187,7 +1193,14 @@ function createBrowserSessionsCoordinator(args: {
       );
     else
       void durable.then(
-        () => pending.resolve(),
+        () => {
+          if (
+            runtime.userId !== userId ||
+            useAuthStore.getState().contextMetadata?.userId !== userId
+          )
+            pending.reject(new Error("Sign in to use this browser tab."));
+          else pending.resolve();
+        },
         () =>
           pending.reject(
             new Error("Could not save browser inventory. Try again."),
