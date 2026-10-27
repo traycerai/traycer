@@ -248,7 +248,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       unmount();
     }
   });
-  it("shows the refusal a saved foreign key carries when the draft is empty, and still saves a valid replacement while that warning stands", () => {
+  it("shows the refusal a saved foreign key carries on an empty or blank draft, and a valid replacement clears it and saves", () => {
     const savedForeign: ProviderCliState = {
       ...apiKeyState("openrouter"),
       apiKey: { supported: true, configured: true, source: "stored" },
@@ -267,11 +267,23 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       />,
     );
 
-    const input = screen.getByLabelText("API key");
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toBe(REFUSAL);
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(input.getAttribute("aria-describedby")).toBe(alert.id);
+    expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBe(
+      "true",
+    );
+    expect(alert.id).toBe(
+      screen.getByLabelText("API key").getAttribute("aria-describedby"),
+    );
+
+    rerender(
+      <ProviderApiKeySection
+        state={savedForeign}
+        draft="   "
+        onDraftChange={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toBe(REFUSAL);
 
     rerender(
       <ProviderApiKeySection
@@ -281,8 +293,10 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       />,
     );
 
-    // The stored warning stays until the state changes; it does not block Save.
-    expect(screen.getByRole("alert").textContent).toBe(REFUSAL);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBe(
+      "false",
+    );
     expect(
       screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
     ).toBe(false);

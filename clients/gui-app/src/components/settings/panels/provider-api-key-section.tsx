@@ -97,12 +97,13 @@ function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {
   return apiKey.source === "stored" ? "Key set" : "From a shell variable";
 }
 
-/** The draft takes precedence; a saved refusal remains until the key is replaced. */
+/** Show the saved refusal until the person enters a replacement draft. */
 function apiKeyRowRefusal(
   state: ProviderCliState,
+  draft: string,
   draftRefusal: string | null,
 ): string | null {
-  if (draftRefusal !== null) return draftRefusal;
+  if (draft.trim().length > 0) return draftRefusal;
   if (state.apiKey.configured && state.auth.status === "unauthenticated") {
     return state.auth.detail;
   }
@@ -147,7 +148,7 @@ export function ProviderApiKeySection({
   const providerId = state.providerId;
   const dashboardUrl = API_KEY_DASHBOARD_URL[providerId];
   const keyRefusal = providerApiKeyRefusal(providerId, draft);
-  const displayedRefusal = apiKeyRowRefusal(state, keyRefusal);
+  const displayedRefusal = apiKeyRowRefusal(state, draft, keyRefusal);
   const saveDisabled =
     setApiKey.isPending ||
     draft.trim().length === 0 ||
