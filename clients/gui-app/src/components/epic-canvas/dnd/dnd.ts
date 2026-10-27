@@ -470,8 +470,12 @@ export function getTerminalTileDragId(
   return `terminal-tile:${plainTerminalFleetIdentityKey({ hostId, terminalId: sessionId })}`;
 }
 
-export function getBrowserTileDragId(sessionId: string, tabId: string): string {
-  return `browser-tile:${sessionId}:${tabId}`;
+export function getBrowserTileDragId(
+  hostId: string,
+  sessionId: string,
+  tabId: string,
+): string {
+  return `browser-tile:${JSON.stringify([hostId, sessionId, tabId])}`;
 }
 
 export function getGitDiffTileDragId(tileId: string): string {

@@ -17,7 +17,7 @@ export interface BrowserTabCloseArgs {
   readonly sessionId: string;
   readonly tabId: string;
   readonly title: string;
-  readonly status: BrowserTabInfo["status"];
+  readonly status: BrowserTabInfo["status"] | null;
   readonly onCloseTab: (sessionId: string, tabId: string) => Promise<void>;
 }
 
