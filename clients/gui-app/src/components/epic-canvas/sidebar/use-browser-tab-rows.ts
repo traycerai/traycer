@@ -21,7 +21,6 @@ export interface BrowserSidebarSession {
   readonly hostId: string;
   readonly sessionId: string;
   readonly profile: BrowserSessionInfo["profile"] | null;
-  readonly source: "catalog" | "legacy";
   readonly tabs: readonly BrowserSidebarTab[];
 }
 
@@ -46,7 +45,7 @@ function nextBrowserSidebarTabRows(
         tab,
         identity: nextSettledTabIdentity(
           previousByKey.get(key)?.identity ?? null,
-          session.source === "catalog" ? { ...tab, status: null } : tab,
+          tab,
         ),
       };
     }),

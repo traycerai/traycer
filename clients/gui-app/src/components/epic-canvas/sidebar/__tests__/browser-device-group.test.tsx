@@ -21,7 +21,6 @@ function row(tabId: string): BrowserSidebarTabRow {
       hostId: "host-2",
       sessionId: "s",
       profile: null,
-      source: "catalog",
       tabs: [tab],
     },
     tab,

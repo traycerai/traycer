@@ -1,4 +1,3 @@
-import { BrowserListLegacyBoundary } from "@/components/epic-canvas/sidebar/browser-list-legacy-boundary";
 import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { Bot, Moon, TriangleAlert, X } from "lucide-react";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
@@ -45,14 +44,6 @@ interface SwitcherListProps {
 
 /** Task-wide browser discovery with touch controls; simulators retain their own selected host. */
 export function SwitcherBrowsersList(props: SwitcherListProps) {
-  return (
-    <BrowserListLegacyBoundary epicId={props.epicId} tabId={props.tabId}>
-      <SwitcherBrowsersListLive {...props} />
-    </BrowserListLegacyBoundary>
-  );
-}
-
-function SwitcherBrowsersListLive(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", tabId));
   const [searchQuery, setSearchQuery] = useState("");

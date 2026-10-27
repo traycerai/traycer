@@ -425,8 +425,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // One task discovery controller owns repair cadence; the unary relay does not poll.
-  "browser.catalog.read": { ...LATEST_SCHEDULING, poll: null },
+  // The visible browser pane refreshes its discovery index every 30 seconds.
+  "browser.catalog.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
   // Settings > Browser's saved-logins list. A bounded read that can coalesce,
   // and no cadence: the list changes only when the person on this screen
   // clears a row or a site writes a cookie, and the group refetches on the

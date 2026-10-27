@@ -14,7 +14,7 @@ import {
 } from "react";
 import {
   queryMountedChatBlock,
-  queryMountedChatMessageRoot,
+  queryMountedChatMessageRoots,
 } from "@/components/chat/chat-find-highlighter";
 import { cn } from "@/lib/utils";
 
@@ -138,9 +138,15 @@ export function scrollChatBlockIntoView(
   messageId: string,
   blockId: string,
 ): ChatBlockScrollAttempt {
-  const messageRoot = queryMountedChatMessageRoot(scroller, messageId);
-  if (messageRoot === null) return "row-absent";
-  const blockRoot = queryMountedChatBlock(messageRoot, blockId);
+  // Across every mounted part of the turn: a split turn draws its blocks over
+  // several list items, and the one holding this block is not necessarily the
+  // first mounted.
+  const messageRoots = queryMountedChatMessageRoots(scroller, messageId);
+  if (messageRoots.length === 0) return "row-absent";
+  const blockRoot = messageRoots.reduce<HTMLElement | null>(
+    (found, root) => found ?? queryMountedChatBlock(root, blockId),
+    null,
+  );
   if (blockRoot === null) return "block-absent";
   blockRoot.scrollIntoView({
     block: "center",

@@ -18,10 +18,12 @@ import {
 } from "@/components/chat/segments/subagent-open-as-chat";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
+import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  FoldedBackgroundEvent,
   ApprovalSegment,
   MessageSegment,
   SubagentSegment as SubagentSegmentModel,
@@ -195,6 +197,7 @@ interface BodyPropsOverrides {
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
   readonly meta?: AssistantTurnMeta | null;
+  readonly foldedBackgroundEvents?: ReadonlyArray<FoldedBackgroundEvent>;
 }
 
 function bodyProps(overrides: BodyPropsOverrides) {
@@ -207,6 +210,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     turnHasOnlyAutonomousResumeSegments:
       overrides.turnHasOnlyAutonomousResumeSegments ?? false,
     autonomousResumeOwed: overrides.autonomousResumeOwed ?? false,
+    foldedBackgroundEvents: overrides.foldedBackgroundEvents,
     showCompletionFooter: overrides.showCompletionFooter ?? true,
     pausedDurationMs: 0,
     pausedSinceMs: null,
@@ -242,7 +246,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 
-  it('renders "Resumed · no response · {elapsed}" for a completed silent autonomous resume', () => {
+  it('says "No reply · {elapsed}" inside the card for a completed silent autonomous resume', () => {
     render(
       <AssistantMessageBody
         turnId={null}
@@ -255,9 +259,10 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
       />,
     );
 
-    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toBe(
-      "Resumed · no response · 5s",
+    expect(screen.getByTestId("background-event-ending").textContent).toBe(
+      "No reply · 5s",
     );
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 
   it("does not infer a silent resume from one autonomous-resume-only slice", () => {
@@ -275,11 +280,11 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
 
     const footer = screen.getByTestId("assistant-elapsed-footer");
     expect(footer.textContent).toMatch(/ for 5s$/);
-    expect(footer.textContent).not.toContain("Resumed · no response");
+    expect(screen.queryByTestId("background-event-ending")).toBeNull();
   });
 
-  it('draws a never-resumed notification as a compact note ending in "Agent not resumed"', () => {
-    const { container } = render(
+  it('ends a never-resumed notification\'s card with "Agent not resumed"', () => {
+    render(
       <AssistantMessageBody
         turnId={null}
         {...bodyProps({
@@ -291,37 +296,14 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
       />,
     );
 
-    expect(container.querySelector("[data-row-header]")).not.toBeNull();
     expect(screen.getByText("Background MCP tool failed")).toBeTruthy();
-    expect(screen.getByTestId("assistant-agent-not-resumed").textContent).toBe(
-      "Agent not resumed",
-    );
+    expect(screen.getByText("Agent not resumed")).toBeTruthy();
+    expect(screen.queryByTestId("assistant-agent-not-resumed")).toBeNull();
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 
-  it('keeps the resumed-no-response footer under the compact note and omits "Agent not resumed"', () => {
-    const { container } = render(
-      <AssistantMessageBody
-        turnId={null}
-        {...bodyProps({
-          segments: [AUTONOMOUS_RESUME_SEGMENT],
-          elapsedStartedAt: 3_000,
-          turnHasOnlyAutonomousResumeSegments: true,
-          showCompletionFooter: true,
-          completedAt: 8_000,
-        })}
-      />,
-    );
-
-    expect(container.querySelector("[data-row-header]")).not.toBeNull();
-    expect(screen.getByTestId("assistant-elapsed-footer").textContent).toBe(
-      "Resumed · no response · 5s",
-    );
-    expect(screen.queryByText("Agent not resumed")).toBeNull();
-  });
-
   it("keeps the card divider and normal footer when the resumed agent replied", () => {
-    const { container } = render(
+    render(
       <AssistantMessageBody
         turnId={null}
         {...bodyProps({
@@ -337,8 +319,42 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     expect(screen.getByTestId("assistant-elapsed-footer").textContent).toMatch(
       / for 5s$/,
     );
-    expect(container.querySelector("[data-row-header]")).toBeNull();
     expect(screen.queryByText("Agent not resumed")).toBeNull();
+  });
+
+  it("lists the folded earlier events in the card and counts them in its foot", () => {
+    const trigger: AutonomousResumeTrigger = {
+      kind: "monitor",
+      title: "build watch",
+      status: "completed",
+      live: false,
+      summary: "Build completed.",
+      blockId: "monitor-0",
+      outputFile: null,
+      mcp: null,
+      managedCommand: null,
+    };
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [AUTONOMOUS_RESUME_SEGMENT],
+          elapsedStartedAt: 3_000,
+          turnHasOnlyAutonomousResumeSegments: true,
+          completedAt: 8_000,
+          foldedBackgroundEvents: [
+            {
+              key: "r1#0",
+              trigger,
+              ending: { kind: "no-reply", elapsedMs: 2_000 },
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByText("No reply · 5s")).toBeTruthy();
+    expect(screen.getByText("1 earlier event")).toBeTruthy();
   });
 
   it("holds the ending back while the resume is still owed", () => {
@@ -356,6 +372,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     );
 
     expect(screen.queryByText("Agent not resumed")).toBeNull();
+    expect(screen.queryByTestId("background-event-ending")).toBeNull();
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
   });
 

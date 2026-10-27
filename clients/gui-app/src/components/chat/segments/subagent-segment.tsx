@@ -301,6 +301,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={handleOpenChange}
       header={header}
@@ -993,6 +994,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={handleOpenChange}
       header={header}

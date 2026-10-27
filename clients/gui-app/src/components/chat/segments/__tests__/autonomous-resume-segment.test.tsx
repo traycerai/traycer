@@ -1,7 +1,20 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
-import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
+import {
+  AutonomousResumeSegment,
+  type BackgroundEventCardEnding,
+} from "@/components/chat/segments/autonomous-resume-segment";
+import type {
+  BackgroundEventEnding,
+  FoldedBackgroundEvent,
+} from "@/stores/composer/chat-store";
 
 const hostQueryMock = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -59,6 +72,9 @@ describe("<AutonomousResumeSegment />", () => {
     // command is done while it is still going.
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "monitor",
@@ -76,13 +92,16 @@ describe("<AutonomousResumeSegment />", () => {
     );
 
     expect(screen.queryByText("Shell completed")).toBeNull();
-    expect(screen.getByText("Monitor running")).toBeTruthy();
+    expect(screen.getByText("Monitor update")).toBeTruthy();
     expect(screen.getByText("12 new log lines")).toBeTruthy();
   });
 
   it("still reports a terminal outcome once the producer has stopped", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "monitor",
@@ -102,13 +121,16 @@ describe("<AutonomousResumeSegment />", () => {
     // Kind-only trigger (no `managedCommand` block): the harness's own
     // Monitor tool, which keeps its real name.
     expect(screen.getByText("Monitor failed")).toBeTruthy();
-    expect(screen.queryByText("Monitor running")).toBeNull();
+    expect(screen.queryByText("Monitor update")).toBeNull();
     expect(screen.queryByText("Command still running")).toBeNull();
   });
 
   it("renders an mcp-identified trigger as an MCP tool card with structured identity", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "command",
@@ -133,6 +155,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders a background command resume card that fetches output on expand", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "command",
@@ -190,6 +215,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders only the output path for a .pdf output file, without fetching it", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "command",
@@ -233,6 +261,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders only the output path for a .docx output file, without fetching it", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "command",
@@ -266,6 +297,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders command triggers without output files as non-expandable cards", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "command",
@@ -297,6 +331,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders shell triggers as non-expandable cards with no output row", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "monitor",
@@ -330,6 +367,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("keeps a monitor delivery summary in the same compact card", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "monitor",
@@ -361,6 +401,8 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders in-turn monitor deliveries as non-expandable rows", () => {
     render(
       <AutonomousResumeSegment
+        ending={null}
+        folded={[]}
         variant="row"
         triggers={[
           {
@@ -389,6 +431,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("uses the shared radar icon and shell labels for live managed deliveries", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "command",
@@ -424,8 +469,8 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.getByText("Monitor running")).toBeTruthy();
-    expect(screen.getByText("Shell running")).toBeTruthy();
+    expect(screen.getByText("Monitor update")).toBeTruthy();
+    expect(screen.getByText("Shell update")).toBeTruthy();
     expect(document.querySelector("[data-monitor-icon='on']")).not.toBeNull();
     expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
   });
@@ -474,11 +519,25 @@ describe("<AutonomousResumeSegment />", () => {
     ];
 
     try {
-      const view = render(<AutonomousResumeSegment triggers={triggers} />);
+      const view = render(
+        <AutonomousResumeSegment
+          variant="card"
+          ending={null}
+          folded={[]}
+          triggers={triggers}
+        />,
+      );
 
       expect(screen.getByText("first child")).toBeTruthy();
       expect(screen.getByText("second child")).toBeTruthy();
-      view.rerender(<AutonomousResumeSegment triggers={[...triggers]} />);
+      view.rerender(
+        <AutonomousResumeSegment
+          variant="card"
+          ending={null}
+          folded={[]}
+          triggers={[...triggers]}
+        />,
+      );
       expect(screen.getByText("first child")).toBeTruthy();
       expect(screen.getByText("second child")).toBeTruthy();
       expect(
@@ -498,6 +557,9 @@ describe("<AutonomousResumeSegment />", () => {
   it("renders wakeup triggers as non-expandable cards carrying the prompt", () => {
     render(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           {
             kind: "wakeup",
@@ -550,11 +612,40 @@ describe("<AutonomousResumeSegment />", () => {
     live: false,
   };
 
-  it("draws a failed background MCP trigger as a compact note with its summary inline and no disclosure", () => {
+  const MONITOR_UPDATE: AutonomousResumeTrigger = {
+    kind: "monitor",
+    title: "build watch",
+    status: "completed",
+    summary: "still running - 4 new log lines",
+    blockId: "managed-monitor-1",
+    outputFile: null,
+    mcp: null,
+    managedCommand: {
+      commandId: "cmd-monitor",
+      monitoring: true,
+      hostId: null,
+    },
+    live: true,
+  };
+
+  const foldedEvent = (
+    key: string,
+    trigger: AutonomousResumeTrigger,
+    ending: BackgroundEventEnding,
+  ): FoldedBackgroundEvent => ({ key, trigger, ending });
+
+  const NO_REPLY_3S: BackgroundEventEnding = {
+    kind: "no-reply",
+    elapsedMs: 3_000,
+  };
+
+  it("draws a failed background MCP trigger as a static card with its summary previewed", () => {
     render(
       <AutonomousResumeSegment
         triggers={[MCP_FAILED_TRIGGER]}
-        variant="note"
+        variant="card"
+        ending={null}
+        folded={[]}
       />,
     );
 
@@ -563,16 +654,18 @@ describe("<AutonomousResumeSegment />", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("keeps the disclosure on a note whose trigger is a subagent", () => {
+  it("opens a subagent card's result from its disclosure", () => {
     render(
-      <AutonomousResumeSegment triggers={[SUBAGENT_TRIGGER]} variant="note" />,
+      <AutonomousResumeSegment
+        triggers={[SUBAGENT_TRIGGER]}
+        variant="card"
+        ending={null}
+        folded={[]}
+      />,
     );
 
     const toggle = screen.getByRole("button", { name: /Subagent completed/ });
-    // Its disclosure opens the summary, so the closed line does not show it.
-    expect(
-      screen.queryByText(/Review finished with two findings\./),
-    ).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
 
     expect(
@@ -581,35 +674,216 @@ describe("<AutonomousResumeSegment />", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("shows a note's summary inline while closed when its disclosure opens an output file", () => {
+  it("keeps the row variant non-expandable for the same subagent trigger", () => {
     render(
       <AutonomousResumeSegment
-        triggers={[
-          {
-            kind: "command",
-            title: "bun test",
-            status: "failed",
-            summary: "Process exited with code 2",
-            blockId: "tool-12",
-            outputFile: { workspacePath: "/ws", filePath: "/ws/out.log" },
-            mcp: null,
-            managedCommand: null,
-            live: false,
-          },
-        ]}
-        variant="note"
+        triggers={[SUBAGENT_TRIGGER]}
+        variant="row"
+        ending={null}
+        folded={[]}
       />,
     );
 
-    expect(screen.getByText("Process exited with code 2")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Command failed/ })).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("keeps the row variant non-expandable for the same subagent trigger", () => {
-    render(
-      <AutonomousResumeSegment triggers={[SUBAGENT_TRIGGER]} variant="row" />,
-    );
+  describe("the card's foot", () => {
+    const renderFoot = (
+      ending: BackgroundEventCardEnding | null,
+      folded: ReadonlyArray<FoldedBackgroundEvent>,
+    ) =>
+      render(
+        <AutonomousResumeSegment
+          triggers={[MONITOR_UPDATE]}
+          variant="card"
+          ending={ending}
+          folded={folded}
+        />,
+      );
 
-    expect(screen.queryByRole("button")).toBeNull();
+    it("shows the elapsed time of a turn that drew no reply", () => {
+      renderFoot(
+        { value: { kind: "no-reply", elapsedMs: 6_000 }, details: null },
+        [],
+      );
+
+      expect(screen.getByText("No reply · 6s")).toBeTruthy();
+    });
+
+    it("puts the turn's details behind the no-reply ending", () => {
+      renderFoot(
+        {
+          value: { kind: "no-reply", elapsedMs: 6_000 },
+          details: <span>turn details</span>,
+        },
+        [],
+      );
+
+      expect(screen.getByTestId("background-event-ending").textContent).toBe(
+        "No reply · 6s",
+      );
+    });
+
+    it("says the agent was not resumed when no turn picked the event up", () => {
+      renderFoot({ value: { kind: "not-resumed" }, details: null }, []);
+
+      expect(screen.getByText("Agent not resumed")).toBeTruthy();
+    });
+
+    it("draws no foot for a card with neither an ending nor earlier events", () => {
+      renderFoot(null, []);
+
+      expect(screen.queryByText(/No reply|not resumed|earlier/)).toBeNull();
+    });
+
+    it("counts earlier events and says no reply when the card has no ending of its own", () => {
+      renderFoot(null, [
+        foldedEvent("a#0", MONITOR_UPDATE, NO_REPLY_3S),
+        foldedEvent("b#0", MONITOR_UPDATE, NO_REPLY_3S),
+      ]);
+
+      expect(screen.getByText("2 earlier updates, no reply")).toBeTruthy();
+    });
+
+    it("leaves out ', no reply' when an earlier event was not resumed", () => {
+      renderFoot(null, [
+        foldedEvent("a#0", MONITOR_UPDATE, NO_REPLY_3S),
+        foldedEvent("b#0", MONITOR_UPDATE, { kind: "not-resumed" }),
+      ]);
+
+      expect(screen.getByText("2 earlier updates")).toBeTruthy();
+    });
+
+    it("leaves out ', no reply' when the card has an ending of its own", () => {
+      renderFoot(
+        { value: { kind: "no-reply", elapsedMs: 6_000 }, details: null },
+        [foldedEvent("a#0", MONITOR_UPDATE, NO_REPLY_3S)],
+      );
+
+      expect(screen.getByText("No reply · 6s")).toBeTruthy();
+      expect(screen.getByText("1 earlier update")).toBeTruthy();
+    });
+
+    it("names earlier scheduled wakes as wakes", () => {
+      const wake: AutonomousResumeTrigger = {
+        kind: "wakeup",
+        title: "check the deploy",
+        status: "completed",
+        summary: "Scheduled wake fired.",
+        blockId: "wake-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+        live: false,
+      };
+      renderFoot(null, [
+        foldedEvent("a#0", wake, NO_REPLY_3S),
+        foldedEvent("b#0", wake, NO_REPLY_3S),
+      ]);
+
+      expect(screen.getByText("2 earlier wakes, no reply")).toBeTruthy();
+    });
+
+    it("names earlier events of mixed kinds as events", () => {
+      renderFoot(null, [
+        foldedEvent("a#0", MONITOR_UPDATE, NO_REPLY_3S),
+        foldedEvent("b#0", SUBAGENT_TRIGGER, NO_REPLY_3S),
+      ]);
+
+      expect(screen.getByText("2 earlier events, no reply")).toBeTruthy();
+    });
+
+    it("lists the earlier events, oldest first, once the card is opened", () => {
+      renderFoot(null, [
+        foldedEvent(
+          "a#0",
+          { ...MONITOR_UPDATE, summary: "still running - first batch" },
+          NO_REPLY_3S,
+        ),
+        foldedEvent(
+          "b#0",
+          { ...MONITOR_UPDATE, summary: "still running - second batch" },
+          { kind: "not-resumed" },
+        ),
+      ]);
+
+      expect(screen.queryByText("Earlier")).toBeNull();
+      fireEvent.click(screen.getByRole("button"));
+
+      expect(screen.getByText("Earlier")).toBeTruthy();
+      const items = screen.getAllByRole("listitem");
+      expect(items.map((item) => item.textContent)).toEqual([
+        "first batch·No reply · 3s",
+        "second batch·Agent not resumed",
+      ]);
+    });
+
+    it("tells earlier wakes with the same title apart by what each said", () => {
+      const wake = (summary: string): AutonomousResumeTrigger => ({
+        kind: "wakeup",
+        title: "check the deploy",
+        status: "completed",
+        summary,
+        blockId: "wake-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+        live: false,
+      });
+      renderFoot(null, [
+        foldedEvent("a#0", wake("Look at the error rate."), NO_REPLY_3S),
+        foldedEvent("b#0", wake("Look at the queue depth."), NO_REPLY_3S),
+      ]);
+
+      fireEvent.click(screen.getByRole("button"));
+
+      expect(
+        screen.getByText("check the deploy · Look at the error rate."),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("check the deploy · Look at the queue depth."),
+      ).toBeTruthy();
+    });
+
+    it("opens an earlier subagent's result from its entry", () => {
+      renderFoot(null, [
+        foldedEvent(
+          "a#0",
+          { ...SUBAGENT_TRIGGER, summary: "**Two findings** in the diff." },
+          NO_REPLY_3S,
+        ),
+      ]);
+      fireEvent.click(screen.getByRole("button"));
+      const entry = within(screen.getByRole("listitem")).getByRole("button");
+
+      expect(entry.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByText("Two findings")).toBeNull();
+      fireEvent.click(entry);
+
+      expect(entry.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("Two findings")).toBeTruthy();
+    });
+
+    it("shows an earlier shell delivery's summary alone and keeps it closed", () => {
+      renderFoot(null, [
+        foldedEvent(
+          "a#0",
+          {
+            ...MONITOR_UPDATE,
+            summary: "still running - 9 new log lines",
+            outputFile: {
+              workspacePath: "/tmp/traycer-output",
+              filePath: "build.log",
+            },
+          },
+          NO_REPLY_3S,
+        ),
+      ]);
+      fireEvent.click(screen.getByRole("button"));
+
+      const entry = screen.getByRole("listitem");
+      expect(entry.textContent).toBe("9 new log lines·No reply · 3s");
+      expect(within(entry).queryByRole("button")).toBeNull();
+    });
   });
 });

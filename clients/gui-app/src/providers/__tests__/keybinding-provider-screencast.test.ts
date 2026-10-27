@@ -2,6 +2,8 @@ import { createElement } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory } from "@tanstack/react-router";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { registerReservedBrowserChords } from "@/lib/browser-view/reserved-chords-registration";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { isMac } from "@/lib/keybindings/platform";
@@ -15,6 +17,7 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 
 function buildProviderRouterSource(
   initialPathname: string,
@@ -408,4 +411,226 @@ describe("KeybindingProvider screencast armed flag", () => {
     expect(keyup?.defaultPrevented).toBe(false);
     expect(bubble).toHaveBeenCalledTimes(1);
   });
+
+  it("registers default Find chords through the native bridge on both surfaces", () => {
+    const landingBridge = new FakeBrowserViewBridge({});
+    const epicBridge = new FakeBrowserViewBridge({});
+    registerReservedBrowserChords(
+      createFakeRunnerHost({ browserView: landingBridge }),
+      getDefaultBindings(),
+      { landingSurfaceActive: true },
+    );
+    registerReservedBrowserChords(
+      createFakeRunnerHost({ browserView: epicBridge }),
+      getDefaultBindings(),
+      { landingSurfaceActive: false },
+    );
+
+    expect([
+      landingBridge.reservedChordsCalls[0]?.filter(
+        (row) => row.token === "mod+f" || row.token === "mod+g",
+      ),
+      epicBridge.reservedChordsCalls[0]?.filter(
+        (row) => row.token === "mod+f" || row.token === "mod+g",
+      ),
+    ]).toEqual([
+      [
+        { token: "mod+f", command: null },
+        { token: "mod+g", command: null },
+      ],
+      [
+        { token: "mod+f", command: null },
+        { token: "mod+g", command: null },
+      ],
+    ]);
+  });
+
+  it("registers live Find rebinds and preserves browser-scoped collision winners", () => {
+    const browserView = new FakeBrowserViewBridge({});
+    const runnerHost = createFakeRunnerHost({ browserView });
+    const findTokens = ["mod+f", "mod+g", "mod+alt+f", "mod+alt+g"];
+
+    useKeybindingStore.getState().setBinding("tile.find.open", "mod+alt+f");
+    useKeybindingStore.getState().setBinding("tile.find.next", "mod+alt+g");
+    registerReservedBrowserChords(
+      runnerHost,
+      useKeybindingStore.getState().bindings,
+      { landingSurfaceActive: true },
+    );
+    expect(
+      browserView.reservedChordsCalls[0]?.filter((row) =>
+        findTokens.includes(row.token),
+      ),
+    ).toEqual([
+      { token: "mod+alt+f", command: null },
+      { token: "mod+alt+g", command: null },
+    ]);
+
+    useKeybindingStore.getState().clearBinding("tile.find.open");
+    useKeybindingStore.getState().clearBinding("tile.find.next");
+    registerReservedBrowserChords(
+      runnerHost,
+      useKeybindingStore.getState().bindings,
+      { landingSurfaceActive: true },
+    );
+    expect(
+      browserView.reservedChordsCalls[1]?.filter((row) =>
+        findTokens.includes(row.token),
+      ),
+    ).toEqual([]);
+
+    useKeybindingStore.getState().setBinding("tile.find.open", "mod+w");
+    useKeybindingStore.getState().setBinding("tile.find.next", "mod+t");
+    registerReservedBrowserChords(
+      runnerHost,
+      useKeybindingStore.getState().bindings,
+      { landingSurfaceActive: true },
+    );
+    expect(
+      browserView.reservedChordsCalls[2]?.filter(
+        (row) => row.token === "mod+w" || row.token === "mod+t",
+      ),
+    ).toEqual([
+      { token: "mod+w", command: "closeTab" },
+      { token: "mod+t", command: "newTab" },
+    ]);
+  });
+
+  it("leaves streamed default Find F/G page-owned while armed", () => {
+    const router = buildProviderRouterSource("/");
+    const findOpen = vi.fn();
+    const findNext = vi.fn();
+    const unregisterFindOpen = registerDynamicActionHandler(
+      "tile.find.open",
+      findOpen,
+    );
+    const unregisterFindNext = registerDynamicActionHandler(
+      "tile.find.next",
+      findNext,
+    );
+
+    try {
+      render(createElement(KeybindingProvider, { router, children: null }));
+      expect(getDefaultBindings()["tile.find.open"]).toBe("mod+f");
+      expect(getDefaultBindings()["tile.find.next"]).toBe("mod+g");
+
+      const { releasePageKeys } = armWithReleaseSpy();
+      const tile = document.createElement("div");
+      document.body.append(tile);
+      const pageKeyCodes: string[] = [];
+      tile.addEventListener(
+        "keydown",
+        (event) => {
+          pageKeyCodes.push(event.code);
+        },
+        true,
+      );
+      let findPrevented = true;
+      let nextPrevented = true;
+      act(() => {
+        findPrevented = dispatchTargetKey(tile, "keydown", {
+          code: "KeyF",
+          key: "f",
+          ...platformModKeys(),
+        }).defaultPrevented;
+        nextPrevented = dispatchTargetKey(tile, "keydown", {
+          code: "KeyG",
+          key: "g",
+          ...platformModKeys(),
+        }).defaultPrevented;
+      });
+
+      expect(findPrevented).toBe(false);
+      expect(nextPrevented).toBe(false);
+      expect(pageKeyCodes).toEqual(["KeyF", "KeyG"]);
+      expect(releasePageKeys).not.toHaveBeenCalled();
+      expect(findOpen).not.toHaveBeenCalled();
+      expect(findNext).not.toHaveBeenCalled();
+    } finally {
+      unregisterFindOpen();
+      unregisterFindNext();
+    }
+  });
+
+  it.each(["tile.find.open", "tile.find.next"] as const)(
+    "keeps rebound %s page-owned while armed, then dispatches it after disarm",
+    (findActionId) => {
+      const router = buildProviderRouterSource("/");
+      const findOpen = vi.fn();
+      const findNext = vi.fn();
+      const openPalette = vi.fn();
+      const unregisterFindOpen = registerDynamicActionHandler(
+        "tile.find.open",
+        findOpen,
+      );
+      const unregisterFindNext = registerDynamicActionHandler(
+        "tile.find.next",
+        findNext,
+      );
+      const unregisterPalette = registerDynamicActionHandler(
+        "app.palette.open",
+        openPalette,
+      );
+
+      try {
+        useKeybindingStore.getState().setBinding(findActionId, "mod+k");
+        expect(getDefaultBindings()["app.palette.open"]).toBe("mod+k");
+        render(createElement(KeybindingProvider, { router, children: null }));
+        const { releasePageKeys } = armWithReleaseSpy();
+        const tile = document.createElement("div");
+        document.body.append(tile);
+        const pageKeyCodes: string[] = [];
+        tile.addEventListener(
+          "keydown",
+          (event) => {
+            pageKeyCodes.push(event.code);
+          },
+          true,
+        );
+
+        let armedPrevented = false;
+        act(() => {
+          armedPrevented = dispatchTargetKey(tile, "keydown", {
+            code: "KeyK",
+            key: "k",
+            ...platformModKeys(),
+          }).defaultPrevented;
+        });
+
+        expect(armedPrevented).toBe(false);
+        expect(pageKeyCodes).toEqual(["KeyK"]);
+        expect(releasePageKeys).not.toHaveBeenCalled();
+        expect(findOpen).not.toHaveBeenCalled();
+        expect(findNext).not.toHaveBeenCalled();
+        expect(openPalette).not.toHaveBeenCalled();
+
+        act(() => {
+          useScreencastArmedStore.getState().release("peek-owner");
+        });
+        let disarmedPrevented = false;
+        act(() => {
+          disarmedPrevented = dispatchTargetKey(tile, "keydown", {
+            code: "KeyK",
+            key: "k",
+            ...platformModKeys(),
+          }).defaultPrevented;
+        });
+
+        expect(disarmedPrevented).toBe(true);
+        expect(pageKeyCodes).toEqual(["KeyK"]);
+        expect(releasePageKeys).not.toHaveBeenCalled();
+        expect(findOpen).toHaveBeenCalledTimes(
+          findActionId === "tile.find.open" ? 1 : 0,
+        );
+        expect(findNext).toHaveBeenCalledTimes(
+          findActionId === "tile.find.next" ? 1 : 0,
+        );
+        expect(openPalette).not.toHaveBeenCalled();
+      } finally {
+        unregisterFindOpen();
+        unregisterFindNext();
+        unregisterPalette();
+      }
+    },
+  );
 });

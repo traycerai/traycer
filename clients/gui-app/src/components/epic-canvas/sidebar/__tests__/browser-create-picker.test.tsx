@@ -27,7 +27,7 @@ const state = vi.hoisted(() => ({
   withOwner: vi.fn(),
   openTab: vi.fn(),
   openTile: vi.fn(),
-  inventoryStatus: "available",
+  scope: "cloud",
   localHostId: "host-home",
 }));
 
@@ -42,7 +42,10 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
 }));
 vi.mock("@/components/epic-canvas/renderers/browser-catalog-context", () => ({
   useBrowserCatalogContext: () => ({
-    inventory: { status: state.inventoryStatus },
+    status: "ready",
+    scope: state.scope,
+    records: [],
+    refetch: vi.fn(),
   }),
 }));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
@@ -129,7 +132,7 @@ describe("BrowserCreatePicker", () => {
       fakeHost("host-nas", "NAS", "offline", {}),
     ];
     state.pinned = "host-home";
-    state.inventoryStatus = "available";
+    state.scope = "cloud";
     state.localHostId = "host-home";
     state.setSelection.mockReset();
     state.withOwner.mockReset();
@@ -224,7 +227,7 @@ describe("BrowserCreatePicker", () => {
   });
 
   it("offers only the owning device for a local-only task", async () => {
-    state.inventoryStatus = "local-only";
+    state.scope = "local-only";
     state.localHostId = "host-work";
     await openPicker();
     expect(
@@ -233,7 +236,7 @@ describe("BrowserCreatePicker", () => {
   });
 
   it("is unavailable for a task whose browsers this account cannot reach", () => {
-    state.inventoryStatus = "inaccessible";
+    state.scope = "inaccessible";
     render(
       wrap(
         <BrowserCreatePicker

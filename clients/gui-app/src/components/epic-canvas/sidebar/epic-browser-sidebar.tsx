@@ -1,4 +1,3 @@
-import { BrowserListLegacyBoundary } from "./browser-list-legacy-boundary";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import type { BrowserTabDriver } from "@traycer/protocol/host/browser/contracts";
 import {
@@ -50,9 +49,7 @@ export function BrowsersPanelBody(props: LeftPanelSlotProps) {
     <SidebarContent className="min-h-0">
       <SidebarGroup className="min-h-0 flex-1">
         <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
-          <BrowserListLegacyBoundary epicId={props.epicId} tabId={props.tabId}>
-            <BrowsersPanelBodyLive {...props} />
-          </BrowserListLegacyBoundary>
+          <BrowsersPanelList {...props} />
         </SidebarGroupContent>
       </SidebarGroup>
       <SimulatorsSidebarGroup
@@ -64,7 +61,7 @@ export function BrowsersPanelBody(props: LeftPanelSlotProps) {
   );
 }
 
-function BrowsersPanelBodyLive(props: LeftPanelSlotProps) {
+function BrowsersPanelList(props: LeftPanelSlotProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const revealRequest = useSidebarNodeRevealRequest(props.tabId);
   const visibleReveal = useVisibleSidebarNodeRevealRequest(props.tabId);

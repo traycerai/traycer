@@ -156,9 +156,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   useExistingChatSessionHandle: () => ({ store: harness.store }),
 }));
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useIsMutating: () => 0,
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
 }));
 
 // The chooser has its own suite. Here it is a button that goes quiet the way

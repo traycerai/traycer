@@ -9,6 +9,7 @@ import {
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   BotConversationRecord,
+  BotConversationSendResponse,
   BotThreadListResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -114,7 +115,8 @@ function channelConversation(
  * line under a post whose thread has replies, and the thread panel beside
  * the channel, as wide as the person dragged it - over it on a narrow pane.
  * The channel's box posts at the top level; the thread panel's box replies
- * in its thread.
+ * in its thread. A post the bot answers in a thread opens that thread as
+ * soon as the host accepts it (decision 97).
  *
  * The tab's host serves all of it, whether it runs the bot or not (T65): a
  * host that does not reads the channel from the cloud and lists the threads
@@ -242,8 +244,36 @@ export function BotChannelView(props: {
   // started.
   const openAnnouncementThread = useCallback(
     (announcementId: string) =>
-      onOpenThread({ anchorMessageId: announcementId, announcement: true }),
+      onOpenThread({
+        anchorMessageId: announcementId,
+        announcement: true,
+        sent: null,
+      }),
     [onOpenThread],
+  );
+
+  // A post whose answer lands in a thread (reply mode `threaded`) opens that
+  // thread as the send is accepted, in place of any thread open now, and the
+  // thread's panel says the send's delivery; one the bot answers in the
+  // channel opens nothing, and the channel's box says it.
+  const openPostedThread = useCallback(
+    (response: BotConversationSendResponse, text: string): boolean => {
+      if (response.threadId === null || !threadListSupported) return false;
+      onOpenThread({
+        anchorMessageId: response.messageId,
+        announcement: false,
+        sent: {
+          threadId: response.threadId,
+          requestId: response.requestId,
+          text,
+          senderUserId: viewer?.userId ?? null,
+          sentAt: Date.now(),
+          delivery: response.delivery,
+        },
+      });
+      return true;
+    },
+    [onOpenThread, threadListSupported, viewer],
   );
 
   const surface = useMemo<BotTranscriptSurface>(
@@ -269,6 +299,7 @@ export function BotChannelView(props: {
             onOpenThread({
               anchorMessageId: postMessageId,
               announcement: false,
+              sent: null,
             })
         : null,
       openAnnouncementThread: threadListSupported
@@ -306,9 +337,12 @@ export function BotChannelView(props: {
   const { refetch: refetchThreads } = threadList;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     if (openThread !== null) return { kind: "listed", thread: openThread };
-    if (threadList.isError) {
-      return { kind: "failed", retry: () => void refetchThreads() };
+    const retry = threadList.isError ? () => void refetchThreads() : null;
+    // A thread its post opened keeps its box through a failed read.
+    if (open !== null && open.sent !== null) {
+      return { kind: "posted", threadId: open.sent.threadId, retry };
     }
+    if (retry !== null) return { kind: "failed", retry };
     if (open?.announcement === true) return { kind: "unopened" };
     return { kind: "pending" };
   }, [open, openThread, refetchThreads, threadList.isError]);
@@ -400,6 +434,7 @@ export function BotChannelView(props: {
             instanceId={`bot-channel:${botId}`}
             surface={surface}
             resolveMember={resolveMember}
+            showConnecting
           />
           <BotReplyingStrip
             botTitle={botTitle}
@@ -417,6 +452,7 @@ export function BotChannelView(props: {
             failure={sendFailure}
             edit={edit}
             onEditEnd={endEdit}
+            onSent={openPostedThread}
           />
         </section>
         {threadOpen ? (
@@ -436,6 +472,7 @@ export function BotChannelView(props: {
               botTitle={botTitle}
               conversationId={channel.conversationId}
               originMessageId={openThreadPostId}
+              sent={open?.sent ?? null}
               thread={panelThread}
               anchorSenderLabel={anchorSenderLabel}
               resolveMember={resolveMember}

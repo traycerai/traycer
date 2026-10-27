@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { findActionMatchForChord } from "@/lib/keybindings/dispatch";
 import { isMac } from "@/lib/keybindings/platform";
 
 describe("useKeybindingStore", () => {
@@ -45,6 +46,28 @@ describe("useKeybindingStore", () => {
     expect(useKeybindingStore.getState().bindings["epic.new"]).toBe(
       isMac() ? "ctrl+alt+t" : "mod+alt+t",
     );
+  });
+
+  // The suggested-reply accept key is the one binding a person records as a
+  // bare key with no modifier (Tab in place of →): it has to survive the
+  // canonical form, the persisted write and a rehydrate exactly as recorded.
+  it("keeps a bare-key rebind of the accept key through persistence", async () => {
+    useKeybindingStore
+      .getState()
+      .setBinding("composer.suggestion.accept", "tab");
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("tab");
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("tab");
+    useKeybindingStore.getState().resetAll();
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("arrowright");
   });
 
   it("clearBinding sets the action to null", () => {
@@ -93,6 +116,104 @@ describe("useKeybindingStore", () => {
     expect(useKeybindingStore.getState().bindings["epic.new"]).toBe(
       "mod+alt+n",
     );
+  });
+
+  it.each([
+    { actionId: "app.palette.open", chord: "mod+f" },
+    { actionId: "composer.model-picker.toggle", chord: "mod+g" },
+  ])(
+    "preserves $actionId when upgrading a version 1 binding map",
+    async ({ actionId, chord }) => {
+      const saved: Record<string, string | null> = {
+        ...getDefaultBindings(),
+      };
+      delete saved["tile.find.open"];
+      delete saved["tile.find.next"];
+      saved[actionId] = chord;
+      window.localStorage.setItem(
+        "traycer-gui-app:keybindings",
+        JSON.stringify({ state: { bindings: saved }, version: 1 }),
+      );
+
+      await useKeybindingStore.persist.rehydrate();
+
+      expect(findActionMatchForChord(chord)).toEqual({
+        actionId,
+        terminalPolicy: "app",
+      });
+    },
+  );
+
+  it("adds Find defaults when upgrading a version 1 binding map", async () => {
+    const saved: Record<string, string | null> = {
+      ...getDefaultBindings(),
+    };
+    delete saved["tile.find.open"];
+    delete saved["tile.find.next"];
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: saved }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(findActionMatchForChord("mod+f")).toEqual({
+      actionId: "tile.find.open",
+      terminalPolicy: "shell",
+    });
+    expect(findActionMatchForChord("mod+g")).toEqual({
+      actionId: "tile.find.next",
+      terminalPolicy: "shell",
+    });
+  });
+
+  it("keeps the first custom primary binding ahead of later custom actions", async () => {
+    const saved: Record<string, string | null> = {
+      ...getDefaultBindings(),
+    };
+    delete saved["tile.find.open"];
+    delete saved["tile.find.next"];
+    saved["app.palette.open"] = "mod+f";
+    saved["composer.model-picker.toggle"] = "mod+f";
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: saved }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(findActionMatchForChord("mod+f")).toEqual({
+      actionId: "app.palette.open",
+      terminalPolicy: "app",
+    });
+  });
+
+  it("keeps primary matches ahead of secondaries and respects null bindings", async () => {
+    const saved: Record<string, string | null> = {
+      ...getDefaultBindings(),
+    };
+    delete saved["tile.find.open"];
+    delete saved["tile.find.next"];
+    const paletteSecondaryChord = isMac() ? "ctrl+shift+p" : "mod+shift+p";
+    saved["app.settings.open"] = paletteSecondaryChord;
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: saved }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(findActionMatchForChord(paletteSecondaryChord)).toEqual({
+      actionId: "app.settings.open",
+      terminalPolicy: "app",
+    });
+    useKeybindingStore.getState().clearBinding("app.settings.open");
+    expect(findActionMatchForChord(paletteSecondaryChord)).toEqual({
+      actionId: "app.palette.open",
+      terminalPolicy: "app",
+    });
+    useKeybindingStore.getState().clearBinding("app.palette.open");
+    expect(findActionMatchForChord(paletteSecondaryChord)).toBeNull();
   });
 
   it("ignores invalid persisted binding keys and values during hydration", async () => {

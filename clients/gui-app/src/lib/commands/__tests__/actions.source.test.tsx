@@ -85,6 +85,11 @@ describe("actionsSource", () => {
     expect(ids).not.toContain("action:composer.drafts");
   });
 
+  it("skips composer.suggestion.accept (matched by the composer's own editor)", () => {
+    const ids = captureItems().map((item) => item.id);
+    expect(ids).not.toContain("action:composer.suggestion.accept");
+  });
+
   it("lists the desktop-only status-bar toggle on desktop", () => {
     const ids = captureItems().map((item) => item.id);
     expect(ids).toContain("action:app.status-bar.toggle");

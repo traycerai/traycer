@@ -197,6 +197,7 @@ export function BotUnderTheHoodPanel(props: {
               }
               surface={null}
               resolveMember={UNRESOLVED_BOT_MEMBERS}
+              showConnecting
             />
           )}
         </div>
