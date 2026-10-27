@@ -55,6 +55,12 @@ function windowsLauncherPath(cliInstallRoot) {
   return `$PROFILE\\${cliInstallRoot.slice(2).replaceAll("/", "\\")}\\host-start-hidden.vbs`;
 }
 
+// Below the user profile, so the uninstaller's PowerShell can join it to
+// `$env:USERPROFILE` without quoting the profile path.
+function windowsCliManifestTail(cliInstallRoot) {
+  return `${cliInstallRoot.slice(2).replaceAll("/", "\\")}\\manifest.json`;
+}
+
 function windowsTaskFolder(taskName) {
   const match = /^\\([^\\]+)\\[^\\]+$/u.exec(taskName);
   if (match === null) {
@@ -71,6 +77,7 @@ function writeTargetNsisInclude() {
     `!define TRAYCER_WINDOWS_TASK_NAME "${target.windowsTaskName}"`,
     `!define TRAYCER_WINDOWS_TASK_FOLDER "${windowsTaskFolder(target.windowsTaskName)}"`,
     `!define TRAYCER_HOST_LAUNCHER "${windowsLauncherPath(target.cliInstallRoot)}"`,
+    `!define TRAYCER_CLI_MANIFEST_TAIL "${windowsCliManifestTail(target.cliInstallRoot)}"`,
     '!include "uninstall-host-autostart.nsh"',
     "",
   ].join("\n");

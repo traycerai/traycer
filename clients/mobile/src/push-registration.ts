@@ -7,11 +7,11 @@
  * in-app feed and its poll are unaffected). Accordingly the lifecycle paths
  * below never throw into a caller; failures are logged and swallowed.
  *
- * ONE DELIBERATE EXCEPTION: the methods behind `IRunnerHost.pushPermission` -
- * `permissionState()`, `requestPermission()` and the muted-severity pair - let
- * a plugin or storage failure propagate. They answer a person who is looking
- * at the Settings rows right now, and the GUI renders that failure (the query
- * shows an error row, the mutation raises a toast). Wrapping any of them in
+ * The permission methods behind `IRunnerHost.pushPermission` propagate plugin
+ * failures, and `setMutedSeverities()` propagates storage failures. A muted-set
+ * read falls back to `[]` for unreadable or malformed storage. These methods
+ * answer a person looking at Settings, where the GUI renders a rejection (the
+ * query shows an error row, the mutation raises a toast). Wrapping a rejection in
  * this file's `logPushFailure` would fabricate a state and silently delete the
  * designed error surface. Their registration side effects stay swallowed, as
  * above.

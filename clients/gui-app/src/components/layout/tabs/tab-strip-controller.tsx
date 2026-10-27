@@ -63,6 +63,13 @@ import {
 } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
+/** The fixed Tracy entry as a strip presentation draws it beside Home. */
+export interface TracyStripEntry {
+  readonly tab: HeaderTab;
+  readonly isActive: boolean;
+  readonly onActivate: () => void;
+}
+
 /**
  * Everything a tab strip does that is not layout: the projection it draws,
  * the per-tab handlers, the pin dispatch, the `tab.split.*` and `epic.close`
@@ -71,13 +78,6 @@ import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
  * (the scroller, the trailing drop slot, overflow measurement, wheel and
  * reveal) belongs to the presentation.
  */
-/** The fixed Tracy entry as a strip presentation draws it beside Home. */
-export interface TracyStripEntry {
-  readonly tab: HeaderTab;
-  readonly isActive: boolean;
-  readonly onActivate: () => void;
-}
-
 export interface TabStripController {
   /**
    * The strip's items, its tabs and its layout, all without the fixed Tracy

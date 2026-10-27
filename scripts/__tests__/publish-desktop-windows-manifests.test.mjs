@@ -153,6 +153,44 @@ describe("desktop Scoop manifest", () => {
     );
   });
 
+  it("removes the host autostart only when the CLI manifest proves Desktop owns it", () => {
+    const script = renderScoop().uninstaller.script;
+    const lines = script.map((line) => line.trim());
+    const indexOf = (text) => lines.findIndex((line) => line.includes(text));
+
+    const read = indexOf("Get-Content");
+    const gate = indexOf("$cli.source");
+    expect(lines[read]).toContain("'.traycer\\cli\\manifest.json'");
+    expect(lines[gate]).toBe(
+      "if (-not (($cli -is [System.Management.Automation.PSCustomObject]) -and ($cli.source -is [string]) -and ($cli.source -ceq 'desktop'))) { return }",
+    );
+    // Inside the uninstall-only guard, and ahead of every line that touches
+    // the task, the folder or the launcher.
+    expect(read).toBeGreaterThan(indexOf("if ($cmd -eq 'uninstall')"));
+    expect(gate).toBeGreaterThan(read);
+    for (const effect of [
+      "Schedule.Service",
+      "schtasks /End",
+      "schtasks /Delete",
+      "DeleteFolder",
+      "Remove-Item",
+    ]) {
+      expect(indexOf(effect), effect).toBeGreaterThan(gate);
+    }
+    // The raw text must start with an object brace before it is parsed, so a
+    // root array never reaches ConvertFrom-Json (which PowerShell 7 unwraps
+    // to its one element).
+    expect(lines[read].indexOf("StartsWith('{')")).toBeGreaterThan(
+      lines[read].indexOf("Get-Content"),
+    );
+    expect(lines[read].indexOf("ConvertFrom-Json")).toBeGreaterThan(
+      lines[read].indexOf("StartsWith('{')"),
+    );
+    // An unreadable manifest leaves $cli null, which RETURNS: unknown
+    // ownership keeps the autostart.
+    expect(lines[read]).toContain("catch {}");
+  });
+
   it("checkver picks the newest stable desktop tag from the shared release list", () => {
     const { checkver } = renderScoop();
     const releases = JSON.stringify([

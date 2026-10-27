@@ -70,7 +70,19 @@ class FakeTokenSource implements PushTokenSource {
     await this.notify();
   }
 
+  /** Publishes the sign-in without waiting for anything the listeners start. */
+  emitSignedIn(value: StoredCredentials): void {
+    this.stored = value;
+    this.emitChange();
+  }
+
   private async notify(): Promise<void> {
+    this.emitChange();
+    // Let the controller's fire-and-forget reactions settle.
+    await drain();
+  }
+
+  private emitChange(): void {
     this.revision += 1;
     const change: TokenStoreChange = {
       present: this.stored !== null,
@@ -80,8 +92,6 @@ class FakeTokenSource implements PushTokenSource {
     for (const listener of this.listeners) {
       listener(change);
     }
-    // Let the controller's fire-and-forget reactions settle.
-    await drain();
   }
 }
 
@@ -100,10 +110,14 @@ class FakeSystemResume implements SystemResumeSource {
     return { dispose: () => this.handlers.delete(handler) };
   }
 
-  async resume(): Promise<void> {
+  emitResume(): void {
     for (const handler of this.handlers) {
       handler({ backgroundedForMs: null });
     }
+  }
+
+  async resume(): Promise<void> {
+    this.emitResume();
     await drain();
   }
 }
@@ -204,6 +218,83 @@ function fakePlugin(input: {
   readonly afterRequest: CapacitorPushPermissionState;
 }): FakePlugin {
   return new FakePlugin(input.permission, input.afterRequest);
+}
+
+/** What a dependency call leaves behind: the promise production awaited. */
+interface DependencyCall<T> {
+  readonly response: Promise<T>;
+}
+
+/**
+ * Receipts for calls into a faked dependency. `record` runs inside the
+ * synchronous call and returns the SAME response promise, so by the time `at`
+ * hands a test the call, production has already attached its await to that
+ * response. `at` resolves the call object, never the response, so no promise
+ * is assimilated on the way.
+ */
+class DependencyCalls<T> {
+  private readonly calls: Array<DependencyCall<T>> = [];
+  private readonly waiting = new Map<
+    number,
+    Array<(call: DependencyCall<T>) => void>
+  >();
+
+  get count(): number {
+    return this.calls.length;
+  }
+
+  record(response: Promise<T>): Promise<T> {
+    const call: DependencyCall<T> = { response };
+    const index = this.calls.push(call) - 1;
+    for (const announce of this.waiting.get(index) ?? []) {
+      announce(call);
+    }
+    this.waiting.delete(index);
+    return response;
+  }
+
+  at(index: number): Promise<DependencyCall<T>> {
+    if (index < this.calls.length) return Promise.resolve(this.calls[index]);
+    return new Promise((resolve) => {
+      this.waiting.set(index, [...(this.waiting.get(index) ?? []), resolve]);
+    });
+  }
+}
+
+/** Waits for the call at `index`, then for the exact response it returned. */
+async function completed<T>(
+  calls: DependencyCalls<T>,
+  index: number,
+): Promise<void> {
+  const call = await calls.at(index);
+  await call.response;
+}
+
+function observeTokenReads(
+  source: FakeTokenSource,
+): DependencyCalls<StoredCredentials | null> {
+  const reads = new DependencyCalls<StoredCredentials | null>();
+  const original = source.get.bind(source);
+  vi.spyOn(source, "get").mockImplementation(() => reads.record(original()));
+  return reads;
+}
+
+function observePluginCalls(plugin: FakePlugin): {
+  readonly permissionChecks: DependencyCalls<PermissionResult>;
+  readonly pluginRegisters: DependencyCalls<void>;
+} {
+  const permissionChecks = new DependencyCalls<PermissionResult>();
+  const pluginRegisters = new DependencyCalls<void>();
+  const checkPermissions = plugin.checkPermissions.getMockImplementation();
+  const register = plugin.register.getMockImplementation();
+  if (checkPermissions === undefined || register === undefined) {
+    throw new Error("the fake plugin has no implementation to observe");
+  }
+  plugin.checkPermissions.mockImplementation(() =>
+    permissionChecks.record(checkPermissions()),
+  );
+  plugin.register.mockImplementation(() => pluginRegisters.record(register()));
+  return { permissionChecks, pluginRegisters };
 }
 
 interface FetchCalls {
@@ -730,20 +821,25 @@ describe("MobilePushRegistration muted severities", () => {
   function mutedPhone(input: {
     readonly plugin: FakePlugin;
     readonly result: { current: PushTokenFetchResult };
-  }): { push: MobilePushRegistration; calls: FetchCalls } {
+  }): {
+    push: MobilePushRegistration;
+    calls: FetchCalls;
+    registrations: DependencyCalls<PushTokenFetchResult>;
+  } {
     const calls: FetchCalls = { registered: [], removed: [] };
+    const registrations = new DependencyCalls<PushTokenFetchResult>();
     const push = new MobilePushRegistration({
       plugin: input.plugin,
       authnBaseUrl: AUTHN_URL,
       platform: "ios",
       environment: "sandbox",
-      registerToken: async (_authnBaseUrl, bearer, body) => {
+      registerToken: (_authnBaseUrl, bearer, body) => {
         calls.registered.push({ bearer, ...body });
-        return input.result.current;
+        return registrations.record(Promise.resolve(input.result.current));
       },
       removeToken: async () => OK,
     });
-    return { push, calls };
+    return { push, calls, registrations };
   }
 
   /** Signed in as user-1, granted, and the first (empty-set) registration sent. */
@@ -753,37 +849,69 @@ describe("MobilePushRegistration muted severities", () => {
     plugin: FakePlugin;
     source: FakeTokenSource;
     result: { current: PushTokenFetchResult };
+    registrations: DependencyCalls<PushTokenFetchResult>;
+    tokenReads: DependencyCalls<StoredCredentials | null>;
+    pluginRegisters: DependencyCalls<void>;
   }> {
     const plugin = fakePlugin({
       permission: "granted",
       afterRequest: "granted",
     });
     const result: { current: PushTokenFetchResult } = { current: OK };
-    const { push, calls } = mutedPhone({ plugin, result });
+    const { push, calls, registrations } = mutedPhone({ plugin, result });
     const source = new FakeTokenSource();
-    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    const tokenReads = observeTokenReads(source);
+    const { pluginRegisters } = observePluginCalls(plugin);
+    source.emitSignedIn(credentials("user-1", "bearer-1"));
+
+    // No device token yet: once plugin.register settles, the startup path
+    // returns at registerCurrentToken's missing-token guard.
+    const startupRegister = pluginRegisters.count;
     push.start(source, resume);
-    await drain();
+    await completed(pluginRegisters, startupRegister);
+
+    const firstRequest = registrations.count;
     plugin.emitRegistration("apns-token-1");
-    await drain();
+    await completed(registrations, firstRequest);
     expect(calls.registered).toHaveLength(1);
-    return { push, calls, plugin, source, result };
+    return {
+      push,
+      calls,
+      plugin,
+      source,
+      result,
+      registrations,
+      tokenReads,
+      pluginRegisters,
+    };
   }
 
   it("keeps the set per account across a reload, and reads [] for a new account", async () => {
     vi.useFakeTimers();
-    const { push, source, plugin } = await registeredPhone(NO_RESUME);
+    const { push, source, plugin, registrations, pluginRegisters } =
+      await registeredPhone(NO_RESUME);
     await expect(push.getMutedSeverities()).resolves.toEqual([]);
 
     await push.setMutedSeverities(["done"]);
 
     // A reload: a fresh registration object over the same storage and login.
+    // It shares the plugin but holds no device token, so startup stops at
+    // registerCurrentToken's missing-token guard once register settles.
     const reloaded = mutedPhone({ plugin, result: { current: OK } });
+    const reloadRegister = pluginRegisters.count;
     reloaded.push.start(source, NO_RESUME);
-    await drain();
+    await completed(pluginRegisters, reloadRegister);
     await expect(reloaded.push.getMutedSeverities()).resolves.toEqual(["done"]);
 
-    await source.setSignedIn(credentials("user-2", "bearer-9"));
+    // Both objects follow the shared source. Settle the work the switch
+    // starts in each of them, without assigning register calls to owners: the
+    // old phone, which holds the device token, is the one that sends.
+    const accountRegister = pluginRegisters.count;
+    const accountRequest = registrations.count;
+    source.emitSignedIn(credentials("user-2", "bearer-9"));
+    await completed(pluginRegisters, accountRegister);
+    await completed(pluginRegisters, accountRegister + 1);
+    await completed(registrations, accountRequest);
     await expect(reloaded.push.getMutedSeverities()).resolves.toEqual([]);
   });
 
@@ -801,7 +929,8 @@ describe("MobilePushRegistration muted severities", () => {
 
   it("sends one registration with the last set after a second of quiet", async () => {
     vi.useFakeTimers();
-    const { push, calls, plugin } = await registeredPhone(NO_RESUME);
+    const { push, calls, plugin, registrations } =
+      await registeredPhone(NO_RESUME);
 
     await push.setMutedSeverities(["done"]);
     await vi.advanceTimersByTimeAsync(600);
@@ -812,7 +941,9 @@ describe("MobilePushRegistration muted severities", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(calls.registered).toHaveLength(1);
 
+    const scheduledRequest = registrations.count;
     await vi.advanceTimersByTimeAsync(1);
+    await completed(registrations, scheduledRequest);
     expect(calls.registered).toHaveLength(2);
     expect(calls.registered[1].mutedSeverities).toEqual(["info"]);
     expect(plugin.register).toHaveBeenCalledTimes(1);
@@ -822,19 +953,30 @@ describe("MobilePushRegistration muted severities", () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const resume = new FakeSystemResume();
-    const { push, calls, result } = await registeredPhone(resume);
+    const { push, calls, result, registrations, tokenReads } =
+      await registeredPhone(resume);
 
     result.current = { kind: "network-error" };
     await push.setMutedSeverities(["done"]);
+    const failedRequest = registrations.count;
     await vi.advanceTimersByTimeAsync(1000);
+    await completed(registrations, failedRequest);
     expect(calls.registered).toHaveLength(2);
 
     result.current = OK;
-    await resume.resume();
+    const retryRequest = registrations.count;
+    resume.emitResume();
+    await completed(registrations, retryRequest);
     expect(calls.registered).toHaveLength(3);
     expect(calls.registered[2].mutedSeverities).toEqual(["done"]);
 
-    await resume.resume();
+    // The accepted key now matches what is wanted, so a resume stops before
+    // it reads the login or sends anything.
+    const readsBefore = tokenReads.count;
+    const sendsBefore = registrations.count;
+    resume.emitResume();
+    expect(tokenReads.count).toBe(readsBefore);
+    expect(registrations.count).toBe(sendsBefore);
     expect(calls.registered).toHaveLength(3);
   });
 
@@ -844,19 +986,28 @@ describe("MobilePushRegistration muted severities", () => {
       permission: "denied",
       afterRequest: "granted",
     });
-    const { push, calls } = mutedPhone({ plugin, result: { current: OK } });
+    const { push, calls, registrations } = mutedPhone({
+      plugin,
+      result: { current: OK },
+    });
     const source = new FakeTokenSource();
-    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    const { permissionChecks } = observePluginCalls(plugin);
+    source.emitSignedIn(credentials("user-1", "bearer-1"));
+    // Denied: startup returns right after the permission read.
+    const startupCheck = permissionChecks.count;
     push.start(source, NO_RESUME);
-    await drain();
+    await completed(permissionChecks, startupCheck);
 
     await push.setMutedSeverities(["failure"]);
+    const scheduledCheck = permissionChecks.count;
     await vi.advanceTimersByTimeAsync(1000);
+    await completed(permissionChecks, scheduledCheck);
     expect(calls.registered).toEqual([]);
 
     await push.requestPermission();
+    const firstRequest = registrations.count;
     plugin.emitRegistration("apns-token-1");
-    await drain();
+    await completed(registrations, firstRequest);
 
     expect(calls.registered).toHaveLength(1);
     expect(calls.registered[0].mutedSeverities).toEqual(["failure"]);
@@ -864,18 +1015,28 @@ describe("MobilePushRegistration muted severities", () => {
 
   it("a bearer rotation or the same token again re-sends nothing; a set change sends once", async () => {
     vi.useFakeTimers();
-    const { push, calls, plugin, source } = await registeredPhone(NO_RESUME);
+    const { push, calls, plugin, source, registrations, pluginRegisters } =
+      await registeredPhone(NO_RESUME);
     await push.setMutedSeverities(["done"]);
+    const firstSend = registrations.count;
     await vi.advanceTimersByTimeAsync(1000);
+    await completed(registrations, firstSend);
     expect(calls.registered).toHaveLength(2);
 
-    await source.setSignedIn(credentials("user-1", "bearer-2"));
+    // The rotation re-reads the login and the permission, then registers with
+    // the OS; once that settles its registerCurrentToken stops at the
+    // accepted-key guard, so the unchanged request count would catch a missing
+    // guard.
+    const rotationRegister = pluginRegisters.count;
+    source.emitSignedIn(credentials("user-1", "bearer-2"));
+    await completed(pluginRegisters, rotationRegister);
     plugin.emitRegistration("apns-token-1");
-    await drain();
     expect(calls.registered).toHaveLength(2);
 
     await push.setMutedSeverities(["done", "info"]);
+    const secondSend = registrations.count;
     await vi.advanceTimersByTimeAsync(1000);
+    await completed(registrations, secondSend);
     expect(calls.registered).toHaveLength(3);
     expect(calls.registered[2].mutedSeverities).toEqual(["done", "info"]);
     expect(calls.registered[2].bearer).toBe("bearer-2");
@@ -888,8 +1049,12 @@ describe("MobilePushRegistration muted severities", () => {
       afterRequest: "granted",
     });
     const { push, calls } = mutedPhone({ plugin, result: { current: OK } });
-    push.start(new FakeTokenSource(), NO_RESUME);
-    await drain();
+    const source = new FakeTokenSource();
+    const tokenReads = observeTokenReads(source);
+    // Signed out: startup returns as soon as the login read comes back null.
+    const startupRead = tokenReads.count;
+    push.start(source, NO_RESUME);
+    await completed(tokenReads, startupRead);
 
     await expect(push.setMutedSeverities(["done"])).rejects.toThrow();
     await vi.advanceTimersByTimeAsync(1000);
@@ -909,83 +1074,129 @@ describe("MobilePushRegistration with a registration in flight", () => {
     push: MobilePushRegistration;
     resume: FakeSystemResume;
     sent: Array<readonly string[]>;
+    requests: DependencyCalls<PushTokenFetchResult>;
+    tokenReads: DependencyCalls<StoredCredentials | null>;
+    permissionChecks: DependencyCalls<PermissionResult>;
     settle: (index: number, result: PushTokenFetchResult) => Promise<void>;
   }> {
     const plugin = fakePlugin({
       permission: "granted",
       afterRequest: "granted",
     });
+    const { permissionChecks, pluginRegisters } = observePluginCalls(plugin);
     const sent: Array<readonly string[]> = [];
-    const releases: Array<(result: PushTokenFetchResult) => void> = [];
+    const requests = new DependencyCalls<PushTokenFetchResult>();
+    const held: Array<{
+      readonly response: Promise<PushTokenFetchResult>;
+      readonly release: (result: PushTokenFetchResult) => void;
+    }> = [];
     const push = new MobilePushRegistration({
       plugin,
       authnBaseUrl: AUTHN_URL,
       platform: "ios",
       environment: "sandbox",
-      registerToken: (_authnBaseUrl, _bearer, body) =>
-        new Promise((resolve) => {
-          sent.push(body.mutedSeverities);
-          releases.push(resolve);
-        }),
+      registerToken: (_authnBaseUrl, _bearer, body) => {
+        sent.push(body.mutedSeverities);
+        let release: (result: PushTokenFetchResult) => void = () => undefined;
+        const response = new Promise<PushTokenFetchResult>((resolve) => {
+          release = resolve;
+        });
+        held.push({ response, release });
+        return requests.record(response);
+      },
       removeToken: async () => OK,
     });
+    // A held response is released only once its request has been observed,
+    // which is after production attached its await to that same promise.
     const settle = async (
       index: number,
       result: PushTokenFetchResult,
     ): Promise<void> => {
-      releases[index](result);
-      await drain();
+      await requests.at(index);
+      held[index].release(result);
+      await held[index].response;
     };
     const source = new FakeTokenSource();
+    const tokenReads = observeTokenReads(source);
     const resume = new FakeSystemResume();
-    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    source.emitSignedIn(credentials("user-1", "bearer-1"));
+    const startupRegister = pluginRegisters.count;
     push.start(source, resume);
-    await drain();
+    await completed(pluginRegisters, startupRegister);
     plugin.emitRegistration("apns-token-1");
-    await drain();
+    await requests.at(0);
     await settle(0, OK);
     expect(sent).toEqual([[]]);
-    return { push, resume, sent, settle };
+    return {
+      push,
+      resume,
+      sent,
+      requests,
+      tokenReads,
+      permissionChecks,
+      settle,
+    };
   }
 
   it("holds a reverted set back while a send is out, then sends it once that send is accepted", async () => {
     vi.useFakeTimers();
-    const { push, resume, sent, settle } = await heldPhone();
+    const {
+      push,
+      resume,
+      sent,
+      requests,
+      tokenReads,
+      permissionChecks,
+      settle,
+    } = await heldPhone();
 
     await push.setMutedSeverities(["done"]);
     await vi.advanceTimersByTimeAsync(1000);
+    await requests.at(1);
     expect(sent).toEqual([[], ["done"]]);
 
+    // While that send is out the timer's attempt reads the permission and
+    // stops at the in-flight guard.
     await push.setMutedSeverities([]);
+    const inFlightCheck = permissionChecks.count;
     await vi.advanceTimersByTimeAsync(1000);
+    await completed(permissionChecks, inFlightCheck);
     expect(sent).toHaveLength(2);
 
     await settle(1, OK);
     await vi.advanceTimersByTimeAsync(1000);
+    await requests.at(2);
     expect(sent).toEqual([[], ["done"], []]);
     await settle(2, OK);
 
     await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
-    await resume.resume();
+    const readsBefore = tokenReads.count;
+    resume.emitResume();
+    expect(tokenReads.count).toBe(readsBefore);
     expect(sent).toHaveLength(3);
   });
 
   it("keeps a send with a lost response dirty, so the reverted set goes out on the next resume", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { push, resume, sent, settle } = await heldPhone();
+    const { push, resume, sent, requests, permissionChecks, settle } =
+      await heldPhone();
 
     await push.setMutedSeverities(["done"]);
     await vi.advanceTimersByTimeAsync(1000);
+    await requests.at(1);
     await push.setMutedSeverities([]);
+    const inFlightCheck = permissionChecks.count;
     await vi.advanceTimersByTimeAsync(1000);
+    await completed(permissionChecks, inFlightCheck);
     expect(sent).toHaveLength(2);
 
     await settle(1, { kind: "network-error" });
     await vi.advanceTimersByTimeAsync(1000);
     expect(sent).toHaveLength(2);
 
-    await resume.resume();
+    resume.emitResume();
+    await requests.at(2);
     expect(sent).toEqual([[], ["done"], []]);
     await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
   });
