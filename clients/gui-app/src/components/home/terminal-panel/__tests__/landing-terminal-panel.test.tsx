@@ -4401,9 +4401,7 @@ describe("<LandingTerminalPanel />", () => {
 
       expect(await screen.findByTestId("landing-terminal-panel")).toBeTruthy();
       expect(
-        screen.getByTestId(
-          "landing-terminal-tab-automation-terminal-instance",
-        ),
+        screen.getByTestId("landing-terminal-tab-automation-terminal-instance"),
       ).toBeTruthy();
       expect(await screen.findByTestId("landing-terminal-tile")).toBeTruthy();
     },

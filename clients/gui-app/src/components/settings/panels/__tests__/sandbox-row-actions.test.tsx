@@ -27,6 +27,10 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { terminalFocusOwnsInstance } from "@/lib/terminals/terminal-focus-registry";
 
 const SURFACE = "landing:window-test";
@@ -152,6 +156,8 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 }));
 
 beforeEach(() => {
+  resetNegotiatedManifests();
+  recordNegotiatedHostMethods("host-automations", ["terminal.plain.create"]);
   automation.openSandboxAutomation.mockReset();
   automation.getSandboxAutomation.mockReset();
   automation.close.mockClear();
@@ -220,6 +226,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -683,9 +690,7 @@ describe("<SandboxRowActions />", () => {
       expectNothingFiledOrClosed();
       expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
       if (success !== undefined) automation.request.mockImplementation(success);
-      await userEvent.click(
-        screen.getByRole("button", { name: /^Retry$/ }),
-      );
+      await userEvent.click(screen.getByRole("button", { name: /^Retry$/ }));
       await waitFor(() =>
         expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
       );

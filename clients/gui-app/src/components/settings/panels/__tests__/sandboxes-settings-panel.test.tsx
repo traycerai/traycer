@@ -22,6 +22,10 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   configurationItem,
   mountTeamPage,
   poolSource,
@@ -245,9 +249,8 @@ vi.mock(
       typeof import("@/components/settings/panels/sandbox-row-actions")
     >()),
     SandboxRowActions: await (async () => {
-      const { useOpenAutomationTerminal } = await import(
-        "@/components/settings/panels/use-open-automation-terminal"
-      );
+      const { useOpenAutomationTerminal } =
+        await import("@/components/settings/panels/use-open-automation-terminal");
       function ObservedAutomationOpen(props: {
         readonly summary: SandboxSummary;
       }) {
@@ -275,7 +278,10 @@ vi.mock(
         unreachable: boolean;
         frozenNeedsOwnCredits: boolean;
       }) => {
-        if (mocks.observeAutomationOpen && props.summary.kind === "automation") {
+        if (
+          mocks.observeAutomationOpen &&
+          props.summary.kind === "automation"
+        ) {
           return <ObservedAutomationOpen summary={props.summary} />;
         }
         const { primary } = sandboxRowActions(props);
@@ -478,6 +484,8 @@ function names(): string[] {
 
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
+    resetNegotiatedManifests();
+    recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
     mocks.listed = true;
@@ -861,6 +869,7 @@ describe("<SandboxesSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     resetTeamPageHarness();
   });

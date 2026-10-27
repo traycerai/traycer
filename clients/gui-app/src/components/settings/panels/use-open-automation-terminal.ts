@@ -18,6 +18,7 @@ import {
 import { useFolderlessTerminalLaunch } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { landingPaneAnchorDraftIds } from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
@@ -91,6 +92,9 @@ function useAutomationTerminalOpen(
     attempt !== null && settledForStartingAccount(attempt) ? attempt : null;
   const hostId = activeAttempt === null ? null : activeAttempt.hostId;
   const client = useHostClientForHostId(hostId);
+  // The directory/list reads negotiate this host's manifest. Unknown support
+  // waits for that answer; a known absence is a retryable opening failure.
+  const createSupport = useHostMethodSupport(hostId, "terminal.plain.create");
   const readinessFailed = useAutomationTerminalReadinessFailed(activeAttempt);
   useEffect(() => {
     if (readinessFailed) currentAttempt.current = null;
@@ -99,11 +103,18 @@ function useAutomationTerminalOpen(
   // directory query waits for the named host's endpoint and keeps its errors.
   const launch = useFolderlessTerminalLaunch("", hostId);
   const list = useAutomationTerminalList(client, activeAttempt);
-  const create = useAutomationPlainTerminalCreate(client, hostId);
+  const create = useAutomationPlainTerminalCreate(
+    client,
+    hostId,
+    createSupport,
+  );
   const failed =
     open.isError ||
     readinessFailed ||
-    (attempt !== null && (launch.failed || list.isError || create.isError));
+    launch.failed ||
+    list.isError ||
+    create.isError ||
+    createSupport === false;
   const starting =
     open.isPending ||
     (attempt !== null &&
@@ -119,6 +130,7 @@ function useAutomationTerminalOpen(
       currentAttempt.current !== attempt ||
       !settledForStartingAccount(attempt) ||
       failed ||
+      createSupport !== true ||
       dispatched.current ||
       launch.target === null ||
       launch.bindings.isFetching ||
@@ -189,6 +201,7 @@ function useAutomationTerminalOpen(
     client,
     close,
     createTerminal,
+    createSupport,
     failed,
     launch.bindings.isFetching,
     launch.target,
@@ -290,11 +303,17 @@ function useAutomationTerminalList(
 function useAutomationPlainTerminalCreate(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
+  support: boolean | null,
 ) {
   return useHostMutation<HostRpcRegistry, "terminal.plain.create">({
     client,
     method: "terminal.plain.create",
-    mapVariables: (request) => request,
+    mapVariables: (request) => {
+      if (support !== true) {
+        throw new Error("The host does not support terminal creation.");
+      }
+      return request;
+    },
     resolveResponse: (response, request) => {
       if (
         response.terminal.record.hostId !== hostId ||

@@ -11,6 +11,10 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRpcRegistry } from "@/lib/host";
 import { AutomationTerminalOpenError } from "@/components/settings/panels/automation-terminal-open-error";
@@ -22,6 +26,11 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 const AUTOMATION_HOST = "host-automation-returned";
 const ROW_HOST = "host-from-row";
+const AUTOMATION_METHODS = [
+  "terminal.plain.list",
+  "terminal.plain.create",
+  "worktree.listBindingsForEpic",
+];
 
 const network = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -30,21 +39,41 @@ const network = vi.hoisted(() => ({
     readonly params: unknown;
   }>,
   hostClientLookups: [] as Array<string | null>,
-  clients: new Map<string, {
-    readonly getActiveHost: () => { readonly hostId: string; readonly websocketUrl: string | null } | null;
-    readonly getActiveHostId: () => string | null;
-    readonly getRequestContextUserId: () => string | null;
-    readonly request: (method: string, params: unknown) => Promise<unknown>;
-    readonly requestWithSignal: (method: string, params: unknown, signal: AbortSignal | undefined) => Promise<unknown>;
-  }>(),
-  directoryEntries: new Map<string, { readonly hostId: string; readonly websocketUrl: string | null; readonly transportDialability: "dialable" } | null>(),
+  clients: new Map<
+    string,
+    {
+      readonly getActiveHost: () => {
+        readonly hostId: string;
+        readonly websocketUrl: string | null;
+      } | null;
+      readonly getActiveHostId: () => string | null;
+      readonly getRequestContextUserId: () => string | null;
+      readonly request: (method: string, params: unknown) => Promise<unknown>;
+      readonly requestWithSignal: (
+        method: string,
+        params: unknown,
+        signal: AbortSignal | undefined,
+      ) => Promise<unknown>;
+    }
+  >(),
+  directoryEntries: new Map<
+    string,
+    {
+      readonly hostId: string;
+      readonly websocketUrl: string | null;
+      readonly transportDialability: "dialable";
+    } | null
+  >(),
   readyHostIds: new Set<string>(),
   sandboxListData: undefined as SandboxListResponse | null | undefined,
   sandboxListSentAt: null as number | null,
   responses: new Map<string, () => Promise<unknown>>(),
   openSandboxAutomation: vi.fn(),
   refreshDirectory: vi.fn(),
-  request: vi.fn<(hostId: string, method: string, params: unknown) => Promise<unknown>>(),
+  request:
+    vi.fn<
+      (hostId: string, method: string, params: unknown) => Promise<unknown>
+    >(),
   close: vi.fn(),
   navigate: vi.fn(),
   activateTab: vi.fn(),
@@ -116,8 +145,7 @@ function installHost(hostId: string, ready: boolean): void {
   else network.readyHostIds.delete(hostId);
   const client = {
     getActiveHost: () => network.directoryEntries.get(hostId) ?? null,
-    getActiveHostId: () =>
-      network.readyHostIds.has(hostId) ? hostId : null,
+    getActiveHostId: () => (network.readyHostIds.has(hostId) ? hostId : null),
     getRequestContextUserId: () =>
       useAuthStore.getState().contextMetadata?.userId ?? null,
     request: (method: string, params: unknown) =>
@@ -130,12 +158,12 @@ function installHost(hostId: string, ready: boolean): void {
 
 function setHostReady(hostId: string): void {
   installHost(hostId, true);
+  recordNegotiatedHostMethods(hostId, AUTOMATION_METHODS);
 }
 
-function workspaceBindings(hostId: string): ResponseOfMethod<
-  HostRpcRegistry,
-  "worktree.listBindingsForEpic"
-> {
+function workspaceBindings(
+  hostId: string,
+): ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic"> {
   return { rows: [], folderlessCwd: `/home/${hostId}` };
 }
 
@@ -210,7 +238,10 @@ function plainTerminalCreateParams(
   };
 }
 
-function openedSandbox(hostId: string, settled: boolean): {
+function openedSandbox(
+  hostId: string,
+  settled: boolean,
+): {
   readonly kind: "ok";
   readonly sandbox: SandboxSummary;
   readonly settled: boolean;
@@ -239,9 +270,7 @@ function hostRpcError(method: string, message: string): HostRpcError {
   });
 }
 
-type AutomationTerminalInput = Parameters<
-  typeof useOpenAutomationTerminal
->[0];
+type AutomationTerminalInput = Parameters<typeof useOpenAutomationTerminal>[0];
 
 function AutomationTerminalHarness(props: {
   readonly existing: AutomationTerminalInput["existing"];
@@ -321,6 +350,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  resetNegotiatedManifests();
   network.calls.length = 0;
   network.hostClientLookups.length = 0;
   network.clients.clear();
@@ -350,7 +380,10 @@ beforeEach(() => {
     }
     if (method === "terminal.plain.create") {
       return Promise.resolve(
-        plainTerminalCreate(hostId, plainTerminalCreateParams(params).terminalId),
+        plainTerminalCreate(
+          hostId,
+          plainTerminalCreateParams(params).terminalId,
+        ),
       );
     }
     return Promise.reject(new Error(`Unexpected RPC ${method}`));
@@ -364,6 +397,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -379,7 +413,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       awake: false,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     await waitFor(() => {
       expect(network.hostClientLookups).toContain(AUTOMATION_HOST);
     });
@@ -425,6 +461,88 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
     );
   });
 
+  it("waits for an unknown create capability and proceeds when the returned host manifest arrives", async () => {
+    installHost(AUTOMATION_HOST, true);
+    network.openSandboxAutomation.mockResolvedValue(
+      openedSandbox(AUTOMATION_HOST, true),
+    );
+    renderHarness({
+      hostId: ROW_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
+    await waitFor(() => {
+      expect(
+        network.calls.some((call) => call.method === "terminal.plain.list"),
+      ).toBe(true);
+    });
+    expect(
+      network.calls.some((call) => call.method === "terminal.plain.create"),
+    ).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+
+    recordNegotiatedHostMethods(AUTOMATION_HOST, AUTOMATION_METHODS);
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(
+      network.calls.some(
+        (call) =>
+          call.hostId === AUTOMATION_HOST &&
+          call.method === "terminal.plain.create",
+      ),
+    ).toBe(true);
+  });
+
+  it("shows Retry for a known-unsupported returned host and recovers after its manifest adds plain create", async () => {
+    installHost(AUTOMATION_HOST, true);
+    recordNegotiatedHostMethods(
+      AUTOMATION_HOST,
+      AUTOMATION_METHODS.filter((method) => method !== "terminal.plain.create"),
+    );
+    network.openSandboxAutomation.mockResolvedValue(
+      openedSandbox(AUTOMATION_HOST, true),
+    );
+    renderHarness({
+      hostId: ROW_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Couldn't open a terminal on Automations.",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(
+      network.calls.some((call) => call.method === "terminal.plain.create"),
+    ).toBe(false);
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    expect(network.close).not.toHaveBeenCalled();
+    expect(network.navigate).not.toHaveBeenCalled();
+    expect(network.activateTab).not.toHaveBeenCalled();
+
+    recordNegotiatedHostMethods(AUTOMATION_HOST, AUTOMATION_METHODS);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(
+      network.calls.some(
+        (call) =>
+          call.hostId === AUTOMATION_HOST &&
+          call.method === "terminal.plain.create",
+      ),
+    ).toBe(true);
+  });
+
   it("shows Retry after a wake failure and starts a terminal when the wake retry succeeds", async () => {
     setHostReady(AUTOMATION_HOST);
     network.openSandboxAutomation
@@ -432,7 +550,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       .mockResolvedValueOnce(openedSandbox(AUTOMATION_HOST, true));
     renderHarness({ hostId: ROW_HOST, sandboxId: "sbx-row", awake: false });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Couldn't open a terminal on Automations.",
     );
@@ -443,25 +563,37 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
     });
     expect(network.openSandboxAutomation).toHaveBeenCalledTimes(2);
-    expect(network.calls.some((call) => call.method === "terminal.plain.create")).toBe(
-      true,
-    );
+    expect(
+      network.calls.some((call) => call.method === "terminal.plain.create"),
+    ).toBe(true);
   });
 
   it("shows Retry for a folderless cwd failure and re-reads the binding before creating", async () => {
     setHostReady(AUTOMATION_HOST);
     let bindingReads = 0;
-    network.responses.set(rpcKey(AUTOMATION_HOST, "worktree.listBindingsForEpic"), () => {
-      bindingReads += 1;
-      return bindingReads === 1
-        ? Promise.reject(
-            hostRpcError("worktree.listBindingsForEpic", "Directory unavailable"),
-          )
-        : Promise.resolve(workspaceBindings(AUTOMATION_HOST));
+    network.responses.set(
+      rpcKey(AUTOMATION_HOST, "worktree.listBindingsForEpic"),
+      () => {
+        bindingReads += 1;
+        return bindingReads === 1
+          ? Promise.reject(
+              hostRpcError(
+                "worktree.listBindingsForEpic",
+                "Directory unavailable",
+              ),
+            )
+          : Promise.resolve(workspaceBindings(AUTOMATION_HOST));
+      },
+    );
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: true,
     });
-    renderHarness({ hostId: AUTOMATION_HOST, sandboxId: "sbx-row", awake: true });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Couldn't open a terminal on Automations.",
     );
@@ -475,14 +607,17 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
     });
     expect(bindingReads).toBe(2);
-    expect(network.calls.filter((call) => call.method === "terminal.plain.create")).toHaveLength(1);
+    expect(
+      network.calls.filter((call) => call.method === "terminal.plain.create"),
+    ).toHaveLength(1);
   });
 
   it("disables Retry and shows its spinner while the folderless cwd is being retried", async () => {
     setHostReady(AUTOMATION_HOST);
-    const secondRead = deferred<
-      ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic">
-    >();
+    const secondRead =
+      deferred<
+        ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic">
+      >();
     let bindingReads = 0;
     network.responses.set(
       rpcKey(AUTOMATION_HOST, "worktree.listBindingsForEpic"),
@@ -498,9 +633,15 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
           : secondRead.promise;
       },
     );
-    renderHarness({ hostId: AUTOMATION_HOST, sandboxId: "sbx-row", awake: true });
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: true,
+    });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     const retry = await screen.findByRole("button", { name: "Retry" });
     await userEvent.click(retry);
 
@@ -509,9 +650,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       expect(retry.querySelector('[aria-hidden="true"]')).not.toBeNull();
     });
     expect(bindingReads).toBe(2);
-    expect(network.calls.some((call) => call.method === "terminal.plain.create")).toBe(
-      false,
-    );
+    expect(
+      network.calls.some((call) => call.method === "terminal.plain.create"),
+    ).toBe(false);
     act(() => {
       secondRead.resolve(workspaceBindings(AUTOMATION_HOST));
     });
@@ -522,9 +663,8 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
 
   it("retries a rejected create with the same terminal id and adopts only its successful response", async () => {
     setHostReady(AUTOMATION_HOST);
-    const secondCreate = deferred<
-      ResponseOfMethod<HostRpcRegistry, "terminal.plain.create">
-    >();
+    const secondCreate =
+      deferred<ResponseOfMethod<HostRpcRegistry, "terminal.plain.create">>();
     let createCount = 0;
     network.responses.set(
       rpcKey(AUTOMATION_HOST, "terminal.plain.create"),
@@ -541,7 +681,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       awake: true,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Couldn't open a terminal on Automations.",
     );
@@ -550,7 +692,8 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
     const firstCreate = network.calls.find(
       (call) => call.method === "terminal.plain.create",
     );
-    if (firstCreate === undefined) throw new Error("no create request was sent");
+    if (firstCreate === undefined)
+      throw new Error("no create request was sent");
     const requestedTerminalId = plainTerminalCreateParams(
       firstCreate.params,
     ).terminalId;
@@ -566,9 +709,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       (call) => call.method === "terminal.plain.create",
     );
     expect(createCalls).toHaveLength(2);
-    expect(
-      plainTerminalCreateParams(createCalls[1].params).terminalId,
-    ).toBe(requestedTerminalId);
+    expect(plainTerminalCreateParams(createCalls[1].params).terminalId).toBe(
+      requestedTerminalId,
+    );
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
     expect(network.activateTab).not.toHaveBeenCalled();
 
@@ -602,7 +745,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       );
       const rendered = renderHarness(null);
 
-      await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Open terminal" }),
+      );
       await waitFor(() => {
         expect(network.hostClientLookups).toContain(AUTOMATION_HOST);
       });
@@ -648,7 +793,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
     );
     const rendered = renderHarness(null);
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     await waitFor(() => {
       expect(network.hostClientLookups).toContain(AUTOMATION_HOST);
     });
@@ -675,7 +822,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       .mockResolvedValueOnce(openedSandbox(AUTOMATION_HOST, false));
     const rendered = renderTeamScopeHarness(teamEnvironmentId);
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     await waitFor(() => {
       expect(network.hostClientLookups).toContain(AUTOMATION_HOST);
     });
@@ -744,9 +893,8 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
 
   it("does not adopt a terminal create response after the opener unmounts", async () => {
     setHostReady(AUTOMATION_HOST);
-    const createResponse = deferred<
-      ResponseOfMethod<HostRpcRegistry, "terminal.plain.create">
-    >();
+    const createResponse =
+      deferred<ResponseOfMethod<HostRpcRegistry, "terminal.plain.create">>();
     network.responses.set(
       rpcKey(AUTOMATION_HOST, "terminal.plain.create"),
       () => createResponse.promise,
@@ -757,7 +905,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       awake: true,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     await waitFor(() => {
       expect(
         network.calls.some((call) => call.method === "terminal.plain.create"),
@@ -785,9 +935,8 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
 
   it("does not adopt a terminal create response after the signed-in account changes", async () => {
     setHostReady(AUTOMATION_HOST);
-    const createResponse = deferred<
-      ResponseOfMethod<HostRpcRegistry, "terminal.plain.create">
-    >();
+    const createResponse =
+      deferred<ResponseOfMethod<HostRpcRegistry, "terminal.plain.create">>();
     network.responses.set(
       rpcKey(AUTOMATION_HOST, "terminal.plain.create"),
       () => createResponse.promise,
@@ -798,7 +947,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       awake: true,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
     await waitFor(() => {
       expect(
         network.calls.some((call) => call.method === "terminal.plain.create"),
