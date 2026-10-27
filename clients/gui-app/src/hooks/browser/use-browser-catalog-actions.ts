@@ -17,6 +17,10 @@ import {
 } from "@/lib/browser-view/sessions/browser-catalog-owner-action";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { isBrowserCatalogQueryKey } from "@/lib/query-keys/host-query-keys";
+import {
+  noteClosedBrowserCatalogTab,
+  withoutClosedBrowserCatalogTabs,
+} from "./browser-catalog-closed-tabs";
 import type { BrowserCatalogQueryData } from "./use-browser-catalog-inventory";
 
 /** Resolve the owner at action time; merely mounting a list never dials it. */
@@ -78,6 +82,7 @@ export function useBrowserCatalogActions(epicId: string) {
           ...ownerContext(identity.hostId),
         });
         if (userId !== null) {
+          noteClosedBrowserCatalogTab(userId, identity, tabId);
           queryClient.setQueriesData<BrowserCatalogQueryData>(
             {
               predicate: (query) =>
@@ -88,17 +93,11 @@ export function useBrowserCatalogActions(epicId: string) {
                 ? undefined
                 : {
                     ...data,
-                    records: data.records.flatMap((record) => {
-                      if (
-                        record.hostId !== identity.hostId ||
-                        record.sessionId !== identity.sessionId
-                      )
-                        return [record];
-                      const tabs = record.tabs.filter(
-                        (tab) => tab.tabId !== tabId,
-                      );
-                      return tabs.length === 0 ? [] : [{ ...record, tabs }];
-                    }),
+                    records: withoutClosedBrowserCatalogTabs(
+                      userId,
+                      epicId,
+                      data.records,
+                    ),
                   },
           );
         }

@@ -1,9 +1,18 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   BrowserCatalogIdentity,
   BrowserCatalogRecord,
 } from "@traycer/protocol/host/browser/catalog-contracts";
+import type { BrowserCatalogReadResponse } from "@traycer/protocol/host/browser/discovery-contracts";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserCatalogQueryData } from "../use-browser-catalog-inventory";
@@ -19,9 +28,16 @@ const mocks = vi.hoisted(() => ({
   userId: vi.fn<() => string | null>(),
 }));
 
-vi.mock("@traycer-clients/shared/host-client/remote-fetcher", () => ({
-  hostUnavailability: mocks.unavailability,
-}));
+vi.mock(
+  "@traycer-clients/shared/host-client/remote-fetcher",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/remote-fetcher")
+      >();
+    return { ...actual, hostUnavailability: mocks.unavailability };
+  },
+);
 vi.mock("@traycer-clients/shared/host-transport/remote/index", () => ({
   hasReadyRemoteSession: mocks.readyRemote,
 }));
@@ -59,6 +75,7 @@ vi.mock("@/lib/browser-view/sessions/browser-catalog-owner-action", () => ({
 }));
 
 import { useBrowserCatalogActions } from "../use-browser-catalog-actions";
+import { useBrowserCatalogInventory } from "../use-browser-catalog-inventory";
 
 const identity: BrowserCatalogIdentity = {
   epicId: "epic-1",
@@ -73,8 +90,8 @@ const record: BrowserCatalogRecord = {
   tabs: [{ tabId: "tab-1", title: "Docs", url: "https://example.com" }],
 };
 
-function catalogData(): BrowserCatalogQueryData {
-  return { scope: "cloud", records: [record], unavailable: false };
+function catalogData(entry: BrowserCatalogRecord): BrowserCatalogQueryData {
+  return { scope: "cloud", records: [entry], unavailable: false };
 }
 
 function createQueryClient(): QueryClient {
@@ -102,6 +119,72 @@ function renderActions(queryClient: QueryClient) {
 
 function renderActionsWithNewCache() {
   return renderActions(createQueryClient());
+}
+
+function staleCatalog(sessionId: string): BrowserCatalogReadResponse {
+  const stale: BrowserCatalogRecord = {
+    ...record,
+    sessionId,
+    tabs: [
+      { tabId: "tab-closed", title: "Closed", url: "https://a.example" },
+      { tabId: "tab-kept", title: "Kept", url: "https://b.example" },
+    ],
+  };
+  return { kind: "available", snapshot: { version: 1, records: [stale] } };
+}
+
+/** Each case closes a tab in its own session: closed tabs are module state
+ * that outlives a test, so a shared session would pre-filter the next case. */
+function renderCatalogReader(
+  sessionId: string,
+  read: () => BrowserCatalogReadResponse | Promise<BrowserCatalogReadResponse>,
+) {
+  let reads = 0;
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `catalog-read-${String(reads)}`,
+      handlers: {
+        "browser.catalog.read": () => {
+          reads += 1;
+          return read();
+        },
+      },
+    }),
+  });
+  const context = createRequestContextFixture({ origin: "renderer" });
+  spine.setRequestContext(context);
+  mocks.userId.mockReturnValue(context.identity.userId);
+  mocks.liveUserId.mockReturnValue(context.identity.userId);
+  const readerClient = spine.createRequester(mockLocalHostEntry);
+  const queryClient = createQueryClient();
+  const { result } = renderHook(
+    () => ({
+      actions: useBrowserCatalogActions("epic-1"),
+      inventory: useBrowserCatalogInventory({ epicId: "epic-1", readerClient }),
+    }),
+    { wrapper: wrapper(queryClient) },
+  );
+  return {
+    result,
+    queryClient,
+    reads: () => reads,
+    closeStaleTab: () =>
+      act(() =>
+        result.current.actions.closeTab(
+          { ...identity, sessionId },
+          "tab-closed",
+        ),
+      ),
+    tabIds: () =>
+      result.current.inventory.records.flatMap((entry) =>
+        entry.tabs.map((tab) => tab.tabId),
+      ),
+  };
 }
 
 describe("useBrowserCatalogActions", () => {
@@ -221,26 +304,29 @@ describe("useBrowserCatalogActions", () => {
       "epic-2",
       "user-1",
     );
+    // Its own session: an earlier case already closed session-1's tab-1.
+    const closing = { ...identity, sessionId: "session-cache" };
+    const closingRecord = { ...record, sessionId: closing.sessionId };
     queryClient.setQueryData<BrowserCatalogQueryData>(
       firstReaderKey,
-      catalogData(),
+      catalogData(closingRecord),
     );
     queryClient.setQueryData<BrowserCatalogQueryData>(
       secondReaderKey,
-      catalogData(),
+      catalogData(closingRecord),
     );
     queryClient.setQueryData<BrowserCatalogQueryData>(
       otherTaskKey,
-      catalogData(),
+      catalogData(closingRecord),
     );
     const { result } = renderActions(queryClient);
 
     await act(async () => {
-      await result.current.closeTab(identity, "tab-1");
+      await result.current.closeTab(closing, "tab-1");
     });
 
     expect(mocks.closeTab).toHaveBeenCalledWith(
-      expect.objectContaining({ identity, tabId: "tab-1" }),
+      expect.objectContaining({ identity: closing, tabId: "tab-1" }),
     );
     expect(
       queryClient.getQueryData<BrowserCatalogQueryData>(firstReaderKey)
@@ -256,8 +342,45 @@ describe("useBrowserCatalogActions", () => {
     );
     expect(
       queryClient.getQueryData<BrowserCatalogQueryData>(otherTaskKey)?.records,
-    ).toEqual([record]);
+    ).toEqual([closingRecord]);
     expect(queryClient.getQueryState(otherTaskKey)?.isInvalidated).toBe(false);
     queryClient.clear();
+  });
+
+  it("keeps a closed tab gone when the next catalog read still lists it", async () => {
+    const sessionId = "session-next-read";
+    const reader = renderCatalogReader(sessionId, () =>
+      staleCatalog(sessionId),
+    );
+    await waitFor(() => expect(reader.tabIds()).toHaveLength(2));
+
+    await reader.closeStaleTab();
+    await waitFor(() => expect(reader.reads()).toBe(2));
+    await waitFor(() => expect(reader.queryClient.isFetching()).toBe(0));
+
+    expect(reader.tabIds()).toEqual(["tab-kept"]);
+    reader.queryClient.clear();
+  });
+
+  it("keeps a closed tab gone when the first catalog read was in flight during the close", async () => {
+    const sessionId = "session-in-flight";
+    let answer: (response: BrowserCatalogReadResponse) => void = () =>
+      undefined;
+    const reader = renderCatalogReader(
+      sessionId,
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await waitFor(() => expect(reader.reads()).toBe(1));
+
+    await reader.closeStaleTab();
+    act(() => answer(staleCatalog(sessionId)));
+    await waitFor(() => expect(reader.queryClient.isFetching()).toBe(0));
+
+    expect(reader.reads()).toBe(1);
+    expect(reader.tabIds()).toEqual(["tab-kept"]);
+    reader.queryClient.clear();
   });
 });
