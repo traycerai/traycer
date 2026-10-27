@@ -371,7 +371,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.model", "", "i"],
     "stop-result": ["W.model", "", "i"],
     "stop-failed": ["W.model", "", "i"],
-    rest: ["W.model", "poll", "a"],
+    rest: ["W.model", "poll+wake", "a"],
     awake: ["W.model", "fetch-model+poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -2024,8 +2024,36 @@ describe("guard: model availability is the last readiness fact", () => {
         blocker: "not-sent",
       });
       expect(sortedEffects(transition)).toEqual(["poll", "report-not-sent"]);
+      const resting = run(transition.state, "rest", factsFor(start, "rest"));
+      expect(resting.state.blocker).toBe("not-sent");
+      expect(resting.effects).toEqual(["poll"]);
     },
   );
+
+  it("wakes after a pending default-model read loses its host, then prepares once the read resolves", () => {
+    const reading = observe("W.none", "observe", { modelUnavailable: false });
+    expect(reading.state.blocker).toBe("model");
+    const disconnected = run(reading.state, "observe", {
+      ...defaultFacts("W.model"),
+      clientReady: false,
+    });
+    const resting = run(
+      disconnected.state,
+      "rest",
+      factsFor("W.model", "rest"),
+    );
+    expect(resting.effects).toEqual(["poll", "wake"]);
+    const waking = run(resting.state, "observe", {
+      ...factsFor("W.model", "rest"),
+      wakeInFlight: true,
+    });
+    expect(waking.effects).toEqual(["poll"]);
+    const resolved = run(waking.state, "awake", {
+      ...factsFor("W.model", "awake"),
+      modelReady: true,
+    });
+    expect(resolved.effects).toEqual(["prepare"]);
+  });
 
   it.each(STARTS)(
     "from %s a resolved model is never reported unavailable",
@@ -2582,7 +2610,7 @@ describe("a send whose stage has not reached the handoff", () => {
         stageStatus: status,
       });
       expect(sortedEffects(transition)).toEqual(
-        rowId === "W.host" || rowId === "W.none"
+        rowId === "W.host" || rowId === "W.none" || rowId === "W.model"
           ? ["poll", "run-stage"]
           : ["poll"],
       );
@@ -2705,7 +2733,6 @@ describe("an epic that failed to create ends the unconfirmed send directly", () 
 describe("a resting sandbox wakes only for work that can proceed there", () => {
   const HELD = [
     "W.provider",
-    "W.model",
     "W.credits",
     "W.settings",
     "W.notsent",

@@ -581,9 +581,13 @@ function readyHost(
   return result({ ...state, blocker: "none" }, ["prepare"], facts);
 }
 
-/** Only host readiness or work in progress can advance without another choice. */
+/** An awake host can advance readiness, a pending model read, or delivery. */
 function hostCanAdvance(state: PendingSendState): boolean {
-  return state.blocker === "none" || state.blocker === "host";
+  return (
+    state.blocker === "none" ||
+    state.blocker === "host" ||
+    state.blocker === "model"
+  );
 }
 
 /** Observe held stages without restarting them, and join a run already waking. */
