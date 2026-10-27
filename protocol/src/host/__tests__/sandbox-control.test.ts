@@ -444,6 +444,7 @@ describe("sandboxSupportReference", () => {
   it.each([
     ["create:kube-create-service-account", "SBX-0412"],
     ["resume", "SBX-0507"],
+    ["destroy:provider-delete", "SBX-0801"],
     ["wake-timeout:attaching", "SBX-0511"],
     ["envelope-delivery:x", "SBX-0520"],
   ])("maps %s to %s by its class", (code, reference) => {

@@ -27,6 +27,7 @@ import {
   SandboxSuspendDialog,
 } from "@/components/hosts/sandbox-confirm-dialogs";
 import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AutomationTerminalOpenError } from "@/components/settings/panels/automation-terminal-open-error";
 import { restingVerb } from "@/components/composer/use-sandbox-staging";
 import {
@@ -36,6 +37,11 @@ import {
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import {
+  useSandboxOperation,
+  type SandboxRowVerb,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
@@ -49,7 +55,11 @@ import {
   type SandboxPageConfiguration,
   type SandboxRowAction,
 } from "@/lib/sandboxes/sandbox-row-lines";
-import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
+import {
+  DETAILS,
+  alreadyDestroyedLine,
+  sandboxVerbPendingLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -87,6 +97,9 @@ export function SandboxRowActions(props: {
   const { summary, configuration } = props;
   const [dialog, setDialog] = useState<RowDialog | null>(null);
   const verb = useSandboxVerb(summary.id);
+  const destroy = useSandboxDestroy(summary);
+  const operation = useSandboxOperation(summary.id);
+  const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
   const patch = useSandboxPatch(summary.id);
   const create = useSandboxCreate();
   // One key per Retry until the server answers it: a press after an answer
@@ -116,7 +129,7 @@ export function SandboxRowActions(props: {
   });
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
   const busy =
-    verb.isPending ||
+    pendingVerb !== null ||
     patch.isPending ||
     create.isPending ||
     repair.isPending ||
@@ -249,27 +262,14 @@ export function SandboxRowActions(props: {
           {giveAnother}
         </Button>
       )}
-      {actions.primary === null ? null : (
-        <Button
-          type="button"
-          variant={actions.primary === "destroy" ? "destructive" : "outline"}
-          size="sm"
-          disabled={busy}
-          data-testid={`sandbox-row-${actions.primary}`}
-          onClick={() => {
-            if (actions.primary !== null) run(actions.primary);
-          }}
-        >
-          {busy && dialog === null ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          {sandboxRowActionLabel(actions.primary, configuration)}
-        </Button>
-      )}
+      <SandboxRowPrimaryAction
+        primary={actions.primary}
+        pendingVerb={pendingVerb}
+        configuration={configuration}
+        busy={busy}
+        dialogOpen={dialog !== null}
+        run={run}
+      />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -284,7 +284,7 @@ export function SandboxRowActions(props: {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
           {actions.menu
-            .filter((action) => action !== "destroy")
+            .filter((action) => pendingVerb === null && action !== "destroy")
             .map((action) => (
               <DropdownMenuItem
                 key={action}
@@ -301,7 +301,7 @@ export function SandboxRowActions(props: {
           >
             {DETAILS}
           </DropdownMenuItem>
-          {actions.menu.includes("destroy") ? (
+          {pendingVerb === null && actions.menu.includes("destroy") ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -315,6 +315,16 @@ export function SandboxRowActions(props: {
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      <SandboxOperationFailure
+        sandboxId={summary.id}
+        name={summary.displayName}
+        operation={operation}
+        busy={busy}
+        onRetry={(pressed) => {
+          if (pressed === "destroy") destroy.mutate(undefined);
+          else wake(pressed);
+        }}
+      />
       <SandboxSuspendDialog
         sandbox={summary}
         open={dialog === "suspend"}
@@ -347,6 +357,49 @@ export function SandboxRowActions(props: {
         onOpenChange={(open) => setDialog(open ? "idle" : null)}
       />
     </div>
+  );
+}
+
+function SandboxRowPrimaryAction(props: {
+  readonly primary: SandboxRowAction | null;
+  readonly pendingVerb: SandboxRowVerb | null;
+  readonly configuration: SandboxPageConfiguration;
+  readonly busy: boolean;
+  readonly dialogOpen: boolean;
+  readonly run: (action: SandboxRowAction) => void;
+}): ReactNode {
+  const { primary, pendingVerb } = props;
+  if (pendingVerb !== null) {
+    return (
+      <Button type="button" variant="outline" size="sm" disabled>
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+        <span role="status">{sandboxVerbPendingLine(pendingVerb)}</span>
+      </Button>
+    );
+  }
+  if (primary === null) return null;
+  return (
+    <Button
+      type="button"
+      variant={primary === "destroy" ? "destructive" : "outline"}
+      size="sm"
+      disabled={props.busy}
+      data-testid={`sandbox-row-${primary}`}
+      onClick={() => props.run(primary)}
+    >
+      {props.busy && !props.dialogOpen ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {sandboxRowActionLabel(primary, props.configuration)}
+    </Button>
   );
 }
 
