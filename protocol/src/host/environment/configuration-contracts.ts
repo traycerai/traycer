@@ -958,6 +958,13 @@ export const ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS = 64;
  * environment's skills, each following its source (`auto-update`), together
  * or not at all.
  */
+/**
+ * The inspect token the `inspected` answer hands out and the `install` step
+ * hands back: one schema on both ends, so a token the host issues always
+ * round-trips.
+ */
+const environmentSkillImportTokenSchema = z.string().min(1).max(128);
+
 export const environmentConfigurationSkillImportRequestSchema = lazySchema(() =>
   z.discriminatedUnion("step", [
     z.object({
@@ -968,7 +975,7 @@ export const environmentConfigurationSkillImportRequestSchema = lazySchema(() =>
     z.object({
       step: z.literal("install"),
       environmentId: environmentIdSchema,
-      token: z.string().min(1).max(128),
+      token: environmentSkillImportTokenSchema,
       names: z
         .array(z.string().min(1).max(128))
         .min(1)
@@ -1020,8 +1027,8 @@ export const environmentConfigurationSkillImportResponseSchema = lazySchema(
     z.discriminatedUnion("outcome", [
       z.object({
         outcome: z.literal("inspected"),
-        token: z.string().min(1),
-        commitSha: z.string().min(1),
+        token: environmentSkillImportTokenSchema,
+        commitSha: z.string().regex(/^[0-9a-f]{40}$/),
         candidates: z.array(providerSkillInspectCandidateSchema),
       }),
       z.object({

@@ -985,7 +985,7 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     response: {
       outcome: "inspected",
       token: "tok",
-      commitSha: "abc123",
+      commitSha: "a".repeat(40),
       candidates: [
         {
           name: "release-notes",

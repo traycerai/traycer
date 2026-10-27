@@ -1525,7 +1525,7 @@ describe("The Skills page's skills from a source", () => {
     const inspected: EnvironmentConfigurationSkillImportResponse = {
       outcome: "inspected",
       token: "tok-1",
-      commitSha: "abc123",
+      commitSha: "a".repeat(40),
       candidates,
     };
 
