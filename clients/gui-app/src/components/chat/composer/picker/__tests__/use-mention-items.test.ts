@@ -490,7 +490,7 @@ describe("buildCurrentEpicArtifactMentionEntries", () => {
     ]);
   });
 
-  it("projects html and canvas artifacts but never a file artifact", () => {
+  it("projects html, canvas and file artifacts", () => {
     const entries = buildCurrentEpicArtifactMentionEntries(
       artifactsSlice([
         artifact("c1", "canvas", {
@@ -531,6 +531,12 @@ describe("buildCurrentEpicArtifactMentionEntries", () => {
         id: "html:epic-1:h1",
         token: "html:epic-1/h1",
         artifactType: "html",
+        status: null,
+      },
+      {
+        id: "file-artifact:epic-1:f1",
+        token: "file-artifact:epic-1/f1",
+        artifactType: "file",
         status: null,
       },
     ]);

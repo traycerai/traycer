@@ -50,14 +50,8 @@ export const markdownArtifactKindSchema = lazySchema(() =>
   z.enum(["spec", "ticket", "story", "review"]),
 );
 
-// Kinds a composer `@` mention can name. A `file` artifact is a loose object
-// with no folder of its own, so it has no mention arm yet.
-export const mentionableArtifactKindSchema = lazySchema(() =>
-  z.enum([...markdownArtifactKindSchema.options, "html", "canvas"]),
-);
-
 export const epicArtifactKindSchema = lazySchema(() =>
-  z.enum([...mentionableArtifactKindSchema.options, "file"]),
+  z.enum([...markdownArtifactKindSchema.options, "html", "canvas", "file"]),
 );
 
 export const harnessIdSchemaPreReasonix = lazySchema(() =>

@@ -21,9 +21,7 @@ import type { TreeNodeNested } from "@/lib/tree-types";
 import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
 import {
   markdownArtifactKindSchema,
-  mentionableArtifactKindSchema,
   type MarkdownArtifactKind,
-  type MentionableArtifactKind,
   type EpicArtifactKind,
 } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
@@ -70,22 +68,6 @@ export function isMarkdownArtifactKind(
     value === "ticket" ||
     value === "story" ||
     value === "review"
-  );
-}
-
-const MENTIONABLE_ARTIFACT_KIND_SET: ReadonlySet<string> = new Set(
-  mentionableArtifactKindSchema.options,
-);
-
-// Kinds the composer can `@` mention: the markdown kinds plus html and canvas.
-// A `file` artifact has no mention arm yet.
-export function isMentionableArtifactKind(
-  value: string | null | undefined,
-): value is MentionableArtifactKind {
-  return (
-    value !== null &&
-    value !== undefined &&
-    MENTIONABLE_ARTIFACT_KIND_SET.has(value)
   );
 }
 

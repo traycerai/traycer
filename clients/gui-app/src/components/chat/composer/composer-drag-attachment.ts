@@ -1,5 +1,9 @@
-import { isMentionableArtifactKind } from "@/lib/artifacts/node-display";
-import type { MentionableArtifactKind } from "@traycer/protocol/common/registry";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  artifactMentionContextType,
+  type EntityMentionContextType,
+} from "@traycer/protocol/common/composer-mention-attrs";
 import { epicArtifactMentionToken } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   ACTIVE_AGENT_DND_TYPE,
@@ -27,34 +31,31 @@ import { epicTreeRecordForNodeId } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getBasename } from "@/lib/path/cross-platform-path";
 
-type EntityContextType = "chat" | "terminal-agent" | MentionableArtifactKind;
+/** The tree node kinds a composer accepts as a drop: chats, agents, artifacts. */
+type EntityNodeKind = "chat" | "terminal-agent" | EpicArtifactKind;
 
 function entityMentionAttachment(args: {
-  readonly contextType: EntityContextType;
+  readonly nodeKind: EntityNodeKind;
   readonly epicId: string;
   readonly entityId: string;
   readonly label: string;
   readonly description: string;
 }): EntityMentionAttachment {
-  const artifactType =
-    args.contextType === "chat" || args.contextType === "terminal-agent"
-      ? null
-      : args.contextType;
+  let artifactType: EpicArtifactKind | null;
+  let contextType: EntityMentionContextType;
   let path: string;
-  if (args.contextType === "chat") {
-    path = `chat:${args.epicId}/${args.entityId}`;
-  } else if (args.contextType === "terminal-agent") {
-    path = `terminal-agent:${args.epicId}/${args.entityId}`;
+  if (args.nodeKind === "chat" || args.nodeKind === "terminal-agent") {
+    artifactType = null;
+    contextType = args.nodeKind;
+    path = `${args.nodeKind}:${args.epicId}/${args.entityId}`;
   } else {
-    path = epicArtifactMentionToken(
-      args.contextType,
-      args.epicId,
-      args.entityId,
-    );
+    artifactType = args.nodeKind;
+    contextType = artifactMentionContextType(args.nodeKind);
+    path = epicArtifactMentionToken(args.nodeKind, args.epicId, args.entityId);
   }
   return {
     kind: "mention",
-    contextType: args.contextType,
+    contextType,
     path,
     pathKind: null,
     relPath: null,
@@ -65,9 +66,8 @@ function entityMentionAttachment(args: {
     epicId: args.epicId,
     artifactId: artifactType === null ? null : args.entityId,
     artifactType,
-    chatId: args.contextType === "chat" ? args.entityId : null,
-    terminalAgentId:
-      args.contextType === "terminal-agent" ? args.entityId : null,
+    chatId: args.nodeKind === "chat" ? args.entityId : null,
+    terminalAgentId: args.nodeKind === "terminal-agent" ? args.entityId : null,
     // Terminals are not draggable into a composer - the tree drag sources are
     // chats, terminal agents, and artifacts.
     terminalId: null,
@@ -101,15 +101,14 @@ function sidebarNodeMention(
   ) {
     return null;
   }
-  // A `file` artifact has no composer mention arm yet.
   if (
     record.type !== "chat" &&
     record.type !== "terminal-agent" &&
-    !isMentionableArtifactKind(record.type)
+    !isEpicArtifactKind(record.type)
   )
     return null;
   return entityMentionAttachment({
-    contextType: record.type,
+    nodeKind: record.type,
     epicId: source.epicId,
     entityId: record.id,
     label: record.name,
@@ -173,7 +172,7 @@ function activeAgentMention(
     return null;
   }
   return entityMentionAttachment({
-    contextType: source.agent.type,
+    nodeKind: source.agent.type,
     epicId: source.epicId,
     entityId: source.agent.id,
     label: source.agent.name,
@@ -213,11 +212,10 @@ export function mentionAttachmentFromDragSource(
     case GIT_DIFF_TILE_DND_TYPE:
       return gitDiffMention(source, targetHostId);
     case CHAT_ARTIFACT_DND_TYPE:
-      // A `file` artifact has no composer mention arm yet.
-      if (!isMentionableArtifactKind(source.artifact.type)) return null;
+      if (!isEpicArtifactKind(source.artifact.type)) return null;
       if (source.artifact.hostId !== targetHostId) return null;
       return entityMentionAttachment({
-        contextType: source.artifact.type,
+        nodeKind: source.artifact.type,
         epicId: source.epicId,
         entityId: source.artifact.id,
         label: source.artifact.name,

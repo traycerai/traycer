@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   hostRpcRegistry,
   epicMentionArtifactsRequestSchema,
-  epicMentionCanvasesResponseSchema,
+  epicMentionArtifactsResponseSchema,
   epicMentionEpicsRequestSchema,
   epicMentionEpicsResponseSchema,
-  epicMentionHtmlArtifactsResponseSchema,
   epicMentionSpecsResponseSchema,
 } from "@traycer/protocol/host/index";
 
@@ -86,52 +85,45 @@ describe("epic mention host schemas", () => {
     ).toEqual({ major: 1, minor: 0 });
   });
 
-  it("lists html artifacts and canvases through their own optional methods", () => {
-    for (const method of [
-      "epic.mentionHtmlArtifacts",
-      "epic.mentionCanvases",
-    ] as const) {
-      expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
-      expect(
-        hostRpcRegistry[method][1].versions[0].contract.schemaVersion,
-      ).toEqual({ major: 1, minor: 0 });
-    }
+  it("lists artifacts of any kind through one optional method", () => {
+    expect(hostRpcRegistry["epic.mentionArtifacts"].degrade).toEqual({
+      kind: "unsupported",
+    });
     expect(
-      epicMentionCanvasesResponseSchema.safeParse({
-        entries: [
-          {
-            kind: "epic-artifact",
-            id: "canvas:epic-1:canvas-1",
-            token: "canvas:epic-1/canvas-1",
-            epicId: "epic-1",
-            epicTitle: "Login flow",
-            artifactId: "canvas-1",
-            artifactType: "canvas",
-            label: "Checkout screens",
-            description: "Login flow",
-            status: null,
-            updatedAt: 123,
-          },
-        ],
+      hostRpcRegistry["epic.mentionArtifacts"][1].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+
+    const canvasRow = {
+      kind: "epic-artifact",
+      id: "canvas:epic-1:canvas-1",
+      token: "canvas:epic-1/canvas-1",
+      epicId: "epic-1",
+      epicTitle: "Login flow",
+      artifactId: "canvas-1",
+      artifactType: "canvas",
+      label: "Checkout screens",
+      description: "Login flow",
+      status: null,
+      updatedAt: 123,
+    };
+    const fileRow = {
+      ...canvasRow,
+      id: "file-artifact:epic-1:file-1",
+      token: "file-artifact:epic-1/file-1",
+      artifactId: "file-1",
+      artifactType: "file",
+      label: "logo.png",
+    };
+
+    expect(
+      epicMentionArtifactsResponseSchema.safeParse({
+        entries: [canvasRow, fileRow],
       }).success,
     ).toBe(true);
-    // Each method answers its own kind only.
     expect(
-      epicMentionHtmlArtifactsResponseSchema.safeParse({
-        entries: [
-          {
-            kind: "epic-artifact",
-            id: "canvas:epic-1:canvas-1",
-            token: "canvas:epic-1/canvas-1",
-            epicId: "epic-1",
-            epicTitle: "Login flow",
-            artifactId: "canvas-1",
-            artifactType: "canvas",
-            label: "Checkout screens",
-            description: "Login flow",
-            status: null,
-          },
-        ],
+      epicMentionArtifactsResponseSchema.safeParse({
+        entries: [{ ...canvasRow, artifactType: "unknown-kind" }],
       }).success,
     ).toBe(false);
   });

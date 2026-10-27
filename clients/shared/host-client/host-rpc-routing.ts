@@ -527,9 +527,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.listTuiAgents": "target-host",
   // The host's local History contribution, from the host that holds it.
   "epic.localHistory.read": "target-host",
-  "epic.mentionCanvases": "target-host",
+  "epic.mentionArtifacts": "target-host",
   "epic.mentionEpics": "target-host",
-  "epic.mentionHtmlArtifacts": "target-host",
   "epic.mentionReviews": "target-host",
   "epic.mentionSpecs": "target-host",
   "epic.mentionStories": "target-host",

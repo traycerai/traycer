@@ -15,7 +15,8 @@
  * Allowed dependencies: `zod` and other protocol modules only - this file
  * must stay browser-safe.
  */
-import type { MentionableArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { artifactMentionContextType } from "@traycer/protocol/common/composer-mention-attrs";
 import {
   commonRecordRegistry,
   EpicArtifactKindSchemaPreHtml,
@@ -1717,7 +1718,7 @@ export type EpicMentionEpicSuggestion = z.infer<
 >;
 
 function epicMentionArtifactSuggestionSchemaFor<
-  const Kind extends MentionableArtifactKind,
+  const Kind extends EpicArtifactKind,
 >(kind: Kind) {
   return z.object({
     kind: z.literal("epic-artifact"),
@@ -1766,8 +1767,7 @@ export type EpicMentionReviewSuggestion = z.infer<
   typeof epicMentionReviewSuggestionSchema
 >;
 
-// HTML artifacts and canvases are folders on the host's disk, so their
-// suggestions come from the host's local index only; `status` is always null.
+// HTML artifacts, canvases and files carry no status; `status` is always null.
 export const epicMentionHtmlArtifactSuggestionSchema = lazySchema(() =>
   epicMentionArtifactSuggestionSchemaFor("html"),
 );
@@ -1782,6 +1782,13 @@ export type EpicMentionCanvasSuggestion = z.infer<
   typeof epicMentionCanvasSuggestionSchema
 >;
 
+export const epicMentionFileArtifactSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("file"),
+);
+export type EpicMentionFileArtifactSuggestion = z.infer<
+  typeof epicMentionFileArtifactSuggestionSchema
+>;
+
 export const epicMentionArtifactSuggestionSchema = lazySchema(() =>
   z.discriminatedUnion("artifactType", [
     epicMentionSpecSuggestionSchema,
@@ -1790,6 +1797,7 @@ export const epicMentionArtifactSuggestionSchema = lazySchema(() =>
     epicMentionReviewSuggestionSchema,
     epicMentionHtmlArtifactSuggestionSchema,
     epicMentionCanvasSuggestionSchema,
+    epicMentionFileArtifactSuggestionSchema,
   ]),
 );
 export type EpicMentionArtifactSuggestion = z.infer<
@@ -1802,21 +1810,25 @@ export type EpicMentionArtifactSuggestion = z.infer<
  * builder so the cloud and local copies of the same artifact produce identical
  * ids and de-dupe to a single mention entry. Keep the two formats in lock-step
  * here rather than hand-rolling the template strings at each call site.
+ *
+ * Both are prefixed with the kind's mention context type rather than the kind
+ * itself: the token becomes the chip's `path`, which the legacy parser reads
+ * back, and a file artifact spells itself `file-artifact` there.
  */
 export function epicArtifactMentionId(
-  kind: MentionableArtifactKind,
+  kind: EpicArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
-  return `${kind}:${epicId}:${artifactId}`;
+  return `${artifactMentionContextType(kind)}:${epicId}:${artifactId}`;
 }
 
 export function epicArtifactMentionToken(
-  kind: MentionableArtifactKind,
+  kind: EpicArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
-  return `${kind}:${epicId}/${artifactId}`;
+  return `${artifactMentionContextType(kind)}:${epicId}/${artifactId}`;
 }
 
 export const epicMentionSuggestionSchema = lazySchema(() =>
@@ -1872,22 +1884,18 @@ export type EpicMentionReviewsResponse = z.infer<
   typeof epicMentionReviewsResponseSchema
 >;
 
-export const epicMentionHtmlArtifactsResponseSchema = lazySchema(() =>
+/**
+ * `epic.mentionArtifacts` answers with any artifact kind. Today it serves the
+ * kinds the four per-kind methods above do not (html, canvas, file); the
+ * discriminated union leaves room for those four to fold into it.
+ */
+export const epicMentionArtifactsResponseSchema = lazySchema(() =>
   z.object({
-    entries: z.array(epicMentionHtmlArtifactSuggestionSchema),
+    entries: z.array(epicMentionArtifactSuggestionSchema),
   }),
 );
-export type EpicMentionHtmlArtifactsResponse = z.infer<
-  typeof epicMentionHtmlArtifactsResponseSchema
->;
-
-export const epicMentionCanvasesResponseSchema = lazySchema(() =>
-  z.object({
-    entries: z.array(epicMentionCanvasSuggestionSchema),
-  }),
-);
-export type EpicMentionCanvasesResponse = z.infer<
-  typeof epicMentionCanvasesResponseSchema
+export type EpicMentionArtifactsResponse = z.infer<
+  typeof epicMentionArtifactsResponseSchema
 >;
 
 // ─── Collaborator mutation primitives ────────────────────────────────────────

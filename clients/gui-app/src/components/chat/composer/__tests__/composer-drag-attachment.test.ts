@@ -75,7 +75,7 @@ describe("mentionAttachmentFromDragSource", () => {
     ).toBeNull();
   });
 
-  it("mentions a sidebar canvas artifact but not a file artifact", () => {
+  it("mentions sidebar canvas and file artifacts", () => {
     peekOpenEpicMock.mockReturnValue({
       store: {
         getState: () => ({
@@ -109,14 +109,27 @@ describe("mentionAttachmentFromDragSource", () => {
     });
 
     epicTreeRecordMock.mockReturnValue({
-      id: "canvas-1",
+      id: "file-1",
       parentId: null,
       name: "report.pdf",
       type: "file",
       status: null,
       hostId: TARGET_HOST_ID,
     });
-    expect(mentionAttachmentFromDragSource(source, TARGET_HOST_ID)).toBeNull();
+    // A file artifact's contextType is distinct from "file", which already
+    // means a workspace file path.
+    expect(
+      mentionAttachmentFromDragSource(
+        { ...source, nodeId: "file-1" },
+        TARGET_HOST_ID,
+      ),
+    ).toMatchObject({
+      kind: "mention",
+      contextType: "file-artifact",
+      artifactType: "file",
+      path: "file-artifact:epic-1/file-1",
+      label: "report.pdf",
+    });
   });
 
   it("rejects unavailable sidebar sessions and records", () => {

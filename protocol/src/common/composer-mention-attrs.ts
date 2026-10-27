@@ -1,6 +1,7 @@
 import type { WorkspaceMentionGitType } from "@traycer/protocol/host/workspace/unary-schemas";
 
-import type { MentionableArtifactKind } from "./registry";
+import type { EpicArtifactKind } from "./registry";
+import { epicArtifactKindSchema } from "@traycer/protocol/common/_internal/schemas";
 import { DEFAULT_GITHUB_MENTION_HOST } from "./github-mention-host";
 import { githubMentionTokenReference } from "./github-mention-identity";
 
@@ -84,7 +85,7 @@ export type EntityMentionContextType =
   | "chat"
   | "terminal-agent"
   | "terminal"
-  | MentionableArtifactKind;
+  | ArtifactMentionContextType;
 
 /**
  * Wire spelling, not a local one: these strings ARE `ContextType` members in
@@ -150,7 +151,7 @@ export type EntityMentionAttachment = {
   description: string;
   epicId: string;
   artifactId: string | null;
-  artifactType: MentionableArtifactKind | null;
+  artifactType: EpicArtifactKind | null;
   chatId: string | null;
   terminalAgentId: string | null;
   /** Session id of a plain terminal mention; null for every other entity. */
@@ -220,16 +221,47 @@ export type MentionAttachment =
   | GithubMentionAttachment
   | BrowserTabMentionAttachment;
 
+/**
+ * How an artifact kind is spelled on a mention node's `contextType`.
+ *
+ * Every kind is its own name except `file`, which that attribute already
+ * uses for a workspace path (see {@link PathKind}): the serializer and the
+ * host's prompt converter both dispatch on `contextType`, so a file artifact
+ * travels as `file-artifact` while its `artifactType` stays the kind.
+ */
+export type ArtifactMentionContextType =
+  | Exclude<EpicArtifactKind, "file">
+  | "file-artifact";
+
 /** Same shape and same reason as {@link GIT_TYPES} - a subset would compile. */
-const ARTIFACT_CONTEXT_TYPES: Readonly<Record<MentionableArtifactKind, true>> =
-  {
-    spec: true,
-    ticket: true,
-    story: true,
-    review: true,
-    html: true,
-    canvas: true,
-  };
+const ARTIFACT_MENTION_CONTEXT_TYPES: Readonly<
+  Record<EpicArtifactKind, ArtifactMentionContextType>
+> = {
+  spec: "spec",
+  ticket: "ticket",
+  story: "story",
+  review: "review",
+  html: "html",
+  canvas: "canvas",
+  file: "file-artifact",
+};
+
+export function artifactMentionContextType(
+  kind: EpicArtifactKind,
+): ArtifactMentionContextType {
+  return ARTIFACT_MENTION_CONTEXT_TYPES[kind];
+}
+
+/** The kind a mention node's `contextType` names, or null for any other chip. */
+export function artifactKindFromMentionContextType(
+  value: unknown,
+): EpicArtifactKind | null {
+  return (
+    epicArtifactKindSchema.options.find(
+      (kind) => ARTIFACT_MENTION_CONTEXT_TYPES[kind] === value,
+    ) ?? null
+  );
+}
 
 /**
  * A RECORD keyed by the union, not an array of it.
@@ -424,7 +456,8 @@ function entityMentionAttachmentFromAttrs(
   if (epicId === null || path === null) return null;
 
   const artifactType =
-    artifactKindValue(attrs.artifactType) ?? artifactKindValue(contextType);
+    artifactKindValue(attrs.artifactType) ??
+    artifactKindFromMentionContextType(contextType);
   return {
     kind: "mention",
     contextType,
@@ -509,8 +542,9 @@ function pathKindValue(value: unknown): PathKind | null {
   return value === "file" || value === "folder" ? value : null;
 }
 
-function artifactKindValue(value: unknown): MentionableArtifactKind | null {
-  return isArtifactContextType(value) ? value : null;
+function artifactKindValue(value: unknown): EpicArtifactKind | null {
+  const parsed = epicArtifactKindSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function isGitType(value: unknown): value is WorkspaceMentionGitType {
@@ -550,8 +584,6 @@ function statusValue(value: unknown): string | number | null {
 
 function isArtifactContextType(
   value: unknown,
-): value is MentionableArtifactKind {
-  return (
-    typeof value === "string" && Object.hasOwn(ARTIFACT_CONTEXT_TYPES, value)
-  );
+): value is ArtifactMentionContextType {
+  return artifactKindFromMentionContextType(value) !== null;
 }

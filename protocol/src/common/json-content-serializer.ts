@@ -22,6 +22,13 @@ export enum ContextType {
    */
   Html = "html",
   Canvas = "canvas",
+  /**
+   * A file artifact (an image, a PDF, any loose object under the task's
+   * artifacts). Spelled apart from `File`, which is a workspace path: the two
+   * resolve through different fields and the host converter dispatches on
+   * this attribute.
+   */
+  FileArtifact = "file-artifact",
   WorkflowCommand = "workflow_command",
   Chat = "chat",
   /**
@@ -831,6 +838,10 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const title = attrs.label || attrs.id || "";
       return `canvas:${title}`;
     }
+    case ContextType.FileArtifact: {
+      const title = attrs.label || attrs.id || "";
+      return `file:${title}`;
+    }
     case ContextType.Epic: {
       const title = attrs.label || attrs.id || "";
       return `epic:${title}`;
@@ -966,6 +977,9 @@ function formatMentionForLLMQuery(
       return atRef(requiredArtifactRelPath(attrs));
     }
     case ContextType.Canvas: {
+      return atRef(requiredArtifactRelPath(attrs));
+    }
+    case ContextType.FileArtifact: {
       return atRef(requiredArtifactRelPath(attrs));
     }
     case ContextType.Epic:

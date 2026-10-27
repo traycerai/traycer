@@ -1,15 +1,8 @@
 import {
-  mentionableArtifactKindSchema,
-  type MentionableArtifactKind,
-} from "@traycer/protocol/common/registry";
+  artifactKindFromMentionContextType,
+  artifactMentionContextType,
+} from "@traycer/protocol/common/composer-mention-attrs";
 import { basenameOfPath } from "@/lib/path";
-
-// Set membership beats `mentionableArtifactKindSchema.safeParse(value).success`
-// on the per-render mention paths (`createLegacyMentionAttachment` runs
-// for every mention segment in every chat-message render).
-const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set(
-  mentionableArtifactKindSchema.options,
-);
 import type { MentionAttachment, PathKind } from "@/lib/composer/types";
 
 export function inferPathKind(path: string): PathKind {
@@ -164,17 +157,20 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
     };
   }
 
+  // The prefix is the kind's mention context type, which is how the token was
+  // minted (`epicArtifactMentionToken`); a file artifact reads `file-artifact`.
   const artifactMatch = path.match(
-    /^(spec|ticket|story|review|html|canvas):([^/\s]+)\/([^\s]+)$/u,
+    /^(spec|ticket|story|review|html|canvas|file-artifact):([^/\s]+)\/([^\s]+)$/u,
   );
   if (artifactMatch === null) return null;
-  const artifactType = artifactMatch[1];
-  if (!isEpicArtifactKind(artifactType)) return null;
+  const contextType = artifactMatch[1];
+  const artifactType = artifactKindFromMentionContextType(contextType);
+  if (artifactType === null) return null;
   const epicId = artifactMatch[2];
   const artifactId = artifactMatch[3];
   return {
     kind: "mention",
-    contextType: artifactType,
+    contextType: artifactMentionContextType(artifactType),
     path,
     pathKind: null,
     relPath: null,
@@ -190,8 +186,4 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
     terminalId: null,
     status: null,
   };
-}
-
-function isEpicArtifactKind(value: string): value is MentionableArtifactKind {
-  return EPIC_ARTIFACT_KINDS.has(value);
 }

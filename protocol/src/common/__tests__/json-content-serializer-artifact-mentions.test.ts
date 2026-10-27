@@ -40,4 +40,33 @@ describe("html and canvas artifact mention serialization", () => {
     expect(llm).toContain("@/abs/epics/e1/artifacts/screens");
     expect(user).toContain("`canvas:Checkout screens`");
   });
+
+  it("serializes a file artifact mention as a path for the LLM and a file label for the user", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "mention",
+              attrs: {
+                contextType: ContextType.FileArtifact,
+                id: "logo",
+                label: "logo.png",
+                relPath: "/abs/epics/e1/artifacts/logo.png",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(
+      jsonContentToMarkdown(doc, { mentionFormat: "llm", platform: "POSIX" }),
+    ).toContain("@/abs/epics/e1/artifacts/logo.png");
+    expect(
+      jsonContentToMarkdown(doc, { mentionFormat: "user", platform: "POSIX" }),
+    ).toContain("`file:logo.png`");
+  });
 });

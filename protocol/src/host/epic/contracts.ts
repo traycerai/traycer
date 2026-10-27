@@ -53,10 +53,9 @@ import {
   editCommentRequestSchemaPreHtml,
   editCommentResponseSchema,
   epicMentionArtifactsRequestSchema,
-  epicMentionCanvasesResponseSchema,
+  epicMentionArtifactsResponseSchema,
   epicMentionEpicsRequestSchema,
   epicMentionEpicsResponseSchema,
-  epicMentionHtmlArtifactsResponseSchema,
   epicMentionReviewsResponseSchema,
   epicMentionSpecsResponseSchema,
   epicMentionStoriesResponseSchema,
@@ -870,23 +869,16 @@ export const epicMentionReviewsV10 = defineRpcContract({
 });
 
 /**
- * HTML artifacts and canvases joined the `@` picker after the released floor
- * was frozen, so both ride the optional-capabilities channel (registered with
- * `degrade: { kind: "unsupported" }`): a host that predates them simply lists
+ * HTML artifacts, canvases and files joined the `@` picker after the released
+ * floor was frozen, so they ride one optional method (registered with
+ * `degrade: { kind: "unsupported" }`): a host that predates it simply lists
  * none, and the picker still shows the four markdown kinds.
  */
-export const epicMentionHtmlArtifactsV10 = defineRpcContract({
-  method: "epic.mentionHtmlArtifacts",
+export const epicMentionArtifactsV10 = defineRpcContract({
+  method: "epic.mentionArtifacts",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: epicMentionArtifactsRequestSchema,
-  responseSchema: epicMentionHtmlArtifactsResponseSchema,
-});
-
-export const epicMentionCanvasesV10 = defineRpcContract({
-  method: "epic.mentionCanvases",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: epicMentionArtifactsRequestSchema,
-  responseSchema: epicMentionCanvasesResponseSchema,
+  responseSchema: epicMentionArtifactsResponseSchema,
 });
 
 /**
