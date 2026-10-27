@@ -115,6 +115,99 @@ import {
   SandboxReadyLineForChat,
 } from "../pending-sandbox-sends";
 import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
+import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
+import type { SplitPaneComponentProps } from "@/components/epic-canvas/canvas/split-container";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  makeOpenableNodeRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
+import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
+import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
+import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+import {
+  requestPaneOpenerFocus,
+  resetPaneOpenerFocusForTests,
+} from "@/lib/canvas/focus-pane-opener";
+
+vi.mock("@dnd-kit/core", () => ({
+  useDroppable: () => ({ setNodeRef: () => undefined }),
+}));
+
+vi.mock(
+  "@/components/epic-canvas/snapshots/snapshot-loading-context-value",
+  () => ({
+    useSnapshotLoading: () => ({
+      snapshotLoaded: true,
+      snapshotFetchError: null,
+    }),
+  }),
+);
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useEpicHasArtifactRecords: () => false,
+}));
+
+vi.mock("@/lib/commands/registry", () => ({ getOpenerItems: () => [] }));
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => SANDBOX_HOST,
+}));
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => false,
+}));
+vi.mock(
+  "@/components/command-palette/command-palette-context",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/command-palette/command-palette-context")
+      >();
+    return {
+      ...actual,
+      useCommandPaletteRouter: (): KeybindingRouter => ({
+        getPathname: () => "/",
+        navigateHome: () => undefined,
+        navigateSettings: () => undefined,
+        navigateToEpic: () => undefined,
+        navigateToEpicTab: () => undefined,
+        navigateToEpicList: () => undefined,
+        navigateSettingsSection: () => undefined,
+        navigateToTabIntent: () => undefined,
+        goBack: () => undefined,
+        goForward: () => undefined,
+        isHistoryNavAvailable: () => false,
+        canGoBack: () => false,
+        canGoForward: () => false,
+      }),
+    };
+  },
+);
+
+// Keep the canvas, opener, pending strip and send lifecycle real; stand in
+// for the pane's heavyweight chat presentation at the canvas boundary.
+vi.mock("@/components/epic-canvas/canvas/tab-group-view", () => ({
+  TabGroupView: (
+    props: SplitPaneComponentProps & { epicId: string; tabId: string },
+  ) => {
+    const tile = useEpicCanvasStore((state) =>
+      props.pane.activeTabId === null
+        ? null
+        : state.canvasByTabId[props.tabId]?.tilesByInstanceId[
+            props.pane.activeTabId
+          ],
+    );
+    return tile === null || tile?.type === "blank" ? (
+      <PaneOpener
+        epicId={props.epicId}
+        tabId={props.tabId}
+        groupId={props.pane.id}
+        active
+      />
+    ) : (
+      <div data-testid="canvas-chat">{tile?.id}</div>
+    );
+  },
+}));
 
 const toastSpies = vi.hoisted(() => ({
   show: vi.fn<
@@ -965,6 +1058,306 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useAuthStore.getState().setSignedOut();
+});
+
+describe("the empty task canvas while its first sandbox send waits", () => {
+  beforeEach(() => {
+    useEpicCanvasStore.setState({ tabsById: {}, canvasByTabId: {} });
+    useEpicCanvasStore
+      .getState()
+      .seedEpic("epic-1", { tabId: "tab-1", name: "Sandbox task" }, []);
+  });
+
+  afterEach(() => {
+    resetPaneOpenerFocusForTests();
+    useEpicCanvasStore.setState({ tabsById: {}, canvasByTabId: {} });
+  });
+
+  function mountCanvas(drive: boolean) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    return render(
+      <QueryClientProvider client={client}>
+        {drive ? <PendingSandboxSendsDriver /> : null}
+        <TileCanvas epicId="epic-1" tabId="tab-1" />
+      </QueryClientProvider>,
+    );
+  }
+
+  function projectChat(chatId: string): void {
+    const store = useEpicCanvasStore.getState();
+    store.ensureEmptyPaneInTab("tab-1");
+    const root = useEpicCanvasStore.getState().canvasByTabId["tab-1"]?.root;
+    if (root?.kind !== "pane") throw new Error("expected the task's pane");
+    const chat: EpicCanvasTileRef = makeOpenableNodeRef({
+      type: "chat",
+      id: chatId,
+      instanceId: `sandbox-chat-${chatId}`,
+      name: "Sandbox chat",
+      hostId: SANDBOX_HOST,
+    });
+    store.openTileInPane("tab-1", root.id, chat, {
+      mode: "permanent",
+      index: null,
+    });
+  }
+
+  it.each([
+    ["resuming", RESUME_TARGET],
+    ["starting", START_TARGET],
+    ["creating", NEW_TARGET],
+  ] as const)(
+    "shows only the pending send on a %s sandbox",
+    async (_name, target) => {
+      seed({ ...SEEDED, target, phase: "creating", created: false });
+      mountCanvas(false);
+
+      expect(await screen.findByTestId("sandbox-setup-line")).toBeDefined();
+      expect(screen.getByText("fix the login bug")).toBeDefined();
+      expect(
+        screen.queryByRole("combobox", { name: "Open into pane" }),
+      ).toBeNull();
+    },
+  );
+
+  it("returns the picker after cancelling the message with the pane still empty", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        phase: "creating",
+      });
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "timed-out", step: "booting" },
+      });
+      mountCanvas(false);
+      expect(
+        screen.queryByRole("combobox", { name: "Open into pane" }),
+      ).toBeNull();
+      const cancel = await screen.findByRole("button", {
+        name: "Cancel the message",
+      });
+      await waitFor(() => expect(cancel).not.toHaveProperty("disabled", true));
+      fireEvent.click(cancel);
+
+      expect(
+        await screen.findByRole("combobox", { name: "Open into pane" }),
+      ).toBeDefined();
+      expect(screen.queryByTestId("pending-sandbox-sends")).toBeNull();
+    } finally {
+      restoreLocks();
+    }
+  });
+
+  it("returns the picker when sandbox creation is refused", async () => {
+    seed({ ...SEEDED, phase: "creating", created: false });
+    const creation = deferred<SandboxCreateFetchResult>();
+    mocks.createSandbox.mockReturnValue(creation.promise);
+    mountCanvas(true);
+    const pickerWhilePending = screen.queryByRole("combobox", {
+      name: "Open into pane",
+    });
+
+    act(() =>
+      creation.resolve({
+        kind: "refused",
+        status: 402,
+        code: "insufficient_credit",
+        reason: null,
+        shortfallMc: 120,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: "refused",
+      }),
+    );
+
+    expect(await screen.findByTestId("sandbox-refusal-line")).toBeDefined();
+    expect(pickerWhilePending).toBeNull();
+    expect(
+      await screen.findByRole("combobox", { name: "Open into pane" }),
+    ).toBeDefined();
+    expect(screen.getByText("fix the login bug")).toBeDefined();
+  });
+
+  it("returns the picker after a terminal failure with no chat", async () => {
+    seed({ ...SEEDED, phase: "creating" });
+    mountCanvas(false);
+    expect(
+      screen.queryByRole("combobox", { name: "Open into pane" }),
+    ).toBeNull();
+
+    act(() =>
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "failed", code: "boot-failed", step: "booting" },
+      }),
+    );
+
+    expect(
+      await screen.findByRole("combobox", { name: "Open into pane" }),
+    ).toBeDefined();
+  });
+
+  it("shows the chat after delivery", async () => {
+    seed(SEEDED);
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mountCanvas(true);
+    expect(
+      screen.queryByRole("combobox", { name: "Open into pane" }),
+    ).toBeNull();
+
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    await waitFor(() => {
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID].delivery,
+      ).not.toBeNull();
+    });
+    const delivery =
+      usePendingSandboxSendStore.getState().sends[SEND_ID].delivery;
+    if (delivery === null) throw new Error("expected the delivered chat");
+    act(() => projectChat(delivery.chatId));
+
+    expect(screen.getByTestId("canvas-chat").textContent).toBe(delivery.chatId);
+    expect(screen.queryByTestId("pending-sandbox-sends")).toBeNull();
+    expect(
+      screen.queryByRole("combobox", { name: "Open into pane" }),
+    ).toBeNull();
+  });
+
+  it("keeps the picker unmounted after rehydrating a pending send and reconnecting", async () => {
+    seed({ ...SEEDED, target: RESUME_TARGET, phase: "creating" });
+    mountCanvas(false);
+    await reloadPendingSandboxStores();
+    mountCanvas(false);
+    notifyAnswerListeners();
+
+    expect(await screen.findByTestId("sandbox-setup-line")).toBeDefined();
+    expect(screen.getByText("fix the login bug")).toBeDefined();
+    expect(
+      screen.queryByRole("combobox", { name: "Open into pane" }),
+    ).toBeNull();
+  });
+
+  it("leaves another task's empty pane available while this task's send waits", async () => {
+    seed({ ...SEEDED, send: { epicId: "other-task" }, phase: "creating" });
+    mountCanvas(false);
+
+    expect(
+      await screen.findByRole("combobox", { name: "Open into pane" }),
+    ).toBeDefined();
+    expect(screen.queryByTestId("pending-sandbox-sends")).toBeNull();
+  });
+
+  it("does not register a picker that can take focus from the composer", () => {
+    seed({ ...SEEDED, phase: "creating" });
+    render(<textarea aria-label="Composer" />);
+    const composer = screen.getByRole("textbox", { name: "Composer" });
+    composer.focus();
+    mountCanvas(false);
+    const root = useEpicCanvasStore.getState().canvasByTabId["tab-1"]?.root;
+    if (root?.kind !== "pane") throw new Error("expected the task's pane");
+    requestPaneOpenerFocus("tab-1", root.id);
+
+    expect(document.activeElement).toBe(composer);
+    expect(
+      screen.queryByRole("combobox", { name: "Open into pane" }),
+    ).toBeNull();
+  });
+
+  it("treats a saved blank tab as empty while the first send waits", () => {
+    seed({ ...SEEDED, phase: "creating" });
+    const store = useEpicCanvasStore.getState();
+    store.ensureEmptyPaneInTab("tab-1");
+    const root = useEpicCanvasStore.getState().canvasByTabId["tab-1"]?.root;
+    if (root?.kind !== "pane") throw new Error("expected the task's pane");
+    store.openTileInPane("tab-1", root.id, makeBlankTileRef(), {
+      mode: "permanent",
+      index: null,
+    });
+    mountCanvas(false);
+
+    expect(
+      screen.queryByRole("combobox", { name: "Open into pane" }),
+    ).toBeNull();
+  });
+
+  it("suppresses only the pane explicitly named by the send", () => {
+    useEpicCanvasStore.getState().ensureEmptyPaneInTab("tab-1");
+    const root = useEpicCanvasStore.getState().canvasByTabId["tab-1"]?.root;
+    if (root?.kind !== "pane") throw new Error("expected the task's pane");
+    seed({
+      ...SEEDED,
+      phase: "creating",
+      send: {
+        request: {
+          kind: "chat",
+          parentId: null,
+          placement: {
+            kind: "tab",
+            paneId: root.id,
+            index: null,
+          },
+        },
+      },
+    });
+    const task = mountCanvas(false);
+    const otherPane = render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-1"
+        groupId="other-pane"
+        active={false}
+      />,
+    );
+
+    expect(within(task.container).queryByRole("combobox")).toBeNull();
+    expect(
+      within(otherPane.container).getByRole("combobox", {
+        name: "Open into pane",
+      }),
+    ).toBeDefined();
+  });
+
+  it.each(["timeout", "held-stop", "uncertain-dispatch"] as const)(
+    "keeps the picker suppressed for a %s with no definite outcome",
+    async (outcome) => {
+      seed({ ...SEEDED, send: { stopRequested: outcome === "held-stop" } });
+      if (outcome === "uncertain-dispatch") {
+        answerHost(SANDBOX_HOST, CODEX_READY);
+        mocks.createChatError = new Error("connection lost");
+      } else {
+        useStagedSandboxStore.getState().report(SURFACE, {
+          failure:
+            outcome === "timeout"
+              ? { kind: "timed-out", step: "booting" }
+              : { kind: "settings", code: "pending-send-stop" },
+        });
+      }
+      mountCanvas(outcome === "uncertain-dispatch");
+
+      if (outcome === "uncertain-dispatch") {
+        await waitFor(() =>
+          expect(
+            usePendingSandboxSendStore.getState().sends[SEND_ID].dispatch
+              ?.status,
+          ).toBe("uncertain"),
+        );
+      }
+      expect(
+        screen.queryByRole("combobox", { name: "Open into pane" }),
+      ).toBeNull();
+      expect(screen.getByText("fix the login bug")).toBeDefined();
+    },
+  );
+
+  it("keeps an existing chat visible while another message waits", () => {
+    seed({ ...SEEDED, phase: "creating" });
+    projectChat("existing-chat");
+    mountCanvas(false);
+
+    expect(screen.getByTestId("canvas-chat").textContent).toBe("existing-chat");
+  });
 });
 
 describe("a send waiting for the requested agent on its sandbox", () => {
