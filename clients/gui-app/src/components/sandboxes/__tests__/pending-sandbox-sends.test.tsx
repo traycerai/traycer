@@ -118,6 +118,10 @@ import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import type { SplitPaneComponentProps } from "@/components/epic-canvas/canvas/split-container";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  makeOpenableNodeRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -1086,12 +1090,17 @@ describe("the empty task canvas while its first sandbox send waits", () => {
     store.ensureEmptyPaneInTab("tab-1");
     const root = useEpicCanvasStore.getState().canvasByTabId["tab-1"]?.root;
     if (root?.kind !== "pane") throw new Error("expected the task's pane");
-    store.openTileInPane(
-      "tab-1",
-      root.id,
-      { type: "chat", id: chatId, name: "Sandbox chat", hostId: SANDBOX_HOST },
-      { mode: "permanent", index: null },
-    );
+    const chat: EpicCanvasTileRef = makeOpenableNodeRef({
+      type: "chat",
+      id: chatId,
+      instanceId: `sandbox-chat-${chatId}`,
+      name: "Sandbox chat",
+      hostId: SANDBOX_HOST,
+    });
+    store.openTileInPane("tab-1", root.id, chat, {
+      mode: "permanent",
+      index: null,
+    });
   }
 
   it.each([

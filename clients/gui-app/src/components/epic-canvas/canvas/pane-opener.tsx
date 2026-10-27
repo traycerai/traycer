@@ -74,7 +74,7 @@ export function PaneOpener(props: PaneOpenerProps) {
   const hasContent = useEpicCanvasStore((state) =>
     Object.values(
       state.canvasByTabId[props.tabId]?.tilesByInstanceId ?? {},
-    ).some((tile) => tile.type !== "blank"),
+    ).some((tile) => tile !== undefined && tile.type !== "blank"),
   );
   const hasPendingMessage = usePendingSandboxSendStore((state) =>
     Object.values(state.sends).some((send) => {
