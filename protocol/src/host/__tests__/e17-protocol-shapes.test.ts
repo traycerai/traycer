@@ -467,7 +467,7 @@ describe("TaskHostRow", () => {
   };
 
   it("parses a row", () => {
-    expect(taskHostRowSchema.parse(ROW)).toEqual(ROW);
+    expect(taskHostRowSchema.parse(ROW)).toEqual({ ...ROW, sandboxEnd: null });
   });
 
   it("parses a team principal beside a user one", () => {
@@ -494,7 +494,7 @@ describe("TaskHostRow", () => {
     const parsed = taskHostRowSchema.parse({ ...ROW, sandboxId: "sbx_1" });
 
     expect(Object.hasOwn(parsed, "sandboxId")).toBe(false);
-    expect(parsed).toEqual(ROW);
+    expect(parsed).toEqual({ ...ROW, sandboxEnd: null });
   });
 
   it("strips a field a newer server adds to the principal, rather than refusing the row", () => {
@@ -584,7 +584,10 @@ describe("epic.listTaskHosts", () => {
       listTaskHostsResponseSchema.parse({
         hosts: [ROW, { ...ROW, label: "x" }],
       }).hosts,
-    ).toEqual([ROW, { ...ROW, label: "x" }]);
+    ).toEqual([
+      { ...ROW, sandboxEnd: null },
+      { ...ROW, label: "x", sandboxEnd: null },
+    ]);
   });
 
   it("refuses a response whose hosts is missing or holds a bad row", () => {

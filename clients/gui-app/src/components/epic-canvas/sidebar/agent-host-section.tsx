@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
+import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
@@ -123,7 +124,10 @@ function TaskHostSection(props: {
             {configuration}
           </Badge>
         )}
-        {principal.kind === "team" ? (
+        {props.host.sandboxEnd !== null ? (
+          <span className="text-muted-foreground">destroyed</span>
+        ) : null}
+        {principal.kind === "team" && props.host.sandboxEnd === null ? (
           <span className="text-muted-foreground">
             {hoverTaskConfiguration(configuration)}
           </span>
@@ -137,7 +141,16 @@ function TaskHostSection(props: {
       {others.length === 0 ? null : (
         <p className="text-muted-foreground">{hoverAlsoInTask(others)}</p>
       )}
-      <HostFilesAction hostId={null} />
+      {props.host.sandboxEnd === null ? (
+        <HostFilesAction hostId={null} />
+      ) : (
+        <TaskSandboxEndDetails
+          ended={{
+            name: props.host.label ?? "This sandbox",
+            end: props.host.sandboxEnd,
+          }}
+        />
+      )}
     </section>
   );
 }

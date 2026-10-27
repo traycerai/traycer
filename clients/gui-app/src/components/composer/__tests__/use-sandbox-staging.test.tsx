@@ -566,6 +566,7 @@ describe("useSandboxStaging In this task", () => {
         label: host.name,
         principal: { kind: "user", id: "u1" },
         reach: "same_principal",
+        sandboxEnd: null,
       })),
       groups: [],
       collaborators: null,

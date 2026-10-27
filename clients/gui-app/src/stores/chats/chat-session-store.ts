@@ -2019,6 +2019,8 @@ export interface ChatSessionState {
    * `epic.createChat`'s `initialMessage`, so the same message never double-runs.
    */
   sendSeededUserMessage: (input: {
+    readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+    readonly deliveryPolicy?: ChatQueueDeliveryPolicy;
     readonly messageId: string;
     readonly clientActionId: string;
     readonly content: JsonContent;
@@ -2187,6 +2189,8 @@ export interface ChatSessionState {
   ) => string | null;
   ackAcceptedAction: (clientActionId: string) => void;
   ackFailedSendRestoration: (clientActionId: string) => void;
+  /** A durable send record owns this rejected prompt and its recovery UI. */
+  ackRetainedRejectedSend: (clientActionId: string) => void;
   /**
    * Record that THIS notice reached the screen. Called by the toast layer,
    * which is the only thing that knows - see
@@ -10858,7 +10862,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // dispatch as a sibling of the per-chat `settings`.
           accountContext: useAccountContextStore.getState().accountContext,
           sentFromHostId: sentFromHostIdSnapshot(),
-          deliveryPolicy: "auto",
+          deliveryPolicy: input.deliveryPolicy ?? "auto",
           // The handoff's intent rides the frame as well as `epic.create`. On
           // the deferred path this resend is a duplicate of the seeded message
           // and the frame is never read; on every SYNCHRONOUS path it can win
@@ -10868,7 +10872,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // turn. Sending `null` there would run the turn in the source
           // checkout if the resend won.
           worktreeIntent: input.worktreeIntent,
-          browserAnnotations: [],
+          browserAnnotations: [...(input.browserAnnotations ?? [])],
         };
         const sentClientActionId = sendAction({
           set,
@@ -10883,7 +10887,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
-            restore: { content: input.content, browserAnnotations: [] },
+            restore: {
+              content: input.content,
+              browserAnnotations: input.browserAnnotations ?? [],
+            },
             sender: input.sender,
             settings: input.settings,
             // Both copies, so a `WORKTREE_CREATE_FAILED` rejection of this
@@ -10923,7 +10930,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             accountContext: frame.accountContext,
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
-            restore: { content: input.content, browserAnnotations: [] },
+            restore: {
+              content: input.content,
+              browserAnnotations: input.browserAnnotations ?? [],
+            },
             // DELIBERATELY null while the pending ACTION above carries it. This
             // copy outlives the ack (it is what the accepted record restores
             // from on a dropped connection), and by then the intent has either
@@ -11942,6 +11952,35 @@ export function createChatSessionStoreWithNotificationDependencies(
                 reason: restoration.displacedReason,
               },
             },
+          };
+        });
+      },
+      ackRetainedRejectedSend: (clientActionId) => {
+        // The pending sandbox send keeps the content, sidecars and intent.
+        // Release only the revision this session restored, never a newer pick.
+        releaseStagingRevisionFor(clientActionId);
+        set((state) => {
+          const deliveredNoticeActionIds = new Set(
+            state.deliveredNoticeActionIds,
+          );
+          addWithFifoEviction(
+            deliveredNoticeActionIds,
+            clientActionId,
+            MAX_DELIVERED_CLIENT_ACTION_IDS,
+          );
+          return {
+            failedSendRestoration:
+              state.failedSendRestoration?.clientActionId === clientActionId
+                ? null
+                : state.failedSendRestoration,
+            lastCopyPrompts: withoutLastCopyPrompt(
+              state.lastCopyPrompts,
+              clientActionId,
+            ),
+            errorNotices: state.errorNotices.filter(
+              (notice) => notice.clientActionId !== clientActionId,
+            ),
+            deliveredNoticeActionIds,
           };
         });
       },

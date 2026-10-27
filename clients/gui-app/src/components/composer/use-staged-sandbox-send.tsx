@@ -141,9 +141,7 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             queryClient,
             userId,
             wake: (hostId: string, gesture: SandboxVerbGesture) =>
-              startSandboxWake(queryClient, binding, hostId, gesture).then(
-                (outcome) => outcome !== null && outcome.kind === "awake",
-              ),
+              startSandboxWake(queryClient, binding, hostId, gesture),
             now: Date.now,
             sleep: (ms: number) =>
               new Promise<void>((resolve) => {

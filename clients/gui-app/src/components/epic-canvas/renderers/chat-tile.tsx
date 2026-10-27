@@ -1,3 +1,14 @@
+import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  restingChatSandbox,
+  type ChatSandboxState,
+} from "@/lib/sandboxes/chat-sandbox-state";
+import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
+import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
+import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
+import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
 import { useFallbackProfileLabels } from "@/components/chat/fallback/fallback-identity";
@@ -405,6 +416,10 @@ interface ChatTileProps {
 }
 
 interface ChatTileSessionViewProps {
+  readonly restingSandbox?: Extract<
+    ChatSandboxState,
+    { readonly kind: "resting" }
+  >;
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
@@ -631,9 +646,18 @@ function ChatTileForChat(props: ChatTileProps) {
   // serves never reads as an offline tile.
   const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
   const servingHostId = useChatServingHostId(servingKey);
-  const serving = useChatServing(servingKey);
   const servedAtRest = servingHostId !== tabHostId;
   const reachability = useHostReachability(servingHostId);
+  const sandboxState = useChatSandboxState(
+    epicId,
+    tabHostId,
+    reachability.status === "reachable",
+  );
+  const copyFacts = useChatOwnerCopyFacts(
+    chatRecord?.userId ?? null,
+    tabHostId,
+    node.id,
+  );
   const lease = useHostLease(servingHostId);
   const hasReadySession = useRemoteSessionPollReadiness(servingHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
@@ -676,7 +700,11 @@ function ChatTileForChat(props: ChatTileProps) {
       lease,
       hasReadySession,
     );
-    if (strip === "offline") {
+    if (
+      strip === "offline" &&
+      sandboxState.kind !== "resting" &&
+      sandboxState.kind !== "unreachable"
+    ) {
       return (
         <ChatDeadTileBannerWithOffer
           epicId={epicId}
@@ -708,13 +736,6 @@ function ChatTileForChat(props: ChatTileProps) {
     }
     return null;
   })();
-  const catchingUpBanner =
-    serving?.state === "catching-up" && serving.catchingUp !== null ? (
-      <ChatCatchingUpBanner
-        reason={serving.catchingUp}
-        testId={`chat-catching-up-${node.id}`}
-      />
-    ) : null;
 
   if (handle === null) {
     return (
@@ -724,7 +745,7 @@ function ChatTileForChat(props: ChatTileProps) {
         className="flex h-full min-h-0 flex-col"
       >
         {deadTileBanner}
-        {catchingUpBanner}
+        <ChatTileCatchingUpBanner chat={servingKey} />
         <ChatTilePreContent
           testId={`chat-tile-pre-content-${node.id}`}
           frame={preContentFrame}
@@ -737,7 +758,12 @@ function ChatTileForChat(props: ChatTileProps) {
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {deadTileBanner}
-      {catchingUpBanner}
+      <ChatTileCatchingUpBanner chat={servingKey} />
+      <PendingSandboxSendForChat
+        epicId={epicId}
+        chatId={node.id}
+        tabId={viewTabId}
+      />
       <SandboxReadyLineForChat chatId={node.id} />
       <TombstonedProfileProvider
         providers={providersList.data?.providers ?? []}
@@ -750,13 +776,46 @@ function ChatTileForChat(props: ChatTileProps) {
           tileId={props.tileId}
           isActive={isActive}
           currentEpicId={epicId}
-          readOnlyNotice={servedAtRest ? CHAT_AT_REST_NOTICE : null}
+          restingSandbox={restingChatSandbox(
+            sandboxState,
+            preContentFrame.cloneAllowed,
+            copyFacts,
+          )}
+          readOnlyNotice={liveSandboxReadOnlyNotice(sandboxState, servedAtRest)}
           isLiveSession
           preContent={preContentFrame}
         />
       </TombstonedProfileProvider>
+      {sandboxState.kind === "resting" ||
+      sandboxState.kind === "unreachable" ? (
+        <ChatSandboxFooter state={sandboxState} />
+      ) : null}
     </div>
   );
+}
+
+function ChatTileCatchingUpBanner(props: {
+  readonly chat: ChatServingKey;
+}): ReactNode {
+  const serving = useChatServing(props.chat);
+  if (serving?.state !== "catching-up" || serving.catchingUp === null)
+    return null;
+  return (
+    <ChatCatchingUpBanner
+      reason={serving.catchingUp}
+      testId={`chat-catching-up-${props.chat.chatId}`}
+    />
+  );
+}
+
+function liveSandboxReadOnlyNotice(
+  state: ChatSandboxState,
+  servedAtRest: boolean,
+): string | null {
+  if (state.kind === "destroyed")
+    return taskSandboxEndLine(state.ended.name, state.ended.end);
+  if (servedAtRest && state.kind !== "resting") return CHAT_AT_REST_NOTICE;
+  return null;
 }
 
 interface ChatDeadTileBannerContainerProps {
@@ -802,12 +861,9 @@ export function ChatDeadTileBannerContainer(
  * the role gate - the live tile, whose body under the strip reads the same
  * value.
  */
-function ChatDeadTileBannerWithOffer(
-  props: ChatDeadTileBannerContainerProps & {
-    readonly cloneAllowed: boolean;
-  },
-): ReactNode {
-  const chatRecord = useChatById(props.chatId);
+function useDeadTileSourceOwner(
+  props: ChatDeadTileBannerContainerProps,
+): string | null {
   // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
   // list the sidebar tree already fetched for this epic, and that fetch rides
   // the session's client - so this must too, or it is a cache miss per host
@@ -832,7 +888,17 @@ function ChatDeadTileBannerWithOffer(
     chatId: providedOwnerUserId === null ? props.chatId : null,
     sourceOwnerHostId: props.sourceHostId,
   });
-  const sourceOwnerUserId = providedOwnerUserId ?? lookedUpOwnerUserId;
+  return providedOwnerUserId ?? lookedUpOwnerUserId;
+}
+
+function ChatDeadTileBannerWithOffer(
+  props: ChatDeadTileBannerContainerProps & {
+    readonly cloneAllowed: boolean;
+  },
+): ReactNode {
+  const chatRecord = useChatById(props.chatId);
+  const sourceOwnerUserId = useDeadTileSourceOwner(props);
+  const sourceTitle = chatRecord?.title ?? "";
   // The two facts the banner's copy and Clone offer vary on (shared-chat
   // support). Ownership: only a POSITIVE mismatch against the signed-in user
   // flips the foreign-owner copy - an unknown owner or identity stays on the
@@ -855,7 +921,7 @@ function ChatDeadTileBannerWithOffer(
     sourceSettings: chatRecord?.settings ?? null,
     // Raw stored title, `""` when this dead tile has no record left to read
     // one from - the host's fork-seed gap-fill names the clone in that case.
-    sourceTitle: chatRecord?.title ?? "",
+    sourceTitle,
     sourceOwnerUserId,
   });
   // A removed team sandbox's agent continues on another awake sandbox of its
@@ -866,15 +932,33 @@ function ChatDeadTileBannerWithOffer(
     chatId: props.chatId,
     sourceHostId: props.sourceHostId,
     ownerUserId: sourceOwnerUserId,
-    name: chatRecord?.title ?? "",
+    name: sourceTitle,
     fallback: offer.clone,
   });
-  const continues = continueOffer.eligible && props.reason === "host-offline";
+  const sandboxState = useChatSandboxState(
+    props.epicId,
+    props.sourceHostId,
+    false,
+  );
+  const reason =
+    sandboxState.kind === "destroyed" ? "sandbox-destroyed" : props.reason;
+  const continues = continueOffer.eligible && reason === "host-offline";
+  if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
+    return null;
   return (
     <>
       <ChatDeadTileBanner
-        hostLabel={props.hostLabel}
-        reason={continues ? "sandbox-removed" : props.reason}
+        details={
+          sandboxState.kind === "destroyed" ? (
+            <TaskSandboxEndDetails ended={sandboxState.ended} />
+          ) : undefined
+        }
+        hostLabel={
+          sandboxState.kind === "destroyed"
+            ? sandboxState.ended.name
+            : props.hostLabel
+        }
+        reason={continues ? "sandbox-removed" : reason}
         ownedByViewer={ownedByViewer}
         environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
@@ -3103,11 +3187,16 @@ function useChatTileSessionViewModel(
     ],
   );
 
+  const submitBoundSandboxMessage = useBoundSandboxSend({
+    epicId: currentEpicId,
+    chatId: node.id,
+    target: props.restingSandbox ?? null,
+  });
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
-      if (!canAct) return false;
       if (profile === null) return false;
       if (activeEditingQueueItemId !== null) {
+        if (!canAct) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
         // carries the settings and the host picks safe-point vs interrupt-restart
         // (any drift was already confirmed by the composer's steer dialog).
@@ -3129,6 +3218,9 @@ function useChatTileSessionViewModel(
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
+      if (props.restingSandbox !== undefined)
+        return submitBoundSandboxMessage(input);
+      if (!canAct) return false;
       return submitThroughRebindGate({
         submit: input,
         dispatch: dispatchUserSend,
@@ -3137,6 +3229,8 @@ function useChatTileSessionViewModel(
     },
     [
       activeEditingQueueItemId,
+      props.restingSandbox,
+      submitBoundSandboxMessage,
       canAct,
       chatActions,
       dispatchUi,
@@ -3639,8 +3733,9 @@ function useChatTileSessionViewModel(
       isViewer: accessFlags.isViewer,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
+      restingSandbox: props.restingSandbox !== undefined,
     }),
-    [accessFlags.isViewer, canAct, props.readOnlyNotice],
+    [accessFlags.isViewer, canAct, props.readOnlyNotice, props.restingSandbox],
   );
 
   // Steer capability is a stable boolean (flips only when the running turn's

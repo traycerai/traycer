@@ -4,6 +4,7 @@ import {
 } from "@tanstack/react-query";
 import type {
   SandboxControlFailure,
+  SandboxWakeOutcome,
   SandboxCreateFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -82,7 +83,7 @@ export interface StagedSandboxRunDeps {
   readonly wake: (
     hostId: string,
     gesture: SandboxVerbGesture,
-  ) => Promise<boolean>;
+  ) => Promise<boolean | SandboxWakeOutcome | null>;
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
 }
@@ -266,9 +267,12 @@ async function wakeCurrentStage(
   if (boundary === null) return false;
   const answered = await deps.wake(hostId, stagedWakeGesture(stage));
   if (!stillCurrent(surfaceKey, clientRequestId)) return false;
+  const awake =
+    answered === true ||
+    (typeof answered === "object" && answered?.kind === "awake");
   const observed = pendingSandboxStageObservation(
     surfaceKey,
-    answered ? "awake" : "waking",
+    awake ? "awake" : "waking",
     {
       kind: "wake-result",
       requestedAt: boundary,
@@ -276,9 +280,20 @@ async function wakeCurrentStage(
   );
   // A newer request owns settlement. Supersession is not a failed wake.
   if (observed === "unknown") return false;
-  if (!answered)
-    fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
-  return answered;
+  if (!awake) fail(surfaceKey, stagedWakeFailure(answered));
+  return awake;
+}
+
+function stagedWakeFailure(
+  answered: boolean | SandboxWakeOutcome | null,
+): StagedSandboxFailure {
+  if (typeof answered === "object" && answered !== null) {
+    if (answered.kind === "credit-gate")
+      return { kind: "credits", shortfallMc: answered.shortfallMc };
+    if (answered.kind === "refused")
+      return { kind: "credits", shortfallMc: null };
+  }
+  return { kind: "failed", code: "wake", step: "booting" };
 }
 
 /** Whether the run is still the one the stage holds (not cancelled or retried). */

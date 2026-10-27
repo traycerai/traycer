@@ -9,10 +9,16 @@ import {
 import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
+import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -22,6 +28,8 @@ import {
   PendingSandboxMessage,
   SandboxReadyLine,
   SandboxSetupLine,
+  type SandboxSetupLineActions,
+  type SandboxSetupLineFacts,
 } from "@/components/composer/sandbox-setup-line";
 import {
   StoppedSandboxSendReceipts,
@@ -107,6 +115,7 @@ import {
   completePendingSandboxTerminal,
   canWithdrawPendingSandboxSend,
   returnPendingSandboxSend,
+  returnPendingSandboxMessage,
   returnPendingSandboxSendToDraft,
   pendingSandboxRecoveryDraftId,
   requestedAgentReadiness,
@@ -157,6 +166,7 @@ import {
   type PendingSandboxSendDispatch,
   type PendingSandboxSendRequest,
   pendingSandboxSendFacts,
+  pendingSandboxDispatchCurrent,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 
 import {
@@ -169,6 +179,7 @@ import {
   type PendingSendFacts,
   type PendingSendBlocker,
   type PendingSendEvent,
+  type PendingSendView,
   type PendingSendTransition,
 } from "@/lib/sandboxes/pending-sandbox-send-transition";
 
@@ -192,6 +203,23 @@ function returnStoppedPendingSend(id: string): void {
   if (!Object.hasOwn(sends, id)) return;
   const send = sends[id];
   const stage = readStagedSandbox(pendingSendSurfaceKey(id)) ?? send.stopStage;
+  if (send.request.kind === "message") {
+    const saveInDrafts =
+      attention === undefined ||
+      attention.userId !== (useAuthStore.getState().profile?.userId ?? null);
+    void returnPendingSandboxMessage(id, saveInDrafts)
+      .then((returned) => {
+        if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
+          return;
+        const attempt = stopsInFlight.get(id);
+        if (attempt !== undefined) attempt.returned = true;
+        if (stage !== undefined)
+          recordStoppedSandboxSend(send, stage, stage.target.name, returned);
+      })
+      .catch(() => undefined);
+    stopAttention.delete(id);
+    return;
+  }
   const returned =
     attention !== undefined &&
     attention.userId === (useAuthStore.getState().profile?.userId ?? null)
@@ -279,6 +307,28 @@ function OwnedPendingSendDriver(props: { readonly id: string }): ReactNode {
 }
 
 function PendingSendDriver(props: { readonly id: string }): ReactNode {
+  const send = usePendingSandboxSendStore(
+    (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
+  );
+  if (send?.returnRequested !== undefined)
+    return <PendingMessageReturnDriver send={send} />;
+  return <ActivePendingSendDriver {...props} />;
+}
+
+function PendingMessageReturnDriver(props: {
+  readonly send: PendingSandboxSend;
+}): ReactNode {
+  const { id, returnRequested } = props.send;
+  useEffect(() => {
+    if (returnRequested === undefined) return;
+    void returnPendingSandboxMessage(id, returnRequested.saveInDrafts).catch(
+      () => undefined,
+    );
+  }, [id, returnRequested]);
+  return null;
+}
+
+function ActivePendingSendDriver(props: { readonly id: string }): ReactNode {
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
@@ -1242,19 +1292,25 @@ function deliverPendingSend(input: {
   readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, hostId, settings } = input;
-  if (send.request.kind !== "chat") return;
+  if (send.request.kind !== "chat" && send.request.kind !== "message") return;
   claimPendingDispatch(send, input.stage, {
     epicId: send.epicId,
     hostId,
-    parentId: send.request.parentId,
+    parentId: send.request.kind === "chat" ? send.request.parentId : null,
     title: "",
-    chatId: uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL),
+    chatId:
+      send.request.kind === "message"
+        ? send.request.chatId
+        : uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL),
     settings,
     ...(input.opencodeLine === null
       ? {}
       : { opencodeLine: input.opencodeLine }),
     workspaceMode: "folderless",
-    worktreeIntent: null,
+    worktreeIntent:
+      send.request.kind === "message"
+        ? (send.request.worktreeIntent ?? null)
+        : null,
     initialMessage:
       send.userId === null
         ? null
@@ -1370,6 +1426,29 @@ function PendingDispatchDriver(props: {
   const { send, dispatch } = props;
   const client = useHostClientForHostId(dispatch.input.hostId);
   const policy = usePendingDispatchLifecycle(send, dispatch, client === null);
+  return send.request.kind === "message" ? (
+    <PendingMessageDispatchDriver
+      send={send}
+      dispatch={dispatch}
+      policy={policy}
+    />
+  ) : (
+    <PendingCreateDispatchDriver
+      send={send}
+      dispatch={dispatch}
+      client={client}
+      policy={policy}
+    />
+  );
+}
+
+function PendingCreateDispatchDriver(props: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly policy: PendingDispatchPolicy;
+}): ReactNode {
+  const { send, dispatch, client, policy } = props;
   const createChat = useEpicCreateChatForPendingSandbox(client, send.userId);
   const createChatAsync = createChat.mutateAsync;
   const navigateNestedFocus = useEpicNestedFocusNavigation();
@@ -1399,6 +1478,216 @@ function PendingDispatchDriver(props: {
     send,
   ]);
   return null;
+}
+
+/** The existing chat uses its ordinary seeded send and the same durable claim. */
+function PendingMessageDispatchDriver(props: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+  readonly policy: PendingDispatchPolicy;
+}): ReactNode {
+  const handle = useChatSessionHandleForContainer(
+    props.send.epicId,
+    props.dispatch.input.chatId,
+    props.dispatch.input.hostId,
+    props.policy.dispatchAllowed,
+  );
+  return handle === null ? null : (
+    <PendingMessageDispatchSession {...props} handle={handle} />
+  );
+}
+
+function PendingMessageDispatchSession(props: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+  readonly policy: PendingDispatchPolicy;
+  readonly handle: ChatSessionStoreHandle;
+}): ReactNode {
+  const { send, dispatch, policy, handle } = props;
+  const snapshot = useStore(
+    handle.store,
+    useShallow((state) => ({
+      epoch: state.connectionEpoch,
+      status: state.connectionStatus,
+      loaded: state.snapshotLoaded,
+      canAct: state.access?.canAct === true,
+      accepted: state.acceptedActions,
+      pending: state.pendingActions,
+      messages: state.messages,
+      delivery: state.messageDelivery,
+      failed: state.failedSendRestoration,
+      lastCopies: state.lastCopyPrompts,
+      notices: state.errorNotices,
+    })),
+  );
+  const attempt = useRef<PendingMessageAttempt | null>(null);
+  useEffect(() => {
+    const message = dispatch.input.initialMessage;
+    if (
+      message === null ||
+      message === undefined ||
+      send.request.kind !== "message" ||
+      !pendingSandboxDispatchCurrent(send.id, dispatch)
+    )
+      return;
+    const state = handle.store.getState();
+    if (
+      settlePendingMessage({
+        send,
+        dispatch,
+        state,
+        message,
+        dispatchAllowed: policy.dispatchAllowed,
+      })
+    )
+      return;
+    if (
+      !policy.dispatchAllowed ||
+      !pendingMessageCanDispatch({
+        send,
+        dispatch,
+        state,
+        handle,
+        attempt: attempt.current,
+        actionId: message.clientActionId,
+      })
+    )
+      return;
+    const plan = transitionPendingSend(
+      pendingSendState(send, "none"),
+      "observe",
+      pendingSandboxSendFacts(send.id, policy.environment),
+    );
+    if (!plan.effects.includes("dispatch")) return;
+    if (
+      usePendingSandboxSendStore.getState().holdObservation(send.id, plan) ===
+      null
+    )
+      return;
+    attempt.current = { handle, epoch: state.connectionEpoch };
+    if (!sendPendingMessage(state, send, dispatch, message)) {
+      attempt.current = null;
+      usePendingSandboxSendStore
+        .getState()
+        .markDispatchUncertain(send.id, dispatch);
+    }
+  }, [
+    dispatch,
+    handle,
+    policy.dispatchAllowed,
+    policy.environment,
+    send,
+    snapshot,
+  ]);
+  return null;
+}
+
+interface PendingMessageAttempt {
+  readonly handle: ChatSessionStoreHandle;
+  readonly epoch: number;
+}
+
+type PendingDispatchMessage = NonNullable<
+  PendingSandboxSendDispatch["input"]["initialMessage"]
+>;
+
+function pendingMessageOutcome(
+  state: ChatSessionState,
+  message: PendingDispatchMessage,
+): "accepted" | "rejected" | "waiting" {
+  if (
+    state.acceptedActions[message.clientActionId]?.action === "send" ||
+    state.messages.some(
+      (row) => row.role === "user" && row.messageId === message.messageId,
+    ) ||
+    state.messageDelivery?.messageId === message.messageId
+  )
+    return "accepted";
+  // A rejection can be displaced from the composer's single recovery slot.
+  // Absence from pendingActions alone is never proof of rejection.
+  if (
+    state.failedSendRestoration?.clientActionId === message.clientActionId ||
+    Object.hasOwn(state.lastCopyPrompts, message.clientActionId) ||
+    state.errorNotices.some(
+      (notice) => notice.clientActionId === message.clientActionId,
+    )
+  )
+    return "rejected";
+  return "waiting";
+}
+
+function settlePendingMessage(input: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+  readonly state: ChatSessionState;
+  readonly message: PendingDispatchMessage;
+  readonly dispatchAllowed: boolean;
+}): boolean {
+  const { send, dispatch, state, message, dispatchAllowed } = input;
+  const outcome = pendingMessageOutcome(state, message);
+  if (outcome === "accepted") {
+    if (
+      usePendingSandboxSendStore
+        .getState()
+        .markDelivered(send.id, dispatch.delivery)
+    ) {
+      useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
+    }
+    return true;
+  }
+  if (outcome !== "rejected" || !dispatchAllowed) return false;
+  refusePendingDispatch(send, dispatch);
+  state.ackRetainedRejectedSend(message.clientActionId);
+  return true;
+}
+
+function pendingMessageCanDispatch(input: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+  readonly state: ChatSessionState;
+  readonly handle: ChatSessionStoreHandle;
+  readonly attempt: PendingMessageAttempt | null;
+  readonly actionId: string;
+}): boolean {
+  const { send, dispatch, state, handle, attempt, actionId } = input;
+  const pending = Object.hasOwn(state.pendingActions, actionId);
+  if (state.connectionStatus !== "open") {
+    if (dispatch.status === "sending" && (attempt !== null || pending)) {
+      usePendingSandboxSendStore
+        .getState()
+        .markDispatchUncertain(send.id, dispatch);
+    }
+    return false;
+  }
+  if (
+    !state.snapshotLoaded ||
+    state.access?.canAct !== true ||
+    send.userId === null ||
+    pending
+  )
+    return false;
+  return attempt?.handle !== handle || attempt.epoch !== state.connectionEpoch;
+}
+
+function sendPendingMessage(
+  state: ChatSessionState,
+  send: PendingSandboxSend,
+  dispatch: PendingSandboxSendDispatch,
+  message: PendingDispatchMessage,
+): boolean {
+  if (send.request.kind !== "message") return false;
+  return (
+    state.sendSeededUserMessage({
+      messageId: message.messageId,
+      clientActionId: message.clientActionId,
+      content: message.content,
+      sender: message.sender,
+      settings: dispatch.input.settings,
+      worktreeIntent: send.request.worktreeIntent ?? null,
+      browserAnnotations: send.request.browserAnnotations,
+      deliveryPolicy: send.request.deliveryPolicy,
+    }) !== null
+  );
 }
 
 /** Converts observations into facts; only the transition kernel chooses effects. */
@@ -1574,7 +1863,10 @@ function usePendingDispatchLifecycle(
     send.retryRequest,
     send.retryHandledId,
   ]);
-  return { dispatchAllowed: plan.effects.includes("dispatch"), environment };
+  return {
+    dispatchAllowed: owned && plan.effects.includes("dispatch"),
+    environment,
+  };
 }
 
 /** A refusal is definite; every other failed response may have accepted the create. */
@@ -1779,18 +2071,7 @@ function PendingDispatchLine(props: {
     sandboxObservation(props.dispatch.blocker ?? "none", environment),
     pendingSandboxSendFacts(props.id, environment),
   );
-  const copy: Readonly<Record<typeof view.line, string>> = {
-    hidden: "",
-    waiting: "Waiting for the sandbox…",
-    creating: "Creating agent…",
-    uncertain: "Couldn't confirm the agent was created.",
-    credits: "Add credits to resume this sandbox.",
-    settings: "Repair the sandbox's settings to continue.",
-    "not-sent": "Couldn't resume this sandbox.",
-    model: "Waiting for a model…",
-    provider: "Waiting for the agent…",
-    delivered: "Agent ready.",
-  };
+
   return (
     <div
       className="flex flex-wrap items-center gap-2 text-ui-xs"
@@ -1806,7 +2087,7 @@ function PendingDispatchLine(props: {
           variant={undefined}
         />
       )}
-      <span>{copy[view.line]}</span>
+      <span>{pendingDispatchLineCopy(send.request.kind, view.line)}</span>
       {view.line === "credits" || view.line === "settings" ? (
         <PendingDispatchRemedy
           id={props.dispatch.delivery.sandboxId}
@@ -1832,6 +2113,28 @@ function PendingDispatchLine(props: {
       ) : null}
     </div>
   );
+}
+
+function pendingDispatchLineCopy(
+  kind: PendingSandboxSendRequest["kind"],
+  line: PendingSendView["line"],
+): string {
+  const message = kind === "message";
+  const copy: Readonly<Record<PendingSendView["line"], string>> = {
+    hidden: "",
+    waiting: "Waiting for the sandbox…",
+    creating: message ? "Sending message…" : "Creating agent…",
+    uncertain: message
+      ? "Couldn't confirm the message was sent."
+      : "Couldn't confirm the agent was created.",
+    credits: "Add credits to resume this sandbox.",
+    settings: "Repair the sandbox's settings to continue.",
+    "not-sent": "Couldn't resume this sandbox.",
+    model: "Waiting for a model…",
+    provider: "Waiting for the agent…",
+    delivered: message ? "Message sent." : "Agent ready.",
+  };
+  return copy[line];
 }
 
 /** Repairs a live sandbox without releasing a possibly accepted request. */
@@ -1885,6 +2188,7 @@ export function PendingSandboxSendStrip(props: {
         .filter(
           (send) =>
             send.epicId === props.epicId &&
+            send.request.kind !== "message" &&
             send.delivery === null &&
             send.userId === userId,
         )
@@ -1908,6 +2212,41 @@ export function PendingSandboxSendStrip(props: {
           ))}
         </div>
       ) : null}
+    </>
+  );
+}
+
+/** A bound send's setup and pending bubble stay beside that chat on every copy. */
+export function PendingSandboxSendForChat(props: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly tabId: string;
+}): ReactNode {
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  const ids = usePendingSandboxSendStore(
+    useShallow((state) =>
+      Object.values(state.sends)
+        .filter(
+          (send) =>
+            send.epicId === props.epicId &&
+            send.userId === userId &&
+            send.delivery === null &&
+            send.request.kind === "message" &&
+            send.request.chatId === props.chatId,
+        )
+        .map((send) => send.id),
+    ),
+  );
+  return (
+    <>
+      <StoppedSandboxSendReceiptStrip
+        epicId={props.epicId}
+        tabId={props.tabId}
+        chatId={props.chatId}
+      />
+      {ids.map((id) => (
+        <PendingSendItem key={id} id={id} tabId={props.tabId} />
+      ))}
     </>
   );
 }
@@ -1936,6 +2275,8 @@ function PendingSendItem(props: {
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
   if (send === null) return null;
+  if (send.returnRequested !== undefined)
+    return <PendingMessageReturnItem send={send} />;
   const dispatch = send.dispatch ?? null;
   if (dispatch === null)
     return <PendingStagedSendItem send={send} tabId={props.tabId} />;
@@ -1949,9 +2290,67 @@ function PendingSendItem(props: {
         userId={send.userId}
         dispatch={dispatch}
       />
-      {send.request.kind === "chat" ? (
-        <PendingSandboxMessage text={send.text} />
-      ) : null}
+      <PendingSendMessage send={send} />
+    </div>
+  );
+}
+
+function PendingMessageReturnItem(props: {
+  readonly send: PendingSandboxSend;
+}): ReactNode {
+  const { send } = props;
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const giveBack = useCallback(
+    () =>
+      returnPendingSandboxMessage(
+        send.id,
+        send.returnRequested?.saveInDrafts ?? false,
+      ),
+    [send.id, send.returnRequested],
+  );
+  useEffect(() => {
+    let disposed = false;
+    void giveBack().then(
+      () => {
+        if (
+          !disposed &&
+          Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id)
+        )
+          setFailed(true);
+      },
+      () => {
+        if (!disposed) setFailed(true);
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [attempt, giveBack, send.id]);
+  return (
+    <div
+      className="flex w-full flex-col gap-2"
+      data-testid="pending-sandbox-send"
+    >
+      <p role="status" className="text-ui-xs text-muted-foreground">
+        {failed
+          ? "Couldn't return your message. It is still kept here."
+          : "Returning your message…"}
+      </p>
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        aria-busy={!failed}
+        disabled={!failed}
+        onClick={() => {
+          setFailed(false);
+          setAttempt((value) => value + 1);
+        }}
+      >
+        Cancel the message
+      </Button>
+      <PendingSendMessage send={send} />
     </div>
   );
 }
@@ -2320,9 +2719,7 @@ function PendingStagedSendItem(props: {
   );
   useOpenTerminalWhenUp(send, stage, newHost.onOpenTerminal);
   if (stage === null || facts === null) {
-    return send.request.kind === "chat" ? (
-      <PendingSandboxMessage text={send.text} />
-    ) : null;
+    return <PendingSendMessage send={send} />;
   }
   const backToComposer = (restage: boolean): ReturnedPendingSandboxSend => {
     return endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
@@ -2368,7 +2765,8 @@ function PendingStagedSendItem(props: {
           stop={stop}
         />
       ) : (
-        <SandboxSetupLine
+        <PendingSendSetupLine
+          requestKind={send.request.kind}
           withdrawalAllowed={canWithdraw}
           stage={stage}
           name={name}
@@ -2376,6 +2774,12 @@ function PendingStagedSendItem(props: {
           actions={{
             onKeepWaiting: () => retrySend("keep-waiting"),
             onCancel: () => {
+              if (send.request.kind === "message") {
+                void returnPendingSandboxMessage(send.id, false).catch(
+                  () => undefined,
+                );
+                return;
+              }
               const returned = backToComposer(false);
               if (
                 !Object.hasOwn(
@@ -2399,10 +2803,45 @@ function PendingStagedSendItem(props: {
           }}
         />
       )}
-      {send.request.kind === "chat" ? (
-        <PendingSandboxMessage text={send.text} />
-      ) : null}
+      <PendingSendMessage send={send} />
     </div>
+  );
+}
+
+function PendingSendMessage(props: {
+  readonly send: PendingSandboxSend;
+}): ReactNode {
+  if (
+    props.send.request.kind !== "chat" &&
+    props.send.request.kind !== "message"
+  )
+    return null;
+  return <PendingSandboxMessage text={props.send.text} />;
+}
+
+/** Existing chats keep their binding, so their setup offers only bound remedies. */
+function PendingSendSetupLine(props: {
+  readonly requestKind: PendingSandboxSendRequest["kind"];
+  readonly stage: StagedSandbox;
+  readonly name: string;
+  readonly facts: SandboxSetupLineFacts;
+  readonly withdrawalAllowed: boolean;
+  readonly actions: SandboxSetupLineActions;
+}): ReactNode {
+  const { requestKind, actions, ...line } = props;
+  if (requestKind !== "message")
+    return <SandboxSetupLine {...line} actions={actions} />;
+  return (
+    <SandboxSetupLine
+      {...line}
+      actions={{
+        ...actions,
+        onChooseAnotherHost: null,
+        onOpenTerminal: null,
+        onChangeShape: null,
+        onChooseModel: null,
+      }}
+    />
   );
 }
 
@@ -2553,7 +2992,11 @@ function endSendBackToComposer(input: {
   if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
     return returned;
   // A task that never came to be: its start-task draft holds the message.
-  if (send.request.kind === "fork" || returned.kind === "landing-draft") {
+  if (
+    send.request.kind === "message" ||
+    send.request.kind === "fork" ||
+    returned.kind === "landing-draft"
+  ) {
     return returned;
   }
   if (input.restage) {

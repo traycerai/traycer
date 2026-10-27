@@ -45,8 +45,10 @@ export function useTaskHosts(
     options: {
       enabled: cloudAuthorized && taskId.length > 0 && viewerUserId.length > 0,
       staleTime: 30_000,
-      // An older host's E_HOST_UNSUPPORTED and every refusal are terminal;
-      // only a transport failure heals without the person.
+      // Permanent ends can arrive after the host leaves every live list.
+      poll: true,
+      // Retry transport failures; refusals wait for a scheduled refresh or
+      // a renewed credential instead of entering a retry loop.
       retry: (_failureCount, error) => isTransientHostRpcFailure(error),
     },
   });
