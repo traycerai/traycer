@@ -1,7 +1,9 @@
+import { useCallback } from "react";
 import {
-  useMutationState,
   useQueryClient,
   hashKey,
+  type Mutation,
+  type MutationStatus,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -14,6 +16,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
 import {
   sandboxMutationKeys,
   hostQueryKeys,
@@ -24,26 +27,33 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const NO_INVALIDATIONS: readonly [] = [];
 const applyingOperationIds = new Map<string, string>();
 
+function selectSettingsOperation(mutation: Mutation): {
+  order: number;
+  status: MutationStatus;
+  data: unknown;
+} {
+  return {
+    order: mutation.mutationId,
+    status: mutation.state.status,
+    data: mutation.state.data,
+  };
+}
+
 export function useSandboxSettingsOperation(
   hostId: string,
 ): "pending" | "failed" | null {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const key = hashKey(sandboxMutationKeys.repairGuestConfigurationOn(hostId));
-  const operations = useMutationState({
-    filters: {
-      predicate: (mutation) =>
-        hashKey(mutation.options.mutationKey ?? []) === key &&
-        typeof mutation.state.context === "object" &&
-        mutation.state.context !== null &&
-        "userId" in mutation.state.context &&
-        mutation.state.context.userId === userId,
-    },
-    select: (mutation) => ({
-      order: mutation.mutationId,
-      status: mutation.state.status,
-      data: mutation.state.data,
-    }),
-  });
+  const predicate = useCallback(
+    (mutation: Mutation) =>
+      hashKey(mutation.options.mutationKey ?? []) === key &&
+      typeof mutation.state.context === "object" &&
+      mutation.state.context !== null &&
+      "userId" in mutation.state.context &&
+      mutation.state.context.userId === userId,
+    [key, userId],
+  );
+  const operations = useMutationStateOf({ predicate }, selectSettingsOperation);
   const latest = operations.reduce<(typeof operations)[number] | null>(
     (best, operation) =>
       best === null || operation.order > best.order ? operation : best,
