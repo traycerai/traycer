@@ -982,7 +982,7 @@ function SandboxActions(props: {
         busy={pendingVerb !== null}
         onRetry={(pressed) => {
           if (pressed === "destroy") {
-            destroy.mutate(undefined, {
+            destroy.mutate(props.operation?.kind === "failed" ? props.operation.destroyRequest : undefined, {
               onSuccess: (gone) => {
                 if (gone) props.onDestroyed?.();
               },

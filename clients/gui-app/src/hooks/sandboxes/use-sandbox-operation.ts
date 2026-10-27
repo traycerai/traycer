@@ -4,6 +4,7 @@ import {
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SandboxDestroySkippedError, type SandboxDestroyRequest } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -11,12 +12,14 @@ export type SandboxRowVerb = SandboxLifecycleVerb | "destroy";
 
 export type SandboxRowOperation =
   | { readonly kind: "pending"; readonly verb: SandboxRowVerb }
+  | { readonly kind: "skipped"; readonly message: string }
   | {
       readonly kind: "failed";
       readonly verb: SandboxRowVerb;
       readonly error: Error;
       readonly code: string | null;
       readonly reference: string;
+      readonly destroyRequest: SandboxDestroyRequest;
     };
 
 /**
@@ -51,6 +54,7 @@ export function useSandboxOperation(
         hashKey(mutation.options.mutationKey ?? []) === destroyKey
           ? "destroy"
           : mutation.state.variables,
+      variables: mutation.state.variables,
       status: mutation.state.status,
       error: mutation.state.error,
     }),
@@ -65,6 +69,9 @@ export function useSandboxOperation(
     return { kind: "pending", verb: latest.verb };
   }
   if (latest.status !== "error" || latest.error === null) return null;
+  if (latest.error instanceof SandboxDestroySkippedError) {
+    return { kind: "skipped", message: latest.error.message };
+  }
   const failure =
     latest.error instanceof SandboxOperationError ? latest.error.failure : null;
   const code = failure?.kind === "refused" ? failure.code : null;
@@ -79,6 +86,7 @@ export function useSandboxOperation(
     error: latest.error,
     code,
     reference,
+    destroyRequest: destroyRetryRequest(latest.variables),
   };
 }
 
@@ -90,4 +98,12 @@ function isRowVerb(value: unknown): value is SandboxRowVerb {
     value === "stop" ||
     value === "destroy"
   );
+}
+
+function destroyRetryRequest(value: unknown): SandboxDestroyRequest {
+  if (typeof value === "object" && value !== null && "idleOnly" in value && value.idleOnly === true &&
+    "startedBy" in value && (typeof value.startedBy === "string" || value.startedBy === null)) {
+    return { idleOnly: true, startedBy: value.startedBy };
+  }
+  return undefined;
 }

@@ -3,8 +3,6 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import type { SandboxVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
-import { SANDBOX_REFUSAL_CODE_NOT_FOUND } from "@traycer/protocol/host/sandbox-control";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
@@ -16,23 +14,20 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import {
+  sandboxDestroyMutationOptions,
+  SandboxDestroySkippedError,
+} from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
-import {
-  forgetEndedSandboxHost,
-  recordEndedSandboxHost,
-} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 /** One target's own outcome: a batch never reports for the set as a whole. */
 export type SandboxBatchOutcome =
   | { readonly kind: "destroyed" }
   | { readonly kind: "destroying" }
-  | { readonly kind: "gone" }
-  /** No longer an idle agent sandbox when the batch reached it. */
-  | { readonly kind: "skipped" }
+  | { readonly kind: "skipped"; readonly message: string }
   | { readonly kind: "failed"; readonly message: string };
 
 export interface SandboxBatchResult {
@@ -42,6 +37,7 @@ export interface SandboxBatchResult {
 }
 
 export interface SandboxBatchTarget {
+  readonly hostId: string;
   readonly sandboxId: string;
   readonly name: string;
 }
@@ -52,20 +48,6 @@ export interface SandboxDestroyBatchRequest {
   readonly startedBy: string | null;
 }
 
-/** A destroy's answer as its target's outcome: a sandbox already gone is gone. */
-function destroyOutcome(result: SandboxVerbFetchResult): SandboxBatchOutcome {
-  if (result.kind === "ok") {
-    return { kind: result.settled ? "destroyed" : "destroying" };
-  }
-  if (
-    result.kind === "refused" &&
-    result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
-  ) {
-    return { kind: "gone" };
-  }
-  return { kind: "failed", message: sandboxFailureMessage(result) };
-}
-
 interface SandboxDestroyBatchContext {
   readonly directory: HostDirectoryService | null;
   readonly userId: string | null;
@@ -74,8 +56,8 @@ interface SandboxDestroyBatchContext {
 /**
  * `Destroy all idle`: destroys the enumerated rows the confirmation named,
  * one by one, and never more. Each target is re-read at execution: a row
- * that woke or was kept meanwhile is skipped rather than destroyed, and a
- * retry passes the same targets, so it never widens the set. The server
+ * that woke or is no longer authorized is skipped rather than destroyed, and a
+ * retry passes only failed targets, so it never widens the set. The server
  * rechecks authority per target. Each request carries whoever is signed in
  * when it is sent, so the batch stops before any read or destroy once the
  * account that confirmed it (`startedBy`) is no longer the one signed in.
@@ -113,40 +95,22 @@ export function useSandboxDestroyBatch(): UseMutationResult<
       const results: SandboxBatchResult[] = [];
       for (const target of targets) {
         stopIfAccountChanged();
-        // Read again right before this destroy: another member may have
-        // resumed or kept the row while the batch worked through the others.
-        const listed = await binding.auth.listSandboxes();
-        if (listed.kind !== "ok") {
-          results.push({
-            ...target,
-            outcome: { kind: "failed", message: sandboxFailureMessage(listed) },
-          });
-          continue;
-        }
-        const row =
-          listed.response.sandboxes.find((s) => s.id === target.sandboxId) ??
-          null;
-        if (row === null) {
-          results.push({ ...target, outcome: { kind: "gone" } });
-          continue;
-        }
-        if (!row.burst || row.frozen || row.state !== "suspended") {
-          results.push({ ...target, outcome: { kind: "skipped" } });
-          continue;
-        }
-        stopIfAccountChanged();
-        if (startedBy !== null) {
-          recordEndedSandboxHost(row.hostId, {
-            name: row.displayName,
-            at: Date.now(),
-            actor: { userId: startedBy, displayName: null },
-          });
-        }
-        const outcome = destroyOutcome(
-          await binding.auth.destroySandbox(target.sandboxId),
+        const mutation = queryClient.getMutationCache().build(queryClient,
+          sandboxDestroyMutationOptions({
+            id: target.sandboxId,
+            hostId: target.hostId,
+            displayName: target.name,
+          }, binding, queryClient, runnerHost),
         );
-        if (outcome.kind === "failed") forgetEndedSandboxHost(row.hostId);
-        results.push({ ...target, outcome });
+        try {
+          const gone = await mutation.execute({ idleOnly: true, startedBy });
+          results.push({ ...target, outcome: { kind: gone ? "destroyed" : "destroying" } });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Couldn't destroy this sandbox.";
+          results.push({ ...target, outcome: {
+            kind: error instanceof SandboxDestroySkippedError ? "skipped" : "failed", message,
+          } });
+        }
       }
       return results;
     },

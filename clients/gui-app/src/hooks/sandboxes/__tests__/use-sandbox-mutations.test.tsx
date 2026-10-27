@@ -585,8 +585,8 @@ describe("useSandboxDestroyBatch", () => {
     await act(async () => {
       const results = await result.current.mutateAsync({
         targets: [
-          { sandboxId: "sbx_1", name: "one" },
-          { sandboxId: "sbx_2", name: "two" },
+          { sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" },
+          { sandboxId: "sbx_2", hostId: "host-sbx_2", name: "two" },
         ],
         startedBy: null,
       });
@@ -598,7 +598,7 @@ describe("useSandboxDestroyBatch", () => {
     expect(outcomes).toEqual(["destroyed", "skipped"]);
   });
 
-  it("refreshes the lists and the cost view once the batch settles", async () => {
+  it("refreshes each destroyed row and the cost view when the batch settles", async () => {
     state.binding?.auth.listSandboxes.mockResolvedValue({
       kind: "ok",
       response: {
@@ -616,12 +616,13 @@ describe("useSandboxDestroyBatch", () => {
 
     await act(async () => {
       await result.current.mutateAsync({
-        targets: [{ sandboxId: "sbx_1", name: "one" }],
+        targets: [{ sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" }],
         startedBy: null,
       });
     });
 
     expect(invalidatedKeys(invalidate)).toEqual([
+      REGISTERED_HOSTS_KEY,
       REGISTERED_HOSTS_KEY,
       COSTS_KEY,
     ]);
@@ -1002,7 +1003,7 @@ describe("useSandboxDestroyBatch under another account", () => {
     await act(async () => {
       await result.current
         .mutateAsync({
-          targets: [{ sandboxId: "sbx_1", name: "one" }],
+          targets: [{ sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" }],
           startedBy: "user-a",
         })
         .catch(() => undefined);
@@ -1020,7 +1021,7 @@ describe("useSandboxDestroyBatch under another account", () => {
     await act(async () => {
       await result.current
         .mutateAsync({
-          targets: [{ sandboxId: "sbx_1", name: "one" }],
+          targets: [{ sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" }],
           startedBy: "user-a",
         })
         .catch(() => undefined);
@@ -1147,9 +1148,9 @@ describe("a destroy records its host as ended", () => {
       await act(async () => {
         await result.current.mutateAsync({
           targets: [
-            { sandboxId: "sbx_1", name: "one" },
-            { sandboxId: "sbx_2", name: "two" },
-            { sandboxId: "sbx_3", name: "three" },
+            { sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" },
+            { sandboxId: "sbx_2", hostId: "host-sbx_2", name: "two" },
+            { sandboxId: "sbx_3", hostId: "host-sbx_3", name: "three" },
           ],
           startedBy: "user-a",
         });

@@ -267,19 +267,14 @@ describe("sandbox row filters", () => {
     expect(only({ search: "TASK-77" })).toEqual(["a"]);
   });
 
-  it("offers Destroy all idle only for exactly Agent sandboxes + Suspended", () => {
+  it("offers Destroy all idle for both idle states regardless of Kind", () => {
     const filter = { ...SANDBOX_ROW_FILTER_NONE };
     expect(sandboxDestroyAllIdleOffered(filter)).toBe(false);
     expect(sandboxDestroyAllIdleOffered({ ...filter, kind: "agent" })).toBe(
       false,
     );
-    expect(
-      sandboxDestroyAllIdleOffered({
-        ...filter,
-        kind: "agent",
-        state: "suspended",
-      }),
-    ).toBe(true);
+    expect(sandboxDestroyAllIdleOffered({ ...filter, state: "suspended" })).toBe(true);
+    expect(sandboxDestroyAllIdleOffered({ ...filter, kind: "sandbox", state: "stopped" })).toBe(true);
   });
 });
 
