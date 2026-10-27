@@ -804,6 +804,10 @@ describe("<BotChannelView /> open thread", () => {
     mocks.postIds = ["post-a", "post-b"];
   });
 
+  afterEach(() => {
+    useBotPaneWidthsStore.getState().resetWidth("thread");
+  });
+
   it("reads the thread's chat in the panel and replies into that thread", () => {
     mount({ openThreadPostId: "post-a" });
 
@@ -847,7 +851,6 @@ describe("<BotChannelView /> open thread", () => {
     expect(screen.getByRole("region", { name: "Release Bot" })).toBe(
       screen.getByTestId("bot-channel"),
     );
-    useBotPaneWidthsStore.getState().resetWidth("thread");
   });
 
   it("shows the thread's cost in the header only when the host can say", () => {

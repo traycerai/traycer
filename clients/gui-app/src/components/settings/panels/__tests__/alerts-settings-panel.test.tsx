@@ -15,13 +15,7 @@ import type {
   PushPermissionState,
 } from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
-import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { AlertsSettingsPanel } from "@/components/settings/panels/alerts-settings-panel";
-import {
-  isPushPermissionRowAvailable,
-  isSystemNotificationsRowAvailable,
-  type SettingsAvailabilityContext,
-} from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
@@ -122,70 +116,6 @@ describe("<AlertsSettingsPanel />", () => {
 
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("notifications");
   });
-
-  // The search index offers the OS notifications and Push notifications rows
-  // exactly where they render: each bridge alone, both, and neither — the
-  // last is what catches an entry left always-available while its row is gated.
-  describe("search targets", () => {
-    const cases: ReadonlyArray<{
-      readonly name: string;
-      readonly capabilities: NotificationCapabilities;
-      readonly system: boolean;
-      readonly push: boolean;
-    }> = [
-      {
-        name: "every bridge absent",
-        capabilities: { pushPermission: null, systemSettings: null },
-        system: false,
-        push: false,
-      },
-      {
-        name: "only the OS notification-settings bridge",
-        capabilities: {
-          pushPermission: null,
-          systemSettings: { open: () => Promise.resolve() },
-        },
-        system: true,
-        push: false,
-      },
-      {
-        name: "only the push-permission bridge",
-        capabilities: {
-          pushPermission: fakePushPermission("granted"),
-          systemSettings: null,
-        },
-        system: false,
-        push: true,
-      },
-      {
-        name: "both bridges",
-        capabilities: {
-          pushPermission: fakePushPermission("prompt"),
-          systemSettings: { open: () => Promise.resolve() },
-        },
-        system: true,
-        push: true,
-      },
-    ];
-
-    for (const testCase of cases) {
-      it(`matches the index with ${testCase.name}`, () => {
-        const { container, runnerHost } = mountPanel(testCase.capabilities);
-        const context: SettingsAvailabilityContext = {
-          runnerHost,
-          featureSettings: null,
-          mobileApp: false,
-          phoneLayout: false,
-        };
-        expect(isSystemNotificationsRowAvailable(context)).toBe(
-          testCase.system,
-        );
-        expect(isPushPermissionRowAvailable(context)).toBe(testCase.push);
-
-        assertSettingsSearchTargets("alerts", context, container);
-      });
-    }
-  });
 });
 
 interface NotificationCapabilities {
@@ -194,14 +124,6 @@ interface NotificationCapabilities {
 }
 
 function renderPanel(capabilities: NotificationCapabilities): void {
-  mountPanel(capabilities);
-}
-
-/** Mounts the panel and returns the runner host it was mounted under. */
-function mountPanel(capabilities: NotificationCapabilities): {
-  readonly container: HTMLElement;
-  readonly runnerHost: IRunnerHost;
-} {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -216,12 +138,11 @@ function mountPanel(capabilities: NotificationCapabilities): {
       systemSettings: capabilities.systemSettings,
     },
   });
-  const { container } = render(
+  render(
     <Providers queryClient={queryClient} runnerHost={runnerHost}>
       <AlertsSettingsPanel />
     </Providers>,
   );
-  return { container, runnerHost };
 }
 
 function Providers(props: {

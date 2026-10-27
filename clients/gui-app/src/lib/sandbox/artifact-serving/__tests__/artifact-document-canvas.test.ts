@@ -660,24 +660,39 @@ describe("the canvas bootstrap in a running page", () => {
       );
     /**
      * Returns whether the page kept the event (not cancelled), after the
-     * task in which the prelude reads the page's verdict has run.
+     * page's deferred verdict callbacks, captured from its own window timer
+     * and run once the whole dispatch is over, have run.
      */
-    async function pressArrow(
+    function pressArrow(
       page: Page,
       target: Element,
       init: KeyboardEventInit,
-    ): Promise<boolean> {
-      const kept = target.dispatchEvent(
-        new page.window.KeyboardEvent("keydown", {
-          code: "ArrowRight",
-          key: "ArrowRight",
-          bubbles: true,
-          cancelable: true,
-          ...init,
-        }),
-      );
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      return kept;
+    ): boolean {
+      const deferred: Array<() => void> = [];
+      const pageSetTimeout = page.window.setTimeout;
+      page.window.setTimeout = (handler) => {
+        if (typeof handler !== "function") {
+          throw new Error("expected a callback timer in the arrow fixture");
+        }
+        return deferred.push(() => {
+          Reflect.apply(handler, page.window, []);
+        });
+      };
+      try {
+        const kept = target.dispatchEvent(
+          new page.window.KeyboardEvent("keydown", {
+            code: "ArrowRight",
+            key: "ArrowRight",
+            bubbles: true,
+            cancelable: true,
+            ...init,
+          }),
+        );
+        for (const callback of deferred.splice(0)) callback();
+        return kept;
+      } finally {
+        page.window.setTimeout = pageSetTimeout;
+      }
     }
     function playing(markup: string): Page {
       const page = runCanvasPage(markup);
@@ -686,15 +701,13 @@ describe("the canvas bootstrap in a running page", () => {
       return page;
     }
 
-    it("tells the app about a bare arrow the playing page left alone, and never cancels it", async () => {
+    it("tells the app about a bare arrow the playing page left alone, and never cancels it", () => {
       const page = playing(MARKUP);
       let pageSaw = 0;
       page.window.document.body.addEventListener("keydown", () => {
         pageSaw += 1;
       });
-      await expect(
-        pressArrow(page, page.window.document.body, {}),
-      ).resolves.toBe(true);
+      expect(pressArrow(page, page.window.document.body, {})).toBe(true);
       expect(pageSaw).toBe(1);
       expect(shortcutPosts(page)).toEqual([
         {
@@ -720,12 +733,12 @@ describe("the canvas bootstrap in a running page", () => {
       ["on the window, added after the prelude", (page: Page) => page.window],
     ])(
       "leaves an arrow the page cancelled %s to the page",
-      async (_label, target) => {
+      (_label, target) => {
         const page = playing(MARKUP);
         target(page).addEventListener("keydown", (event: Event) => {
           event.preventDefault();
         });
-        await pressArrow(page, page.window.document.body, {});
+        pressArrow(page, page.window.document.body, {});
         expect(shortcutPosts(page)).toEqual([]);
       },
     );
@@ -737,11 +750,11 @@ describe("the canvas bootstrap in a running page", () => {
         "a tab inside a tab list",
         `<div role="tablist"><button id="t" role="tab">a</button></div>`,
       ],
-    ])("leaves an arrow pressed in %s to the page", async (_label, markup) => {
+    ])("leaves an arrow pressed in %s to the page", (_label, markup) => {
       const page = playing(markup);
       const target = page.window.document.getElementById("t");
       if (target === null) throw new Error("no target");
-      await pressArrow(page, target, {});
+      pressArrow(page, target, {});
       expect(shortcutPosts(page)).toEqual([]);
     });
 
@@ -749,16 +762,16 @@ describe("the canvas bootstrap in a running page", () => {
       ["Shift", { shiftKey: true }],
       ["Alt", { altKey: true }],
       ["ArrowDown", { code: "ArrowDown", key: "ArrowDown" }],
-    ])("leaves %s to the page", async (_label, init) => {
+    ])("leaves %s to the page", (_label, init) => {
       const page = playing(MARKUP);
-      await pressArrow(page, page.window.document.body, init);
+      pressArrow(page, page.window.document.body, init);
       expect(shortcutPosts(page)).toEqual([]);
     });
 
-    it("leaves arrows to the page while editing", async () => {
+    it("leaves arrows to the page while editing", () => {
       const page = runCanvasPage(MARKUP);
       loaded(page);
-      await pressArrow(page, page.window.document.body, {});
+      pressArrow(page, page.window.document.body, {});
       expect(shortcutPosts(page)).toEqual([]);
     });
   });

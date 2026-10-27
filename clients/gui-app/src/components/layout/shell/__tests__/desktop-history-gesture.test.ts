@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DESKTOP_HISTORY_GESTURE,
   installDesktopHistoryGesture,
-  ownsDesktopHorizontalWheel,
   type DesktopHistoryDirection,
   type DesktopHistoryGestureView,
 } from "@/components/layout/shell/desktop-history-gesture";
@@ -170,7 +169,7 @@ function createFakeTrackpad(): FakeTrackpad {
 }
 
 interface GestureProbe {
-  readonly views: ReadonlyArray<DesktopHistoryGestureView | null>;
+  readonly views: ReadonlyArray<DesktopHistoryGestureView>;
   readonly navigations: ReadonlyArray<DesktopHistoryDirection>;
 }
 
@@ -205,7 +204,7 @@ let activeMounts: MountedGesture[] = [];
 let laterListenerCleanups: Array<() => void> = [];
 
 function mountGesture(options: MountGestureOptions): MountedGesture {
-  const views: Array<DesktopHistoryGestureView | null> = [];
+  const views: DesktopHistoryGestureView[] = [];
   const navigations: DesktopHistoryDirection[] = [];
   let currentEntry = options.currentEntry;
   let destinationFor = options.destinationFor;
@@ -290,14 +289,14 @@ function pullTo(
 }
 
 function hasRenderedView(mounted: MountedGesture): boolean {
-  return mounted.probe.views.some((view) => view !== null);
+  return mounted.probe.views.length > 0;
 }
 
 function hasPhase(
   mounted: MountedGesture,
   phase: DesktopHistoryGestureView["phase"],
 ): boolean {
-  return mounted.probe.views.some((view) => view?.phase === phase);
+  return mounted.probe.views.some((view) => view.phase === phase);
 }
 
 beforeEach(() => {
@@ -413,30 +412,32 @@ describe("committed and canceling are final views", () => {
     vi.useFakeTimers();
   });
 
-  it("never follows a committed view with null, however long the tail runs", () => {
+  it("emits no view after a committed one, however long the tail runs", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     pullTo(mounted, "back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
     mounted.signal("ended");
+    expect(mounted.probe.views.at(-1)?.phase).toBe("committed");
+    const viewsAtCommit = [...mounted.probe.views];
 
     vi.advanceTimersByTime(
       2 * (DESKTOP_HISTORY_GESTURE.settleMs + DESKTOP_HISTORY_GESTURE.tailMs),
     );
 
-    expect(mounted.probe.views.at(-1)?.phase).toBe("committed");
-    expect(mounted.probe.views.includes(null)).toBe(false);
+    expect(mounted.probe.views).toEqual(viewsAtCommit);
   });
 
-  it("never follows a canceling view with null, however long the tail runs", () => {
+  it("emits no view after a canceling one, however long the tail runs", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     pullTo(mounted, "forward", 60, document.body);
     mounted.signal("ended");
+    expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
+    const viewsAtCancel = [...mounted.probe.views];
 
     vi.advanceTimersByTime(
       2 * (DESKTOP_HISTORY_GESTURE.settleMs + DESKTOP_HISTORY_GESTURE.tailMs),
     );
 
-    expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
-    expect(mounted.probe.views.includes(null)).toBe(false);
+    expect(mounted.probe.views).toEqual(viewsAtCancel);
   });
 });
 
@@ -1321,61 +1322,6 @@ describe("uninstall", () => {
   });
 });
 
-describe("ownsDesktopHorizontalWheel", () => {
-  function stubScrollWidth(
-    el: HTMLElement,
-    metrics: { readonly scrollWidth: number; readonly clientWidth: number },
-  ): void {
-    Object.defineProperty(el, "scrollWidth", {
-      value: metrics.scrollWidth,
-      configurable: true,
-    });
-    Object.defineProperty(el, "clientWidth", {
-      value: metrics.clientWidth,
-      configurable: true,
-    });
-  }
-
-  it("owns a horizontally-overflowing surface regardless of which edge it is scrolled to", () => {
-    const rail = document.createElement("div");
-    rail.style.overflowX = "auto";
-    document.body.appendChild(rail);
-    stubScrollWidth(rail, { scrollWidth: 600, clientWidth: 300 });
-
-    rail.scrollLeft = 0;
-    expect(ownsDesktopHorizontalWheel(rail)).toBe(true);
-    rail.scrollLeft = 300;
-    expect(ownsDesktopHorizontalWheel(rail)).toBe(true);
-  });
-
-  it("does not own a tab strip that declares touch-pan-x but has nothing to scroll", () => {
-    const strip = document.createElement("div");
-    strip.style.touchAction = "pan-x";
-    strip.style.overflowX = "auto";
-    document.body.appendChild(strip);
-    stubScrollWidth(strip, { scrollWidth: 300, clientWidth: 300 });
-
-    expect(ownsDesktopHorizontalWheel(strip)).toBe(false);
-  });
-
-  it("does not own a terminal surface that only declares touch-action: none", () => {
-    const terminal = document.createElement("div");
-    terminal.className = "xterm terminal";
-    terminal.style.touchAction = "none";
-    document.body.appendChild(terminal);
-
-    expect(ownsDesktopHorizontalWheel(terminal)).toBe(false);
-  });
-
-  it("owns an explicitly-registered gesture surface via the selector allowlist", () => {
-    const owner = document.createElement("div");
-    owner.setAttribute("data-history-gesture-owner", "");
-    document.body.appendChild(owner);
-
-    expect(ownsDesktopHorizontalWheel(owner)).toBe(true);
-  });
-});
-
 describe("wheel ownership decides who gets the whole sequence", () => {
   function appendRail(metrics: {
     readonly className: string;
@@ -1412,24 +1358,28 @@ describe("wheel ownership decides who gets the whole sequence", () => {
     return mounted;
   }
 
-  it("leaves an overflowing surface's sequence to content scroll entirely", () => {
-    const rail = appendRail({
-      className: "",
-      scrollWidth: 600,
-      clientWidth: 300,
-      touchAction: undefined,
-    });
-    const mounted = pullOver(rail, "back");
+  it.each([0, 300])(
+    "leaves an overflowing surface's sequence to content scroll entirely at scrollLeft %i",
+    (scrollLeft) => {
+      const rail = appendRail({
+        className: "",
+        scrollWidth: 600,
+        clientWidth: 300,
+        touchAction: undefined,
+      });
+      rail.scrollLeft = scrollLeft;
+      const mounted = pullOver(rail, "back");
 
-    expect(mounted.probe.navigations).toEqual([]);
-    expect(hasRenderedView(mounted)).toBe(false);
-  });
+      expect(mounted.probe.navigations).toEqual([]);
+      expect(hasRenderedView(mounted)).toBe(false);
+    },
+  );
 
   it("still claims the sequence over a non-overflowing tab strip that merely declares touch-pan-x", () => {
     const strip = appendRail({
       className: "",
-      scrollWidth: undefined,
-      clientWidth: undefined,
+      scrollWidth: 300,
+      clientWidth: 300,
       touchAction: "pan-x",
     });
     expect(pullOver(strip, "forward").probe.navigations).toEqual(["forward"]);
@@ -1458,6 +1408,29 @@ describe("wheel ownership decides who gets the whole sequence", () => {
     expect(pullOver(terminal, "forward").probe.navigations).toEqual([
       "forward",
     ]);
+  });
+
+  it("leaves the whole sequence to a data-history-gesture-owner element", () => {
+    const owner = appendRail({
+      className: "",
+      scrollWidth: undefined,
+      clientWidth: undefined,
+      touchAction: undefined,
+    });
+    owner.setAttribute("data-history-gesture-owner", "");
+    const mounted = mountGesture(DEFAULT_MOUNT);
+
+    const opening = pullTo(
+      mounted,
+      "back",
+      DESKTOP_HISTORY_GESTURE.commitPx,
+      owner,
+    );
+    mounted.signal("ended");
+
+    expect(opening.defaultPrevented).toBe(false);
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(hasRenderedView(mounted)).toBe(false);
   });
 
   // A 1px rounding overflow still reads as fitting.

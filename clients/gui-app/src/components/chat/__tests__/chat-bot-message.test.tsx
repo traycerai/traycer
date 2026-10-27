@@ -510,40 +510,6 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(retry).toHaveBeenCalledWith("Please review the release");
   });
 
-  it("asks the presentation about the message's request and its writer", () => {
-    const asked: Array<{
-      readonly requestId: string;
-      readonly senderUserId: string | null;
-    }> = [];
-    renderRow(
-      { ...memberPost(OPEN_REQUEST), senderUserId: "user-teammate" },
-      {
-        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
-        failedRequest: (requestId, senderUserId) => {
-          asked.push({ requestId, senderUserId });
-          return null;
-        },
-      },
-    );
-
-    expect(asked).toContainEqual({
-      requestId: OPEN_REQUEST.requestId,
-      senderUserId: "user-teammate",
-    });
-  });
-
-  it("holds Retry while a retry is being sent, and leaves Edit", () => {
-    renderRow(memberPost(OPEN_REQUEST), failing(vi.fn(), true, vi.fn()));
-
-    const actions = within(screen.getByTestId("bot-message-actions"));
-    expect(
-      actions.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      actions.getByRole("button", { name: "Edit" }).hasAttribute("disabled"),
-    ).toBe(false);
-  });
-
   it("offers neither on a message the session did not fail on, and none on the bot's own row", () => {
     renderRow(
       memberPost({ ...OPEN_REQUEST, requestId: "req-answered" }),

@@ -121,8 +121,8 @@ export interface OpenLinkIn {
    */
   readonly openLinkIn: (url: string, destination: LinkDestination) => void;
   /**
-   * False where no canvas is behind the surface, so an in-app open would land
-   * in the OS browser anyway and offering it as a separate choice would lie.
+   * False where this surface cannot open an in-app tab, so that choice would
+   * land in the OS browser anyway.
    */
   readonly canOpenInApp: boolean;
 }
@@ -205,11 +205,7 @@ function useLinkOpeners(): LinkOpeners {
     ): Promise<void> => {
       if (destination === "external") return openInOsBrowser(webUrl);
       if (target === null) {
-        // No epic behind this surface at all, so there is no canvas an in-app
-        // tab could land on. This is not the A5 failure case (that one toasts
-        // in `useOpenBrowserUrl`): nothing was attempted and nothing failed,
-        // the surface simply has no in-app destination. Ticket 08 shrinks this
-        // set by mounting `LinkTargetProvider` on the surfaces that do.
+        // This surface has no in-app destination, including the mobile app.
         return openInOsBrowser(webUrl);
       }
       openBrowserUrl({
