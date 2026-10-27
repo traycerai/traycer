@@ -9,6 +9,8 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -30,6 +32,11 @@ export function useConfigurationItemsQuery<Data>(
 ): UseQueryResult<Data, HostRpcError> {
   const source = useConfigurationSource();
   const client = usePoolTierHostClient(useHostClient());
+  const { hostId } = useReactiveHostReadiness(client);
+  const revisionSupported = useHostMethodSupport(
+    hostId,
+    "environment.configuration.revision",
+  );
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -49,6 +56,8 @@ export function useConfigurationItemsQuery<Data>(
     mapResponse: ({ response }) => mapItems(response.items),
     options: {
       enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
+      // Older tiers have no position signal; keep their mounted page fresh too.
+      poll: revisionSupported !== true,
     },
   });
 }

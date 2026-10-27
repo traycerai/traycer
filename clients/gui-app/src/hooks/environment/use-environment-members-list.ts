@@ -14,6 +14,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { TeamRole } from "@/components/settings/members/types";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
   useHostQueries,
@@ -110,6 +111,10 @@ export function useEnvironmentMembersList(
     [client],
   );
   const hostId = useReactiveHostReadiness(servingClient).hostId;
+  const revisionSupported = useHostMethodSupport(
+    hostId,
+    "environment.configuration.revision",
+  );
   const viewerUserId = useCloudChatViewerId();
   const [requested, setRequested] = useState<Requested>({
     environmentId,
@@ -169,6 +174,7 @@ export function useEnvironmentMembersList(
     requiredHostMethodVersion: () => ENVIRONMENT_MEMBERS_FLOOR,
     options: {
       enabled: enabled && environmentId !== null && viewerUserId.length > 0,
+      poll: revisionSupported !== true,
       refetchOnWindowFocus: false,
     },
     combine,

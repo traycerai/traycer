@@ -1,3 +1,4 @@
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useMutation } from "@tanstack/react-query";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -497,40 +498,62 @@ function ShellSettingsPanelBody(props: {
     oldKey: string,
     newKey: string,
     value: string | null,
-  ): void => {
-    if (envPending) return;
+  ): Promise<void> => {
+    if (envPending)
+      return Promise.reject(new Error("A variable is already being saved."));
     if (
       credentialRefusal !== null &&
       (isCredentialShapedEnvName(newKey) ||
         (value !== null && urlCarriesCredentials(value)))
     ) {
-      return;
+      return Promise.reject(new Error(credentialRefusal));
     }
-    storeEnv(oldKey, newKey, value);
-  };
-  const storeEnv = (
-    oldKey: string,
-    newKey: string,
-    value: string | null,
-  ): void => {
     beginEnvSave();
-    if (oldKey === newKey) {
-      controller.setEnv({ key: newKey, value }, envSaveCallbacks(oldKey));
-      return;
-    }
-    // ONE call, not a set whose per-`mutate` `onSuccess` fires the delete.
-    // Chained here, the delete sat on the far side of an unmount boundary
-    // TanStack does not cross: close Settings or switch host while the set is
-    // in flight and the observer is gone, so the old key was never dropped and
-    // the rename left two live variables. The controller owns the sequencing
-    // now - create first, then drop, so a failed delete still leaves a
-    // harmless duplicate rather than a lost value.
-    controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks(oldKey));
+    return new Promise((resolve, reject) => {
+      const feedback = envSaveCallbacks(oldKey);
+      const callbacks = {
+        onSuccess: () => {
+          feedback.onSuccess();
+          resolve();
+        },
+        onError: (error: unknown) => {
+          feedback.onError(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Couldn't save this variable."),
+          );
+        },
+      };
+      if (oldKey === newKey) {
+        controller.setEnv({ key: newKey, value }, callbacks);
+      } else {
+        // The controller owns set-new then delete-old across panel unmount.
+        controller.renameEnv({ oldKey, newKey, value }, callbacks);
+      }
+    });
   };
-  const onEnvDelete = (key: string): void => {
-    if (envPending) return;
+  const onEnvDelete = (key: string): Promise<void> => {
+    if (envPending)
+      return Promise.reject(new Error("A variable is already being saved."));
     beginEnvSave();
-    controller.deleteEnv(key, envSaveCallbacks(key));
+    return new Promise((resolve, reject) => {
+      const feedback = envSaveCallbacks(key);
+      controller.deleteEnv(key, {
+        onSuccess: () => {
+          feedback.onSuccess();
+          resolve();
+        },
+        onError: (error: unknown) => {
+          feedback.onError(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Couldn't save this variable."),
+          );
+        },
+      });
+    });
   };
   // Use everywhere: this host's own value becomes Personal's, then the host
   // stops keeping one of its own. Cleared only after the save landed, so a
@@ -995,11 +1018,13 @@ function HostEnvironmentGroup(props: {
     oldKey: string,
     newKey: string,
     value: string | null,
-  ) => void;
-  readonly onDelete: (key: string) => void;
+  ) => Promise<void>;
+  readonly onDelete: (key: string) => Promise<void>;
   readonly onUseEverywhere: (key: string, value: string) => void;
   readonly useEverywherePending: boolean;
 }) {
+  const viewerId = useCloudChatViewerId();
+  const configurationKey = useConfigurationKey();
   const notes = usePersonalRowNotes(VARIABLE_NOTES);
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
@@ -1050,6 +1075,7 @@ function HostEnvironmentGroup(props: {
         </div>
         <div className={props.compact ? "p-4" : "p-5"}>
           <EnvOverrideEditor
+            key={JSON.stringify([viewerId, configurationKey])}
             rowNotes={rowNotes}
             onHold={onHold}
             claimedBy={claimedBy}

@@ -17,4 +17,9 @@ export const DELTA_FED_READS = [
   ...SECRET_READS,
   "providers.list",
   "config.env.list",
+  "environment.agentDefinitions.list",
+  "environment.setup.get",
+  "environment.notices",
+  "environment.review",
+  "environment.localOverrides",
 ] as const;

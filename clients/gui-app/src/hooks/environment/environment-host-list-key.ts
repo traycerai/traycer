@@ -34,22 +34,29 @@ export function hostListEnvironmentId(
 }
 
 /**
- * Every read a configuration's pages render. None of them polls, so a change
- * made elsewhere (the dashboard, another computer, another person) reaches an
- * open page only through a reread.
+ * Reads whose source moves with the configuration's apply position.
  */
-export const CONFIGURATION_READS = [
+export const CONFIGURATION_ITEM_READS = [
   "environment.configuration.items",
   "environment.configuration.mcpServers.list",
+  "environment.members",
+  "environment.members.seats",
+  "environment.plans.list",
+] as const;
+
+/** Focus and stale-write recovery also refresh independent receipt/room state. */
+export const CONFIGURATION_READS = [
+  ...CONFIGURATION_ITEM_READS,
   "environment.configuration.skills.list",
   "environment.configuration.guide.get",
-  "environment.plans.list",
+  "environment.secrets.list",
+  "environment.secrets.versions",
 ] as const;
 
 /**
  * A configuration write moves `reads` of that environment, and its delivery
  * reports, under EVERY requesting host. The configuration is one record, but
- * each host's answer to a read is cached apart and none of these reads polls:
+ * each host's answer to a read is cached apart:
  * a page that read on the surface host while its write ran on the viewing
  * host (`TeamViewingHostBinding`) would otherwise keep the old answer, and
  * send its revision with the next write.
