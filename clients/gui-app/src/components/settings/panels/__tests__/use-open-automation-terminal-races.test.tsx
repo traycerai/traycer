@@ -1,5 +1,15 @@
+import type { SandboxAutomationOpenFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import { StrictMode } from "react";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   SandboxListResponse,
@@ -17,8 +27,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRpcRegistry } from "@/lib/host";
-import { AutomationTerminalOpenError } from "@/components/settings/panels/automation-terminal-open-error";
-import { AutomationTerminalOpenScope } from "@/components/settings/panels/automation-terminal-open-scope";
+import { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -68,7 +77,7 @@ const network = vi.hoisted(() => ({
   sandboxListData: undefined as SandboxListResponse | null | undefined,
   sandboxListSentAt: null as number | null,
   responses: new Map<string, () => Promise<unknown>>(),
-  openSandboxAutomation: vi.fn(),
+  openSandboxAutomation: vi.fn<AuthService["openSandboxAutomation"]>(),
   refreshDirectory: vi.fn(),
   request:
     vi.fn<
@@ -78,7 +87,7 @@ const network = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTab: vi.fn(),
   toastFromAuthError: vi.fn(),
-  teamPods: new Map(),
+  teamPods: new Map<string, readonly SandboxPod[]>(),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -285,14 +294,17 @@ function AutomationTerminalHarness(props: {
       <button type="button" onClick={opener.run}>
         Open terminal
       </button>
-      {opener.starting ? <span role="status">Opening terminal</span> : null}
-      {opener.failed ? (
-        <AutomationTerminalOpenError
-          onRetry={opener.run}
-          pending={opener.starting}
-        />
-      ) : null}
     </div>
+  );
+}
+
+function TerminalPaneHarness() {
+  const placeholder = useLandingPanelStore((state) => state.placeholder);
+  return placeholder?.automation === undefined ? null : (
+    <AutomationTerminalPane
+      request={placeholder.automation}
+      instanceId={placeholder.instanceId}
+    />
   );
 }
 
@@ -306,6 +318,7 @@ function renderHarness(existing: AutomationTerminalInput["existing"]) {
   const tree = () => (
     <QueryClientProvider client={queryClient}>
       <AutomationTerminalHarness existing={existing} />
+      <TerminalPaneHarness />
     </QueryClientProvider>
   );
   const view = render(tree());
@@ -325,12 +338,13 @@ function renderTeamScopeHarness(teamEnvironmentId: string) {
   });
   const tree = () => (
     <QueryClientProvider client={queryClient}>
-      <AutomationTerminalOpenScope teamEnvironmentId={teamEnvironmentId}>
+      <>
         <AutomationTerminalHarness
           existing={null}
           teamEnvironmentId={teamEnvironmentId}
         />
-      </AutomationTerminalOpenScope>
+        <TerminalPaneHarness />
+      </>
     </QueryClientProvider>
   );
   const view = render(tree());
@@ -402,6 +416,160 @@ afterEach(() => {
 });
 
 describe("useOpenAutomationTerminal readiness and stale completions", () => {
+  it("opens the terminal pane at the click with Starting Automations · 0:00 while resting", () => {
+    network.openSandboxAutomation.mockReturnValue(new Promise(() => undefined));
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+
+    expect(network.close).toHaveBeenCalledTimes(1);
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
+    expect(useLandingPanelStore.getState().fallbackLayout).toMatchObject({
+      panelOpen: true,
+      maximized: true,
+    });
+    expect(screen.getByRole("status").textContent).toContain(
+      "Starting Automations · 0:00",
+    );
+  });
+
+  it("attaches the shell to the same pane once the host is ready", async () => {
+    installHost(AUTOMATION_HOST, false);
+    network.openSandboxAutomation.mockResolvedValue(
+      openedSandbox(AUTOMATION_HOST, false),
+    );
+    const rendered = renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    const instanceId = useLandingPanelStore.getState().activeInstanceId;
+    expect(instanceId).not.toBeNull();
+    await waitFor(() =>
+      expect(network.hostClientLookups).toContain(AUTOMATION_HOST),
+    );
+    setHostReady(AUTOMATION_HOST);
+    rendered.rerenderHarness();
+    await waitFor(() =>
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
+    );
+    expect(useLandingPanelStore.getState().tabs[0]).toMatchObject({
+      instanceId,
+      hostId: AUTOMATION_HOST,
+    });
+    expect(screen.queryByText(/Starting Automations/)).toBeNull();
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens awake Automations directly without the starting line", async () => {
+    setHostReady(AUTOMATION_HOST);
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    expect(network.close).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Starting Automations/)).toBeNull();
+    await waitFor(() =>
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
+    );
+    expect(network.openSandboxAutomation).not.toHaveBeenCalled();
+  });
+
+  it("keeps failure and Details in the pane and retries one logical terminal", async () => {
+    setHostReady(AUTOMATION_HOST);
+    let createCount = 0;
+    network.responses.set(
+      rpcKey(AUTOMATION_HOST, "terminal.plain.create"),
+      () => {
+        createCount += 1;
+        if (createCount === 1)
+          return Promise.reject(
+            hostRpcError(
+              "terminal.plain.create",
+              "Guest text must stay hidden",
+            ),
+          );
+        const call = network.calls.find(
+          (entry) => entry.method === "terminal.plain.create",
+        );
+        if (call === undefined) throw new Error("missing create");
+        return Promise.resolve(
+          plainTerminalCreate(
+            AUTOMATION_HOST,
+            plainTerminalCreateParams(call.params).terminalId,
+          ),
+        );
+      },
+    );
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    const instanceId = useLandingPanelStore.getState().activeInstanceId;
+    const alert = await screen.findByRole("alert");
+    expect(
+      alert.closest('[data-testid="automation-terminal-pane"]'),
+    ).not.toBeNull();
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("E_HOST_UNSUPPORTED")).toBeTruthy();
+    expect(screen.queryByText("Guest text must stay hidden")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
+    );
+    expect(useLandingPanelStore.getState().tabs[0]).toMatchObject({
+      instanceId,
+    });
+    expect(
+      new Set(
+        network.calls
+          .filter((call) => call.method === "terminal.plain.create")
+          .map((call) => plainTerminalCreateParams(call.params).terminalId),
+      ).size,
+    ).toBe(1);
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("reserves one pane for a double-click", () => {
+    network.openSandboxAutomation.mockReturnValue(new Promise(() => undefined));
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+    const button = screen.getByRole("button", { name: "Open terminal" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(useLandingPanelStore.getState().placeholder).not.toBeNull();
+    expect(network.close).toHaveBeenCalledTimes(1);
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds the opening pane to Automations while the last-picked host differs", () => {
+    network.openSandboxAutomation.mockReturnValue(new Promise(() => undefined));
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    expect(
+      screen
+        .getByTestId("automation-terminal-pane")
+        .getAttribute("data-host-id"),
+    ).toBe(AUTOMATION_HOST);
+    expect(network.hostClientLookups).not.toContain("host-effective");
+  });
+
   it("waits for a 202 host to become dialable, then routes every request and the durable tab to the returned host", async () => {
     installHost(AUTOMATION_HOST, false);
     network.openSandboxAutomation.mockResolvedValue(
@@ -525,9 +693,9 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       network.calls.some((call) => call.method === "terminal.plain.create"),
     ).toBe(false);
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
-    expect(network.close).not.toHaveBeenCalled();
+    expect(network.close).toHaveBeenCalledTimes(1);
     expect(network.navigate).not.toHaveBeenCalled();
-    expect(network.activateTab).not.toHaveBeenCalled();
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
 
     recordNegotiatedHostMethods(AUTOMATION_HOST, AUTOMATION_METHODS);
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -688,7 +856,7 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       "Couldn't open a terminal on Automations.",
     );
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
-    expect(network.activateTab).not.toHaveBeenCalled();
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
     const firstCreate = network.calls.find(
       (call) => call.method === "terminal.plain.create",
     );
@@ -713,7 +881,7 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       requestedTerminalId,
     );
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
-    expect(network.activateTab).not.toHaveBeenCalled();
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
 
     act(() => {
       secondCreate.resolve(
@@ -891,6 +1059,93 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
     ).toBe(true);
   });
 
+  it("shows a refused start's typed code in Details without its message", async () => {
+    network.openSandboxAutomation.mockResolvedValue({
+      kind: "refused",
+      status: 503,
+      code: "provider_failed",
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: "Guest diagnostic must stay private",
+    });
+    renderHarness({
+      hostId: AUTOMATION_HOST,
+      sandboxId: "sbx-row",
+      awake: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("provider_failed")).toBeTruthy();
+    expect(screen.queryByText("Guest diagnostic must stay private")).toBeNull();
+  });
+
+  it("keeps a failed wake visible through React's mount replay", async () => {
+    network.openSandboxAutomation.mockRejectedValue(new Error("wake failed"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <AutomationTerminalHarness
+            existing={{
+              hostId: AUTOMATION_HOST,
+              sandboxId: "sbx-row",
+              awake: false,
+            }}
+          />
+          <TerminalPaneHarness />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Couldn't open a terminal on Automations.",
+    );
+    expect(network.openSandboxAutomation).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the wake alive when Settings unmounts before its response", async () => {
+    const wake = deferred<SandboxAutomationOpenFetchResult>();
+    network.openSandboxAutomation.mockReturnValue(wake.promise);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const tree = (settingsOpen: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        {settingsOpen ? (
+          <AutomationTerminalHarness
+            existing={{
+              hostId: AUTOMATION_HOST,
+              sandboxId: "sbx-row",
+              awake: false,
+            }}
+          />
+        ) : null}
+        <TerminalPaneHarness />
+      </QueryClientProvider>
+    );
+    const view = render(tree(true));
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    const instanceId = useLandingPanelStore.getState().activeInstanceId;
+    view.rerender(tree(false));
+    setHostReady(AUTOMATION_HOST);
+    await act(async () => {
+      wake.resolve(openedSandbox(AUTOMATION_HOST, true));
+      await wake.promise;
+    });
+    await waitFor(() =>
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1),
+    );
+    expect(useLandingPanelStore.getState().tabs[0]).toMatchObject({
+      instanceId,
+      hostId: AUTOMATION_HOST,
+    });
+  });
+
   it("does not adopt a terminal create response after the opener unmounts", async () => {
     setHostReady(AUTOMATION_HOST);
     const createResponse =
@@ -928,8 +1183,8 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       expect(rendered.queryClient.isMutating()).toBe(0);
     });
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
-    expect(network.close).not.toHaveBeenCalled();
-    expect(network.activateTab).not.toHaveBeenCalled();
+    expect(network.close).toHaveBeenCalledTimes(1);
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
     expect(network.navigate).not.toHaveBeenCalled();
   });
 
@@ -974,8 +1229,8 @@ describe("useOpenAutomationTerminal readiness and stale completions", () => {
       expect(rendered.queryClient.isMutating()).toBe(0);
     });
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
-    expect(network.close).not.toHaveBeenCalled();
-    expect(network.activateTab).not.toHaveBeenCalled();
+    expect(network.close).toHaveBeenCalledTimes(1);
+    expect(network.activateTab).toHaveBeenCalledTimes(1);
     expect(network.navigate).not.toHaveBeenCalled();
   });
 });

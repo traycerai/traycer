@@ -16,11 +16,6 @@ import { SandboxDestroyAllIdleDialog } from "@/components/hosts/sandbox-confirm-
 import { SandboxSessionPillBadge } from "@/components/hosts/sandbox-reported-sessions";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
 import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
-import { AutomationTerminalOpenScope } from "@/components/settings/panels/automation-terminal-open-scope";
-import {
-  AutomationTerminalOpenError,
-  AutomationTerminalOpenFallback,
-} from "@/components/settings/panels/automation-terminal-open-error";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -425,20 +420,6 @@ interface SandboxListSectionProps {
 }
 
 function SandboxListSection(props: SandboxListSectionProps): ReactNode {
-  return (
-    <AutomationTerminalOpenScope
-      teamEnvironmentId={
-        props.configuration.kind === "team"
-          ? props.configuration.environmentId
-          : null
-      }
-    >
-      <SandboxListSectionContents {...props} />
-    </AutomationTerminalOpenScope>
-  );
-}
-
-function SandboxListSectionContents(props: SandboxListSectionProps): ReactNode {
   const { configuration } = props;
   useRefreshSandboxCosts();
   const list = useSandboxList();
@@ -477,12 +458,6 @@ function SandboxListSectionContents(props: SandboxListSectionProps): ReactNode {
   });
   const unstartedShown =
     unstartedAutomations && unstartedAutomationsMatches(filter);
-  const openError = (
-    <AutomationTerminalOpenFallback
-      shownHostIds={shown.map((row) => row.hostId)}
-      unstartedShown={unstartedShown}
-    />
-  );
   useScrollRevealedRow(highlighted, shown, reveals);
   const personalTodayMc = useMemo(() => {
     const data = costs.data ?? null;
@@ -517,12 +492,7 @@ function SandboxListSectionContents(props: SandboxListSectionProps): ReactNode {
     configurationRows === null ||
     (configurationRows.length === 0 && !unstartedAutomations)
   ) {
-    return (
-      <>
-        {gate}
-        {openError}
-      </>
-    );
+    return gate;
   }
   const figures = todayFigures({
     configuration,
@@ -601,7 +571,6 @@ function SandboxListSectionContents(props: SandboxListSectionProps): ReactNode {
           />
         ) : null}
       </ul>
-      {openError}
       <SandboxDestroyAllIdleDialog
         targets={destroyAllTargets}
         open={destroyAllOpen}
@@ -975,12 +944,6 @@ function UnstartedAutomationsRow(props: {
         </div>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        {open.failed ? (
-          <AutomationTerminalOpenError
-            onRetry={open.run}
-            pending={open.starting}
-          />
-        ) : null}
         <Button
           type="button"
           variant="outline"

@@ -71,6 +71,74 @@ import {
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
 
+/** The same ruled setup treatment and counter for a shell waiting on Automations. */
+export function SandboxStartingLine(props: {
+  readonly startedAt: number;
+}): ReactNode {
+  const seconds = useElapsedSeconds(props.startedAt, 0, null);
+  return (
+    <SandboxSetupLineFrame
+      expanded={false}
+      onToggle={null}
+      trailing={null}
+      head={
+        <>
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+          <span>{`Starting Automations · ${formatStopwatch(seconds)}`}</span>
+        </>
+      }
+    >
+      {null}
+    </SandboxSetupLineFrame>
+  );
+}
+
+function SandboxSetupLineFrame(props: {
+  readonly expanded: boolean;
+  readonly onToggle: (() => void) | null;
+  readonly head: ReactNode;
+  readonly trailing: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const ChevronIcon = props.expanded ? ChevronDown : ChevronRight;
+  return (
+    <div
+      className="flex w-full flex-col gap-1"
+      data-testid="sandbox-setup-line"
+    >
+      <div className="flex items-center gap-3">
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        {props.onToggle === null ? (
+          <div
+            role="status"
+            className="flex items-center gap-2 text-ui-xs text-muted-foreground"
+          >
+            {props.head}
+          </div>
+        ) : (
+          <button
+            type="button"
+            aria-expanded={props.expanded}
+            data-testid="sandbox-setup-line-toggle"
+            onClick={props.onToggle}
+            className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            {props.head}
+            <ChevronIcon aria-hidden className="size-3 shrink-0" />
+          </button>
+        )}
+        {props.trailing}
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
 /** What the line's buttons do, wired by the surface that owns the stage. */
 export interface SandboxSetupLineActions {
   readonly onKeepWaiting: () => void;
@@ -426,7 +494,6 @@ function SandboxProgressLine(props: {
   const takingLonger = isTakingLonger(failure, elapsedSeconds);
   const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
   const expanded = manualExpanded ?? (failure !== null || takingLonger);
-  const ChevronIcon = expanded ? ChevronDown : ChevronRight;
   const view: ProgressView = {
     stage,
     failure,
@@ -435,26 +502,10 @@ function SandboxProgressLine(props: {
     takingLonger,
   };
   return (
-    <div
-      className="flex w-full flex-col gap-1"
-      data-testid="sandbox-setup-line"
-    >
-      <div className="flex items-center gap-3">
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
-        <button
-          type="button"
-          aria-expanded={expanded}
-          data-testid="sandbox-setup-line-toggle"
-          onClick={() => setManualExpanded(!expanded)}
-          className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <ProgressHead
-            view={view}
-            name={name}
-            elapsedSeconds={elapsedSeconds}
-          />
-          <ChevronIcon aria-hidden className="size-3 shrink-0" />
-        </button>
+    <SandboxSetupLineFrame
+      expanded={expanded}
+      onToggle={() => setManualExpanded(!expanded)}
+      trailing={
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
@@ -464,8 +515,11 @@ function SandboxProgressLine(props: {
               : props.actions.onStop
           }
         />
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
-      </div>
+      }
+      head={
+        <ProgressHead view={view} name={name} elapsedSeconds={elapsedSeconds} />
+      }
+    >
       {expanded ? (
         <ProgressDetail
           view={view}
@@ -473,7 +527,7 @@ function SandboxProgressLine(props: {
           actions={props.actions}
         />
       ) : null}
-    </div>
+    </SandboxSetupLineFrame>
   );
 }
 

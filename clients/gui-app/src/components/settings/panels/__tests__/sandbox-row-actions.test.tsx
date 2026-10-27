@@ -1,3 +1,4 @@
+import { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -233,8 +234,23 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
+function TerminalPaneHarness() {
+  const placeholder = useLandingPanelStore((state) => state.placeholder);
+  return placeholder?.automation === undefined ? null : (
+    <AutomationTerminalPane
+      request={placeholder.automation}
+      instanceId={placeholder.instanceId}
+    />
+  );
+}
+
 function renderRowIn(client: QueryClient, element: ReactElement): void {
-  render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      {element}
+      <TerminalPaneHarness />
+    </QueryClientProvider>,
+  );
 }
 
 function renderRow(element: ReactElement): void {
@@ -674,7 +690,7 @@ describe("<SandboxRowActions />", () => {
       expect(automation.close).toHaveBeenCalledTimes(1);
     });
 
-    it("keeps Settings open with an explicit Retry when the Automations terminal list fails", async () => {
+    it("keeps an explicit Retry in the terminal pane when the Automations terminal list fails", async () => {
       const success = automation.request.getMockImplementation();
       automation.request.mockImplementation(
         (method: string, ...params: unknown[]): unknown =>
@@ -690,7 +706,7 @@ describe("<SandboxRowActions />", () => {
       await userEvent.click(screen.getByTestId("sandbox-row-open-terminal"));
 
       await screen.findByText("Couldn't open a terminal on Automations.");
-      expectNothingFiledOrClosed();
+      expect(automation.close).toHaveBeenCalledTimes(1);
       expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
       if (success !== undefined) automation.request.mockImplementation(success);
       await userEvent.click(screen.getByRole("button", { name: /^Retry$/ }));
@@ -777,7 +793,7 @@ describe("<SandboxRowActions />", () => {
       expect(automation.openSandboxAutomation).not.toHaveBeenCalled();
       await waitFor(expectTerminalOnAutomationsHost);
     });
-    it("files nothing and leaves Settings open when starting a released Automations fails", async () => {
+    it("keeps the terminal pane when starting a released Automations fails", async () => {
       automation.openSandboxAutomation.mockResolvedValue(
         refusal(503, "provider_unavailable"),
       );
@@ -789,7 +805,8 @@ describe("<SandboxRowActions />", () => {
 
       await screen.findByText("Couldn't open a terminal on Automations.");
       expect(automation.toastFromAuthError).not.toHaveBeenCalled();
-      expectNothingFiledOrClosed();
+      expect(automation.close).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("automation-terminal-pane")).toBeTruthy();
     });
 
     it("offers a failed row Retry, and Rename and Details in its menu", async () => {
@@ -832,7 +849,7 @@ describe("<SandboxRowActions />", () => {
       expectNothingFiledOrClosed();
     });
 
-    it("files the request and closes Settings only once the start has succeeded", async () => {
+    it("closes Settings onto the reserved pane while the start is still pending", async () => {
       let finishStart: (result: {
         kind: "ok";
         sandbox: SandboxSummary;
@@ -851,7 +868,11 @@ describe("<SandboxRowActions />", () => {
       await waitFor(() => {
         expect(automation.openSandboxAutomation).toHaveBeenCalledTimes(1);
       });
-      expectNothingFiledOrClosed();
+      expect(automation.close).toHaveBeenCalledTimes(1);
+      expect(
+        useLandingPanelStore.getState().placeholder?.automation?.existing
+          ?.hostId,
+      ).toBe("host-automations");
 
       await act(async () => {
         finishStart({
