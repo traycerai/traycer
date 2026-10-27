@@ -85,6 +85,21 @@ function refused(
   };
 }
 
+function created(): StagedSandbox {
+  const now = Date.now();
+  return {
+    ...refused(
+      { kind: "personal" },
+      { kind: "failed", code: "create", step: "creating" },
+    ),
+    createdSandboxId: "sbx_made_1",
+    createdHostId: "host-1",
+    failure: null,
+    startedAt: now,
+    stepAt: now,
+  };
+}
+
 function mountRefusal(
   configuration: StageConfiguration,
   failure: StagedSandboxFailure,
@@ -205,5 +220,47 @@ describe("SandboxSetupLine's failed start", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
+  });
+});
+
+describe("SandboxSetupLine's Stop action", () => {
+  it("stays available while the created sandbox's line is collapsed or expanded", () => {
+    vi.mocked(ACTIONS.onStop).mockClear();
+    render(
+      <SandboxSetupLine
+        stage={created()}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(
+      within(line).getByRole("button", { name: "Stop" }),
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+
+    expect(screen.getByTestId("sandbox-setup-line-detail")).toBeDefined();
+    const stop = within(line).getByRole("button", { name: "Stop" });
+    fireEvent.click(stop);
+    expect(ACTIONS.onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Stop in both line states when withdrawal is unavailable", () => {
+    render(
+      <SandboxSetupLine
+        stage={created()}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+        withdrawalAllowed={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+    expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
   });
 });

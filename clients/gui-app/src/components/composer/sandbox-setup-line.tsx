@@ -394,6 +394,11 @@ function SandboxProgressLine(props: {
           />
           <ChevronIcon aria-hidden className="size-3 shrink-0" />
         </button>
+        <LineButton
+          label={STOP}
+          testId="sandbox-setup-stop"
+          onClick={props.actions.onStop}
+        />
         <span aria-hidden className="h-px flex-1 bg-border/60" />
       </div>
       {expanded ? (
@@ -589,11 +594,6 @@ function ProgressBranchButtons(props: {
             onClick={actions.onOpenTerminal}
           />
         )}
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
-          onClick={actions.onStop}
-        />
         <LineButton
           label={CHOOSE_ANOTHER_HOST}
           testId="sandbox-setup-choose-another-host"
