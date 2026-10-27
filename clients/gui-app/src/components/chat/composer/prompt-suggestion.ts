@@ -2,12 +2,14 @@ import type { ComposerTopBannerKind } from "./chat-composer-top-banner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
+import { chordMatchesEvent, type ChordString } from "@/lib/keybindings/chord";
 import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 
 /**
  * Whether the composer may offer the suggestion at all, before asking whether
  * there is one to offer. The suggestion is the empty composer's placeholder,
- * and → (or a rightward swipe on a touch device) fills it.
+ * and the accept key (→ unless rebound) or a rightward swipe on a touch
+ * device fills it.
  *
  * - **Only when no banner is up.** A fallback card or a re-auth prompt is
  *   something the user has to deal with; a suggestion is not, and it does not
@@ -59,27 +61,34 @@ export type SuggestionFillTarget = Pick<
 >;
 
 /**
- * The key that accepts the suggestion: a bare →, the inline-autosuggestion
- * convention. It is only ever consulted over an empty composer, where → has
- * nothing else to do. A modified → (word or line jumps, selection) is never
- * taken, and neither is one still composing an IME candidate.
+ * Whether a keydown is the one that accepts the suggestion: the chord bound
+ * to `composer.suggestion.accept` (a bare → by default, Tab for a person who
+ * rebinds it), and nothing else.
+ *
+ * It is only ever consulted over an empty composer showing a suggestion. Even
+ * then it yields to:
+ * - an unbound action (`null`): the suggestion is then swipe- or type-over
+ *   only, never an invisible fallback to →;
+ * - a key something earlier already took (`defaultPrevented`);
+ * - an open mention or slash picker, which owns Tab (commit) and the arrows;
+ * - an IME still composing a candidate;
+ * - OS key-repeat, so a held key cannot fill and then act again on the text
+ *   it just filled.
+ *
+ * `chordMatchesEvent` compares the physical key and the exact modifier set,
+ * so a modified → or Tab (word jumps, selection, backward focus traversal)
+ * never matches a bare binding.
  */
-export function isPromptSuggestionAcceptKey(event: {
-  readonly key: string;
-  readonly altKey: boolean;
-  readonly ctrlKey: boolean;
-  readonly metaKey: boolean;
-  readonly shiftKey: boolean;
-  readonly isComposing: boolean;
+export function isPromptSuggestionAcceptEvent(input: {
+  readonly binding: ChordString | null;
+  readonly event: KeyboardEvent;
+  readonly pickerOpen: boolean;
 }): boolean {
-  return (
-    event.key === "ArrowRight" &&
-    !event.altKey &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.shiftKey &&
-    !event.isComposing
-  );
+  const { binding, event, pickerOpen } = input;
+  if (binding === null) return false;
+  if (event.defaultPrevented || event.repeat || pickerOpen) return false;
+  if (event.isComposing) return false;
+  return chordMatchesEvent(binding, event);
 }
 
 /**
@@ -90,8 +99,8 @@ export function isPromptSuggestionAcceptKey(event: {
  * drops it ahead of the accept, and a run opening clears it ahead of an edit's
  * accept). So while a `send` or `editUserMessage` is still pending, the value
  * this client holds is either the one that send retires or one a frame the
- * host emitted before it saw the send; offering it would let → fill a prompt
- * for a conversation that has already moved on. Once the ack lands, the held
+ * host emitted before it saw the send; offering it would let the accept key
+ * fill a prompt for a conversation that has already moved on. Once the ack lands, the held
  * value is the host's again: cleared, or - for a send the host refused before
  * retiring anything - the suggestion it still stands by.
  */
@@ -111,8 +120,9 @@ export function suggestionOfferableWhilePending(
  * real editor mutation, so the draft store records it exactly as it would a
  * paste, and the user still presses Enter. A no-op before the editor is ready.
  *
- * Returns whether it filled, so the → handler takes the key only when it did:
- * a declined fill leaves the key to move the caret as it otherwise would.
+ * Returns whether it filled, so the accept handler takes the key only when it
+ * did: a declined fill leaves the key its ordinary job (moving the caret, or
+ * moving focus for a Tab binding).
  */
 export function fillComposerWithSuggestion(
   editor: SuggestionFillTarget | null,
