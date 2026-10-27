@@ -1,5 +1,6 @@
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   GuiHarnessId,
@@ -7,8 +8,8 @@ import type {
 } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
-  providerPackBlocksExecution,
-  providerPackPreparingByHarnessId,
+  newChatOpencodeLineFromProviders,
+  providerPackPreparingForSandboxAgent,
   providerPackPreparingLabel,
 } from "@/components/providers/provider-pack-readiness";
 import {
@@ -38,6 +39,7 @@ import {
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
 import {
   reservePendingSandboxSendOwnership,
@@ -57,7 +59,7 @@ import {
 export type RequestedAgentReadiness =
   /** Its availability is still being probed, or its install is in flight. */
   | { readonly kind: "waiting" }
-  | { readonly kind: "ready" }
+  | { readonly kind: "ready"; readonly opencodeLine: OpencodeLine | null }
   /** Sandbox hosts do not offer this agent. */
   | { readonly kind: "not-offered" }
   /** Offered, but the sandbox's configuration cannot run it. */
@@ -70,6 +72,22 @@ type HarnessRow = Pick<
   "id" | "enabled" | "available" | "availabilityPending"
 >;
 
+/** A settled catalog refusal stays actionable when no install is in flight. */
+function catalogRefusesWithoutSetup(
+  harness: HarnessRow,
+  provider: ProviderCliState | undefined,
+  opencodeFamily: boolean,
+): boolean {
+  if (harness.available || harness.availabilityPending) return false;
+  if (provider === undefined) return true;
+  return (
+    !opencodeFamily &&
+    !provider.availabilityPending &&
+    (provider.managedInstallState === null ||
+      provider.managedInstallState === undefined)
+  );
+}
+
 /**
  * The requested agent's readiness on the sandbox, from the sandbox host's own
  * harness catalog and provider list (sandboxes redesign Flow 1: the message
@@ -77,37 +95,51 @@ type HarnessRow = Pick<
  * when the control plane says awake). A install in flight or an availability
  * still being probed is a wait; a failed install and an agent that cannot run
  * there are refusals. Never another agent: the model the person picked is the
- * one the message runs on.
+ * one the message runs on. Bound chats pass their recorded line; a new chat
+ * gets the destination's resolved line back with its ready result and carries
+ * that same line in the create.
  */
 export function requestedAgentReadiness(
   harnessId: GuiHarnessId,
   harnesses: ReadonlyArray<HarnessRow> | undefined,
   providers: ReadonlyArray<ProviderCliState> | undefined,
+  boundOpencodeLine: OpencodeLine | null,
 ): RequestedAgentReadiness {
   if (harnesses === undefined || providers === undefined) {
     return { kind: "waiting" };
   }
   const harness = harnesses.find((row) => row.id === harnessId);
   if (harness === undefined) return { kind: "not-offered" };
-  const preparing = providerPackPreparingByHarnessId(providers, null).get(
+  if (!harness.enabled) return { kind: "unusable" };
+  const family = isOpencodeFamilyHarness(harnessId);
+  const opencodeLine = family
+    ? (boundOpencodeLine ?? newChatOpencodeLineFromProviders(providers))
+    : null;
+  const providerId = family ? "opencode" : guiHarnessIdToProviderId(harnessId);
+  const provider = providers.find((row) => row.providerId === providerId);
+  if (catalogRefusesWithoutSetup(harness, provider, family))
+    return { kind: "unusable" };
+  const preparing = providerPackPreparingForSandboxAgent(
     harnessId,
+    providers,
+    opencodeLine,
   );
-  if (preparing !== undefined && providerPackBlocksExecution(preparing)) {
+  if (preparing !== null) {
     if (preparing.kind === "downloading") return { kind: "waiting" };
-    const providerId = guiHarnessIdToProviderId(harnessId);
+    const labelProviderId = guiHarnessIdToProviderId(harnessId);
     return {
       kind: "setup-failed",
       detail: providerPackPreparingLabel(
         preparing,
-        providerId === null ? harnessId : providerDisplayName(providerId),
+        labelProviderId === null
+          ? harnessId
+          : providerDisplayName(labelProviderId),
       ),
     };
   }
-  if (!harness.enabled) return { kind: "unusable" };
-  if (harness.available) return { kind: "ready" };
-  return harness.availabilityPending
-    ? { kind: "waiting" }
-    : { kind: "unusable" };
+  if (harness.availabilityPending) return { kind: "waiting" };
+  if (harness.available) return { kind: "ready", opencodeLine };
+  return { kind: "unusable" };
 }
 
 /** What a surface's send hands to its task. */

@@ -62,6 +62,7 @@ import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
   harnessRow,
+  opencodeProviderRow,
   pendingSend,
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
@@ -967,6 +968,90 @@ afterEach(() => {
 });
 
 describe("a send waiting for the requested agent on its sandbox", () => {
+  it.each(["chat", "fork"] as const)(
+    "waits for Traycer's Managed 2 engine before a %s, then creates on that exact line",
+    async (kind) => {
+      const create = deferred<CreateChatResponseV12>();
+      mocks.createChatDeferred = create.promise;
+      onTestFinished(() => resolvePendingCreate(create));
+      seed({
+        ...SEEDED,
+        send: {
+          ...SEND_BY_KIND[kind],
+          settings: { ...PICKED_SETTINGS, harnessId: "traycer" },
+        },
+      });
+      answerHost(SANDBOX_HOST, {
+        harnesses: [harnessRow("traycer", {})],
+        providers: [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow({ status: "downloading", percent: 40 }, {}),
+        ],
+      });
+      mount();
+
+      expect(createChatCalls()).toEqual([]);
+      expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+      expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+      expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
+
+      answerHost(SANDBOX_HOST, {
+        harnesses: [harnessRow("traycer", {})],
+        providers: [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow({ status: "installed" }, {}),
+        ],
+      });
+
+      await waitForCreateChats(1);
+      expect(createChatCalls()[0]).toMatchObject({
+        clientHostId: SANDBOX_HOST,
+        input: { opencodeLine: 2, settings: { harnessId: "traycer" } },
+      });
+      render(
+        <SandboxReadyLineForChat chatId={createChatCalls()[0].input.chatId} />,
+      );
+      expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+      await resolvePendingCreate(create);
+      expect(await screen.findByTestId("sandbox-ready-line")).toBeDefined();
+      expect(screen.queryByTestId("pending-sandbox-message")).toBeNull();
+    },
+  );
+
+  it("refuses Traycer's failed Managed 2 setup even though Managed 1 is installed and its catalog is available", async () => {
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, harnessId: "traycer" } },
+    });
+    answerHost(SANDBOX_HOST, {
+      harnesses: [harnessRow("traycer", {})],
+      providers: [
+        providerRow("traycer", { status: "installed" }),
+        opencodeProviderRow(
+          {
+            status: "error",
+            reason: "disk-full",
+            message: "ENOSPC",
+            retryAtMs: null,
+          },
+          {},
+        ),
+      ],
+    });
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+        kind: "agent-setup-failed",
+      });
+    });
+    const failure = readStagedSandbox(SURFACE)?.failure;
+    if (failure?.kind !== "agent-setup-failed")
+      throw new Error("expected failed setup");
+    expect(failure.detail).toContain("disk space");
+    expect(createChatCalls()).toEqual([]);
+  });
+
   it("is not delivered while the requested agent's pack downloads, shows no error, and goes out once, on the sandbox's own client, when it is ready", async () => {
     seed(SEEDED);
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
@@ -1085,7 +1170,10 @@ describe("a send waiting for the requested agent on its sandbox", () => {
         harnessRow("codex", { available: true }),
         harnessRow("claude", { available: true }),
       ],
-      providers: [providerRow("codex", null), providerRow("claude-code", null)],
+      providers: [
+        providerRow("codex", { status: "installed" }),
+        providerRow("claude-code", null),
+      ],
     });
 
     await waitForCreateChats(1);
