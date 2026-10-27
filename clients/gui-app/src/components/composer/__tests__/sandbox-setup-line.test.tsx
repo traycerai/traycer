@@ -39,6 +39,7 @@ const ACTIONS: SandboxSetupLineActions = {
   onSendAgain: vi.fn(),
   onChangeShape: vi.fn(),
   onRetryApplying: vi.fn(),
+  onRepairSetup: null,
   onStop,
   onOpenTerminal: null,
   onOpenProviders: null,
@@ -487,6 +488,31 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     ]) {
       expect(labels).toContain(label);
     }
+  });
+
+  it("hides Retry applying when the host offers no combined retry", () => {
+    const detail = mountSettings(true, { ...ACTIONS, onRetryApplying: null });
+
+    expect(
+      within(detail).queryByTestId("sandbox-setup-retry-applying"),
+    ).toBeNull();
+    expect(within(detail).getByTestId("sandbox-setup-stop")).toBeTruthy();
+  });
+
+  it("offers Repair setup instead of Retry applying when only the guest-only repair is available", () => {
+    const onRepairSetup = vi.fn();
+    const detail = mountSettings(true, {
+      ...ACTIONS,
+      onRetryApplying: null,
+      onRepairSetup,
+    });
+
+    fireEvent.click(within(detail).getByTestId("sandbox-setup-repair-setup"));
+
+    expect(onRepairSetup).toHaveBeenCalledTimes(1);
+    expect(
+      within(detail).queryByTestId("sandbox-setup-retry-applying"),
+    ).toBeNull();
   });
 
   it("disables Retry applying while a retry is pending", () => {

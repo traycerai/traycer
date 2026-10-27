@@ -333,6 +333,18 @@ const mocks = vi.hoisted(() => ({
   stopSandbox: vi.fn<(verb: string) => void>(),
   /** Repairs started and not finished; calling one succeeds that repair. */
   repairFinishers: [] as Array<() => void>,
+  retrySupported: true,
+  legacySupported: false,
+  legacyMutate: vi.fn(),
+  settingsStatus: undefined as
+    | {
+        readonly principal: { readonly kind: "personal" };
+        readonly items: readonly {
+          readonly kind: string;
+          readonly status: string;
+        }[];
+      }
+    | undefined,
   /** The held answer of the next sandbox verb; `null` settles it at rest. */
   verbAnswer: null as Promise<SandboxVerbOutcome> | null,
   /** The verb mutation's reactive state, as `useMutation` reports it. */
@@ -741,19 +753,38 @@ vi.mock("@/lib/links/open-link", () => ({
 // The isolated fixtures read the host's settings as ready; a settings hold is
 // exercised by its own test, not by every send.
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
-  useSandboxSettingsStatus: () => ({ ready: true, data: undefined }),
+  useSandboxSettingsStatus: () => ({
+    // A failed item keeps the host's settings unready, as the real read does.
+    ready: mocks.settingsStatus === undefined,
+    data: mocks.settingsStatus,
+  }),
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
   () => ({
     useSandboxSettingsOperation: () => null,
+    useSandboxRetryApplyingSupported: () => mocks.retrySupported,
+    useSandboxGuestSetupRepairSupported: () => mocks.legacySupported,
+    useSandboxRepairGuestSetupOnHost: () => ({
+      isPending: false,
+      mutate: mocks.legacyMutate,
+    }),
     // A repair stays out until the test finishes it, as a slow host would.
     useSandboxRepairGuestConfigurationOnHost: () => ({
       mutate: (
         _variables: Record<string, never>,
-        options: { readonly onSuccess: (() => void) | undefined },
+        options: {
+          readonly onSuccess:
+            | ((outcome: {
+                readonly guestConfigured: boolean;
+                readonly settingsApplied: boolean;
+              }) => void)
+            | undefined;
+        },
       ) => {
-        mocks.repairFinishers.push(() => options.onSuccess?.());
+        mocks.repairFinishers.push(() =>
+          options.onSuccess?.({ guestConfigured: true, settingsApplied: true }),
+        );
       },
     }),
   }),
@@ -1099,6 +1130,10 @@ beforeEach(() => {
   toastSpies.dismiss.mockClear();
   mocks.verbAnswer = null;
   mocks.repairFinishers.length = 0;
+  mocks.retrySupported = true;
+  mocks.legacySupported = false;
+  mocks.legacyMutate.mockReset();
+  mocks.settingsStatus = undefined;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
   mocks.findById.mockReset();
@@ -5102,6 +5137,85 @@ describe("a send that named no model, ready on its sandbox", () => {
     );
     expect(mocks.modelReads.every((read) => read.hostId === null)).toBe(true);
   });
+});
+
+describe("a send whose created sandbox stalled on settings, on a host with only the guest-only repair", () => {
+  const FRESH = Date.now() + 60_000;
+  const ENVIRONMENT_FAILED = {
+    principal: { kind: "personal" },
+    items: [{ kind: "variable", status: "failed" }],
+  } as const;
+
+  async function mountStalled(
+    guestConfigured: boolean | null,
+    environmentFailed: boolean,
+  ): Promise<void> {
+    mocks.retrySupported = false;
+    mocks.legacySupported = true;
+    mocks.settingsStatus = environmentFailed ? ENVIRONMENT_FAILED : undefined;
+    seed({
+      ...SEEDED,
+      send: SEND_BY_KIND.chat,
+      phase: "creating",
+      created: true,
+    });
+    const stalled = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+      guestConfigured,
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([stalled]));
+    answerSandboxRows([stalled], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await screen.findByTestId("pending-sandbox-sends");
+    // A settings-only failure is not read off the row, so the stage reports it
+    // as the setup line does once the environment says it did not apply.
+    if (environmentFailed) {
+      act(() => {
+        useStagedSandboxStore.getState().report(SURFACE, {
+          failure: { kind: "settings", code: "SBX-0520" },
+        });
+      });
+    }
+  }
+
+  it("offers Repair setup, not Retry applying, for a guest that really failed, and runs only the guest repair", async () => {
+    await mountStalled(false, false);
+
+    const strip = screen.getByTestId("pending-sandbox-sends");
+    await waitFor(() => {
+      expect(strip.textContent).toMatch(/repair setup/i);
+    });
+    expect(strip.textContent).not.toMatch(/retry applying/i);
+    fireEvent.click(screen.getByRole("button", { name: /repair setup/i }));
+
+    expect(mocks.legacyMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.repairFinishers).toHaveLength(0);
+    expect(createChatCalls()).toEqual([]);
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+  });
+
+  it.each([
+    ["a configured guest", true],
+    ["an unknown guest", null],
+  ])(
+    "offers neither remedy when only the environment failed on %s",
+    async (_name, guestConfigured) => {
+      await mountStalled(guestConfigured, true);
+
+      const strip = screen.getByTestId("pending-sandbox-sends");
+      await waitFor(() => {
+        expect(strip.textContent).toMatch(
+          /didn't apply|waits until they apply/i,
+        );
+      });
+      expect(strip.textContent).not.toMatch(/repair setup/i);
+      expect(strip.textContent).not.toMatch(/retry applying/i);
+    },
+  );
 });
 
 describe("a send whose created sandbox stalled on credits or settings while it was still being created", () => {

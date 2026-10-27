@@ -120,6 +120,12 @@ vi.mock(
       isPending: false,
       mutate: vi.fn(),
     }),
+    useSandboxRepairGuestSetupOnHost: () => ({
+      isPending: false,
+      mutate: vi.fn(),
+    }),
+    useSandboxRetryApplyingSupported: () => false,
+    useSandboxGuestSetupRepairSupported: () => false,
     useSandboxSettingsOperation: () => null,
   }),
 );
@@ -212,6 +218,7 @@ function Rows(): ReactNode {
         configuration={mocks.configuration}
         unreachable={false}
         frozenNeedsOwnCredits={false}
+        settingsFailed={false}
       />
     </section>
   ));
@@ -561,6 +568,7 @@ describe("sandbox row operations", () => {
             configuration={mocks.configuration}
             unreachable={false}
             frozenNeedsOwnCredits={false}
+            settingsFailed={false}
           />
         </section>
       </QueryClientProvider>,

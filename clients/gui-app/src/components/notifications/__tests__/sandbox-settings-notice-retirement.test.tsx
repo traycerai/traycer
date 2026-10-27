@@ -22,6 +22,10 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   environmentStatusResponseSchemaV11,
@@ -237,6 +241,10 @@ function mount(showCenter: boolean): void {
 }
 
 beforeEach(() => {
+  // The host negotiated the combined retry, which offers `Retry applying`.
+  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+    "host.sandbox.repairGuestConfiguration": { major: 1, minor: 1 },
+  });
   auth.auth.listSandboxes.mockReset();
   auth.auth.listSandboxes.mockResolvedValue({
     kind: "ok",
@@ -294,8 +302,10 @@ beforeEach(() => {
       },
       "host.sandbox.repairGuestConfiguration": () =>
         Promise.resolve({
-          guestConfigured: repairSucceeds,
+          // A retry that did not apply leaves the guest itself configured.
+          guestConfigured: true,
           guestConfigFailureReason: null,
+          settingsApplied: repairSucceeds,
         }),
     },
   });
@@ -321,6 +331,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   queryClient.clear();
   state.client = null;
   state.binding = null;

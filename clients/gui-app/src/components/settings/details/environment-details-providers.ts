@@ -10,6 +10,7 @@ import type {
   DetailsHistory,
   DetailsHostStatus,
   DetailsProviderContext,
+  DetailsRecovery,
   DetailsStatus,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
@@ -138,6 +139,24 @@ function currentSandboxState(
   return waiting ? "received" : "applied";
 }
 
+/** Recovery admission and guest evidence come from the current sandbox, independently of history. */
+function deliveryRecovery(
+  host: DetailsHostStatus,
+  sandbox: SandboxSummary | null,
+  state: string,
+  isSandbox: boolean,
+): DetailsRecovery | null {
+  if (!isSandbox || (state !== "failed" && state !== "not_applied")) {
+    return host.recovery;
+  }
+  return {
+    kind: "apply",
+    hostId: host.hostId,
+    guestSetupFailed:
+      sandbox === null ? null : sandbox.guestConfigured === false,
+  };
+}
+
 /** Join current sandbox delivery with authorized history, preserving offline evidence. */
 async function deliveryHostRows(input: {
   readonly host: DetailsHostStatus;
@@ -178,10 +197,7 @@ async function deliveryHostRows(input: {
     name: sandbox?.displayName ?? host.name,
     state,
     reason: diagnostics ? host.reason : null,
-    recovery:
-      isSandbox && (state === "failed" || state === "not_applied")
-        ? { kind: "apply", hostId: host.hostId }
-        : host.recovery,
+    recovery: deliveryRecovery(host, sandbox, state, isSandbox),
   };
   if (diagnostics && status !== null)
     return [

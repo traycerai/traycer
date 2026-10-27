@@ -108,9 +108,21 @@ const mocks = vi.hoisted(() => ({
   /** The account's host directory, which names the new host once it dials. */
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   repairHostIds: [] as string[],
+  retrySupported: true,
+  legacySupported: false,
+  legacyHostIds: [] as string[],
+  legacyMutate: vi.fn(),
   repairMutate: vi.fn(
-    (_variables: object, options: { readonly onSuccess: () => void }) => {
-      options.onSuccess();
+    (
+      _variables: object,
+      options: {
+        readonly onSuccess: (outcome: {
+          readonly guestConfigured: boolean;
+          readonly settingsApplied: boolean;
+        }) => void;
+      },
+    ) => {
+      options.onSuccess({ guestConfigured: true, settingsApplied: true });
     },
   ),
   startSandboxWake: vi.fn<
@@ -148,6 +160,12 @@ vi.mock(
     useSandboxRepairGuestConfigurationOnHost: (hostId: string) => {
       mocks.repairHostIds.push(hostId);
       return { mutate: mocks.repairMutate };
+    },
+    useSandboxRetryApplyingSupported: () => mocks.retrySupported,
+    useSandboxGuestSetupRepairSupported: () => mocks.legacySupported,
+    useSandboxRepairGuestSetupOnHost: (hostId: string) => {
+      mocks.legacyHostIds.push(hostId);
+      return { mutate: mocks.legacyMutate };
     },
     useSandboxSettingsOperation: () => null,
   }),
@@ -357,6 +375,10 @@ beforeEach(() => {
   mocks.findById.mockReset();
   mocks.repairMutate.mockClear();
   mocks.repairHostIds.length = 0;
+  mocks.retrySupported = true;
+  mocks.legacySupported = false;
+  mocks.legacyHostIds.length = 0;
+  mocks.legacyMutate.mockReset();
   mocks.startSandboxWake.mockReset();
   mocks.startSandboxWake.mockResolvedValue({
     kind: "failed",
@@ -453,11 +475,97 @@ describe("useStagedSandboxSend's setup line", () => {
     });
   });
 
+  it("does not resume the wait when the guest is configured but the settings did not apply", () => {
+    stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    mocks.repairMutate.mockImplementationOnce((_variables, options) => {
+      options.onSuccess({ guestConfigured: true, settingsApplied: false });
+    });
+    mount(vi.fn());
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
+
+    expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
+  });
+
+  it("offers no Retry applying on a host that did not negotiate the combined retry", () => {
+    mocks.retrySupported = false;
+    stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    mount(vi.fn());
+
+    expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+  });
+
+  describe("on a host that negotiated only the guest-only repair", () => {
+    function mountLegacy(guestConfigured: boolean | null): void {
+      mocks.retrySupported = false;
+      mocks.legacySupported = true;
+      mocks.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-1",
+          hostId: NEW_HOST,
+          guestConfigured,
+        }),
+      ];
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+    }
+
+    it("offers Repair setup for a guest that really failed, on that host, and never resumes the wait", () => {
+      mountLegacy(false);
+
+      expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+      fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
+
+      expect(mocks.legacyHostIds).toContain(NEW_HOST);
+      expect(mocks.legacyMutate).toHaveBeenCalledTimes(1);
+      expect(mocks.repairMutate).not.toHaveBeenCalled();
+      expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a configured guest", true],
+      ["an unknown guest", null],
+    ])(
+      "offers neither Repair setup nor Retry applying for %s",
+      (_name, guestConfigured) => {
+        mountLegacy(guestConfigured);
+
+        expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
+        expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+      },
+    );
+
+    it("offers no Repair setup when the failure is a settings stage but the summary is not loaded", () => {
+      mocks.retrySupported = false;
+      mocks.legacySupported = true;
+      mocks.sandboxes = null;
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+
+      expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
+    });
+
+    it("never offers Repair setup beside Retry applying on a host that negotiated the combined retry", () => {
+      mocks.retrySupported = true;
+      mocks.legacySupported = false;
+      mocks.sandboxes = [
+        sandboxSummaryFixture({ hostId: NEW_HOST, guestConfigured: false }),
+      ];
+      stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+      mount(vi.fn());
+
+      expect(screen.getByTestId("sandbox-setup-retry-applying")).toBeTruthy();
+      expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
+    });
+  });
+
   it("starts nothing when another sandbox was picked while the repair ran", () => {
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     let finishRepair: () => void = () => undefined;
     mocks.repairMutate.mockImplementationOnce((_variables, options) => {
-      finishRepair = options.onSuccess;
+      finishRepair = () =>
+        options.onSuccess({ guestConfigured: true, settingsApplied: true });
     });
     mount(vi.fn());
 

@@ -1023,8 +1023,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A repair re-applies the guest's files and refetches its configuration; two
-  // presses must run in order, never coalesce into one answer.
+  // Guest repair (1.0) and combined settings retry (1.1) mutate the sandbox;
+  // preserve separate presses in order, never coalesce unrelated attempts.
   "host.sandbox.repairGuestConfiguration": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
