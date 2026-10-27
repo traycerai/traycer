@@ -12,7 +12,7 @@ import {
   hostNotificationEntrySchema,
   hostNotificationEntrySchemaV21,
   hostNotificationEntrySchemaV22,
-  hostNotificationEntrySchemaV25,
+  hostNotificationCloudEntrySchemaV26,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV12,
@@ -22,6 +22,7 @@ import {
   hostNotificationsCloudFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV14,
   hostNotificationsCloudFeedSubscribeV15,
+  hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -29,10 +30,13 @@ import {
   hostNotificationsFeedSubscribeV14,
   hostNotificationsFeedSubscribeV15,
   hostNotificationsFeedSubscribeV16,
+  hostNotificationsFeedSubscribeV17,
   hostNotificationsSubscribeServerFrameSchemaV12,
   hostNotificationsSubscribeServerFrameSchemaV13,
   HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR,
-  hostNotificationsListDowngradeV24ToV10,
+  hostNotificationsListDowngradeV25ToV10,
+  hostNotificationsListUpgradeV24ToV25,
+  hostNotificationsListV25,
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListResponseSchemaV21,
@@ -260,9 +264,13 @@ describe("released schemas stay frozen", () => {
 });
 
 describe("registry wiring", () => {
-  it("advertises @2.4 as the canonical list minor with @2.0-@2.3 still installed", () => {
+  it("advertises @2.5 as the canonical list minor with @2.0-@2.4 still installed", () => {
     const line = hostRpcRegistry["host.notifications.list"][2];
-    expect(line.latestMinor).toBe(4);
+    expect(line.latestMinor).toBe(5);
+    expect(line.versions[5].contract).toBe(hostNotificationsListV25);
+    expect(line.versions[5].upgradeFromPreviousVersion).toBe(
+      hostNotificationsListUpgradeV24ToV25,
+    );
     expect(line.versions[4].contract).toBe(hostNotificationsListV24);
     expect(line.versions[4].upgradeFromPreviousVersion).toBe(
       hostNotificationsListUpgradeV23ToV24,
@@ -281,13 +289,14 @@ describe("registry wiring", () => {
       hostNotificationsListUpgradeV21ToV22,
     );
     expect(line.downgradePathsFromLatest[1]).toBe(
-      hostNotificationsListDowngradeV24ToV10,
+      hostNotificationsListDowngradeV25ToV10,
     );
   });
 
-  it("advertises feed @1.6 with @1.0-@1.5 still installed for older peers", () => {
+  it("advertises feed @1.7 with @1.0-@1.6 still installed for older peers", () => {
     const line = hostStreamRpcRegistry["host.notifications.feed.subscribe"][1];
-    expect(line.latestMinor).toBe(6);
+    expect(line.latestMinor).toBe(7);
+    expect(line.versions[7].contract).toBe(hostNotificationsFeedSubscribeV17);
     expect(line.versions[6].contract).toBe(hostNotificationsFeedSubscribeV16);
     expect(line.versions[5].contract).toBe(hostNotificationsFeedSubscribeV15);
     expect(line.versions[4].contract).toBe(hostNotificationsFeedSubscribeV14);
@@ -332,10 +341,13 @@ describe("registry wiring", () => {
     expect(Object.keys(line.versions)).toEqual(["0"]);
   });
 
-  it("advertises cloud feed @1.5 with the prior minors installed for older peers", () => {
+  it("advertises cloud feed @1.6 with the prior minors installed for older peers", () => {
     const line =
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1];
-    expect(line.latestMinor).toBe(5);
+    expect(line.latestMinor).toBe(6);
+    expect(line.versions[6].contract).toBe(
+      hostNotificationsCloudFeedSubscribeV16,
+    );
     expect(line.versions[5].contract).toBe(
       hostNotificationsCloudFeedSubscribeV15,
     );
@@ -508,6 +520,7 @@ describe("negotiated-version visibility projection", () => {
           "team.host.returned",
           "secret.removed",
           "sandbox.notice",
+          "notification.hooks.removed",
         ]);
       }
     }
@@ -517,13 +530,13 @@ describe("negotiated-version visibility projection", () => {
     expect(
       hiddenHostNotificationKinds(
         { method: "host.notifications.cloudFeed.subscribe" },
-        { major: 1, minor: 5 },
+        { major: 1, minor: 6 },
       ),
     ).toEqual([]);
   });
 
   it("covers every kind the entry unions can carry", () => {
-    const armKinds = hostNotificationEntrySchemaV25.options.map(
+    const armKinds = hostNotificationCloudEntrySchemaV26.options.map(
       (option) => option.shape.kind.value,
     );
     expect([...ALL_HOST_NOTIFICATION_KINDS].sort()).toEqual(
@@ -569,7 +582,7 @@ describe("channel-emission capability", () => {
 
 describe("@2.3 -> @1.0 downgrade", () => {
   it("cannot hand a v1.1.7 caller an arm it has no parser for", () => {
-    const result = hostNotificationsListDowngradeV24ToV10.downgradeResponse({
+    const result = hostNotificationsListDowngradeV25ToV10.downgradeResponse({
       entries: [AGENT_STOPPED_ENTRY, OPERATION_FINISHED_ENTRY],
       nextCursor: { kind: "chronological", updatedAt: 1, id: "x" },
     });

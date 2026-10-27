@@ -19,6 +19,7 @@ import {
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListDowngradeV24ToV10,
+  hostNotificationsListDowngradeV25ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
@@ -981,7 +982,7 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsListUpgradeV10ToV20);
     expect(
       hostRpcRegistry["host.notifications.list"][2].downgradePathsFromLatest[1],
-    ).toBe(hostNotificationsListDowngradeV24ToV10);
+    ).toBe(hostNotificationsListDowngradeV25ToV10);
   });
 
   it("REFUSES a local-home selector on the v1 bridge instead of widening it to whole-origin", () => {

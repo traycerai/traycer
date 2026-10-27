@@ -34,7 +34,7 @@ describe("released floor production module", () => {
     // peer negotiates down to one of them, but optional capability manifests
     // always advertise the method's latest major AND minor.
     expect(split.optionalManifest).toMatchObject({
-      "host.notifications.list": { major: 2, minor: 4 },
+      "host.notifications.list": { major: 2, minor: 5 },
       "host.notifications.markRead": { major: 1, minor: 0 },
       "host.notifications.resolve": { major: 1, minor: 0 },
       "host.notifications.markAllRead": { major: 1, minor: 1 },
