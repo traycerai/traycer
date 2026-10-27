@@ -191,6 +191,7 @@ import {
 import { useEpicDeleteTuiAgentInBatch } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
+  isCreatableArtifactKind,
   isMarkdownArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
@@ -2192,8 +2193,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const addRoot = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate) return;
-      // This create menu authors Markdown bodies only.
-      if (!isMarkdownArtifactKind(type)) {
+      if (!isCreatableArtifactKind(type)) {
         return;
       }
       const pendingName = DEFAULT_EPIC_NODE_NAMES[type];
@@ -2215,7 +2215,9 @@ function TreePanelActions(props: TreePanelActionsProps) {
               pendingName,
             );
             openRootWhenProjected(result.artifactId, (node) => {
-              requestArtifactEditorFocus(node.id, node.instanceId);
+              // Only a markdown tile mounts the editor that consumes the mark.
+              if (isMarkdownArtifactKind(type))
+                requestArtifactEditorFocus(node.id, node.instanceId);
             });
           },
           onError: () => {

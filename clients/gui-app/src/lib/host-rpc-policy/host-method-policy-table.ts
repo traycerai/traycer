@@ -1169,6 +1169,7 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.mentionTickets": { ...LATEST_SCHEDULING, poll: null },
   "epic.mentionStories": { ...LATEST_SCHEDULING, poll: null },
   "epic.mentionReviews": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionArtifacts": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCollaborators": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 5 * MINUTE_MS },
