@@ -22,6 +22,7 @@ import {
   notificationFeedTone,
   TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
+import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   isTeamHostNotificationKind,
@@ -335,11 +336,33 @@ function NotificationRowWithSecrets(props: {
   const secrets = props.row.secrets ?? null;
   const environmentDetail = props.row.environmentDetail ?? null;
   const sandboxNotice = props.row.sandboxNotice ?? null;
-  if (secrets === null && environmentDetail === null && sandboxNotice === null)
+  const hooksRemoved =
+    props.row.hostKind === "notification.hooks.removed" &&
+    props.row.payload !== null;
+  if (
+    secrets === null &&
+    environmentDetail === null &&
+    sandboxNotice === null &&
+    !hooksRemoved
+  )
     return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {props.children}
+      {hooksRemoved ? (
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              props.onActivate(props.row);
+            }}
+          >
+            Review hooks
+          </Button>
+        </div>
+      ) : null}
       <NotificationSecretsExtra
         secrets={secrets}
         resolved={props.row.resolvedAt !== null}
@@ -693,6 +716,7 @@ const HOST_KIND_GLYPHS: Record<
   // Only reachable for an `info` row: the severity branches above claim a
   // warning and a destroy.
   "sandbox.notice": NEUTRAL_BELL,
+  "notification.hooks.removed": NEUTRAL_BELL,
   // A change in a team the reader belongs to.
   "team.role.changed": TEAM_GLYPH,
   "team.host.returned": TEAM_GLYPH,

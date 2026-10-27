@@ -130,9 +130,8 @@ export interface BrowserSessionNotificationPayload {
  * worktree, by construction), and failing to resolve a focus target must never
  * turn into a dead-end activation.
  */
-export interface HostSurfaceNotificationPayload {
+export type HostSurfaceNotificationPayload = {
   readonly kind: "hostSurface";
-  readonly surface: "worktreeSettings";
   /**
    * Which view WITHIN the surface, when the surface has more than one. Also a
    * hint, and for the same reason `focus` is: a build that does not know a view
@@ -140,20 +139,19 @@ export interface HostSurfaceNotificationPayload {
    * only ever narrow a destination that already works without it.
    */
   readonly view?: "cleanupHistory" | undefined;
-  /**
-   * WHICH HOST owns the resource, when the surface is host-scoped and the row
-   * can name it. Settings administers one host at a time, so a row about host
-   * B's cleanup run has to carry B or the destination resolves against
-   * whichever host Settings last showed — the same failure
-   * `carryViewedHostIntoSettingsScope` exists to prevent for read-only
-   * surfaces with a Settings CTA.
-   *
-   * Absent on manual worktree-deletion rows, which is why their behavior is
-   * unchanged: they land on the list for the host already being administered.
-   */
-  readonly hostId?: string | undefined;
   readonly focus: { readonly resourceId: string } | undefined;
-}
+} & (
+  | {
+      readonly surface: "worktreeSettings";
+      /** Cleanup history names its host; manual deletion keeps the current scope. */
+      readonly hostId?: string | undefined;
+    }
+  | {
+      readonly surface: "notificationSettings";
+      /** A removal notice always opens its affected computer, including offline. */
+      readonly hostId: string;
+    }
+);
 
 export type NotificationPayload =
   | SessionNotificationPayload
@@ -347,7 +345,10 @@ function parseInterviewPayload(
 function parseHostSurfacePayload(
   value: Record<string, unknown>,
 ): HostSurfaceNotificationPayload | null {
-  if (value.surface !== "worktreeSettings") {
+  if (
+    value.surface !== "worktreeSettings" &&
+    value.surface !== "notificationSettings"
+  ) {
     return null;
   }
   const focus = isRecord(value.focus)
@@ -358,6 +359,16 @@ function parseHostSurfacePayload(
   // from a newer build naming views this one has never heard of.
   const view = value.view === "cleanupHistory" ? "cleanupHistory" : undefined;
   const hostId = readString(value.hostId);
+  if (value.surface === "notificationSettings") {
+    return hostId === null
+      ? null
+      : {
+          kind: "hostSurface",
+          surface: "notificationSettings",
+          hostId,
+          focus: undefined,
+        };
+  }
   return {
     kind: "hostSurface",
     surface: "worktreeSettings",
@@ -701,10 +712,12 @@ function routeHostSurfaceNotification(
   payload: HostSurfaceNotificationPayload,
 ): void {
   carryViewedHostIntoSettingsScope(payload.hostId ?? null);
-  selectWorktreeCleanupView(
-    payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
-    payload.focus?.resourceId ?? null,
-  );
+  if (payload.surface === "worktreeSettings") {
+    selectWorktreeCleanupView(
+      payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
+      payload.focus?.resourceId ?? null,
+    );
+  }
   navigateToTabIntent(
     navigate,
     ensureSettingsTab({
@@ -729,6 +742,7 @@ const HOST_SURFACE_SETTINGS_SECTION: Record<
   SettingsSectionId
 > = {
   worktreeSettings: "worktrees",
+  notificationSettings: "notifications",
 };
 
 function routeTerminalNotification(

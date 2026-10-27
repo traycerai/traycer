@@ -148,8 +148,15 @@ describe("visibility of the five environments-redesign kinds", () => {
       expect(visible).toContain(kind);
       expect(hidden).not.toContain(kind);
     }
-    // `sandbox.notice` is cloud-feed @1.5 only; the five are not what it hides.
-    expect(hidden.filter((kind) => kind !== "sandbox.notice")).toEqual([]);
+    // `sandbox.notice` is cloud-feed only and `notification.hooks.removed` is
+    // origin-store only from list @2.5 / feed @1.7; the five are not what
+    // either hides.
+    expect(
+      hidden.filter(
+        (kind) =>
+          kind !== "sandbox.notice" && kind !== "notification.hooks.removed",
+      ),
+    ).toEqual([]);
   });
 
   it("freezes V23_HOST_NOTIFICATION_KINDS as what list 2.3, feed 1.4-1.5 and cloudFeed 1.3 carry", () => {

@@ -303,6 +303,20 @@ const REPRESENTATIVE_ENTRIES: Readonly<
       notice: { kind: "resting_destroyed" },
     },
   },
+  "notification.hooks.removed": {
+    ...ENTRY_BASE,
+    kind: "notification.hooks.removed",
+    epicId: null,
+    chatId: null,
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "notification_hooks_removed",
+      hostId: "host-1",
+      hostName: "Work laptop",
+      count: 2,
+    },
+  },
   "host.operation.finished": {
     ...ENTRY_BASE,
     kind: "host.operation.finished",

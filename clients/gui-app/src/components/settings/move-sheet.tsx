@@ -361,6 +361,7 @@ function MovePlanRows(props: {
             key={section.rows}
             testId={`move-sheet-${section.rows}`}
             title={section.title}
+            initiallyOpen={stays}
             rows={sectionRows}
             chosen={chosen}
             onTakeBack={(row) => props.onChoose(moveItemChoiceKey(row), null)}
@@ -528,6 +529,7 @@ function MovesRow(props: {
 function MoveSection(props: {
   readonly testId: string;
   readonly title: string;
+  readonly initiallyOpen: boolean;
   readonly rows: readonly MoveRow[];
   readonly chosen: readonly MoveRow[];
   readonly onTakeBack: (row: MoveRow) => void;
@@ -541,7 +543,7 @@ function MoveSection(props: {
       {count === 0 ? (
         <p className="text-ui-sm text-muted-foreground">{props.empty}</p>
       ) : (
-        <Collapsible>
+        <Collapsible defaultOpen={props.initiallyOpen}>
           <CollapsibleTrigger asChild>
             <Button type="button" variant="ghost" size="sm">
               <ChevronRight className="size-3.5" aria-hidden />
