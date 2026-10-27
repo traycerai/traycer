@@ -14,6 +14,7 @@ import {
 } from "./configuration-source";
 
 interface PendingTextWrite {
+  readonly kind: "variable" | "env_override";
   readonly key: string;
   readonly os: EnvironmentOs | null;
   readonly action: "put" | "remove";
@@ -52,10 +53,14 @@ export function TeamTextItems(props: {
     pending.accepted &&
     (pending.action === "remove"
       ? !props.items.some(
-          (item) => item.key === pending.key && item.os === pending.os,
+          (item) =>
+            item.kind === pending.kind &&
+            item.key === pending.key &&
+            item.os === pending.os,
         )
       : props.items.some(
           (item) =>
+            item.kind === pending.kind &&
             item.key === pending.key &&
             item.os === pending.os &&
             configurationTextValueSchema.parse(item.value).value ===
@@ -67,7 +72,10 @@ export function TeamTextItems(props: {
     pending?.original !== null &&
     pending?.original !== undefined &&
     !inventory.some(
-      (item) => item.key === pending.key && item.os === pending.os,
+      (item) =>
+        item.kind === pending.kind &&
+        item.key === pending.key &&
+        item.os === pending.os,
     )
   ) {
     inventory.push(pending.original);
@@ -165,6 +173,7 @@ function TeamTextItemEditor(props: {
         ? name.trim()
         : `${props.providerId}:${name.trim()}`);
     const write: PendingTextWrite = {
+      kind: props.kind,
       key,
       os: props.item === null ? props.os : props.item.os,
       action: "put",
@@ -202,6 +211,7 @@ function TeamTextItemEditor(props: {
   const deleteItem = (): void => {
     if (source.kind !== "pool" || props.item === null) return;
     const write: PendingTextWrite = {
+      kind: props.kind,
       key: props.item.key,
       os: props.item.os,
       action: "remove",
@@ -288,14 +298,16 @@ function TeamTextItemEditor(props: {
   );
 }
 
-/** A status belongs to the complete row address, including OS. */
+/** A status belongs to the complete row address: kind, key and OS. */
 function textRowWrite(
   item: ConfigurationItem | null,
   pending: PendingTextWrite | null,
 ): PendingTextWrite | null {
   if (pending === null) return null;
   if (item === null) return pending.original === null ? pending : null;
-  return pending.original?.key === item.key && pending.original.os === item.os
+  return pending.original?.kind === item.kind &&
+    pending.original.key === item.key &&
+    pending.original.os === item.os
     ? pending
     : null;
 }
