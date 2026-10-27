@@ -1599,6 +1599,13 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
   },
+  // The Browsers panel's other-machine sessions, at the terminal-agent list's
+  // cadence: the browser-session record publishes no delta on
+  // `host.chatRecords.subscribe`, so the poll is the only change signal.
+  "browser.replicas.list": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
+  },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
   "epic.chatBackupStatus": {

@@ -345,6 +345,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "browser.repl.requestApproval": "target-host",
   "browser.repl.runCell": "target-host",
   "browser.repl.stopCell": "target-host",
+  "browser.replicas.list": "target-host",
   "browser.savedLoginSites": "target-host",
   // The sandbox host the person continues a removed sandbox's chat on.
   "chat.continueHere": "target-host",

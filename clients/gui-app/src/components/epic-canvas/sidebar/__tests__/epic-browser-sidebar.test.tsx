@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -20,6 +21,8 @@ import {
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { BrowserSessionReplica } from "@traycer/protocol/host/browser/replicas";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -107,6 +110,24 @@ vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
   SimulatorsSidebarGroup: () => null,
 }));
 
+const replicasState = vi.hoisted(() => ({
+  sessions: [] as BrowserSessionReplica[],
+}));
+
+const directoryState = vi.hoisted(() => ({
+  entries: [] as HostDirectoryEntry[],
+}));
+
+vi.mock("@/hooks/browser/use-browser-replicas-query", () => ({
+  useBrowserReplicasQuery: () => ({
+    data: { sessions: replicasState.sessions },
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: directoryState.entries }),
+}));
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: (hostId: string | null) => ({
     label: hostId === "host-2" ? "Work Mac" : "Home Mac",
@@ -146,9 +167,26 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   },
 }));
 
+const toastWarning = vi.hoisted(() =>
+  vi.fn<
+    (
+      message: string,
+      options:
+        | {
+            readonly action?: {
+              readonly label: string;
+              readonly onClick: () => void;
+            };
+          }
+        | undefined,
+    ) => void
+  >(),
+);
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
+    warning: toastWarning,
   },
 }));
 
@@ -318,6 +356,37 @@ function seedCanvasTab(): void {
   });
 }
 
+function directoryEntry(
+  hostId: string,
+  label: string,
+  transportDialability: HostDirectoryEntry["transportDialability"],
+): HostDirectoryEntry {
+  return {
+    hostId,
+    label,
+    kind: "local",
+    websocketUrl: null,
+    version: null,
+    transportDialability,
+  };
+}
+
+function workMacReplica(): BrowserSessionReplica {
+  return {
+    sessionId: "sess-remote",
+    hostId: "host-2",
+    profile: "primary",
+    lastActivityAt: 3,
+    tabs: [
+      {
+        tabId: "tab-remote",
+        url: "https://work.example/dash",
+        title: "Work dash",
+      },
+    ],
+  };
+}
+
 describe("BrowsersPanelBody", () => {
   beforeEach(() => {
     dndState.draggables = [];
@@ -340,6 +409,12 @@ describe("BrowsersPanelBody", () => {
       handoffToken: null,
     });
     vi.mocked(toast.error).mockClear();
+    toastWarning.mockClear();
+    replicasState.sessions = [];
+    directoryState.entries = [
+      directoryEntry("host-1", "Home Mac", "dialable"),
+      directoryEntry("host-2", "Work Mac", "dialable"),
+    ];
     navigateNested.mockClear();
     usePanelHeaderSearchStore.setState(
       usePanelHeaderSearchStore.getInitialState(),
@@ -950,6 +1025,132 @@ describe("BrowsersPanelBody", () => {
     expect(findOpenArtifactInTab("view-tab-1", expected.id)?.instanceId).toBe(
       open.instanceId,
     );
+  });
+
+  it("groups rows by machine under directory labels, naming a host the directory lacks as unnamed", () => {
+    replicasState.sessions = [
+      workMacReplica(),
+      {
+        ...workMacReplica(),
+        hostId: "host-3",
+        sessionId: "sess-lost",
+        tabs: [
+          { tabId: "tab-lost", url: "https://lost.example", title: "Lost" },
+        ],
+      },
+    ];
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    const workGroup = screen.getByTestId("epic-browsers-panel-machine-host-2");
+    expect(within(workGroup).getByText("Work Mac")).toBeTruthy();
+    expect(
+      within(workGroup).getByTestId(
+        "epic-browser-sidebar-replica-row-tab-remote",
+      ),
+    ).toBeTruthy();
+    const homeGroup = screen.getByTestId("epic-browsers-panel-machine-host-1");
+    expect(within(homeGroup).getByText("Home Mac")).toBeTruthy();
+    expect(
+      within(homeGroup).getByRole("button", { name: /^Live page/i }),
+    ).toBeTruthy();
+    const unnamedGroup = screen.getByTestId(
+      "epic-browsers-panel-machine-host-3",
+    );
+    expect(within(unnamedGroup).getByText("Unnamed host")).toBeTruthy();
+  });
+
+  it("opens an online replica row as a tile on its own host, durable on double click", () => {
+    replicasState.sessions = [workMacReplica()];
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    const row = screen.getByRole("button", { name: /^Work dash/i });
+    fireEvent.click(row);
+
+    const expected = makeBrowserSessionTileRef({
+      hostId: "host-2",
+      sessionId: "sess-remote",
+      tabId: "tab-remote",
+    });
+    const open = findOpenArtifactInTab("view-tab-1", expected.id);
+    expect(open).not.toBeNull();
+    if (open === null) throw new Error("expected open browser pointer");
+    const tile =
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
+        ?.tilesByInstanceId[open.instanceId];
+    expect(tile).toMatchObject({
+      type: "browser-session",
+      hostId: "host-2",
+      sessionId: "sess-remote",
+      tabId: "tab-remote",
+    });
+    const previewCanvas =
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"];
+    expect(
+      findPaneById(previewCanvas?.root ?? null, open.paneId)?.previewTabId,
+    ).toBe(open.instanceId);
+
+    fireEvent.doubleClick(row);
+
+    const durableCanvas =
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"];
+    expect(
+      findPaneById(durableCanvas?.root ?? null, open.paneId)?.previewTabId,
+    ).toBeNull();
+  });
+
+  it("refuses to open a replica row on an offline machine and offers a browser here", async () => {
+    directoryState.entries = [
+      directoryEntry("host-1", "Home Mac", "dialable"),
+      directoryEntry("host-2", "Work Mac", "not-dialable"),
+    ];
+    replicasState.sessions = [workMacReplica()];
+    sessionsState.value = {
+      ...sessionsState.value,
+      prepareOpenTab: fakePrepareOpenTab({
+        hostId: () => "host-1",
+        openTab: forwardOpenTab,
+      }),
+    };
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    expect(screen.getByText("Work Mac · offline")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Work dash/i }));
+
+    const expected = makeBrowserSessionTileRef({
+      hostId: "host-2",
+      sessionId: "sess-remote",
+      tabId: "tab-remote",
+    });
+    expect(findOpenArtifactInTab("view-tab-1", expected.id)).toBeNull();
+    expect(toastWarning).toHaveBeenCalledOnce();
+    const [message, options] = toastWarning.mock.calls[0];
+    expect(message).toBe("This browser is on Work Mac, which is offline.");
+    const action = options?.action;
+    if (action === undefined) throw new Error("expected a toast action");
+    expect(action.label).toBe("Open a browser here");
+    act(() => {
+      action.onClick();
+    });
+
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
+    await waitFor(() => {
+      expect(navigateNested).toHaveBeenCalledWith(
+        "epic-1",
+        "view-tab-1",
+        expect.any(Function),
+      );
+    });
+    const opened = Object.values(
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
+        ?.tilesByInstanceId ?? {},
+    ).find((tile) => tile !== undefined && tile.type === "browser-session");
+    expect(opened).toMatchObject({
+      hostId: "host-1",
+      sessionId: "sess-created",
+      tabId: "tab-created",
+    });
   });
 
   it("Shift+Enter makes a browser preview durable", async () => {

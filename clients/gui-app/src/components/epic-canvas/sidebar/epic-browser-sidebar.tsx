@@ -1,5 +1,6 @@
 import { Globe2, Plus, RotateCcw, Search, TriangleAlert } from "lucide-react";
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -18,15 +19,30 @@ import {
   BrowserSearchHeaderInput,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-header";
 import { BrowserTabRow } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-row";
+import { BrowserReplicaTabRowView } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-replica-row";
+import {
+  browserMachineGroups,
+  browserReplicaTabRows,
+  filterBrowserReplicaTabRows,
+  offlineBrowserRefusal,
+  type BrowserMachineGroup,
+  type BrowserReplicaTabRow,
+} from "@/components/epic-canvas/sidebar/browser-panel-union";
+import { useBrowserPanelSessions } from "@/components/epic-canvas/sidebar/use-browser-panel-sessions";
 import { SimulatorsSidebarGroup } from "@/components/epic-canvas/sidebar/epic-simulator-sidebar";
 import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
 import {
   filterBrowserTabRows,
   useBrowserSidebarTabRows,
   useBrowserTabRowLabels,
+  type BrowserSidebarTabRow,
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import {
+  disambiguateSecondaryLabels,
+  resolveTabTitle,
+} from "@/lib/browser-view/browser-tab-display";
 import {
   useEpicBrowsersElsewhere,
   type EpicBrowsersElsewhere,
@@ -100,12 +116,26 @@ function BrowsersPanelBodyFrame(
   );
 }
 
+/** A panel row: a tab from a live stream, or one from a replica. */
+type BrowserPanelRow =
+  | { readonly kind: "live"; readonly row: BrowserSidebarTabRow }
+  | { readonly kind: "replica"; readonly row: BrowserReplicaTabRow };
+
 function BrowsersPanelBodyLive(props: {
   readonly epicId: string;
   readonly tabId: string;
 }) {
   const sessions = useBrowserSessionsContext();
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
+  const {
+    sessions: union,
+    hostFacts,
+    closeTabOn,
+  } = useBrowserPanelSessions({
+    epicId: props.epicId,
+    panelSessions: sessions,
+    panelHostId: hostPin.resolvedHostId,
+  });
   // Read whether or not the panel is empty - the empty state is the only
   // consumer today, but the read is a registry scan with no stream of its own,
   // so gating it on emptiness would buy nothing and add a branch.
@@ -122,8 +152,24 @@ function BrowsersPanelBodyLive(props: {
     () => new Map(chats.map((chat) => [chat.id, chat])),
     [chats],
   );
-  const tabs = useBrowserSidebarTabRows(sessions.items);
+  const tabs = useBrowserSidebarTabRows(union.live);
   const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
+  const replicaRows = useMemo(
+    () => browserReplicaTabRows(union.replicas),
+    [union.replicas],
+  );
+  const replicaSecondaryByKey = useMemo(
+    () =>
+      disambiguateSecondaryLabels(
+        replicaRows.map((row) => ({
+          key: row.key,
+          tabId: row.tab.tabId,
+          title: resolveTabTitle(row.tab),
+          url: row.tab.url,
+        })),
+      ),
+    [replicaRows],
+  );
   const filteredTabs = useMemo(() => {
     const matches = filterBrowserTabRows(tabs, searchQuery);
     if (visibleRevealRequest === null) return matches;
@@ -137,6 +183,43 @@ function BrowsersPanelBodyLive(props: {
         }) === visibleRevealRequest.nodeId,
     );
   }, [searchQuery, tabs, visibleRevealRequest]);
+  const filteredReplicaRows = useMemo(() => {
+    const matches = filterBrowserReplicaTabRows(replicaRows, searchQuery);
+    if (visibleRevealRequest === null) return matches;
+    const matchKeys = new Set(matches.map((row) => row.key));
+    return replicaRows.filter(
+      (row) =>
+        matchKeys.has(row.key) ||
+        browserSessionTileId({
+          sessionId: row.replica.sessionId,
+          tabId: row.tab.tabId,
+        }) === visibleRevealRequest.nodeId,
+    );
+  }, [replicaRows, searchQuery, visibleRevealRequest]);
+  const groups = useMemo(
+    () =>
+      browserMachineGroups<BrowserPanelRow>({
+        rows: [
+          ...filteredTabs.map((row) => ({ kind: "live" as const, row })),
+          ...filteredReplicaRows.map((row) => ({
+            kind: "replica" as const,
+            row,
+          })),
+        ],
+        hostIdOf: (panelRow) =>
+          panelRow.kind === "live"
+            ? panelRow.row.session.hostId
+            : panelRow.row.replica.hostId,
+        panelHostId: hostPin.resolvedHostId,
+        hostFacts,
+      }),
+    [filteredReplicaRows, filteredTabs, hostFacts, hostPin.resolvedHostId],
+  );
+  // Rows all on the machine the panel shows read as they always have; once
+  // any is elsewhere, every machine is named.
+  const showMachineHeaders = groups.some(
+    (group) => group.hostId !== hostPin.resolvedHostId,
+  );
   const { openTile } = useEpicTileNavigation();
   const { add: addBrowser, isAdding } = useAddBrowserAction(
     props.epicId,
@@ -156,7 +239,7 @@ function BrowsersPanelBodyLive(props: {
       return;
     }
     clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
-  }, [filteredTabs, props.tabId, revealRequest]);
+  }, [filteredReplicaRows, filteredTabs, props.tabId, revealRequest]);
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -210,24 +293,93 @@ function BrowsersPanelBodyLive(props: {
     },
     [chatById, openTile, props.tabId],
   );
+
+  const openReplicaTab = useCallback(
+    (row: BrowserReplicaTabRow, permanently: boolean) => {
+      // The tile dials the replica's own machine, as any tile on a host other
+      // than this one does.
+      const tile = makeBrowserSessionTileRef({
+        hostId: row.replica.hostId,
+        sessionId: row.replica.sessionId,
+        tabId: row.tab.tabId,
+      });
+      openTile(
+        tileIntent(
+          tile,
+          { tabId: props.tabId },
+          permanently ? "explicit" : "single",
+          "direct_ui",
+        ),
+      );
+    },
+    [openTile, props.tabId],
+  );
+
+  // Nothing is queued for an offline machine: the open is refused, and the
+  // one alternative is a new browser where an open from here goes.
+  const refuseOfflineOpen = useCallback(
+    (machineLabel: string) => {
+      toast.warning(offlineBrowserRefusal(machineLabel), {
+        action: { label: "Open a browser here", onClick: addBrowser },
+      });
+    },
+    [addBrowser],
+  );
+
+  const renderRow = (
+    panelRow: BrowserPanelRow,
+    group: BrowserMachineGroup<BrowserPanelRow>,
+  ) => {
+    if (panelRow.kind === "replica") {
+      return (
+        <BrowserReplicaTabRowView
+          key={panelRow.row.key}
+          viewTabId={props.tabId}
+          row={panelRow.row}
+          secondaryLabel={replicaSecondaryByKey.get(panelRow.row.key) ?? null}
+          machineLabel={group.title}
+          offline={group.offline}
+          onOpen={openReplicaTab}
+          onRefuse={refuseOfflineOpen}
+        />
+      );
+    }
+    const { key, session, tab, identity } = panelRow.row;
+    return (
+      <BrowserTabRow
+        key={key}
+        epicId={props.epicId}
+        viewTabId={props.tabId}
+        session={session}
+        tab={tab}
+        identity={identity}
+        secondaryLabel={secondaryByKey.get(key) ?? null}
+        chatById={chatById}
+        duplicateTitles={duplicateTitles}
+        onOpenTab={openTab}
+        onOpenTabPermanently={openTabPermanently}
+        onOpenDrivingChat={openDrivingChat}
+        onCloseTab={closeTabOn(session.hostId)}
+      />
+    );
+  };
   const isUnavailable =
     sessions.lifecycle === "failed" ||
     sessions.lifecycle === "closed" ||
     sessions.lifecycle === "unsupported";
+  const rowCount = tabs.length + replicaRows.length;
+  const resultCount = filteredTabs.length + filteredReplicaRows.length;
   const isLoading =
     (sessions.lifecycle === "connecting" ||
       sessions.lifecycle === "reconnecting") &&
-    tabs.length === 0;
-  const isEmpty = !isLoading && !isUnavailable && tabs.length === 0;
-  const hasNoResults = tabs.length > 0 && filteredTabs.length === 0;
-  const hasResults = filteredTabs.length > 0;
+    rowCount === 0;
+  const isEmpty = !isLoading && !isUnavailable && rowCount === 0;
+  const hasNoResults = rowCount > 0 && resultCount === 0;
+  const hasResults = resultCount > 0;
 
   return (
     <>
-      <BrowserSearchHeaderInput
-        tabId={props.tabId}
-        resultCount={filteredTabs.length}
-      />
+      <BrowserSearchHeaderInput tabId={props.tabId} resultCount={resultCount} />
       {isLoading ? <BrowsersPanelLoadingState /> : null}
       {isUnavailable ? (
         <BrowsersPanelUnavailableState
@@ -251,23 +403,25 @@ function BrowsersPanelBodyLive(props: {
           className="space-y-0.5"
           data-testid="epic-browsers-panel-list"
         >
-          {filteredTabs.map(({ key, session, tab, identity }) => (
-            <BrowserTabRow
-              key={key}
-              epicId={props.epicId}
-              viewTabId={props.tabId}
-              session={session}
-              tab={tab}
-              identity={identity}
-              secondaryLabel={secondaryByKey.get(key) ?? null}
-              chatById={chatById}
-              duplicateTitles={duplicateTitles}
-              onOpenTab={openTab}
-              onOpenTabPermanently={openTabPermanently}
-              onOpenDrivingChat={openDrivingChat}
-              onCloseTab={sessions.closeTab}
-            />
-          ))}
+          {groups.map((group) =>
+            showMachineHeaders ? (
+              <li
+                key={group.key}
+                data-testid={`epic-browsers-panel-machine-${group.hostId}`}
+              >
+                <p className="px-2 pt-2 pb-0.5 text-ui-xs font-medium text-muted-foreground">
+                  {group.offline ? `${group.title} · offline` : group.title}
+                </p>
+                <ul aria-label={group.title} className="space-y-0.5">
+                  {group.rows.map((panelRow) => renderRow(panelRow, group))}
+                </ul>
+              </li>
+            ) : (
+              <Fragment key={group.key}>
+                {group.rows.map((panelRow) => renderRow(panelRow, group))}
+              </Fragment>
+            ),
+          )}
         </ul>
       ) : null}
     </>

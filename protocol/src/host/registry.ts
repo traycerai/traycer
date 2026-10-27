@@ -1047,6 +1047,7 @@ import {
   browserSessionsV22,
 } from "@traycer/protocol/host/browser/contracts";
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
+import { browserReplicasListV10 } from "@traycer/protocol/host/browser/replicas";
 import {
   configSimulatorGetV10,
   configSimulatorSetV10,
@@ -6157,6 +6158,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: browserSavedLoginSitesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The Browsers panel's sessions on the caller's other machines (cross-host
+  // browser sessions). A new name, so a host that predates it degrades to
+  // `unsupported` and the panel lists the live stream's sessions alone.
+  "browser.replicas.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplicasListV10,
           upgradeFromPreviousVersion: null,
         },
       },
