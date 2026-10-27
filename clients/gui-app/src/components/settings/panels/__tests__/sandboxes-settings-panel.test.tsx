@@ -1249,6 +1249,19 @@ describe("<SandboxesSettingsPanel />", () => {
       await waitFor(() => expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id], [second.id], [second.id]]));
     });
 
+    it("sends the idle precondition and renders a lost server CAS as that target's skip", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce(refusal(409, "sandbox_transition_conflict"));
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Destroy 1" }));
+      await waitFor(() => expect(dialog.textContent).toContain("idle-a · no longer idle, left as it is"));
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([[first.id, true]]);
+      expect(within(dialog).getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(true);
+      expect(within(rowOf(first.id)).queryByRole("alert", { hidden: true })).toBeNull();
+    });
+
     it("rechecks a row Retry from a failed batch instead of destroying a target that woke", async () => {
       const { binding } = mount([first]);
       binding.auth.destroySandbox.mockResolvedValueOnce(refusal(503, "provider-error"));
