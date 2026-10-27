@@ -68,9 +68,7 @@ function renderThemes(): void {
 
 // ThemeGallery lazy-loads the dialog; evaluating its module graph cold can
 // outlast findBy's default wait under load, so await the real import first.
-async function openImportDialog(
-  user: UserEvent,
-): Promise<HTMLElement> {
+async function openImportDialog(user: UserEvent): Promise<HTMLElement> {
   await import("@/components/settings/themes/theme-import-dialog");
   await user.click(screen.getByRole("button", { name: "Import theme" }));
   return screen.findByRole("dialog", { name: "Import themes" });
