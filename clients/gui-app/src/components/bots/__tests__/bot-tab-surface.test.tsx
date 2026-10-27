@@ -228,6 +228,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
     hostId: string;
+    boundHostId: string | null;
     botTitle: string;
     appConversationChatId: string | null;
     resolveMember: (
@@ -237,6 +238,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     <div
       data-testid="stub-channel"
       data-host-id={props.hostId}
+      data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-teammate-name={
@@ -687,6 +689,14 @@ describe("<BotTabSurface /> paused", () => {
     expect(
       screen.getByTestId("stub-channel").getAttribute("data-host-id"),
     ).toBe(TAB_HOST);
+  });
+
+  it("hands the channel view the tab's host for its reads and sends, and the bot's bound host for signing a provider in again", () => {
+    render(surface());
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-host-id")).toBe(TAB_HOST);
+    expect(channel.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
   });
 
   it("hands the channel view the conversation the bot record names as its channel", () => {
