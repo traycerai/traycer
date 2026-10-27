@@ -43,6 +43,7 @@ import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
   sandboxAwakeTodayMs,
+  sandboxShapeAndCostLine,
   sandboxTodayCost,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
@@ -202,6 +203,7 @@ export interface SandboxStaging {
   readonly consequences: ConsequencesInput | null;
   /** The block's `Open terminal instead`; `null` when nothing is staged. */
   readonly openTerminalInstead: (() => void) | null;
+  readonly chooseAnotherHost?: () => void;
   /** The shape sheet, mounted beside the picker. */
   readonly sheet: ReactNode;
 }
@@ -300,10 +302,26 @@ export function useSandboxStaging(input: {
   const consequences = useMemo<ConsequencesInput | null>(() => {
     if (stage === null || stagedConfiguration === null) return null;
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
+    const price = stagedTargetPrice(stage.target, input.hosts, stagedFacts);
+    const balance = stageBalanceMc(user, stagedConfiguration);
+    const existingHostId =
+      stage.target.kind === "existing" ? stage.target.hostId : null;
+    const existingHost = input.hosts.find(
+      (host) => host.hostId === existingHostId,
+    );
+    const payer = existingHost?.sandbox?.summary?.wakePayer;
     return {
       configuration: stagedConfiguration,
-      price: stagedTargetPrice(stage.target, input.hosts, stagedFacts),
+      price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
+      shortfallMc:
+        balance === null || price === null
+          ? null
+          : Math.max(1, price.awakeMcPerHour - balance),
+      wakingName:
+        stage.target.kind === "existing" && payer?.userId !== viewerUserId
+          ? stage.target.name
+          : null,
       audience: audienceFor(stagedConfiguration),
       reachHost: reachFor(
         stage.target.kind === "existing" ? stage.target.hostId : "",
@@ -319,6 +337,7 @@ export function useSandboxStaging(input: {
     stage,
     stagedConfiguration,
     stagedFacts,
+    user,
     viewerUserId,
   ]);
 
@@ -415,6 +434,7 @@ export function useSandboxStaging(input: {
           now,
           epicId,
           creatorName,
+          viewerUserId: composerViewerId,
         });
         if (task === null) return sandboxLines;
         const owner = hostOptionTeamOwner(host);
@@ -564,7 +584,14 @@ export function useSandboxStaging(input: {
     stage === null || stage.phase === "handoff"
       ? null
       : input.surface.openTerminalInstead;
-  return { composer, stage, consequences, openTerminalInstead, sheet };
+  return {
+    composer,
+    stage,
+    consequences,
+    openTerminalInstead,
+    sheet,
+    chooseAnotherHost: () => useStagedSandboxStore.getState().clear(surfaceKey),
+  };
 }
 
 function newRowFacts(input: {
@@ -848,6 +875,7 @@ function sandboxRowLines(
     readonly now: number;
     readonly epicId: string | null;
     readonly creatorName: (agentId: string) => string | null;
+    readonly viewerUserId: string | null;
   },
 ): readonly string[] {
   const summary = host.sandbox === null ? null : host.sandbox.summary;
@@ -871,7 +899,24 @@ function sandboxRowLines(
     sandboxAwakeTodayMs(summary, context.now),
   );
   const configuration = hostConfigurationLabel(host);
-  return [today === null ? configuration : `${configuration} · ${today}`];
+  const team = hostOptionTeamOwner(host);
+  const lines = [
+    today === null ? configuration : `${configuration} · ${today}`,
+  ];
+  if (team !== null)
+    lines.unshift(
+      sandboxShapeAndCostLine(
+        summary,
+        {
+          kind: "team",
+          teamId: team.teamId,
+          teamName: team.teamName,
+          environmentId: summary.environmentId,
+        },
+        context.viewerUserId,
+      ),
+    );
+  return lines;
 }
 
 /**

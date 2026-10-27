@@ -320,7 +320,9 @@ export function sandboxPaidByLabel(
   if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
     return null;
   }
-  return paidByLine(sandboxMemberName(summary.wakePayer, viewerUserId));
+  const payer = summary.wakePayer;
+  if (payer.displayName !== null) return paidByLine(payer.displayName);
+  return payer.userId === viewerUserId ? paidByLine("you") : null;
 }
 
 export function sandboxKeptByLabel(
@@ -349,6 +351,7 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
   const shape = sandboxShapeLine(summary);
@@ -356,6 +359,15 @@ export function sandboxShapeAndCostLine(
   const creator = agentCreatorClause(summary);
   if (creator !== null) {
     return `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake · ${creator}`;
+  }
+  const rate = `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  if (
+    configuration.kind === "team" &&
+    summary.wakePayer?.userId !== viewerUserId
+  ) {
+    const resting =
+      summary.state === "suspended" || summary.state === "stopped";
+    return resting ? `${rate} · waking it makes you the payer` : rate;
   }
   return `${shape} · ${costLine(summary.priceMcPerHour.awakeMc, configurationCopy(configuration))}`;
 }

@@ -183,7 +183,7 @@ describe("withdrawing a message from every refusal or failure", () => {
         screen.getByTestId("sandbox-setup-line-detail");
       const labels = buttonLabels(line);
       const exits = [
-        "Open terminal instead",
+        ...(failure.kind === "credits" ? [] : ["Open terminal instead"]),
         "Choose another host",
         "Cancel the message",
         "Details",

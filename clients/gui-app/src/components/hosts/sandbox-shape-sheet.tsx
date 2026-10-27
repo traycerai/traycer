@@ -389,14 +389,16 @@ function ShapeSheetForm(props: {
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);
   const wake = wakeString(provider.suspendFidelity);
-  const needsCredits = stageNeedsCredits(
-    stageBalanceMc(user, props.configuration),
-    price,
-  );
+  const balance = stageBalanceMc(user, props.configuration);
+  const needsCredits = stageNeedsCredits(balance, price);
   const clauses = consequenceClauses({
     configuration: props.configuration,
     price,
     needsCredits,
+    shortfallMc:
+      balance === null || price === null
+        ? null
+        : Math.max(1, price.awakeMcPerHour - balance),
     ...props.context,
   });
   const offered = offeredOses(props.catalogue);

@@ -453,6 +453,7 @@ describe("runStagedSandbox refusals", () => {
         createSandbox: () => ({
           ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
           shortfallMc: 1_200_000,
+          creditSource: "personal",
         }),
       },
       true,
@@ -463,6 +464,7 @@ describe("runStagedSandbox refusals", () => {
     expect(stageOf().failure).toEqual({
       kind: "credits",
       shortfallMc: 1_200_000,
+      creditSource: "personal",
     });
     expect(stageOf().phase).toBe("creating");
     expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});

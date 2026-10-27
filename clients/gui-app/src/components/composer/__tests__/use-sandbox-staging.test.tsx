@@ -640,7 +640,10 @@ describe("useSandboxStaging sandbox rows' lines", () => {
       teamOwnedItem(),
     );
 
-    expect(lineOf(awakeTeamBox)).toEqual(["acme · $0.05 today"]);
+    expect(lineOf(awakeTeamBox)).toEqual([
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+      "acme · $0.05 today",
+    ]);
   });
 });
 
@@ -876,7 +879,7 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
   it("names the team on a team sandbox's price", () => {
     expect(
       stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
-    ).toBe("$0.21 an hour while awake · uses your acme credits");
+    ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
   });
 });
 

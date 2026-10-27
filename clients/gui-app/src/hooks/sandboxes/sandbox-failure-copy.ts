@@ -52,9 +52,14 @@ function insufficientCreditCopy(
   }
   // Create, resume and start share one gate (an hour of the new rate on top
   // of what is already awake), so the sentence names no verb.
+  let pot = "Your credits";
+  if (failure.creditSource === "team-allowance") pot = "Your team allowance";
+  if (failure.creditSource === "team") pot = "The team's credits";
+  const cover = failure.creditSource === "team-allowance" ? "doesn't" : "don't";
+  const sentence = `${pot} ${cover} cover an hour of this sandbox.`;
   return failure.shortfallMc === null
-    ? "Your credits don't cover an hour of this sandbox."
-    : `Your credits don't cover an hour of this sandbox. Add ${formatCreditsRequired(failure.shortfallMc)} credits and try again.`;
+    ? sentence
+    : `${sentence} Add $${formatCreditsRequired(failure.shortfallMc)} and try again.`;
 }
 
 /** The refusals whose sentence depends on nothing but the code. */

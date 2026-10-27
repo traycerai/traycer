@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toastFromAuthError } from "@/lib/auth-error-toast";
 import type { ReactNode } from "react";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -24,6 +25,8 @@ import {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
+import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxRowVerb } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
@@ -32,6 +35,7 @@ import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directo
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   entry: null as RemoteHostDirectoryEntry | null,
+  configuration: { kind: "personal" } as SandboxPageConfiguration,
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -119,6 +123,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
+  mocks.configuration = { kind: "personal" };
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: "u1", username: "ada" },
@@ -188,7 +193,7 @@ function Rows(): ReactNode {
     <section key={summary.id} aria-label={summary.displayName}>
       <SandboxRowActions
         summary={summary}
-        configuration={{ kind: "personal" }}
+        configuration={mocks.configuration}
         unreachable={false}
         frozenNeedsOwnCredits={false}
       />
@@ -265,6 +270,53 @@ async function press(testCase: VerbCase): Promise<HTMLElement> {
 }
 
 describe("sandbox row operations", () => {
+  it.each<{ source: SandboxCreditSource; pot: string }>([
+    { source: "team-allowance", pot: "your pool-e2e-fixture allowance is" },
+    { source: "team", pot: "your pool-e2e-fixture credits are" },
+    { source: "personal", pot: "your credits are" },
+  ])(
+    "keeps a $source refusal and remedies on the row without a toast",
+    async ({ source, pot }) => {
+      mocks.configuration =
+        source === "personal"
+          ? { kind: "personal" }
+          : {
+              kind: "team",
+              teamId: "team-a",
+              teamName: "pool-e2e-fixture",
+              environmentId: "team-env",
+            };
+      const testCase = CASES.find((entry) => entry.verb === "resume");
+      if (testCase === undefined) throw new Error("Expected the Resume case");
+      const { answer } = setup(testCase);
+      const row = await press(testCase);
+      await act(async () => {
+        answer.resolve({
+          kind: "refused",
+          status: 402,
+          code: "insufficient_credit",
+          reason: "denied",
+          shortfallMc: 210,
+          newRateMcPerHour: 210,
+          currentAwakeBurnMcPerHour: 0,
+          message: null,
+          creditSource: source,
+        });
+        await answer.promise;
+      });
+      const failure = await within(row).findByRole("alert");
+      expect(failure.textContent).toContain(
+        `Couldn't resume build-box · ${pot} short $0.21. $0.21 more wakes it for an hour.`,
+      );
+      expect(
+        within(failure)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["Add credits ↗", "Retry", "Details"]);
+      expect(toastFromAuthError).not.toHaveBeenCalled();
+    },
+  );
+
   it("shows the Settings dialog's pending operation and its failure on the card too", async () => {
     const { answer, client, main } = setup(SUSPEND_CASE);
     render(
@@ -381,7 +433,7 @@ describe("sandbox row operations", () => {
         <section aria-label="Another view">
           <SandboxRowActions
             summary={main}
-            configuration={{ kind: "personal" }}
+            configuration={mocks.configuration}
             unreachable={false}
             frozenNeedsOwnCredits={false}
           />

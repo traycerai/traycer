@@ -978,6 +978,7 @@ function SandboxActions(props: {
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
+        hostId={summary.hostId}
         operation={props.operation}
         busy={pendingVerb !== null}
         onRetry={(pressed) => {

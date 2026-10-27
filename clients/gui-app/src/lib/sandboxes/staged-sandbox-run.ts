@@ -513,7 +513,11 @@ export function createFailure(
     if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
       return failure.reason === "unverified"
         ? { kind: "unverified" }
-        : { kind: "credits", shortfallMc: failure.shortfallMc };
+        : {
+            kind: "credits",
+            shortfallMc: failure.shortfallMc,
+            creditSource: failure.creditSource ?? null,
+          };
     }
     if (failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) {
       return { kind: "shape" };
