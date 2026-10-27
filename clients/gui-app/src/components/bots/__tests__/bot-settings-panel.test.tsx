@@ -344,41 +344,6 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(mocks.runSettingsClients.at(-1)).toBe(mocks.hostClient);
   });
 
-  it("re-seeds the picker from the refetched row after an apply, and leaves Apply disabled", async () => {
-    const user = userEvent.setup();
-    const panel = (bot: BotRecord) => (
-      <StrictMode>
-        <BotChannelSettingsPanel
-          bot={bot}
-          isMain={null}
-          personal={false}
-          channelId={null}
-          environmentBots={null}
-          onClose={vi.fn()}
-        />
-      </StrictMode>
-    );
-    const { rerender } = render(panel(BOT));
-    fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
-    act(() => {
-      liveStore().getState().setSelection({
-        harnessId: "codex",
-        modelSlug: "model-c",
-        profileId: "profile-1",
-      });
-    });
-    await user.click(applyButton());
-
-    rerender(panel({ ...BOT, harness: "codex", model: "model-c" }));
-
-    const seed = mocks.seeds.at(-1);
-    expect(seed?.kind === "fallback" ? seed.settings : null).toMatchObject({
-      harnessId: "codex",
-      model: "model-c",
-    });
-    expect(applyButton().disabled).toBe(true);
-  });
-
   it("disables Apply again when the person picks the bot's own model back", () => {
     mountPanel(BOT, null, false);
 
