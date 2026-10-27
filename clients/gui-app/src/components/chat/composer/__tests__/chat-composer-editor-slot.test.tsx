@@ -108,10 +108,11 @@ describe("ChatComposerEditorSlot", () => {
     const ARROW_RIGHT = { key: "ArrowRight", code: "ArrowRight" };
     const TAB = { key: "Tab", code: "Tab" };
 
+    /** Fires one keydown and returns it, to read whether it was taken. */
     function fireAcceptKey(
       target: HTMLElement,
       init: KeyboardEventInit,
-    ): KeyboardEvent {
+    ): Event {
       const event = createEvent.keyDown(target, init);
       fireEvent(target, event);
       return event;
