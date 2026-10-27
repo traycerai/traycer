@@ -701,7 +701,9 @@ function BotChannelHeader(props: {
         >
           {props.title}
         </h1>
-        {props.isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
+        {props.isMain ? (
+          <MainBotBadge testId="bot-tab-main" tone="muted" />
+        ) : null}
         <Button
           ref={settingsButtonRef}
           type="button"

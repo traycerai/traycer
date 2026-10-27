@@ -342,12 +342,27 @@ describe("<BotChannelSidebar /> main bot", () => {
       name: "Main bot",
     });
     expect(row("bot-triage").lastElementChild).toBe(star);
+    expect(star.getAttribute("class")).toContain("text-muted-foreground");
     expect(
       within(row("bot-release")).queryByRole("img", { name: "Main bot" }),
     ).toBeNull();
     expect(
       within(row("bot-notes")).queryByRole("img", { name: "Main bot" }),
     ).toBeNull();
+  });
+
+  it("draws the main bot's star in its row's own colour while its channel is in view", () => {
+    mocks.state.mainBotIds = { "env-team": "bot-triage" };
+    mount("bot-triage");
+
+    const star = within(row("bot-triage")).getByRole("img", {
+      name: "Main bot",
+    });
+    expect(row("bot-triage").getAttribute("class")).toContain(
+      "text-primary-foreground",
+    );
+    expect(star.getAttribute("class")).toContain("text-current");
+    expect(star.getAttribute("class")).not.toContain("text-muted-foreground");
   });
 
   it("stars no channel when the host's list names no main bots", () => {

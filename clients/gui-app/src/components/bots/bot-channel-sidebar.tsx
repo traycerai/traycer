@@ -254,7 +254,12 @@ function ChannelRow(props: {
     >
       <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />
       <span className="truncate">{bot.title}</span>
-      {isMain ? <MainBotBadge testId="bot-channel-row-main" /> : null}
+      {isMain ? (
+        <MainBotBadge
+          testId="bot-channel-row-main"
+          tone={active ? "current" : "muted"}
+        />
+      ) : null}
     </button>
   );
 }
