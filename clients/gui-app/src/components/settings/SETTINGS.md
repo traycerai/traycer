@@ -15,6 +15,13 @@ This surface is a **real local settings shell**:
 
 When changing the settings surface, update this file in the same change.
 
+Absolute dates and times use `lib/settings/settings-date.ts`: today is
+`08:35`, another day this year is `25 Oct` (or `25 Oct 08:35` when the time
+matters), and another year is `25 Oct 2025`. This includes host installation
+and update details, setup attempts, session dates, provider resets and expiry,
+and billing-period ranges, as well as move history, secret versions and
+Details. Relative descriptions and countdowns keep their existing wording.
+
 ## Structure
 
 ```text
@@ -4090,7 +4097,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
-  may do without asking, on every computer and sandbox."
+  may do without asking, on every computer and sandbox running Personal."
   Rules carries **Reset to default**, which saves the empty policy after a
   confirm (the custom rules go; the built-in ones stay). The confirmation
   stays blocked if the current policy cannot be read freshly, its opening

@@ -183,7 +183,25 @@ describe("<DevicesSessionsPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     signOut();
+  });
+
+  it("uses Settings dates when a session is old enough to show absolute dates", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12));
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-other",
+        createdAt: new Date(2025, 9, 25, 8, 35).toISOString(),
+        lastSeenAt: new Date(2026, 7, 25, 8, 35).toISOString(),
+      }),
+    ];
+    render(<DevicesSessionsPanel />);
+
+    expect(
+      screen.getByText("Created 25 Oct 2025 · Last seen 25 Aug 08:35"),
+    ).toBeTruthy();
   });
 
   it("renders the sessions section description with the expanded client list", () => {
