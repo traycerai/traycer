@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => ({
   // Every `maxModeContext` the (stubbed) picker was rendered with, one per render.
   pickerContexts: [] as MaxModeContext[],
   updateRunSettings: vi.fn<(variables: object) => void>(),
+  // The client each `useBotUpdateRunSettingsMutation` call was handed.
+  runSettingsClients: [] as Array<object | null>,
   updateTitle: vi.fn<(variables: object) => void>(),
   deleteBot: vi.fn<(variables: object) => void>(),
   setMainBot: vi.fn<(variables: object) => void>(),
@@ -126,11 +128,14 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: refusalOf(mocks.refusal.remove),
     mutate: mocks.deleteBot,
   }),
-  useBotUpdateRunSettingsMutation: () => ({
-    isPending: false,
-    error: refusalOf(mocks.refusal.runSettings),
-    mutate: mocks.updateRunSettings,
-  }),
+  useBotUpdateRunSettingsMutation: (client: object | null) => {
+    mocks.runSettingsClients.push(client);
+    return {
+      isPending: false,
+      error: refusalOf(mocks.refusal.runSettings),
+      mutate: mocks.updateRunSettings,
+    };
+  },
   useBotUpdateReplyModeMutation: () => ({
     isPending: mocks.replyModePending,
     error: refusalOf(mocks.refusal.replyMode),
@@ -261,6 +266,7 @@ beforeEach(() => {
   mocks.seeds.length = 0;
   mocks.stores.length = 0;
   mocks.pickerContexts.length = 0;
+  mocks.runSettingsClients.length = 0;
   mocks.refusal.title = null;
   mocks.refusal.runSettings = null;
   mocks.refusal.remove = null;
@@ -335,6 +341,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
       effort: "high",
       profile: "profile-1",
     });
+    expect(mocks.runSettingsClients.at(-1)).toBe(mocks.hostClient);
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {

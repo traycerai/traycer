@@ -49,6 +49,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { BrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
 import {
   prPresenceScopeKey,
   usePrPresenceStore,
@@ -130,9 +131,19 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   findOpenArtifactInTab: () => null,
 }));
 
-vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useBrowserSessionsContext: () => browserPanelState.value,
-}));
+vi.mock(
+  "@/components/epic-canvas/renderers/browser-sessions-context",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/renderers/browser-sessions-context")
+      >();
+    return {
+      ...actual,
+      useBrowserSessionsContext: () => browserPanelState.value,
+    };
+  },
+);
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
     props.children,
@@ -193,6 +204,34 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: () => ({ label: "Test host" }),
   useHostClientForHostId: () => null,
+}));
+
+// This suite keeps the real browser picker and panel mounted, but host-list
+// discovery belongs to its own hook tests. A resolved empty answer avoids
+// pulling the runner-host provider into these sidebar mechanics fixtures.
+const hostOptionsState = vi.hoisted(() => ({ retryLists: vi.fn() }));
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({
+    hosts: [],
+    activeHostId: null,
+    isLoading: false,
+    directoryResolved: true,
+    directoryFailed: false,
+    listsResolved: true,
+    listsFailed: false,
+    retryLists: hostOptionsState.retryLists,
+    nowMs: 0,
+  }),
+}));
+
+// Picker host actions have their own provider and hook coverage. Keep the real
+// picker mounted here, but replace only the action boundary the sidebar never
+// invokes so this panel-mechanics fixture does not need a HostRuntimeProvider.
+const browserCatalogActionsState = vi.hoisted(() => ({
+  withOwner: vi.fn(),
+}));
+vi.mock("@/hooks/browser/use-browser-catalog-actions", () => ({
+  useBrowserCatalogActions: () => browserCatalogActionsState,
 }));
 
 const EPIC_ID = "epic-sidebar-test";
@@ -1897,14 +1936,40 @@ describe("Browsers panel registration", () => {
     // cannot mount without a client - unlike the siblings it is compared to.
     render(
       <QueryClientProvider client={testQueryClient}>
-        <EpicLeftPanelRail
-          epicId={EPIC_ID}
-          tabId={TAB_ID}
-          orientation="vertical"
-        />
-        <SidebarProvider>
-          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />
-        </SidebarProvider>
+        <BrowserCatalogContext.Provider
+          value={{
+            inventory: {
+              status: "available",
+              records: [],
+              readiness: [
+                {
+                  hostId: OTHER_HOST_ID,
+                  state: "complete",
+                  indexingRevision: 1,
+                  capability: {
+                    catalogVersion: 1,
+                    durableInventoryRevisions: true,
+                    revisionedMutationAcks: true,
+                  },
+                },
+              ],
+              version: 1,
+              pendingCount: 0,
+              revokedHostIds: [],
+            },
+            hosts: new Map(),
+            refresh: vi.fn(),
+          }}
+        >
+          <EpicLeftPanelRail
+            epicId={EPIC_ID}
+            tabId={TAB_ID}
+            orientation="vertical"
+          />
+          <SidebarProvider>
+            <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />
+          </SidebarProvider>
+        </BrowserCatalogContext.Provider>
       </QueryClientProvider>,
     );
 
@@ -1935,7 +2000,7 @@ describe("Browsers panel registration", () => {
     expect(
       screen.getByTestId("epic-sidebar").getAttribute("data-left-panel-id"),
     ).toBe("browsers");
-    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
+    expect(screen.getByTestId("browser-list-empty-state")).toBeTruthy();
 
     // Dragging Browsers before Terminals reorders the flat rail directly -
     // both are lone panels, so there is no group for either to leave or join.

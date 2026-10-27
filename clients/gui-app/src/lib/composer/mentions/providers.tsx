@@ -12,7 +12,6 @@ import type {
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   GithubMentionRepository,
@@ -193,7 +192,8 @@ export type EpicMentionMethod =
   | "epic.mentionSpecs"
   | "epic.mentionTickets"
   | "epic.mentionStories"
-  | "epic.mentionReviews";
+  | "epic.mentionReviews"
+  | "epic.mentionArtifacts";
 
 export type EpicArtifactMentionMethod = Exclude<
   EpicMentionMethod,
@@ -928,30 +928,27 @@ class TerminalMentionProvider extends ComposerMentionProvider {
   }
 }
 
-const EPIC_ARTIFACT_MENTION_METHODS: Record<
-  MarkdownArtifactKind,
-  EpicArtifactMentionMethod
-> = {
-  spec: "epic.mentionSpecs",
-  ticket: "epic.mentionTickets",
-  story: "epic.mentionStories",
-  review: "epic.mentionReviews",
-};
-
-const ALL_ARTIFACT_KINDS: ReadonlyArray<MarkdownArtifactKind> = [
-  "spec",
-  "ticket",
-  "story",
-  "review",
-];
+/**
+ * The host answers the four markdown kinds one method each, and every other
+ * kind (html, canvas, file) through `epic.mentionArtifacts`. The picker asks
+ * all five and merges the rows into its one Artifacts list.
+ */
+const EPIC_ARTIFACT_MENTION_METHODS: ReadonlyArray<EpicArtifactMentionMethod> =
+  [
+    "epic.mentionSpecs",
+    "epic.mentionTickets",
+    "epic.mentionStories",
+    "epic.mentionReviews",
+    "epic.mentionArtifacts",
+  ];
 
 export function isArtifactMentionStep(step: MentionFlowStep): boolean {
   return step.kind === "provider" && step.providerId === "artifacts";
 }
 
 /**
- * The one Artifacts category. Covers every artifact kind - spec, ticket,
- * story, AND review - matching the sidebar's single "Artifacts" grouping.
+ * The one Artifacts category. Covers every artifact kind, matching the
+ * sidebar's single "Artifacts" grouping.
  */
 class ArtifactMentionProvider extends ComposerMentionProvider {
   readonly id = "artifacts" as const;
@@ -980,8 +977,8 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
   rootEpicRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return ALL_ARTIFACT_KINDS.map((kind) =>
-      epicRequest(context, EPIC_ARTIFACT_MENTION_METHODS[kind]),
+    return EPIC_ARTIFACT_MENTION_METHODS.map((method) =>
+      epicRequest(context, method),
     );
   }
 

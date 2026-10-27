@@ -114,6 +114,9 @@ export const epicArtifactKindRecordV100 = defineRecordContract({
 // Kinds that carry a markdown body.
 export { markdownArtifactKindSchema };
 
+// Every artifact kind, markdown or not. The composer can `@` mention each.
+export { epicArtifactKindSchema };
+
 // Frozen copy for every released line. New lines read the latest record.
 // It shares the domain schema today; the two names can diverge if a markdown
 // kind is added. The released copy must keep its original four kinds.

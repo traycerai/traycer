@@ -1050,9 +1050,15 @@ function quiescenceRefusal(
   reason: SwapQuiescenceGap,
   formatsVerdict: string,
 ): CliError {
+  // With the manager out of reach the formats verdict and the override are
+  // beside the point: the person can do one thing, and the message says it.
+  const message =
+    reason === "service-manager-unreachable"
+      ? `${args.site}: ${describeQuiescenceGap(reason)}. Nothing has been replaced. Run this from a desktop or login session.`
+      : `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args.installedVersion)} - ${formatsVerdict}, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`;
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
-    message: `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args.installedVersion)} - ${formatsVerdict}, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`,
+    message,
     details: {
       environment: args.environment,
       site: args.site,

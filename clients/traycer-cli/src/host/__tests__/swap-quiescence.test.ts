@@ -8,12 +8,14 @@ import type { Environment } from "../../runner/environment";
 import type { HostPidMetadata, HostPidMetadataEvidence } from "../pid-metadata";
 import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
 import type { SwapQuiescence } from "../swap-quiescence";
+import { ServiceMutationAuthorityError } from "../../service/mutation-authority";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataEvidenceMock: vi.fn(),
   readHostHolderEvidenceMock: vi.fn(),
   macosServiceMayRespawnMock: vi.fn(),
   linuxServiceMayRespawnMock: vi.fn(),
+  linuxUserManagerUnreachableMock: vi.fn(),
 }));
 
 // The holder record is read for every surveyed root, so it is sandboxed for
@@ -105,6 +107,10 @@ vi.mock("../../service/platforms/linux", async (importOriginal) => {
   return {
     ...actual,
     linuxServiceMayRespawn: mocks.linuxServiceMayRespawnMock,
+    // Left real, the reachability probe would run a genuine `systemctl
+    // --user show-environment` inside the fake-timer window of every test
+    // that spends the settle window.
+    linuxUserManagerUnreachable: mocks.linuxUserManagerUnreachableMock,
   };
 });
 
@@ -113,6 +119,7 @@ vi.mock("../../service/platforms/linux", async (importOriginal) => {
 // touching the real platform probes.
 mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
 mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+mocks.linuxUserManagerUnreachableMock.mockResolvedValue(false);
 mocks.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
 
 const { observeSwapQuiescence, SERVICE_SETTLE_TIMEOUT_MS } =
@@ -739,6 +746,8 @@ describe("observeSwapQuiescence", () => {
       // elsewhere in this file can't inherit a `true` left behind here.
       mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
       mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+      mocks.linuxUserManagerUnreachableMock.mockReset();
+      mocks.linuxUserManagerUnreachableMock.mockResolvedValue(false);
     });
 
     it("is NOT established, reason service-may-respawn, when pid.json is absent and the service manager keeps holding a job past the settle window", async () => {
@@ -769,6 +778,197 @@ describe("observeSwapQuiescence", () => {
           established: false,
           reason: "service-may-respawn",
         });
+      });
+    });
+
+    it("is NOT established, reason service-manager-unreachable, when the job probe stays unsettled past the window and the user manager cannot be reached - asked once, inside the probe cap", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: samplePidMetadata({ pid: DEFINITELY_DEAD_PID }),
+      } satisfies HostPidMetadataEvidence);
+      mocks.linuxServiceMayRespawnMock.mockResolvedValue(true);
+      const reachabilityTimeouts: number[] = [];
+      mocks.linuxUserManagerUnreachableMock.mockImplementation(
+        (_runner: unknown, timeoutMs: number) => {
+          reachabilityTimeouts.push(timeoutMs);
+          return Promise.resolve(true);
+        },
+      );
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: false,
+          reason: "service-manager-unreachable",
+        });
+      });
+      // One question across the whole window, however many rounds polled.
+      expect(reachabilityTimeouts).toHaveLength(1);
+      expect(reachabilityTimeouts[0] ?? Number.NaN).toBeGreaterThan(0);
+      expect(reachabilityTimeouts[0] ?? Number.NaN).toBeLessThanOrEqual(10_000);
+    });
+
+    it("keeps reason service-may-respawn when the job probe stays unsettled past the window but the user manager answered", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: samplePidMetadata({ pid: DEFINITELY_DEAD_PID }),
+      } satisfies HostPidMetadataEvidence);
+      mocks.linuxServiceMayRespawnMock.mockResolvedValue(true);
+      mocks.linuxUserManagerUnreachableMock.mockResolvedValue(false);
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+    });
+
+    it("on macOS keeps reason service-may-respawn and never asks the systemd reachability probe", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(true);
+      // Would flip the reason if the platform gate let it through.
+      mocks.linuxUserManagerUnreachableMock.mockClear();
+      mocks.linuxUserManagerUnreachableMock.mockResolvedValue(true);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+      expect(mocks.linuxUserManagerUnreachableMock).not.toHaveBeenCalled();
+    });
+
+    it("a manager that settles on a later round still clears after the user manager was reported unreachable - reachability never blocks", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.linuxServiceMayRespawnMock
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false);
+      mocks.linuxUserManagerUnreachableMock.mockClear();
+      mocks.linuxUserManagerUnreachableMock.mockResolvedValue(true);
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: true,
+        });
+      });
+      // The first round did not settle, so the question was asked.
+      expect(mocks.linuxUserManagerUnreachableMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a settled round waits for a slow reachability diagnostic before it clears, and the diagnostic's answer never blocks the clear", async () => {
+      mocks.linuxServiceMayRespawnMock.mockClear();
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.linuxServiceMayRespawnMock
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false);
+      let resolveDiagnostic: (unreachable: boolean) => void = () => undefined;
+      mocks.linuxUserManagerUnreachableMock.mockClear();
+      mocks.linuxUserManagerUnreachableMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveDiagnostic = resolve;
+          }),
+      );
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        const startedAt = performance.now();
+        let settled = false;
+        const pending = observeSwapQuiescence(
+          ENVIRONMENT,
+          singleChatStoreSurveyRoot("/tmp/host-home"),
+          logger,
+        ).then((answer) => {
+          settled = true;
+          return answer;
+        });
+        // Past the poll: round 2 has probed and found the manager settled.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(mocks.linuxServiceMayRespawnMock).toHaveBeenCalledTimes(2);
+        expect(mocks.linuxUserManagerUnreachableMock).toHaveBeenCalledTimes(1);
+        expect(settled).toBe(false);
+
+        resolveDiagnostic(true);
+        await expect(pending).resolves.toEqual({ established: true });
+        expect(performance.now() - startedAt).toBeLessThan(
+          SERVICE_SETTLE_TIMEOUT_MS,
+        );
+      });
+    });
+
+    it("a reachability diagnostic that rejects with a lost mutation authority reaches the caller on the settled path", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.linuxServiceMayRespawnMock
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false);
+      const authorityLost = new ServiceMutationAuthorityError(
+        new Error("lock was lost"),
+      );
+      mocks.linuxUserManagerUnreachableMock.mockRejectedValue(authorityLost);
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        const pending = observeSwapQuiescence(
+          ENVIRONMENT,
+          singleChatStoreSurveyRoot("/tmp/host-home"),
+          logger,
+        );
+        // Observed from the start, so the rejection is never unhandled.
+        const rejection = expect(pending).rejects.toBe(authorityLost);
+        await vi.advanceTimersByTimeAsync(SERVICE_SETTLE_TIMEOUT_MS + 1_000);
+        await rejection;
+      });
+    });
+
+    it("a throw from the settle loop drains the diagnostic first and still rejects with the loop's own error", async () => {
+      mocks.linuxServiceMayRespawnMock.mockClear();
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      const loopError = new Error("round 2 probe failed");
+      const diagnosticError = new Error("diagnostic failed");
+      mocks.linuxServiceMayRespawnMock
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(loopError);
+      let rejectDiagnostic: (cause: Error) => void = () => undefined;
+      mocks.linuxUserManagerUnreachableMock.mockImplementation(
+        () =>
+          new Promise<boolean>((_resolve, reject) => {
+            rejectDiagnostic = reject;
+          }),
+      );
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        let observed: unknown = null;
+        const pending = observeSwapQuiescence(
+          ENVIRONMENT,
+          singleChatStoreSurveyRoot("/tmp/host-home"),
+          logger,
+        ).catch((error: unknown) => {
+          observed = error;
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        // Round 2 threw, and the call is still waiting on the diagnostic.
+        expect(mocks.linuxServiceMayRespawnMock).toHaveBeenCalledTimes(2);
+        expect(observed).toBeNull();
+
+        rejectDiagnostic(diagnosticError);
+        await pending;
+        expect(observed).toBe(loopError);
       });
     });
 

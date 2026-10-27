@@ -17,7 +17,9 @@ export interface SettledTabIdentity {
  * Every browser-tab reference surface (sidebar rows, chat chips) resolves the
  * same title-fallback chain, so it lives here once instead of drifting.
  */
-export function resolveTabTitle(tab: BrowserTabInfo): string {
+export function resolveTabTitle(
+  tab: Pick<BrowserTabInfo, "title" | "url">,
+): string {
   const title = documentTitle(tab.title);
   if (title !== null) return title;
   const host = browserTabHostname(tab.url);
@@ -41,14 +43,16 @@ export function browserTabOrigin(url: string): string | null {
 }
 
 function isTransientBrowserTabStatus(
-  status: BrowserTabInfo["status"],
+  status: BrowserTabInfo["status"] | null,
 ): boolean {
   return status === "provisioning" || status === "navigating";
 }
 
 export function nextSettledTabIdentity(
   previous: SettledTabIdentity | null,
-  tab: BrowserTabInfo,
+  tab: Pick<BrowserTabInfo, "title" | "url"> & {
+    readonly status: BrowserTabInfo["status"] | null;
+  },
 ): SettledTabIdentity {
   if (isTransientBrowserTabStatus(tab.status)) {
     if (previous === null) {

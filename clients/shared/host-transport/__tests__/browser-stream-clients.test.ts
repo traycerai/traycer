@@ -263,6 +263,120 @@ describe("BrowserSessionsStreamClient", () => {
   });
 });
 
+describe("BrowserSessionsStreamClient owner inventory frames", () => {
+  it("delivers 2.3 owner inventory frames once 2.3 is negotiated and still drops malformed ones", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const kinds: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: client,
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onServerFrame: (frame) => {
+          kinds.push(frame.kind);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText({
+      kind: "ownerInventoryUnavailable",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      hostId: "host-1",
+      reason: "Browser inventory is unavailable. Try again.",
+    });
+    sockets[0].fireText({
+      kind: "ownerInventorySnapshot",
+      hasBinaryPayload: false,
+      capability: {
+        catalogVersion: 1,
+        durableInventoryRevisions: true,
+        revisionedMutationAcks: true,
+      },
+      inventory: { epicId: "epic-1", hostId: "host-1", sessions: [] },
+    });
+    // Deletion evidence without its identity is malformed.
+    sockets[0].fireText({
+      kind: "ownerInventoryUpdated",
+      hasBinaryPayload: false,
+      evidence: { kind: "deleted", deletion: {} },
+    });
+
+    expect(kinds).toEqual([
+      "ownerInventoryUnavailable",
+      "ownerInventorySnapshot",
+    ]);
+    stream.close();
+  });
+});
+
+describe("BrowserSessionsStreamClient inventory capability", () => {
+  const sessionsFrame = {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    sessions: [],
+  };
+
+  it("announces 2.3 support once, before the first frame and not again per frame", () => {
+    const { factory, sockets } = makeFactory();
+    const events: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: makeClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onInventoryCapability: (supported) => {
+          events.push(`capability:${String(supported)}`);
+        },
+        onServerFrame: (frame) => {
+          events.push(`frame:${frame.kind}`);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText(sessionsFrame);
+    sockets[0].fireText(sessionsFrame);
+
+    expect(events).toEqual([
+      "capability:true",
+      "frame:snapshot",
+      "frame:snapshot",
+    ]);
+    stream.close();
+  });
+
+  it("announces no support against a host that only serves the first browser line", () => {
+    const { factory, sockets } = makeFactory();
+    const events: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: makeClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onInventoryCapability: (supported) => {
+          events.push(`capability:${String(supported)}`);
+        },
+        onServerFrame: (frame) => {
+          events.push(`frame:${frame.kind}`);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+    completeHandshakeWithManifest(sockets[0], V1_ONLY_SERVED);
+
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      sessions: [V1_ONLY_SESSION_V10],
+    });
+
+    expect(events).toEqual(["capability:false", "frame:snapshot"]);
+    stream.close();
+  });
+});
+
 describe("BrowserScreencastStreamClient", () => {
   it("pairs a frame envelope with its binary payload and leaves acking to the consumer", () => {
     const { factory, sockets } = makeFactory();
@@ -943,7 +1057,7 @@ describe("browser.sessions / browser.screencast: the `independent` scope uses @2
     completeHandshake(sockets[0]);
 
     const subscribeFrame = parseSent(sockets[0].textSent[1]);
-    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 2 });
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 3 });
     expect(subscribeFrame.params).toEqual({ scope: { kind: "independent" } });
 
     stream.close();
@@ -969,7 +1083,7 @@ describe("browser.sessions against a host serving @1 and @2 (epic scope)", () =>
     completeHandshake(sockets[0]);
 
     const subscribeFrame = parseSent(sockets[0].textSent[1]);
-    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 2 });
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 3 });
     expect(subscribeFrame.params).toEqual({
       scope: { kind: "epic", epicId: "epic-1" },
     });
