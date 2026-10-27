@@ -21,17 +21,23 @@ type RestoredMessage =
       readonly draftId: string | null;
     });
 
-export interface StoppedSandboxSendReceipt {
+type ReceiptOutcome =
+  | { readonly kind: "cancelled" }
+  | {
+      readonly kind: "stopped";
+      readonly sandboxId: string;
+      readonly name: string;
+      readonly confirmedAt: number;
+    };
+
+export type StoppedSandboxSendReceipt = ReceiptOutcome & {
   readonly id: string;
   readonly userId: string | null;
   readonly epicId: string;
-  readonly sandboxId: string;
-  readonly name: string;
   readonly returned: RestoredMessage;
-  readonly confirmedAt: number;
   readonly existingSendIds: ReadonlySet<string>;
   readonly picks: Readonly<Record<string, ReceiptPick>>;
-}
+};
 
 interface ReceiptPick {
   readonly pin: string | undefined;
@@ -80,17 +86,34 @@ export function recordStoppedSandboxSend(
   name: string,
   returned: ReturnedPendingSandboxSend,
 ): void {
-  if (
-    stage.createdSandboxId === null ||
-    (returned.kind !== "task" && returned.kind !== "landing-draft")
-  )
-    return;
+  if (stage.createdSandboxId === null) return;
+  recordReturnedSandboxSend(send, returned, {
+    kind: "stopped",
+    sandboxId: stage.createdSandboxId,
+    name,
+    confirmedAt: Date.now(),
+  });
+}
+
+/** Cancelling returns only the message; it makes no claim about the sandbox. */
+export function recordCancelledSandboxSend(
+  send: PendingSandboxSend,
+  returned: ReturnedPendingSandboxSend,
+): void {
+  recordReturnedSandboxSend(send, returned, { kind: "cancelled" });
+}
+
+function recordReturnedSandboxSend(
+  send: PendingSandboxSend,
+  returned: ReturnedPendingSandboxSend,
+  outcome: ReceiptOutcome,
+): void {
+  if (returned.kind !== "task" && returned.kind !== "landing-draft") return;
   const receipt: StoppedSandboxSendReceipt = {
+    ...outcome,
     id: send.id,
     userId: send.userId,
     epicId: send.epicId,
-    sandboxId: stage.createdSandboxId,
-    name,
     returned:
       returned.kind === "task"
         ? {
@@ -101,7 +124,6 @@ export function recordStoppedSandboxSend(
               ]?.draftId ?? null,
           }
         : returned,
-    confirmedAt: Date.now(),
     existingSendIds: new Set(
       Object.keys(usePendingSandboxSendStore.getState().sends),
     ),
