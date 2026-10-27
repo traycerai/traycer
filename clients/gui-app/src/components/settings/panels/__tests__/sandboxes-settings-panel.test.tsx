@@ -22,6 +22,10 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   configurationItem,
   mountTeamPage,
   poolSource,
@@ -117,6 +121,7 @@ const mocks = vi.hoisted(() => ({
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
+  observeAutomationOpen: false,
   openAutomation: vi.fn<() => Promise<SandboxAutomationOpened>>(),
   openLink: vi.fn<(url: string, kind: string, event: null) => void>(),
   close: vi.fn(),
@@ -172,6 +177,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
     isFetching: false,
     refetch: vi.fn(),
   }),
+  sandboxListReadSentAt: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
@@ -188,6 +194,12 @@ vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "laptop",
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
@@ -201,7 +213,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
   useSandboxAutomationOpen: () => ({
     mutateAsync: mocks.openAutomation,
+    mutate: vi.fn(),
     isPending: false,
+    isError: false,
+    reset: vi.fn(),
   }),
 }));
 
@@ -233,21 +248,52 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/components/settings/panels/sandbox-row-actions")
     >()),
-    SandboxRowActions: (props: {
-      summary: SandboxSummary;
-      configuration: SandboxPageConfiguration;
-      unreachable: boolean;
-      frozenNeedsOwnCredits: boolean;
-    }) => {
-      const { primary } = sandboxRowActions(props);
-      return (
-        <span data-testid="row-primary">
-          {primary === null
-            ? ""
-            : sandboxRowActionLabel(primary, props.configuration)}
-        </span>
-      );
-    },
+    SandboxRowActions: await (async () => {
+      const { useOpenAutomationTerminal } =
+        await import("@/components/settings/panels/use-open-automation-terminal");
+      function ObservedAutomationOpen(props: {
+        readonly summary: SandboxSummary;
+      }) {
+        const opener = useOpenAutomationTerminal({
+          existing: {
+            hostId: props.summary.hostId,
+            sandboxId: props.summary.id,
+            awake: props.summary.state === "awake",
+          },
+          teamEnvironmentId: null,
+        });
+        return (
+          <button
+            type="button"
+            data-testid="automation-row-terminal-state"
+            disabled={opener.starting}
+          >
+            {opener.starting ? "Opening terminal" : "Open terminal"}
+          </button>
+        );
+      }
+      return (props: {
+        summary: SandboxSummary;
+        configuration: SandboxPageConfiguration;
+        unreachable: boolean;
+        frozenNeedsOwnCredits: boolean;
+      }) => {
+        if (
+          mocks.observeAutomationOpen &&
+          props.summary.kind === "automation"
+        ) {
+          return <ObservedAutomationOpen summary={props.summary} />;
+        }
+        const { primary } = sandboxRowActions(props);
+        return (
+          <span data-testid="row-primary">
+            {primary === null
+              ? ""
+              : sandboxRowActionLabel(primary, props.configuration)}
+          </span>
+        );
+      };
+    })(),
   }),
 );
 
@@ -438,6 +484,8 @@ function names(): string[] {
 
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
+    resetNegotiatedManifests();
+    recordNegotiatedHostMethods("auto-host", ["terminal.plain.create"]);
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
     mocks.listed = true;
@@ -446,6 +494,7 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.report = { kind: "unknown" };
     mocks.costs = null;
     mocks.automation = null;
+    mocks.observeAutomationOpen = false;
     mocks.openAutomation.mockReset();
     mocks.openLink.mockReset();
     mocks.close.mockReset();
@@ -828,6 +877,7 @@ describe("<SandboxesSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     resetTeamPageHarness();
   });
@@ -1357,7 +1407,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBeNull();
     });
 
-    it("creates and starts it, then opens the terminal on the host it answers with, leaving the composer as it was", async () => {
+    it("does not navigate or close Settings when the first open settles after Settings unmounts", async () => {
       mocks.automation = NOT_CREATED;
       const pendingOpen = deferredAutomationOpen();
       mocks.openAutomation.mockReturnValue(pendingOpen.promise);
@@ -1382,17 +1432,15 @@ describe("<SandboxesSettingsPanel />", () => {
         await pendingOpen.promise;
       });
 
-      await waitFor(() => {
-        expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
-          "auto-host",
-        );
-      });
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
       expect(mocks.openAutomation).toHaveBeenCalledWith(null);
-      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(mocks.close).not.toHaveBeenCalled();
+      expect(navigations).toHaveLength(0);
       expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
     });
 
-    it("does not apply a previous account's start after its Settings panel unmounts", async () => {
+    it("does not apply a previous account's start after the signed-in account changes", async () => {
       mocks.automation = NOT_CREATED;
       const pendingOpen = deferredAutomationOpen();
       mocks.openAutomation.mockReturnValue(pendingOpen.promise);
@@ -1410,16 +1458,22 @@ describe("<SandboxesSettingsPanel />", () => {
       await waitFor(() => {
         expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
       });
-      panel.unmount();
 
       useAuthStore.setState({
         status: "signed-in",
         contextMetadata: { userId: "user-b", username: "Account B" },
       });
-      useLandingPanelStore
-        .getState()
-        .requestTerminal("landing:account-b", "host-account-b");
-      const accountBRequest = useLandingPanelStore.getState().terminalRequest;
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "account-b-terminal",
+        sessionId: "account-b-session",
+        hostId: "host-account-b",
+        cwd: "/account-b",
+        name: "Account B terminal",
+        titleSource: "default",
+        hostAuthorityAcknowledged: true,
+      });
+      const accountBTabs = [...useLandingPanelStore.getState().tabs];
       const navigationsBeforeSettlement = [...navigations];
 
       await act(async () => {
@@ -1427,11 +1481,56 @@ describe("<SandboxesSettingsPanel />", () => {
         await pendingOpen.promise;
       });
 
-      expect(useLandingPanelStore.getState().terminalRequest).toEqual(
-        accountBRequest,
-      );
+      expect(useLandingPanelStore.getState().tabs).toEqual(accountBTabs);
       expect(navigations).toEqual(navigationsBeforeSettlement);
       expect(mocks.close).not.toHaveBeenCalled();
+      panel.unmount();
+    });
+
+    it("keeps the first open alive through the automation result and sandbox-row replacement", async () => {
+      mocks.automation = NOT_CREATED;
+      mocks.observeAutomationOpen = true;
+      const pendingOpen = deferredAutomationOpen();
+      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
+      const panel = renderUi(<SandboxesSettingsPanel />);
+
+      fireEvent.click(
+        within(unstarted()).getByRole("button", { name: "Open terminal" }),
+      );
+      await waitFor(() => {
+        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
+      });
+
+      // The automation endpoint can report enrollment before the list query
+      // includes its new row. The section scope must survive this empty gate.
+      mocks.automation = { available: true, sandbox: OPENED, pods: [] };
+      panel.rerender(<SandboxesSettingsPanel />);
+      expect(
+        screen.queryByTestId("sandboxes-row-automations-unstarted"),
+      ).toBeNull();
+
+      mocks.sandboxes = [OPENED];
+      panel.rerender(<SandboxesSettingsPanel />);
+      const rowAction = await screen.findByTestId(
+        "automation-row-terminal-state",
+      );
+      expect(rowAction.hasAttribute("disabled")).toBe(false);
+
+      await act(async () => {
+        pendingOpen.resolve({ sandbox: OPENED, settled: true });
+        await pendingOpen.promise;
+      });
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId("automation-row-terminal-state")
+            .hasAttribute("disabled"),
+        ).toBe(true);
+      });
+      expect(
+        screen.getByTestId("automation-row-terminal-state").textContent,
+      ).toBe("Opening terminal");
+      expect(mocks.openAutomation).toHaveBeenCalledWith(null);
     });
 
     it("files no request and keeps Settings open when the start fails", async () => {

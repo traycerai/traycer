@@ -15,6 +15,14 @@ export function useFolderlessTerminalTarget(
   epicId: string,
   hostId: string | null,
 ): TerminalLaunchTarget | null {
+  return useFolderlessTerminalLaunch(epicId, hostId).target;
+}
+
+/** The same launch, with its directory query available to Retry surfaces. */
+export function useFolderlessTerminalLaunch(
+  epicId: string,
+  hostId: string | null,
+) {
   const namedClient = useHostClientForHostId(hostId);
   const dialable = dialableHostEndpoint(useHostDirectoryEntry(hostId)) !== null;
   const bindings = useTerminalWorkspaceBindingsForClient({
@@ -23,8 +31,14 @@ export function useFolderlessTerminalTarget(
     enabled: hostId !== null && dialable,
   });
   const cwd = bindings.data?.folderlessCwd ?? null;
-  if (hostId === null || !dialable || cwd === null || cwd.length === 0) {
-    return null;
-  }
-  return { hostId, cwd };
+  const target: TerminalLaunchTarget | null =
+    hostId === null || !dialable || cwd === null || cwd.length === 0
+      ? null
+      : { hostId, cwd };
+  const failed =
+    bindings.isError ||
+    (bindings.isSuccess &&
+      !bindings.isFetching &&
+      (cwd === null || cwd.length === 0));
+  return { target, bindings, failed };
 }
