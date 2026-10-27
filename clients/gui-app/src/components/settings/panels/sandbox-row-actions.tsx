@@ -465,7 +465,6 @@ function useOpenSandboxOnLanding(): (
         // starts the wake unless one is on its way.
         startStagedTerminal(surfaceKey, (fresh) =>
           runStaged(surfaceKey, fresh, {
-            fallbackName: summary.displayName,
             taskId: null,
             resume: false,
           }),
