@@ -4363,6 +4363,50 @@ describe("<LandingTerminalPanel />", () => {
     expect(tile.getAttribute("data-panel-open")).toBe("true");
   });
 
+  it.each(["unsupported composer host", "no composer host selected"] as const)(
+    "keeps an acknowledged durable terminal visible with %s",
+    async (targetState) => {
+      if (targetState === "unsupported composer host") {
+        mocks.activeHostId = "host-a";
+        mocks.clientActiveHostId = "host-a";
+        mocks.primaryWorkspacePath = "/workspace/project";
+        mocks.probeData = undefined;
+        mocks.freshProbeData = undefined;
+        mocks.probeError = new HostRpcError({
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "terminal.list is not supported by this host",
+          requestId: "req-unsupported",
+          method: "terminal.list",
+          fatalDetails: null,
+        });
+      } else {
+        mocks.activeHostId = null;
+        mocks.clientActiveHostId = null;
+        mocks.primaryWorkspacePath = null;
+        mocks.probeData = undefined;
+        mocks.freshProbeData = undefined;
+      }
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "automation-terminal-instance",
+        sessionId: "automation-terminal-session",
+        hostId: "host-automation",
+        cwd: "/automation/work",
+        name: "Automations",
+        titleSource: "default",
+        hostAuthorityAcknowledged: true,
+      });
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(panelUi());
+
+      expect(await screen.findByTestId("landing-terminal-panel")).toBeTruthy();
+      expect(
+        screen.getByTestId("landing-terminal-tab-automation-terminal-instance"),
+      ).toBeTruthy();
+      expect(await screen.findByTestId("landing-terminal-tile")).toBeTruthy();
+    },
+  );
+
   // The other half, unchanged: with only terminal rows, every row IS served by
   // the target host, so the verdict speaks for all of them and the panel still
   // goes away exactly as it does today.

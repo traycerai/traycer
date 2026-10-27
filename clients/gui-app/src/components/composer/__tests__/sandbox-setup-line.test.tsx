@@ -27,6 +27,8 @@ vi.mock("@/lib/links/open-link", () => ({
 
 afterEach(cleanup);
 
+const onStop = vi.fn();
+
 const ACTIONS: SandboxSetupLineActions = {
   onKeepWaiting: vi.fn(),
   onCancel: vi.fn(),
@@ -36,7 +38,7 @@ const ACTIONS: SandboxSetupLineActions = {
   onSendAgain: vi.fn(),
   onChangeShape: vi.fn(),
   onRetryApplying: vi.fn(),
-  onStop: vi.fn(),
+  onStop,
   onOpenTerminal: null,
   onOpenProviders: null,
 };
@@ -82,6 +84,21 @@ function refused(
     terminalLaunch: null,
     openTerminal: false,
     sendTaken: true,
+  };
+}
+
+function created(): StagedSandbox {
+  const now = Date.now();
+  return {
+    ...refused(
+      { kind: "personal" },
+      { kind: "failed", code: "create", step: "creating" },
+    ),
+    createdSandboxId: "sbx_made_1",
+    createdHostId: "host-1",
+    failure: null,
+    startedAt: now,
+    stepAt: now,
   };
 }
 
@@ -205,5 +222,45 @@ describe("SandboxSetupLine's failed start", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
+  });
+});
+
+describe("SandboxSetupLine's Stop action", () => {
+  it("stays available while the created sandbox's line is collapsed or expanded", () => {
+    onStop.mockClear();
+    render(
+      <SandboxSetupLine
+        stage={created()}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(within(line).getByRole("button", { name: "Stop" })).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+
+    expect(screen.getByTestId("sandbox-setup-line-detail")).toBeDefined();
+    const stop = within(line).getByRole("button", { name: "Stop" });
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Stop in both line states when withdrawal is unavailable", () => {
+    render(
+      <SandboxSetupLine
+        stage={created()}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+        withdrawalAllowed={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+    expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
   });
 });
