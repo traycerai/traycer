@@ -417,13 +417,14 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
-/**
- * A send to an agent that cannot run on the sandbox's configuration:
- * `Sign in to a coding agent to run agents on Personal.`
- */
-export function signInToCodingAgentLine(configuration: string): string {
-  return `Sign in to a coding agent to run agents on ${configuration}.`;
+export function agentNotOfferedOnSandboxesLine(agent: string): string {
+  return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
+
+export function enableSandboxInferenceLine(configuration: string): string {
+  return `Turn on Traycer Inference in ${configuration}'s Providers to run agents on sandboxes.`;
+}
+
 /**
  * The new sandbox is up but the send handed to it stopped short:
  * `review-box is ready, but nothing was sent.`

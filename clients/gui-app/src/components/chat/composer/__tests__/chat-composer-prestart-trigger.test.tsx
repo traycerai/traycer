@@ -512,8 +512,9 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
   });
 });
 
-describe("ChatComposer on a sandbox host that cannot run the agent picked", () => {
-  const SENTENCE = "Sign in to a coding agent to run agents on Personal.";
+describe("ChatComposer on a sandbox host without Traycer Inference", () => {
+  const SENTENCE =
+    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
 
   function refusal(message: string, onAction: () => void) {
     return {
@@ -560,12 +561,12 @@ describe("ChatComposer on a sandbox host that cannot run the agent picked", () =
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
 
     captured.agentNotice = refusal(
-      "Sign in to a coding agent to run agents on Acme.",
+      "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
       vi.fn(),
     );
     view.rerender(composerElement());
     expect(screen.getByTestId("composer-host-notice").textContent).toContain(
-      "on Acme.",
+      "in Acme's Providers",
     );
   });
 });

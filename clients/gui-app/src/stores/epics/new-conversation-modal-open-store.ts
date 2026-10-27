@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 /**
  * Transient "open the New Conversation modal here" request. Set from the
@@ -41,6 +42,8 @@ export interface NewConversationModalOpenRequest {
    * the terminal it quotes is on a machine the new chat cannot see.
    */
   readonly hostId: string | null;
+  /** Browse these models when recovering a sandbox send's draft. */
+  readonly modelPickerHarnessId?: GuiHarnessId;
 }
 
 interface NewConversationModalOpenStore {

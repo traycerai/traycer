@@ -29,6 +29,9 @@ export function useRegisterActiveModelPicker(
     if (!enabled) return;
     return registerActiveModelPicker({
       toggle: () => controllerRef.current.toggle(),
+      openForHarness: (harnessId) =>
+        controllerRef.current.openForHarness?.(harnessId),
+      getSurfaceKey: () => controllerRef.current.getSurfaceKey?.() ?? null,
       getSelectionSummary: () => controllerRef.current.getSelectionSummary(),
     });
   }, [enabled]);

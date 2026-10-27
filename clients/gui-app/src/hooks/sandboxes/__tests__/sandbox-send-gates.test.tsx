@@ -2,11 +2,11 @@
  * The two Send-time agent checks a sandbox adds to a composer:
  *
  * - `useSandboxAgentGate`: the composer's host IS a sandbox, so the agent the
- *   person picked cannot be swapped for another; one that cannot run there is
- *   refused at Send with the configuration's own Providers.
- * - `useStagedSendSignInCheck`: the composer's host runs the configuration a
- *   staged sandbox will be created in, and the agent picked is signed out on
- *   it, so the create and the wake are refused before they start.
+ *   person picked cannot be swapped for another; one not offered or unusable
+ *   there is refused at Send.
+ * - `useStagedSendSignInCheck`: the server catalogue says whether the selected
+ *   agent can run on a staged sandbox, so an unoffered pick is refused before
+ *   create or wake; a legacy catalogue leaves readiness to that host.
  *
  * Real hooks and the real host directory; only the host reads are answered.
  */
@@ -43,6 +43,15 @@ const LAPTOP_HOST = "laptop-host";
 const answers = vi.hoisted(() => ({
   harnesses: undefined as ReadonlyArray<unknown> | undefined,
   providers: undefined as ReadonlyArray<unknown> | undefined,
+  catalogue: undefined as
+    | {
+        readonly offeredAgents?: ReadonlyArray<string>;
+        readonly providers?: ReadonlyArray<unknown>;
+      }
+    | undefined,
+  catalogueError: false,
+  catalogueFetching: false,
+  refetchCatalogue: vi.fn<() => Promise<unknown>>(),
   principal: { kind: "personal" } as
     | { readonly kind: "personal" }
     | { readonly kind: "team"; readonly teamName: string },
@@ -53,6 +62,9 @@ const answers = vi.hoisted(() => ({
   }>,
   openEnvironmentPage:
     vi.fn<(address: { configurationId: string; pageId: string }) => void>(),
+  onOpenTerminalInstead: vi.fn<() => void>(),
+  onChooseAnotherHost: vi.fn<() => void>(),
+  openForHarness: vi.fn<(harnessId: "traycer") => void>(),
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
@@ -69,6 +81,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       answers.providers === undefined
         ? undefined
         : { providers: answers.providers },
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: answers.catalogue,
+    isError: answers.catalogueError,
+    isFetching: answers.catalogueFetching,
+    refetch: answers.refetchCatalogue,
   }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
@@ -93,6 +113,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
+import {
+  registerActiveModelPicker,
+  resetActiveModelPickerForTests,
+} from "@/lib/commands/active-model-picker-registry";
 
 function buildClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = plainHostEntry(hostId);
@@ -123,11 +147,20 @@ const PACKS_INSTALLED: ReadonlyArray<ProviderCliState> = [
 beforeEach(() => {
   answers.harnesses = CODEX_SIGNED_OUT;
   answers.providers = PACKS_INSTALLED;
+  answers.catalogue = undefined;
+  answers.catalogueError = false;
+  answers.catalogueFetching = false;
   answers.principal = { kind: "personal" };
   answers.environments = [
     { environmentId: "env-acme", ownerKind: "organization", ownerId: "team-9" },
   ];
   answers.openEnvironmentPage.mockReset();
+  answers.onOpenTerminalInstead.mockReset();
+  answers.onChooseAnotherHost.mockReset();
+  answers.openForHarness.mockReset();
+  answers.refetchCatalogue.mockReset();
+  answers.refetchCatalogue.mockResolvedValue(undefined);
+  resetActiveModelPickerForTests();
   installHostDirectoryRows([
     sandboxHostEntry(SANDBOX_HOST, null),
     sandboxHostEntry(TEAM_SANDBOX_HOST, { id: "team-9", name: "Acme" }),
@@ -139,29 +172,70 @@ afterEach(() => {
   resetHostDirectoryRows();
 });
 
-function gateOn(hostId: string | null, harnessId: "codex" | "claude" | null) {
+function gateOn(
+  hostId: string | null,
+  harnessId: "codex" | "claude" | "traycer" | null,
+) {
   return renderHook(() =>
     useSandboxAgentGate({
       hostId,
       client: CLIENT,
       harnessId,
       active: true,
+      onOpenTerminalInstead: answers.onOpenTerminalInstead,
+      onChooseAnotherHost: answers.onChooseAnotherHost,
     }),
   ).result.current;
 }
 
 describe("useSandboxAgentGate", () => {
-  it("refuses an agent that cannot run on the person's own sandbox, with Personal's Providers", () => {
-    const gate = gateOn(SANDBOX_HOST, "codex");
+  it("refuses an agent not offered on sandboxes, with the model picker and other remedies", () => {
+    answers.catalogue = { offeredAgents: ["traycer"] };
+    registerActiveModelPicker({
+      toggle: vi.fn(),
+      openForHarness: answers.openForHarness,
+      getSelectionSummary: () => null,
+    });
+    const gate = gateOn(SANDBOX_HOST, "claude");
+
+    expect(gate.blocked).toBe(true);
+    expect(gate.notice).toMatchObject({
+      kind: "refused",
+      message:
+        "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      action: { label: "Choose a model" },
+      secondaryActions: [
+        { label: "Open terminal instead" },
+        { label: "Choose another host" },
+      ],
+    });
+    gate.notice?.action?.onAction();
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer");
+    gate.notice?.secondaryActions?.[0]?.onAction();
+    gate.notice?.secondaryActions?.[1]?.onAction();
+    expect(answers.onOpenTerminalInstead).toHaveBeenCalledOnce();
+    expect(answers.onChooseAnotherHost).toHaveBeenCalledOnce();
+  });
+
+  it("offers Personal's Providers when Traycer Inference is offered but unavailable", () => {
+    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.harnesses = [harnessRow("traycer", { available: false })];
+    answers.providers = [providerRow("traycer", { status: "installed" })];
+
+    const gate = gateOn(SANDBOX_HOST, "traycer");
 
     expect(gate.blocked).toBe(true);
     expect(gate.hint).toBe(
-      "Sign in to a coding agent to run agents on Personal.",
+      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
     );
     expect(gate.notice).toMatchObject({
-      kind: "refused",
-      message: "Sign in to a coding agent to run agents on Personal.",
+      message:
+        "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
       action: { label: "Open Personal's Providers" },
+      secondaryActions: [
+        { label: "Open terminal instead" },
+        { label: "Choose another host" },
+      ],
     });
     gate.notice?.action?.onAction();
     expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
@@ -171,10 +245,14 @@ describe("useSandboxAgentGate", () => {
   });
 
   it("names the team and opens that team's own Providers on a team's sandbox", () => {
-    const gate = gateOn(TEAM_SANDBOX_HOST, "codex");
+    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.harnesses = [harnessRow("traycer", { available: false })];
+    answers.providers = [providerRow("traycer", { status: "installed" })];
+    const gate = gateOn(TEAM_SANDBOX_HOST, "traycer");
 
     expect(gate.notice).toMatchObject({
-      message: "Sign in to a coding agent to run agents on Acme.",
+      message:
+        "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
       action: { label: "Open Acme's Providers" },
     });
     gate.notice?.action?.onAction();
@@ -186,8 +264,11 @@ describe("useSandboxAgentGate", () => {
 
   it("offers no link when the team's environment has not been read", () => {
     answers.environments = [];
+    answers.catalogue = { offeredAgents: ["traycer"] };
+    answers.harnesses = [harnessRow("traycer", { available: false })];
+    answers.providers = [providerRow("traycer", { status: "installed" })];
 
-    const gate = gateOn(TEAM_SANDBOX_HOST, "codex");
+    const gate = gateOn(TEAM_SANDBOX_HOST, "traycer");
 
     expect(gate.blocked).toBe(true);
     expect(gate.notice?.action).toBeNull();
@@ -265,97 +346,88 @@ function stageIn(
   return staged;
 }
 
-function harnessesWith(
-  authStatus: "authenticated" | "unauthenticated" | undefined,
-): ReadonlyArray<GuiHarnessOption> {
-  return [harnessRow("codex", { authStatus }), harnessRow("claude", {})];
-}
-
 function checkFor(harnessId: "codex" | "claude" | null) {
   return renderHook(() =>
     useStagedSendSignInCheck({
-      client: CLIENT,
-      hostId: LAPTOP_HOST,
       harnessId,
       active: true,
+      onOpenTerminalInstead: answers.onOpenTerminalInstead,
+      onChooseAnotherHost: answers.onChooseAnotherHost,
     }),
   ).result.current;
 }
 
 describe("useStagedSendSignInCheck", () => {
-  it("refuses a Personal stage on a Personal host whose picked agent is signed out, with the Providers link", () => {
-    answers.harnesses = harnessesWith("unauthenticated");
+  it("refuses a picked agent the sandbox launch catalogue does not offer", () => {
+    answers.catalogue = { offeredAgents: ["traycer"] };
+    registerActiveModelPicker({
+      toggle: vi.fn(),
+      openForHarness: answers.openForHarness,
+      getSelectionSummary: () => null,
+    });
 
-    const refusal = checkFor("codex")(stageIn({ kind: "personal" }));
+    const refusal = checkFor("claude")(stageIn({ kind: "personal" }));
 
     expect(refusal).toMatchObject({
       kind: "refused",
-      message: "Sign in to a coding agent to run agents on Personal.",
-      action: { label: "Open Personal's Providers" },
+      message:
+        "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      action: { label: "Choose a model" },
+      secondaryActions: [
+        { label: "Open terminal instead" },
+        { label: "Choose another host" },
+      ],
     });
     refusal?.action?.onAction();
-    expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
-      configurationId: "personal",
-      pageId: "providers",
+    refusal?.secondaryActions?.[0]?.onAction();
+    refusal?.secondaryActions?.[1]?.onAction();
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer");
+    expect(answers.onOpenTerminalInstead).toHaveBeenCalledOnce();
+    expect(answers.onChooseAnotherHost).toHaveBeenCalledOnce();
+  });
+
+  it("shows a checking notice while the sandbox catalogue is unresolved", () => {
+    answers.catalogue = undefined;
+    answers.catalogueFetching = true;
+
+    const notice = checkFor("claude")(stageIn({ kind: "personal" }));
+
+    expect(notice).toEqual({
+      kind: "mirror",
+      pending: true,
+      message: "Checking which agents run on sandboxes.",
+      action: null,
     });
   });
 
-  it("refuses a team's stage on that team's host, naming the team and opening its Providers", () => {
-    answers.harnesses = harnessesWith("unauthenticated");
-    answers.principal = { kind: "team", teamName: "Acme" };
+  it("lets a failed catalogue request fall back to the sandbox host", () => {
+    answers.catalogue = undefined;
+    answers.catalogueError = true;
 
-    const refusal = checkFor("codex")(
-      stageIn({ kind: "team", teamId: "team-9", teamName: "Acme" }),
-    );
-
-    expect(refusal).toMatchObject({
-      message: "Sign in to a coding agent to run agents on Acme.",
-      action: { label: "Open Acme's Providers" },
-    });
-    refusal?.action?.onAction();
-    expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
-      configurationId: "env-acme",
-      pageId: "providers",
-    });
+    expect(checkFor("claude")(stageIn({ kind: "personal" }))).toBeNull();
+    expect(answers.refetchCatalogue).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "the host runs another configuration than the stage",
-      { kind: "team", teamName: "Other" } as const,
-      "unauthenticated",
-      "codex",
-    ],
-    [
-      "the picked agent is signed in",
-      { kind: "personal" } as const,
-      "authenticated",
-      "codex",
-    ],
-    [
-      "another agent than the signed-out one is picked",
-      { kind: "personal" } as const,
-      "unauthenticated",
-      "claude",
-    ],
-    [
-      "the host does not report a sign-in",
-      { kind: "personal" } as const,
-      undefined,
-      "codex",
-    ],
-  ] as const)(
-    "cannot refuse when %s",
-    (_label, principal, authStatus, harnessId) => {
-      answers.principal = principal;
-      answers.harnesses = harnessesWith(authStatus);
+  it("allows a picked agent present in the catalogue regardless of desktop auth", () => {
+    answers.catalogue = { offeredAgents: ["codex"] };
+    answers.harnesses = [
+      harnessRow("codex", { authStatus: "unauthenticated" }),
+    ];
 
-      expect(checkFor(harnessId)(stageIn({ kind: "personal" }))).toBeNull();
-    },
-  );
+    expect(checkFor("codex")(stageIn({ kind: "personal" }))).toBeNull();
+  });
+
+  it("allows a legacy catalogue response without offeredAgents to reach the sandbox host", () => {
+    answers.catalogue = { providers: [] };
+    answers.harnesses = [
+      harnessRow("codex", { authStatus: "unauthenticated" }),
+    ];
+
+    expect(checkFor("codex")(stageIn({ kind: "personal" }))).toBeNull();
+  });
 
   it("refuses nothing when no agent is picked", () => {
-    answers.harnesses = harnessesWith("unauthenticated");
+    answers.catalogue = { offeredAgents: [] };
 
     expect(checkFor(null)(stageIn({ kind: "personal" }))).toBeNull();
   });

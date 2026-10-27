@@ -20,6 +20,7 @@ import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/us
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
 import { useHostBinding } from "@/lib/host";
@@ -356,6 +357,9 @@ export function useStagedSandboxSend(input: {
   );
 
   const facts = useSetupLineFacts(stage);
+  const providersOpener = useConfigurationProvidersOpener(
+    stage?.target.configuration.kind === "team",
+  );
 
   const line =
     surfaceKey === null || stage === null || facts === null ? null : (
@@ -381,7 +385,7 @@ export function useStagedSandboxSend(input: {
             useStagedSandboxStore.getState().clear(surfaceKey);
           },
           onOpenTerminal: newHost.onOpenTerminal,
-          onOpenProviders: null,
+          onOpenProviders: providersOpener(stage.target.configuration),
         }}
       />
     );

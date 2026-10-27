@@ -97,14 +97,19 @@ const testState = vi.hoisted(() => ({
       } | null;
     } | null;
   },
-  /** What the staged send's sign-in check says: `null` lets it through. */
-  stagedSignedOut: null as {
-    readonly kind: "refused";
+  /** What the staged send's offered-agent check says: `null` lets it through. */
+  stagedRefusal: null as {
+    readonly kind: "refused" | "mirror";
     readonly message: string;
+    readonly pending?: boolean;
     readonly action: {
       readonly label: string;
       readonly onAction: () => void;
     } | null;
+    readonly secondaryActions?: ReadonlyArray<{
+      readonly label: string;
+      readonly onAction: () => void;
+    }>;
   } | null,
   /** The agent the person picked, as the toolbar holds it raw. */
   pickHarness: "codex",
@@ -192,7 +197,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
           "button",
           {
             type: "button",
-            disabled: props.isSubmitting,
+            disabled: props.isSubmitting || !props.canSubmit,
             onClick: props.onSubmit,
           },
           "Submit landing",
@@ -365,7 +370,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => testState.agentGate,
 }));
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => () => testState.stagedSignedOut,
+  useStagedSendSignInCheck: () => () => testState.stagedRefusal,
 }));
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
@@ -631,7 +636,7 @@ afterEach(() => {
   testState.profileDisabled = false;
   testState.packBlocked = false;
   testState.agentGate = { blocked: false, hint: null, notice: null };
-  testState.stagedSignedOut = null;
+  testState.stagedRefusal = null;
 });
 
 const SHAPE = {
@@ -666,9 +671,8 @@ const EXISTING_START: StagedSandboxTarget = {
   verb: "start",
 };
 
-/** Types a draft and presses Send, as the person does. */
-function sendFromComposer(): void {
-  const composer = (
+function landingComposer(): ReactElement {
+  return (
     <LandingComposer
       draftId={null}
       pendingCreateId="pending-test"
@@ -676,15 +680,20 @@ function sendFromComposer(): void {
       workspaceControls={() => null}
     />
   );
-  const view = render(composer);
+}
+
+/** Types a draft and presses Send, as the person does. */
+function sendFromComposer(): { view: RenderResult; rerender: () => void } {
+  const view = render(landingComposer());
   const installEditor = testState.installEditor;
   if (installEditor === null) throw new Error("expected ComposerBody seam");
   installEditor();
   const snapshot = testState.snapshot;
   if (snapshot === null) throw new Error("expected snapshot seam");
   snapshot();
-  view.rerender(composer);
+  view.rerender(landingComposer());
   fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+  return { view, rerender: () => view.rerender(landingComposer()) };
 }
 
 function onlyPendingSend() {
@@ -1293,7 +1302,8 @@ describe("LandingComposer direct submit gate", () => {
   });
 
   describe("refusals at Send", () => {
-    const SENTENCE = "Sign in to a coding agent to run agents on Personal.";
+    const SENTENCE =
+      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
 
     function refusal(onAction: () => void) {
       return {
@@ -1335,27 +1345,115 @@ describe("LandingComposer direct submit gate", () => {
       expect(testState.submit).toHaveBeenCalledTimes(1);
     });
 
-    it("refuses a staged send whose agent is signed out on the staged configuration, before any create or wake", () => {
-      const openProviders = vi.fn();
-      testState.stagedSignedOut = refusal(openProviders);
+    it.each([
+      ["new", NEW_STAGE],
+      ["existing", EXISTING_RESUME],
+    ] as const)(
+      "refuses an unoffered agent before create or wake and keeps the %s stage and draft",
+      (_kind, target) => {
+        const openModelPicker = vi.fn();
+        const openTerminalInstead = vi.fn();
+        const chooseAnotherHost = vi.fn();
+        testState.stagedRefusal = {
+          kind: "refused",
+          message:
+            "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+          action: { label: "Choose a model", onAction: openModelPicker },
+          secondaryActions: [
+            { label: "Open terminal instead", onAction: openTerminalInstead },
+            { label: "Choose another host", onAction: chooseAnotherHost },
+          ],
+        };
+        useStagedSandboxStore.getState().stage("landing:window-test", target);
+
+        sendFromComposer();
+
+        expect(screen.getByRole("alert").textContent).toContain(
+          "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+        );
+        expect(testState.startTask).not.toHaveBeenCalled();
+        expect(testState.submit).not.toHaveBeenCalled();
+        expect(
+          Object.keys(usePendingSandboxSendStore.getState().sends),
+        ).toEqual([]);
+        expect(readStagedSandbox("landing:window-test")).toMatchObject({
+          target,
+          phase: "staged",
+          clientRequestId: null,
+        });
+        expect(
+          screen.getByRole("button", { name: "Submit landing" }),
+        ).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+        fireEvent.click(
+          screen.getByRole("button", { name: "Open terminal instead" }),
+        );
+        fireEvent.click(
+          screen.getByRole("button", { name: "Choose another host" }),
+        );
+        expect(openModelPicker).toHaveBeenCalledOnce();
+        expect(openTerminalInstead).toHaveBeenCalledOnce();
+        expect(chooseAnotherHost).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("keeps the send pending while the catalogue loads and waits for another Send after it settles", () => {
+      testState.stagedRefusal = {
+        kind: "mirror",
+        pending: true,
+        message: "Checking which agents run on sandboxes.",
+        action: null,
+      };
+      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+
+      const { rerender } = sendFromComposer();
+
+      expect(screen.getByRole("status").textContent).toContain(
+        "Checking which agents run on sandboxes.",
+      );
+      expect(
+        screen.getByRole("button", { name: "Submit landing" }),
+      ).toHaveProperty("disabled", true);
+      expect(testState.startTask).not.toHaveBeenCalled();
+      expect(testState.submit).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(readStagedSandbox("landing:window-test")).toMatchObject({
+        target: NEW_STAGE,
+        phase: "staged",
+        clientRequestId: null,
+      });
+      expect(
+        screen.getByRole("button", { name: "Submit landing" }),
+      ).toBeDefined();
+
+      testState.stagedRefusal = null;
+      expect(testState.startTask).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      rerender();
+      expect(
+        screen.getByRole("button", { name: "Submit landing" }),
+      ).toHaveProperty("disabled", false);
+
+      fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+      expect(testState.startTask).toHaveBeenCalledOnce();
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+
+    it("lets a legacy server without offeredAgents create the sandbox and defer readiness to its host", () => {
       useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
 
       sendFromComposer();
 
-      expect(screen.getByRole("alert").textContent).toContain(SENTENCE);
-      expect(testState.startTask).not.toHaveBeenCalled();
+      expect(testState.startTask).toHaveBeenCalledOnce();
       expect(testState.submit).not.toHaveBeenCalled();
-      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
-        [],
-      );
-      // Still staged on the composer, nothing begun.
-      expect(readStagedSandbox("landing:window-test")).toMatchObject({
-        phase: "staged",
-        clientRequestId: null,
-      });
-
-      fireEvent.click(screen.getByTestId("composer-host-notice-action"));
-      expect(openProviders).toHaveBeenCalledTimes(1);
+      expect(
+        Object.keys(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+      expect(readStagedSandbox("landing:window-test")).toBeNull();
     });
   });
 

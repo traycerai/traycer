@@ -148,14 +148,14 @@ describe("requestedAgentReadiness", () => {
     ).toEqual({ kind: "unusable" });
   });
 
-  it("refuses an agent the sandbox does not offer, or has turned off", () => {
+  it("distinguishes an unoffered agent from one the sandbox has turned off", () => {
     expect(
       requestedAgentReadiness(
         "codex",
         [harnessRow("claude", {})],
         [providerRow("codex", null)],
       ),
-    ).toEqual({ kind: "unusable" });
+    ).toEqual({ kind: "not-offered" });
     expect(
       requestedAgentReadiness(
         "codex",

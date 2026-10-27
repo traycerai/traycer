@@ -89,13 +89,14 @@ function mountRefusal(
   configuration: StageConfiguration,
   failure: StagedSandboxFailure,
   smallerShapeAffordable: boolean,
+  actions: SandboxSetupLineActions,
 ): HTMLElement {
   render(
     <SandboxSetupLine
       stage={refused(configuration, failure)}
       name="api-refactor"
       facts={facts(smallerShapeAffordable)}
-      actions={ACTIONS}
+      actions={actions}
     />,
   );
   return screen.getByTestId("sandbox-refusal-line");
@@ -113,6 +114,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
       { kind: "personal" },
       { kind: "credits", shortfallMc: 120 },
       false,
+      ACTIONS,
     );
 
     expect(line.textContent).toContain("Not enough credits.");
@@ -127,6 +129,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
       { kind: "team", teamId: "team-1", teamName: "acme" },
       { kind: "credits", shortfallMc: 120 },
       false,
+      ACTIONS,
     );
 
     expect(line.textContent).toContain("Your acme allowance is short");
@@ -141,6 +144,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
       { kind: "personal" },
       { kind: "credits", shortfallMc: 120 },
       true,
+      ACTIONS,
     );
 
     expect(buttonLabels(line)).toEqual([
@@ -157,10 +161,66 @@ describe("SandboxSetupLine's refusal whose answer never came", () => {
       { kind: "personal" },
       { kind: "unverified" },
       false,
+      ACTIONS,
     );
 
     expect(line.textContent).toContain("Couldn't verify your balance.");
     expect(buttonLabels(line)).toEqual(["Retry", "Choose another host"]);
+  });
+});
+
+describe("SandboxSetupLine's agent refusals", () => {
+  it("names an unoffered agent and offers model, terminal, and host remedies", () => {
+    const onChooseModel = vi.fn();
+    const onOpenTerminal = vi.fn();
+    const onChooseAnotherHost = vi.fn();
+    const line = mountRefusal(
+      { kind: "personal" },
+      { kind: "agent-not-offered", harnessId: "codex" },
+      false,
+      {
+        ...ACTIONS,
+        onChooseModel,
+        onOpenTerminal,
+        onChooseAnotherHost,
+      },
+    );
+
+    expect(line.textContent).toContain(
+      "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+    );
+    expect(buttonLabels(line)).toEqual([
+      "Choose a model",
+      "Open terminal instead",
+      "Choose another host",
+    ]);
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Choose a model" }),
+    );
+    expect(onChooseModel).toHaveBeenCalledOnce();
+  });
+
+  it("uses Traycer Inference setup copy and keeps Personal's Providers available", () => {
+    const onOpenProviders = vi.fn();
+    const line = mountRefusal(
+      { kind: "personal" },
+      { kind: "no-provider" },
+      false,
+      { ...ACTIONS, onOpenProviders, onOpenTerminal: vi.fn() },
+    );
+
+    expect(line.textContent).toContain(
+      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
+    );
+    expect(buttonLabels(line)).toEqual([
+      "Open Personal's Providers",
+      "Open terminal instead",
+      "Choose another host",
+    ]);
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Open Personal's Providers" }),
+    );
+    expect(onOpenProviders).toHaveBeenCalledOnce();
   });
 });
 

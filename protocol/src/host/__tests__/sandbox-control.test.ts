@@ -64,8 +64,9 @@ describe("sandbox control plane mirror", () => {
     ).toBe(false);
   });
 
-  it("parses the catalogue with its shape bounds and from-prices", () => {
+  it("preserves offered agents with the catalogue's shape bounds and from-prices", () => {
     const parsed = sandboxCatalogueSchema.parse({
+      offeredAgents: ["traycer"],
       providers: [
         {
           provider: "tensorlake",
@@ -100,6 +101,7 @@ describe("sandbox control plane mirror", () => {
       ],
     });
     expect(parsed.providers[0]?.shape.diskDefaultMb).toBe(20480);
+    expect(parsed.offeredAgents).toEqual(["traycer"]);
   });
 
   describe("shapes", () => {

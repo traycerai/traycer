@@ -198,9 +198,9 @@ export interface SandboxSummary {
    */
   readonly environmentId: string | null;
   /**
-   * The member who created the sandbox (an agent's create names the member
-   * it ran for); `null` on a pod, and from a server that predates the field.
-   * A server before the staging.145 fixes sent it on team rows only.
+   * The member who created a team agent sandbox (an agent's create names the
+   * member it ran for); `null` on personal sandboxes, pods, and from a server
+   * that predates the field.
    */
   readonly createdBy: SandboxMember | null;
   /**
@@ -745,12 +745,15 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
 /** `GET /api/sandboxes/catalogue`. */
 export interface SandboxCatalogue {
   readonly providers: readonly SandboxCatalogueProvider[];
+  /** Agent ids offered by sandbox hosts; absent from older servers. */
+  readonly offeredAgents?: readonly string[];
 }
 
 export const sandboxCatalogueSchema: z.ZodType<SandboxCatalogue> = lazySchema(
   () =>
     z.object({
       providers: z.array(sandboxCatalogueProviderSchema),
+      offeredAgents: z.array(z.string()).optional(),
     }),
 );
 
