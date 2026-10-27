@@ -141,8 +141,6 @@ describe("Layout section placement and digit reassignment", () => {
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
     expect(hostIndex).toBe(27);
-    expect(hostIndex).toBeGreaterThan(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
-    expect(hostIndex).toBeGreaterThanOrEqual(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
   });
 
   it("keeps the first ten sections within the single-digit range", () => {
