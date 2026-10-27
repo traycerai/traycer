@@ -631,7 +631,8 @@ async function settleSettings(
   }
   if (
     settings !== "unsupported" &&
-    (settings.receivedRevision === null || !sandboxSettingsReady(settings.items))
+    (settings.principal === null || settings.receivedRevision === null ||
+      settings.sandboxSettingsOperationId === null || !sandboxSettingsReady(settings.items))
   )
     return "waiting";
   report(surfaceKey, "delivering", deps.now());

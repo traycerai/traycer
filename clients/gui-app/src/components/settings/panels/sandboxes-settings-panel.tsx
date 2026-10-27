@@ -974,11 +974,7 @@ function SandboxListRow(props: {
   readonly highlighted: boolean;
 }): ReactNode {
   const { configuration, viewerUserId } = props;
-  const settings = useSandboxSettingsStatus(
-    props.summary.hostId,
-    props.summary.state === "awake",
-    props.summary.lastTransitionAt,
-  );
+  const settings = useSandboxSettingsStatus(props.summary);
   const summary = sandboxSettingsFailed(settings.data?.items ?? [])
     ? { ...props.summary, guestConfigured: false }
     : props.summary;

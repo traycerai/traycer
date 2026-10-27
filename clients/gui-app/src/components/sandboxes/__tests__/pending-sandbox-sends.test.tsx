@@ -408,6 +408,24 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   },
 }));
 
+// The staged run reads the sandbox host's environment.status; an older build
+// answers it with the typed unsupported-method error (a network failure would hold).
+vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
+  resolveNamedHostClient: () => ({
+    request: () =>
+      Promise.reject(
+        new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: "Unsupported.",
+          requestId: "request-1",
+          method: "environment.status",
+          fatalDetails: null,
+        }),
+      ),
+  }),
+}));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: (
     client: FakeClient | null,

@@ -24,7 +24,8 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
@@ -147,9 +148,6 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             queryClient,
             userId,
             readSettings: async (hostId: string) => {
-              const methods = getNegotiatedHostMethods(hostId);
-              if (methods !== null && !methods.has("environment.status"))
-                return "unsupported" as const;
               const requestSettings = async () => {
                 const client = resolveNamedHostClient(binding, hostId);
                 if (client === null) throw new Error("Host unavailable");
@@ -158,22 +156,26 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
               return queryClient
                 .fetchQuery(
                   queryOptions({
-                    queryKey: hostQueryKeys.method<
-                      HostRpcRegistry,
-                      "environment.status"
-                    >(hostId, "environment.status", {}),
+                    // A staged wake must not join a status read begun before it.
+                    queryKey: [
+                      ...hostQueryKeys.method<HostRpcRegistry, "environment.status">(
+                        hostId, "environment.status", {},
+                      ),
+                      "sandbox-settings", uuidv4(),
+                    ],
                     queryFn: requestSettings,
                     staleTime: 0,
+                    gcTime: 0,
                     retry: false,
                   }),
                 )
-                .catch(() => {
-                  const negotiated = getNegotiatedHostMethods(hostId);
-                  return negotiated !== null &&
-                    !negotiated.has("environment.status")
+                .catch((error: unknown) =>
+                  error instanceof HostRpcError &&
+                  error.code === "E_HOST_UNSUPPORTED" &&
+                  error.method === "environment.status"
                     ? ("unsupported" as const)
-                    : null;
-                });
+                    : null,
+                );
             },
             wake: (hostId: string, gesture: SandboxVerbGesture) =>
               startSandboxWake(queryClient, binding, hostId, gesture).then(

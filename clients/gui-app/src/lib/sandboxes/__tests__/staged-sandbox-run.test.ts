@@ -701,6 +701,22 @@ describe("runStagedSandbox settling", () => {
         () => Promise.resolve(statusOf(null, [])),
       ],
       [
+        "an explicit settings operation still pending",
+        () =>
+          Promise.resolve({
+            ...statusOf(5, [item("variable", "REGION", "applied")]),
+            sandboxSettingsOperationId: null,
+          }),
+      ],
+      [
+        "a status with no principal, though a received revision is cached",
+        () =>
+          Promise.resolve({
+            ...statusOf(5, [item("variable", "REGION", "applied")]),
+            principal: null,
+          }),
+      ],
+      [
         "an item with a status this app does not know",
         () =>
           Promise.resolve(

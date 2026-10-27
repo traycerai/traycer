@@ -43,6 +43,8 @@ export type EnvironmentNotificationDetail =
       readonly itemKey: string;
       readonly reason: string;
       readonly sandbox?: {
+        readonly sandboxId?: string | null;
+        readonly operationId?: string | null;
         readonly name: string;
         readonly configurationName: string;
         readonly attemptId: string;

@@ -19,6 +19,7 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
  */
 export function EnvironmentNotificationExtra(props: {
   readonly detail: EnvironmentNotificationDetail;
+  readonly onSettingsApplied?: () => void;
 }): ReactNode {
   const details = (
     <SettingsDetailsButton
@@ -72,7 +73,7 @@ export function EnvironmentNotificationExtra(props: {
   if (props.detail.kind === "environment_apply_failed") {
     if (props.detail.sandbox !== null && props.detail.sandbox !== undefined)
       return (
-        <SandboxSettingsFailedCard detail={props.detail} details={details} />
+        <SandboxSettingsFailedCard detail={props.detail} details={details} onSettingsApplied={props.onSettingsApplied} />
       );
     return (
       <EnvironmentApplyFailedCard

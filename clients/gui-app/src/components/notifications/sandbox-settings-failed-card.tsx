@@ -15,6 +15,7 @@ export function SandboxSettingsFailedCard(props: {
     { kind: "environment_apply_failed" }
   >;
   readonly details: ReactNode;
+  readonly onSettingsApplied?: () => void;
 }) {
   const rows = useSandboxList().data?.sandboxes ?? [];
   const configurations = useSandboxConfigurations();
@@ -33,13 +34,14 @@ export function SandboxSettingsFailedCard(props: {
         <p>{sandboxSettingsStepsLine(evidence)}</p>
       )}
       {row === undefined || configuration === null ? (
-        <SandboxRetryApplyingButton hostId={props.detail.hostId} />
+        <SandboxRetryApplyingButton hostId={props.detail.hostId} onApplied={props.onSettingsApplied} />
       ) : (
         <SandboxRowActions
           summary={{ ...row, guestConfigured: false }}
           configuration={configuration}
           unreachable={false}
           frozenNeedsOwnCredits={false}
+          onSettingsApplied={props.onSettingsApplied}
         />
       )}
       {props.details}

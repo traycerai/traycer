@@ -889,6 +889,8 @@ export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
         reason: z.string().min(1),
         sandbox: z
           .object({
+            sandboxId: z.string().min(1).nullable().optional(),
+            operationId: z.string().min(1).nullable().optional(),
             name: z.string(),
             configurationName: z.string(),
             attemptId: z.string(),

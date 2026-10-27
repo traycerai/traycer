@@ -969,11 +969,7 @@ function useWatchedSandboxRow(
     stage?.createdHostId ?? null,
     send === null ? null : send.id,
   );
-  const settings = useSandboxSettingsStatus(
-    stage?.createdHostId ?? null,
-    row.row?.state === "awake",
-    row.row?.lastTransitionAt ?? null,
-  );
+  const settings = useSandboxSettingsStatus(row.row);
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
     settingsReady: settings.ready,
@@ -1488,11 +1484,7 @@ function usePendingDispatchLifecycle(
   const queryClient = useQueryClient();
   const wakeRequested = useRef(false);
   const [owned, setOwned] = useState(() => ownsPendingSandboxSend(send.id));
-  const settings = useSandboxSettingsStatus(
-    dispatch.input.hostId,
-    row.row?.state === "awake",
-    row.row?.lastTransitionAt ?? null,
-  );
+  const settings = useSandboxSettingsStatus(row.row);
   useEffect(() => {
     let disposed = false;
     const ownership = holdPendingSandboxSendOwnership(send.id);
@@ -1792,11 +1784,7 @@ function PendingDispatchLine(props: {
     props.id,
   );
   const client = useHostClientForHostId(props.dispatch.input.hostId);
-  const settings = useSandboxSettingsStatus(
-    props.dispatch.input.hostId,
-    row.row?.state === "awake",
-    row.row?.lastTransitionAt ?? null,
-  );
+  const settings = useSandboxSettingsStatus(row.row);
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
