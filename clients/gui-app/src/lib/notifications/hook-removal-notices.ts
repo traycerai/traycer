@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { NotificationHooksStatusResponse } from "@traycer/protocol/host/notifications/host-notifications";
 import { hostQueryKeys } from "@/lib/query-keys";
 
@@ -17,25 +17,22 @@ export async function consumePendingHookRemovalNotices(
     hostQueryKeys.methodScope(hostId, "host.notificationHooks.status"),
     hostQueryKeys.notificationHookRemovalBorrowedStatus(hostId),
   ];
-  const selectedIds = new Set("ids" in selection ? selection.ids : []);
-  const consumed = queryKeys
-    .flatMap((queryKey) =>
-      queryClient.getQueriesData<NotificationHooksStatusResponse>({ queryKey }),
-    )
-    .flatMap(([, data]) => data?.pendingRemovalNotices ?? [])
-    .filter((notice) =>
-      "ids" in selection
-        ? selectedIds.has(notice.id)
-        : notice.occurredAt <= selection.beforeUpdatedAt,
-    )
-    .map((notice) => notice.id);
-  if (consumed.length === 0) return;
   // Cloud markers can reach the origin later than their successful write.
-  // Keep that confirmed result across status reads; receipt ids never reopen.
-  const readKey = hostQueryKeys.notificationHookRemovalReadIds(hostId);
-  queryClient.setQueryData<readonly string[]>(readKey, (ids) => [
-    ...new Set([...(ids ?? []), ...consumed]),
-  ]);
+  // Remember acknowledgments even before status arrives. This is session
+  // history, so status-cache garbage collection must not reopen a receipt.
+  if ("ids" in selection) {
+    const readKey = hostQueryKeys.notificationHookRemovalReadIds(hostId);
+    retainAcknowledgmentHistory(queryClient, readKey);
+    queryClient.setQueryData<readonly string[]>(readKey, (ids) => [
+      ...new Set([...(ids ?? []), ...selection.ids]),
+    ]);
+  } else {
+    const cutoffKey = hostQueryKeys.notificationHookRemovalReadCutoff(hostId);
+    retainAcknowledgmentHistory(queryClient, cutoffKey);
+    queryClient.setQueryData<number>(cutoffKey, (cutoff) =>
+      Math.max(cutoff ?? selection.beforeUpdatedAt, selection.beforeUpdatedAt),
+    );
+  }
   await Promise.all(
     queryKeys.map((queryKey) => queryClient.cancelQueries({ queryKey })),
   );
@@ -65,10 +62,29 @@ export function filterConsumedHookRemovalNotices(
       hostQueryKeys.notificationHookRemovalReadIds(hostId),
     ) ?? [],
   );
+  const cutoff = queryClient.getQueryData<number>(
+    hostQueryKeys.notificationHookRemovalReadCutoff(hostId),
+  );
   return {
     ...response,
     pendingRemovalNotices: response.pendingRemovalNotices.filter(
-      (notice) => !consumed.has(notice.id),
+      (notice) =>
+        !consumed.has(notice.id) &&
+        (cutoff === undefined || notice.occurredAt > cutoff),
     ),
   };
+}
+
+/** These private history keys have no observers or query functions. Recreate
+ * older entries to clear finite GC timers already scheduled before retention. */
+function retainAcknowledgmentHistory(
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+): void {
+  queryClient.setQueryDefaults(queryKey, { gcTime: Infinity });
+  const existing = queryClient.getQueryCache().find({ queryKey, exact: true });
+  if (existing === undefined || existing.gcTime === Infinity) return;
+  const data = existing.state.data;
+  queryClient.removeQueries({ queryKey, exact: true });
+  queryClient.setQueryData(queryKey, data);
 }

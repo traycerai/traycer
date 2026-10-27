@@ -16,6 +16,11 @@ export const hostQueryKeys = {
     ] as const,
   notificationHookRemovalReadIds: (hostId: string) =>
     [...hostQueryKeys.scope(hostId), "notificationHookRemovalReadIds"] as const,
+  notificationHookRemovalReadCutoff: (hostId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "notificationHookRemovalReadCutoff",
+    ] as const,
   base: () => ["host"] as const,
   scope: (hostId: string | null) =>
     hostId === null
