@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -49,7 +50,7 @@ export function ContinueOnOpencodeTwoTabMenu(
   const client = useHostClientForHostId(hostId);
   const createChat = useEpicCreateChatForHostClient(client);
   const creatingContinuation =
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: epicMutationKeys.createChat(),
       predicate: (mutation) => {
         const variables = mutation.state.variables;

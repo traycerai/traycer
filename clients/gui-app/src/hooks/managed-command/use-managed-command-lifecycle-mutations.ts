@@ -1,9 +1,4 @@
-import {
-  useIsMutating,
-  useMutation,
-  useMutationState,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   HostRpcError,
@@ -18,6 +13,10 @@ import {
   type ManagedCommandHeldReleaseFailure,
   type ManagedCommandHeldReleaseUnattributed,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+import {
+  useIsMutatingOf,
+  useMutationStateOf,
+} from "@/hooks/use-mutation-state-of";
 import {
   useHostClient,
   useHostDirectory,
@@ -156,8 +155,9 @@ export interface ManagedCommandStopAllVariables {
  */
 export function useManagedCommandStopAllIsPending(chatId: string): boolean {
   return (
-    useIsMutating({ mutationKey: managedCommandMutationKeys.stopAll(chatId) }) >
-    0
+    useIsMutatingOf({
+      mutationKey: managedCommandMutationKeys.stopAll(chatId),
+    }) > 0
   );
 }
 
@@ -270,7 +270,7 @@ export function useManagedCommandConfigureIsPending(
   target: ManagedCommandConfigureTarget,
 ): boolean {
   return (
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: managedCommandMutationKeys.configure(
         target.hostId,
         target.commandId,
@@ -293,22 +293,22 @@ export function useManagedCommandRelaunchOnHostRestart(
   target: ManagedCommandConfigureTarget,
   streamed: ManagedCommand,
 ): boolean {
-  const settled = useMutationState({
-    filters: {
+  const settled = useMutationStateOf(
+    {
       mutationKey: managedCommandMutationKeys.configure(
         target.hostId,
         target.commandId,
       ),
       status: "success",
     },
-    select: (mutation) => ({
+    (mutation) => ({
       data: mutation.state.data,
       // Monotonic per mutation cache, assigned at `mutate()`: press order.
       // Not `submittedAt` - two presses in one millisecond stamp the same
       // clock value, which is exactly the collision this has to break.
       order: mutation.mutationId,
     }),
-  });
+  );
   // Newest by the host's `updatedAtMs`, and among writes that landed in the
   // same millisecond - two quick presses can - by press order, which is the
   // order the scope delivered them to the host in. Without the tie-break the
@@ -521,7 +521,7 @@ export interface ManagedCommandDeliverHeldVariables {
  */
 export function useManagedCommandDeliverHeldIsPending(chatId: string): boolean {
   return (
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: managedCommandMutationKeys.deliverHeld(chatId),
     }) > 0
   );
