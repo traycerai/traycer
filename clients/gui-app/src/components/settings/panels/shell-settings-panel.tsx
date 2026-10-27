@@ -518,7 +518,11 @@ function ShellSettingsPanelBody(props: {
         },
         onError: (error: unknown) => {
           feedback.onError(error);
-          reject(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Couldn't save this variable."),
+          );
         },
       };
       if (oldKey === newKey) {
@@ -542,7 +546,11 @@ function ShellSettingsPanelBody(props: {
         },
         onError: (error: unknown) => {
           feedback.onError(error);
-          reject(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Couldn't save this variable."),
+          );
         },
       });
     });

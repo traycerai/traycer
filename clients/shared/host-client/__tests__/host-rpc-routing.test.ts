@@ -40,6 +40,7 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.configuration.mcpServers.put",
   "environment.configuration.mcpServers.setEnabled",
   "environment.configuration.policy.put",
+  "environment.configuration.revision",
   "environment.configuration.skills.list",
   "environment.configuration.skills.remove",
   "environment.configuration.skills.setProviders",

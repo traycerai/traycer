@@ -202,8 +202,40 @@ function TeamTextItemEditor(props: {
       },
     );
   };
-  let pendingAction = props.item === null ? "Adding" : "Saving";
-  if (props.pending?.action === "remove") pendingAction = "Removing";
+  const deleteItem = (): void => {
+    if (source.kind !== "pool" || props.item === null) return;
+    const write: PendingTextWrite = {
+      key: props.item.key,
+      os: props.item.os,
+      action: "remove",
+      value: saved,
+      original: props.item,
+      accepted: false,
+    };
+    props.onPending(write);
+    setWriteError(null);
+    remove.mutate(
+      {
+        environmentId: source.environmentId,
+        kind: props.kind,
+        key: props.item.key,
+        os: props.item.os,
+        revision: props.item.revision,
+      },
+      {
+        onError: (error) => {
+          props.onPending(null);
+          setWriteError(error.message);
+        },
+        onSuccess: (result) => {
+          props.onOutcome(result);
+          if (result.outcome === "saved")
+            props.onPending({ ...write, accepted: true });
+          else props.onPending(null);
+        },
+      },
+    );
+  };
   return (
     <section
       className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
@@ -239,83 +271,83 @@ function TeamTextItemEditor(props: {
       ) : (
         <span className="font-mono text-ui-sm">{saved}</span>
       )}
-      {props.pending !== null &&
-      (props.item === null
-        ? props.pending.original === null
-        : props.pending.original?.key === props.item.key) ? (
-        <p role="status" className="text-ui-xs text-muted-foreground">
-          {props.pending.key} · {pendingAction}
-        </p>
-      ) : null}
+      <TeamTextWriteStatus item={props.item} pending={props.pending} />
       {writeError === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
           {writeError}
         </p>
       )}
       {canEdit ? (
-        <div className="flex justify-end gap-2">
-          {props.item === null ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={
-                props.pending !== null || remove.isPending || put.isPending
-              }
-              onClick={() => {
-                if (source.kind !== "pool" || props.item === null) return;
-                const write: PendingTextWrite = {
-                  key: props.item.key,
-                  os: props.item.os,
-                  action: "remove",
-                  value: saved,
-                  original: props.item,
-                  accepted: false,
-                };
-                props.onPending(write);
-                setWriteError(null);
-                remove.mutate(
-                  {
-                    environmentId: source.environmentId,
-                    kind: props.kind,
-                    key: props.item.key,
-                    os: props.item.os,
-                    revision: props.item.revision,
-                  },
-                  {
-                    onError: (error) => {
-                      props.onPending(null);
-                      setWriteError(error.message);
-                    },
-                    onSuccess: (result) => {
-                      props.onOutcome(result);
-                      if (result.outcome === "saved")
-                        props.onPending({ ...write, accepted: true });
-                      else props.onPending(null);
-                    },
-                  },
-                );
-              }}
-            >
-              Delete
-            </Button>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            disabled={
-              props.pending !== null ||
-              put.isPending ||
-              remove.isPending ||
-              (props.item === null ? !validName : value === saved)
-            }
-            onClick={save}
-          >
-            {props.item === null ? "Add a variable" : "Save"}
-            {put.isPending ? <MutedAgentSpinner /> : null}
-          </Button>
-        </div>
+        <TeamTextActions
+          isNew={props.item === null}
+          disabled={props.pending !== null || put.isPending || remove.isPending}
+          canSave={props.item === null ? validName : value !== saved}
+          saving={put.isPending}
+          onSave={save}
+          onDelete={deleteItem}
+        />
       ) : null}
     </section>
+  );
+}
+
+/** A status belongs to the complete row address, including OS. */
+function textRowWrite(
+  item: ConfigurationItem | null,
+  pending: PendingTextWrite | null,
+): PendingTextWrite | null {
+  if (pending === null) return null;
+  if (item === null) return pending.original === null ? pending : null;
+  return pending.original?.key === item.key && pending.original.os === item.os
+    ? pending
+    : null;
+}
+
+function TeamTextActions(props: {
+  readonly isNew: boolean;
+  readonly disabled: boolean;
+  readonly canSave: boolean;
+  readonly saving: boolean;
+  readonly onSave: () => void;
+  readonly onDelete: () => void;
+}): ReactNode {
+  return (
+    <div className="flex justify-end gap-2">
+      {props.isNew ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={props.disabled}
+          onClick={props.onDelete}
+        >
+          Delete
+        </Button>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        disabled={props.disabled || !props.canSave}
+        onClick={props.onSave}
+      >
+        {props.isNew ? "Add a variable" : "Save"}
+        {props.saving ? <MutedAgentSpinner /> : null}
+      </Button>
+    </div>
+  );
+}
+
+function TeamTextWriteStatus(props: {
+  readonly item: ConfigurationItem | null;
+  readonly pending: PendingTextWrite | null;
+}): ReactNode {
+  const write = textRowWrite(props.item, props.pending);
+  if (write === null) return null;
+  let action = props.item === null ? "Adding" : "Saving";
+  if (write.action === "remove") action = "Removing";
+  return (
+    <p role="status" className="text-ui-xs text-muted-foreground">
+      {write.key} · {action}
+    </p>
   );
 }

@@ -6,6 +6,7 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentSecretsVerifyResponse,
+  EnvironmentSecretRemovalV12,
   EnvironmentSecret,
 } from "@traycer/protocol/host/environment-schemas";
 import { ReplaceSecretValueDialog } from "@/components/settings/secrets/replace-secret-value-dialog";
@@ -322,7 +323,6 @@ export function SecretRow(props: {
   const [replacements, setReplacements] = useState(0);
   const actions = useSecretRowActions({ ...props, removing: secret.revoked });
   const environmentId = useDetailsEnvironmentId(props.client);
-  const retry = useSecretRemovalRetry(props.client, props.hostId);
   const source = useConfigurationSource();
   // Personal's values, and a computer's own, are all the person's; a team's
   // author is not on the wire.
@@ -344,8 +344,7 @@ export function SecretRow(props: {
     actions.verify.error,
     secret.protocol,
   );
-  const removeError =
-    retry.error ?? removalFailure(actions.remove.data, actions.remove.error);
+  const removeError = removalFailure(actions.remove.data, actions.remove.error);
   const remove = (): void => {
     if (actions.currentVersionId === null) return;
     actions.remove.mutate(
@@ -421,23 +420,14 @@ export function SecretRow(props: {
         />
       </div>
       {removal === null ? null : (
-        <SecretRemovalStatus
+        <SecretRowRemoval
+          client={props.client}
+          hostId={props.hostId}
+          environmentId={environmentId}
+          secretId={secret.secretId}
           removal={removalWithFailures(removal, null)}
           hostName={props.hostName}
-          pending={
-            retry.pending ||
-            actions.remove.isPending ||
-            actions.versions.isFetching ||
-            environmentId === null
-          }
-          onRetry={() => {
-            if (environmentId === null) return;
-            retry.onRetry({
-              environmentId,
-              kind: "secret",
-              key: secret.secretId,
-            });
-          }}
+          pending={actions.remove.isPending || actions.versions.isFetching}
         />
       )}
       {removeError === null ? null : (
@@ -511,5 +501,40 @@ export function SecretRow(props: {
         )}
       </ConfirmDestructiveDialog>
     </li>
+  );
+}
+
+/** A pending row retries only after checking the authoritative removal. */
+function SecretRowRemoval(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+  readonly environmentId: string | null;
+  readonly secretId: string;
+  readonly removal: EnvironmentSecretRemovalV12;
+  readonly hostName: (hostId: string) => string;
+  readonly pending: boolean;
+}): ReactNode {
+  const retry = useSecretRemovalRetry(props.client, props.hostId);
+  return (
+    <>
+      <SecretRemovalStatus
+        removal={props.removal}
+        hostName={props.hostName}
+        pending={retry.pending || props.pending || props.environmentId === null}
+        onRetry={() => {
+          if (props.environmentId === null) return;
+          retry.onRetry({
+            environmentId: props.environmentId,
+            kind: "secret",
+            key: props.secretId,
+          });
+        }}
+      />
+      {retry.error === null ? null : (
+        <p role="alert" className="text-ui-xs text-warning-foreground">
+          {retry.error}
+        </p>
+      )}
+    </>
   );
 }

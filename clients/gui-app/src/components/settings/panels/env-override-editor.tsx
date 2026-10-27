@@ -277,6 +277,42 @@ function credentialError(
   return null;
 }
 
+/** A write is settled only after both acceptance and the observing read. */
+function envWriteObserved(
+  overrides: readonly EnvOverrideValue[],
+  pending: PendingEnvWrite | null,
+): boolean {
+  if (pending === null || !pending.accepted) return false;
+  if (pending.action === "remove")
+    return !overrides.some((entry) => entry.key === pending.key);
+  if (
+    !overrides.some(
+      (entry) => entry.key === pending.key && entry.value === pending.value,
+    )
+  )
+    return false;
+  if (pending.oldKey === "" || pending.oldKey === pending.key) return true;
+  return !overrides.some((entry) => entry.key === pending.oldKey);
+}
+
+/** Retain only the submitted row, keeping a pending add in its own draft. */
+function envRowsWithPending(
+  overrides: readonly EnvOverrideValue[],
+  pending: PendingEnvWrite | null,
+): EnvOverrideValue[] {
+  if (pending === null) return [...overrides];
+  const rows = overrides.filter(
+    (entry) =>
+      pending.action !== "put" ||
+      pending.oldKey !== "" ||
+      entry.key !== pending.key,
+  );
+  const original = pending.original;
+  if (original !== null && !rows.some((entry) => entry.key === original.key))
+    rows.push(original);
+  return rows;
+}
+
 export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
@@ -324,39 +360,16 @@ export function EnvOverrideEditor(props: {
   const pendingRef = useRef<PendingEnvWrite | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
   const disabled = props.disabled || pending !== null;
-  const observed =
-    pending !== null &&
-    pending.accepted &&
-    (pending.action === "remove"
-      ? !props.overrides.some((entry) => entry.key === pending.key)
-      : props.overrides.some(
-          (entry) => entry.key === pending.key && entry.value === pending.value,
-        ) &&
-        (pending.oldKey === "" ||
-          pending.oldKey === pending.key ||
-          !props.overrides.some((entry) => entry.key === pending.oldKey)));
+  const observed = envWriteObserved(props.overrides, pending);
   useEffect(() => {
-    if (!observed) return;
-    if (pending?.oldKey === "" && pending.action === "put") setAdding(false);
+    if (!observed || pending === null) return;
+    if (pending.oldKey === "" && pending.action === "put") setAdding(false);
     pendingRef.current = null;
     setPending(null);
   }, [observed, pending]);
   // Only a submitted write is retained, never a second cache of the list.
   // Its read can lag acceptance, or arrive before the mutation's reply.
-  const overrides = props.overrides.filter(
-    (entry) =>
-      pending === null ||
-      pending.action !== "put" ||
-      pending.oldKey !== "" ||
-      entry.key !== pending.key,
-  );
-  if (
-    pending?.original !== null &&
-    pending?.original !== undefined &&
-    !overrides.some((entry) => entry.key === pending.original?.key)
-  ) {
-    overrides.push(pending.original);
-  }
+  const overrides = envRowsWithPending(props.overrides, pending);
   const keys = overrides.map((entry) => entry.key);
   async function submit(
     write: PendingEnvWrite,
