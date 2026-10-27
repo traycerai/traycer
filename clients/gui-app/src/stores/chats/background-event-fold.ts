@@ -140,8 +140,11 @@ function triggerSourceKey(trigger: AutonomousResumeTrigger): string | null {
   // Every scheduled wake is its own `ScheduleWakeup` call, so a wake's block
   // id never repeats: the chat's wakes are one source.
   if (trigger.kind === "wakeup") return "wakeup";
-  if (trigger.blockId === "") return null;
-  return `${trigger.kind}:${trigger.blockId}`;
+  // `blockId` is one of those keys, and its type says `string`, so it is read
+  // as the value it may really be.
+  const blockId: unknown = Reflect.get(trigger, "blockId");
+  if (typeof blockId !== "string" || blockId === "") return null;
+  return `${trigger.kind}:${blockId}`;
 }
 
 /** The one source every trigger in `segments` shares, or `null`. */
@@ -224,11 +227,10 @@ function foldedEventsOf(
  * nothing - loaded or not - between them.
  *
  * The legacy line holds the whole transcript, so neighbours in `rows` are
- * neighbours. On the windowed line a row's ordinal comes from the span that
- * served it, else from the skeleton; a row with neither renders after every
- * ordinal (a live turn, a record the index has not placed), so it follows the
- * last ordinal and the other unplaced rows. An invalidated window proves
- * nothing.
+ * neighbours. On the windowed line see {@link placementOf}: two placed rows
+ * are neighbours when their ordinals are consecutive, and an unplaced row
+ * follows the last ordinal and the other unplaced rows. A row whose placement
+ * is unproven, or an invalidated window, proves nothing.
  */
 function isNextRow(
   previous: ChatMessageModel,
@@ -237,11 +239,34 @@ function isNextRow(
 ): boolean {
   if (window === null) return true;
   if (window.invalidated) return false;
-  const before = ordinalOf(window, previous.id);
-  const after = ordinalOf(window, next.id);
-  if (before === null) return after === null;
-  if (after === null) return before === window.rowCount - 1;
+  const before = placementOf(window, previous.id);
+  const after = placementOf(window, next.id);
+  if (before === "unproven" || after === "unproven") return false;
+  if (before === "unplaced") return after === "unplaced";
+  if (after === "unplaced") return before === window.rowCount - 1;
   return after === before + 1;
+}
+
+/**
+ * Where the list draws a row: the ordinal of the span that served it, else
+ * the skeleton's; `"unplaced"` for a row neither names, which renders after
+ * every ordinal (a live turn, a record the index has not placed yet).
+ *
+ * A row only a stale span holds is `"unproven"`. After a rebase it is drawn
+ * at its seat from the OLD index (`seatStaleRows`) until the replacement
+ * index names it, so it is neither unplaced nor at an ordinal that says
+ * anything about its neighbours now - and folding it away there would leave
+ * its old seat a placeholder.
+ */
+function placementOf(
+  window: TranscriptWindow,
+  rowId: string,
+): number | "unplaced" | "unproven" {
+  const ordinal =
+    spanOrdinals(window.spans).get(rowId) ??
+    skeletonOrdinalByRowId(window.skeleton).get(rowId);
+  if (ordinal !== undefined) return ordinal;
+  return spanOrdinals(window.staleSpans).has(rowId) ? "unproven" : "unplaced";
 }
 
 const spanOrdinalCache = new WeakMap<
@@ -249,21 +274,17 @@ const spanOrdinalCache = new WeakMap<
   ReadonlyMap<string, number>
 >();
 
-function ordinalOf(window: TranscriptWindow, rowId: string): number | null {
-  let spanOrdinals = spanOrdinalCache.get(window.spans);
-  if (spanOrdinals === undefined) {
-    const ordinals = new Map<string, number>();
-    for (const span of window.spans) {
-      span.rowIds.forEach((id, offset) => {
-        ordinals.set(id, span.fromOrdinal + offset);
-      });
-    }
-    spanOrdinalCache.set(window.spans, ordinals);
-    spanOrdinals = ordinals;
+function spanOrdinals(
+  spans: ReadonlyArray<HydratedSpan>,
+): ReadonlyMap<string, number> {
+  const cached = spanOrdinalCache.get(spans);
+  if (cached !== undefined) return cached;
+  const ordinals = new Map<string, number>();
+  for (const span of spans) {
+    span.rowIds.forEach((id, offset) => {
+      ordinals.set(id, span.fromOrdinal + offset);
+    });
   }
-  return (
-    spanOrdinals.get(rowId) ??
-    skeletonOrdinalByRowId(window.skeleton).get(rowId) ??
-    null
-  );
+  spanOrdinalCache.set(spans, ordinals);
+  return ordinals;
 }

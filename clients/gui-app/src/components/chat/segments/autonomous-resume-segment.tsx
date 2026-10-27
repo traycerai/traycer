@@ -111,22 +111,9 @@ function ResumeCompletionCard(props: {
   // at the row's width (the full text stays in its tooltip), so a character
   // cap in front could only end it early on a wide reading column.
   const deliverySummary = shellDeliverySummary(trigger);
-
-  // An auto-backgrounded MCP call rides a "command" trigger (the kind enum is
-  // frozen for old-host chat parses); the structured identity is what marks it
-  // as MCP work, so prefer it over the CLI's freeform "server/tool" title.
-  const rawTitle =
-    trigger.mcp === null
-      ? trigger.title
-      : `${trigger.mcp.serverName} · ${trigger.mcp.toolName}`;
+  const rawTitle = resumeRawTitle(trigger);
   const title = collapseToSingleLine(rawTitle);
-  // Non-subagent triggers only have something to reveal when there's a captured
-  // output file - without one the body is just "Output file unavailable." every
-  // time, so collapse to a static single-row card. Shell and wakeup triggers
-  // do not normally have capturable output files; subagents always have a
-  // markdown result to show.
-  const hasOwnBody =
-    !compact && (trigger.kind === "subagent" || trigger.outputFile !== null);
+  const hasOwnBody = resumeHasOwnBody(trigger);
   const header = (
     <>
       {resumeStatusIcon(trigger)}
@@ -338,21 +325,10 @@ function FoldedBackgroundEventList(props: {
       bodyChrome="framed"
       className={undefined}
     >
-      <ul className="m-0 flex list-none flex-col gap-1 px-3 py-2">
+      <ul className="m-0 flex list-none flex-col px-2 py-1">
         {props.folded.map((event) => (
-          <li
-            key={event.key}
-            className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
-          >
-            <span className="min-w-0 truncate">
-              {foldedEventText(event.trigger)}
-            </span>
-            <span aria-hidden className="shrink-0 text-muted-foreground/40">
-              ·
-            </span>
-            <span className="shrink-0">
-              {backgroundEventEndingLabel(event.ending)}
-            </span>
+          <li key={event.key} className="min-w-0">
+            <FoldedBackgroundEventRow event={event} />
           </li>
         ))}
       </ul>
@@ -361,13 +337,90 @@ function FoldedBackgroundEventList(props: {
 }
 
 /**
- * What one earlier event said. A shell's events all share its title, so its
- * summary is what tells them apart; any other event is named by its title.
+ * One earlier event: what it said and how it ended, the whole line in its
+ * tooltip, and - for an event with a body of its own - that body on expand. A
+ * folded event keeps everything its own card showed.
+ */
+function FoldedBackgroundEventRow(props: {
+  readonly event: FoldedBackgroundEvent;
+}) {
+  const { trigger, ending } = props.event;
+  const [open, setOpen] = useState(false);
+  const expandable = resumeHasOwnBody(trigger);
+  const text = foldedEventText(trigger);
+  const header = (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <TooltipWrapper
+        label={text}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span className="min-w-0 truncate">{text}</span>
+      </TooltipWrapper>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span className="shrink-0">{backgroundEventEndingLabel(ending)}</span>
+    </span>
+  );
+  return (
+    <SegmentRow
+      open={open}
+      onOpenChange={setOpen}
+      header={header}
+      headerAction={null}
+      body={
+        expandable && open ? (
+          <ResumeCompletionCardBody trigger={trigger} enabled={open} />
+        ) : null
+      }
+      tone="default"
+      stickyHeader={false}
+      expandable={expandable}
+      headerFindUnitId={null}
+      bodyFindUnitId={null}
+      className={undefined}
+      footer={null}
+    />
+  );
+}
+
+/**
+ * What one earlier event said, on one line. A shell's events all share its
+ * title, so its summary alone tells them apart; any other event leads with its
+ * title, then what it said.
  */
 function foldedEventText(trigger: AutonomousResumeTrigger): string {
-  if (!isShellDelivery(trigger)) return collapseToSingleLine(trigger.title);
-  const summary = shellDeliverySummary(trigger);
-  return summary.length > 0 ? summary : collapseToSingleLine(trigger.title);
+  const title = collapseToSingleLine(resumeRawTitle(trigger));
+  if (isShellDelivery(trigger)) {
+    const delivery = shellDeliverySummary(trigger);
+    return delivery.length > 0 ? delivery : title;
+  }
+  const summary = collapseToSingleLine(trigger.summary);
+  return summary.length > 0 ? `${title} · ${summary}` : title;
+}
+
+// An auto-backgrounded MCP call rides a "command" trigger (the kind enum is
+// frozen for old-host chat parses); the structured identity is what marks it
+// as MCP work, so prefer it over the CLI's freeform "server/tool" title.
+function resumeRawTitle(trigger: AutonomousResumeTrigger): string {
+  return trigger.mcp === null
+    ? trigger.title
+    : `${trigger.mcp.serverName} · ${trigger.mcp.toolName}`;
+}
+
+/**
+ * Whether an event has something of its own to reveal. Subagents always have a
+ * markdown result. Any other trigger has a body only with a captured output
+ * file - without one the body is just "Output file unavailable." every time -
+ * and a shell delivery says everything in its header.
+ */
+function resumeHasOwnBody(trigger: AutonomousResumeTrigger): boolean {
+  return (
+    !isShellDelivery(trigger) &&
+    (trigger.kind === "subagent" || trigger.outputFile !== null)
+  );
 }
 
 /** A shell delivery's summary without its "still running" lead-in. */

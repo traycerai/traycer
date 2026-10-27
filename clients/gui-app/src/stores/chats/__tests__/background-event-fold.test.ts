@@ -224,6 +224,16 @@ describe("foldBackgroundEventRows", () => {
       expect(foldBackgroundEventRows(rows, null)).toBe(rows);
     });
 
+    it("does not fold triggers an older host wrote with no blockId key at all", () => {
+      const first = monitorTrigger("x", {});
+      const second = monitorTrigger("x", {});
+      Reflect.deleteProperty(first, "blockId");
+      Reflect.deleteProperty(second, "blockId");
+      const rows = [silentRow("a", [first], {}), silentRow("b", [second], {})];
+
+      expect(foldBackgroundEventRows(rows, null)).toBe(rows);
+    });
+
     it("returns the same array when nothing can fold", () => {
       const rows = [userRow("u"), actedRow("a", SHELL("one"))];
 
@@ -362,6 +372,23 @@ describe("foldBackgroundEventRows", () => {
       ];
 
       expect(foldBackgroundEventRows(rows, window)).toBe(rows);
+    });
+
+    it("does not fold rows only a stale span holds", () => {
+      const staleSpan = (rowId: string, fromOrdinal: number) => ({
+        fromOrdinal,
+        rowIds: [rowId],
+        rowContext: {},
+        messageIds: [],
+        eventIds: [],
+        contextBytes: 0,
+      });
+      const window: TranscriptWindow = {
+        ...windowOf({ rowCount: 30, skeletonIds: [], invalidated: false }),
+        staleSpans: [staleSpan("a", 10), staleSpan("b", 20)],
+      };
+
+      expect(foldBackgroundEventRows(pair, window)).toBe(pair);
     });
 
     it("never folds in an invalidated window", () => {

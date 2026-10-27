@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
@@ -810,6 +816,74 @@ describe("<AutonomousResumeSegment />", () => {
         "first batch·No reply · 3s",
         "second batch·Agent not resumed",
       ]);
+    });
+
+    it("tells earlier wakes with the same title apart by what each said", () => {
+      const wake = (summary: string): AutonomousResumeTrigger => ({
+        kind: "wakeup",
+        title: "check the deploy",
+        status: "completed",
+        summary,
+        blockId: "wake-1",
+        outputFile: null,
+        mcp: null,
+        managedCommand: null,
+        live: false,
+      });
+      renderFoot(null, [
+        foldedEvent("a#0", wake("Look at the error rate."), NO_REPLY_3S),
+        foldedEvent("b#0", wake("Look at the queue depth."), NO_REPLY_3S),
+      ]);
+
+      fireEvent.click(screen.getByRole("button"));
+
+      expect(
+        screen.getByText("check the deploy · Look at the error rate."),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("check the deploy · Look at the queue depth."),
+      ).toBeTruthy();
+    });
+
+    it("opens an earlier subagent's result from its entry", () => {
+      renderFoot(null, [
+        foldedEvent(
+          "a#0",
+          { ...SUBAGENT_TRIGGER, summary: "**Two findings** in the diff." },
+          NO_REPLY_3S,
+        ),
+      ]);
+      fireEvent.click(screen.getByRole("button"));
+      const entry = within(screen.getByRole("listitem")).getByRole("button");
+
+      expect(entry.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByText("Two findings")).toBeNull();
+      fireEvent.click(entry);
+
+      expect(entry.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("Two findings")).toBeTruthy();
+    });
+
+    it("shows an earlier shell delivery's summary alone and keeps it closed", () => {
+      renderFoot(null, [
+        foldedEvent(
+          "a#0",
+          {
+            ...MONITOR_UPDATE,
+            summary: "still running - 9 new log lines",
+            outputFile: {
+              workspacePath: "/tmp/traycer-output",
+              filePath: "build.log",
+            },
+          },
+          NO_REPLY_3S,
+        ),
+      ]);
+      fireEvent.click(screen.getByRole("button"));
+
+      const entry = screen.getByRole("listitem");
+      expect(entry.textContent).toBe("9 new log lines·No reply · 3s");
+      expect(within(entry).queryByRole("button")).toBeNull();
     });
   });
 });
