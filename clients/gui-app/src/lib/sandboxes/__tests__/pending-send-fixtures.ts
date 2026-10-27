@@ -88,6 +88,31 @@ export function providerRow(
   };
 }
 
+/** OpenCode 1 is installed while the new chat's Managed 2 pack sets up. */
+export function opencodeProviderRow(
+  lineTwoState: ProviderManagedInstallState | null,
+  overrides: Partial<ProviderCliState>,
+): ProviderCliState {
+  return {
+    ...providerRow("opencode", { status: "installed" }),
+    managedLines: ([1, 2] as const).map((line) => ({
+      line,
+      candidate: {
+        kind: "bundled",
+        path: `/managed/opencode-${line}`,
+        version: `${line}.0.0`,
+        available: line === 1 || lineTwoState?.status === "installed",
+        versionPending: false,
+      },
+      packId: `opencode-${line}`,
+      managedInstallState: line === 1 ? { status: "installed" } : lineTwoState,
+      managedVersions: null,
+      managedVersionsUnavailable: null,
+    })),
+    ...overrides,
+  };
+}
+
 /** A message waiting on its sandbox, as `handPendingSandboxSend` records it. */
 export function pendingSend(
   overrides: Partial<PendingSandboxSend>,

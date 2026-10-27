@@ -6,6 +6,11 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import type {
+  ProviderCliCandidate,
+  ProviderCliState,
+  ProviderManagedInstallState,
+} from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
@@ -39,6 +44,7 @@ import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
   harnessRow,
+  opencodeProviderRow,
   pendingSend,
   providerRow,
 } from "./pending-send-fixtures";
@@ -90,11 +96,299 @@ beforeEach(() => {
 });
 
 describe("requestedAgentReadiness", () => {
+  it.each([
+    [{ status: "downloading", percent: 40 }, "waiting"],
+    [
+      {
+        status: "error",
+        reason: "disk-full",
+        message: "ENOSPC",
+        retryAtMs: null,
+      },
+      "setup-failed",
+    ],
+  ] satisfies ReadonlyArray<readonly [ProviderManagedInstallState, string]>)(
+    "requires Managed 2 for a sibling even when OpenCode's external v2 is runnable: %j",
+    (state, kind) => {
+      const engine = opencodeProviderRow(state, {
+        selected: { kind: "custom", path: "/custom/opencode" },
+        candidates: [
+          {
+            kind: "custom",
+            path: "/custom/opencode",
+            available: true,
+            version: "2.0.0",
+            versionPending: false,
+          },
+        ],
+      });
+      expect(
+        requestedAgentReadiness(
+          "traycer",
+          [harnessRow("traycer", {})],
+          [engine],
+          null,
+        ).kind,
+      ).toBe(kind);
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [engine],
+          null,
+        ),
+      ).toEqual({ kind: "ready", opencodeLine: 2 });
+    },
+  );
+
+  it.each(["traycer", "openrouter", "huggingface", "opencode"] as const)(
+    "waits for the exact engine %s will launch rather than its legacy installed pack",
+    (harnessId) => {
+      expect(
+        requestedAgentReadiness(
+          harnessId,
+          [harnessRow(harnessId, {})],
+          [
+            ...(harnessId === "opencode"
+              ? []
+              : [providerRow(harnessId, { status: "installed" })]),
+            opencodeProviderRow({ status: "downloading", percent: 40 }, {}),
+          ],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
+  it.each([
+    [
+      "availability pending",
+      opencodeProviderRow(
+        { status: "installed" },
+        { availabilityPending: true },
+      ),
+    ],
+    ["null state", opencodeProviderRow(null, {})],
+    ["queued install", opencodeProviderRow({ status: "absent" }, {})],
+    [
+      "absent lines",
+      opencodeProviderRow({ status: "installed" }, { managedLines: undefined }),
+    ],
+    [
+      "empty lines",
+      opencodeProviderRow({ status: "installed" }, { managedLines: [] }),
+    ],
+    ["absent engine provider", undefined],
+  ] as const)("waits for positive engine proof: %s", (_label, engine) => {
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [
+          providerRow("traycer", { status: "installed" }),
+          ...(engine === undefined ? [] : [engine]),
+        ],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it.each(["unavailable candidate", "pending version"] as const)(
+    "waits despite an installed line with an %s",
+    (reason) => {
+      const engine = opencodeProviderRow({ status: "installed" }, {});
+      engine.managedLines = engine.managedLines?.map((entry) => ({
+        ...entry,
+        candidate: {
+          ...entry.candidate,
+          available: reason !== "unavailable candidate",
+          versionPending: reason === "pending version",
+        },
+      }));
+      expect(
+        requestedAgentReadiness(
+          "traycer",
+          [harnessRow("traycer", {})],
+          [engine],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
+  it("uses the destination's explicit line for a new chat and the recorded line for a bound chat", () => {
+    const engine = opencodeProviderRow(
+      { status: "downloading", percent: 40 },
+      { selected: { kind: "bundled", line: 1 } },
+    );
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine],
+        null,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine],
+        2,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it.each(["path", "custom"] as const)(
+    "uses a proven %s engine's version, and waits for its probe",
+    (kind) => {
+      const selected: ProviderCliState["selected"] =
+        kind === "path" ? { kind } : { kind, path: "/custom/opencode" };
+      const candidate: ProviderCliCandidate = {
+        kind,
+        path: "/custom/opencode",
+        available: true,
+        version: "1.5.0",
+        versionPending: false,
+      };
+      const engine = opencodeProviderRow(
+        { status: "downloading", percent: 40 },
+        { selected, candidates: [candidate], managedLines: [] },
+      );
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [engine],
+          null,
+        ),
+      ).toEqual({ kind: "ready", opencodeLine: 1 });
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [{ ...engine, candidates: [{ ...candidate, versionPending: true }] }],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+      expect(
+        requestedAgentReadiness(
+          "opencode",
+          [harnessRow("opencode", {})],
+          [{ ...engine, candidates: [{ ...candidate, version: null }] }],
+          null,
+        ),
+      ).toEqual({ kind: "waiting" });
+    },
+  );
+
+  it("requires a line-1 sibling's own external proof rather than OpenCode's external candidate", () => {
+    const candidate: ProviderCliCandidate = {
+      kind: "path",
+      path: "/external/opencode",
+      available: true,
+      version: "1.5.0",
+      versionPending: false,
+    };
+    const engine = opencodeProviderRow(null, {
+      selected: { kind: "path" },
+      candidates: [candidate],
+      managedLines: [],
+    });
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+    const sibling: ProviderCliState = {
+      ...providerRow("traycer", null),
+      selected: { kind: "path" },
+      candidates: [candidate],
+    };
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [engine, sibling],
+        null,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", {})],
+        [
+          engine,
+          { ...sibling, candidates: [{ ...candidate, versionPending: true }] },
+        ],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it("holds a bound OpenCode 2 chat on an external v1 selection, while preserving the host's opposite managed fallback", () => {
+    const candidate: ProviderCliCandidate = {
+      kind: "custom",
+      path: "/external/opencode",
+      available: true,
+      version: "1.5.0",
+      versionPending: false,
+    };
+    const engine = opencodeProviderRow(
+      { status: "installed" },
+      {
+        selected: { kind: "custom", path: candidate.path },
+        candidates: [candidate],
+      },
+    );
+    expect(
+      requestedAgentReadiness(
+        "opencode",
+        [harnessRow("opencode", {})],
+        [engine],
+        2,
+      ),
+    ).toEqual({ kind: "waiting" });
+    expect(
+      requestedAgentReadiness(
+        "opencode",
+        [harnessRow("opencode", {})],
+        [engine],
+        null,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+    expect(
+      requestedAgentReadiness(
+        "opencode",
+        [harnessRow("opencode", {})],
+        [{ ...engine, candidates: [{ ...candidate, version: "2.0.0" }] }],
+        1,
+      ),
+    ).toEqual({ kind: "ready", opencodeLine: 1 });
+  });
+
+  it("waits on a pending harness probe even when its cached availability is true", () => {
+    expect(
+      requestedAgentReadiness(
+        "traycer",
+        [harnessRow("traycer", { availabilityPending: true })],
+        [
+          providerRow("traycer", { status: "installed" }),
+          opencodeProviderRow({ status: "installed" }, {}),
+        ],
+        null,
+      ),
+    ).toEqual({ kind: "waiting" });
+  });
+
   it("waits until both the catalog and the provider list have answered", () => {
-    expect(requestedAgentReadiness("codex", undefined, [])).toEqual({
+    expect(requestedAgentReadiness("codex", undefined, [], null)).toEqual({
       kind: "waiting",
     });
-    expect(requestedAgentReadiness("codex", [], undefined)).toEqual({
+    expect(requestedAgentReadiness("codex", [], undefined, null)).toEqual({
       kind: "waiting",
     });
   });
@@ -111,6 +405,7 @@ describe("requestedAgentReadiness", () => {
           providerRow("codex", { status: "downloading", percent: 40 }),
           providerRow("claude-code", null),
         ],
+        null,
       ),
     ).toEqual({ kind: "waiting" });
   });
@@ -121,8 +416,9 @@ describe("requestedAgentReadiness", () => {
         "codex",
         [harnessRow("codex", { available: true })],
         [providerRow("codex", { status: "installed" })],
+        null,
       ),
-    ).toEqual({ kind: "ready" });
+    ).toEqual({ kind: "ready", opencodeLine: null });
   });
 
   it("waits while the requested agent's availability is still being probed", () => {
@@ -131,6 +427,7 @@ describe("requestedAgentReadiness", () => {
         "codex",
         [harnessRow("codex", { available: false, availabilityPending: true })],
         [providerRow("codex", null)],
+        null,
       ),
     ).toEqual({ kind: "waiting" });
   });
@@ -144,6 +441,7 @@ describe("requestedAgentReadiness", () => {
           harnessRow("claude", { available: true }),
         ],
         [providerRow("codex", null), providerRow("claude-code", null)],
+        null,
       ),
     ).toEqual({ kind: "unusable" });
   });
@@ -154,6 +452,7 @@ describe("requestedAgentReadiness", () => {
         "codex",
         [harnessRow("claude", {})],
         [providerRow("codex", null)],
+        null,
       ),
     ).toEqual({ kind: "not-offered" });
     expect(
@@ -161,6 +460,7 @@ describe("requestedAgentReadiness", () => {
         "codex",
         [harnessRow("codex", { enabled: false })],
         [providerRow("codex", null)],
+        null,
       ),
     ).toEqual({ kind: "unusable" });
   });
@@ -177,6 +477,7 @@ describe("requestedAgentReadiness", () => {
           retryAtMs: null,
         }),
       ],
+      null,
     );
 
     expect(readiness.kind).toBe("setup-failed");

@@ -1,11 +1,17 @@
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type {
+  ProviderCliCandidate,
   ProviderCliState,
+  ProviderManagedLine,
   ProviderManagedInstallState,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerPackReasonRetryable } from "@traycer-clients/shared/providers/provider-pack-retry";
-import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import {
+  guiHarnessIdToProviderId,
+  providerIdToGuiHarnessId,
+} from "@/lib/provider-ordering";
+import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
 
 /**
  * A provider whose managed (registry-backed) binary pack is not ready to run
@@ -41,6 +47,160 @@ export interface ProviderPackPreparing {
   readonly fallbackRunnable: boolean;
 }
 
+function selectedExternalCandidate(
+  provider: ProviderCliState,
+): ProviderCliCandidate | undefined {
+  const selected = provider.selected;
+  if (selected.kind === "bundled") return undefined;
+  return provider.candidates.find((candidate) =>
+    selected.kind === "path"
+      ? candidate.kind === "path"
+      : candidate.kind === "custom" && candidate.path === selected.path,
+  );
+}
+
+function candidateOpencodeLine(
+  candidate: ProviderCliCandidate,
+): OpencodeLine | null {
+  if (!candidate.available || candidate.versionPending) return null;
+  const major = candidate.version?.match(
+    /^v?([12])\.\d+\.\d+(?:[-+].*)?$/,
+  )?.[1];
+  if (major === "1") return 1;
+  if (major === "2") return 2;
+  return null;
+}
+
+/**
+ * Mirrors the host's `resolveNewChatOpencodeLine` in
+ * `domain/providers/opencode-line-default.ts`: the destination's saved
+ * OpenCode selection names every sibling's line, and plain Managed means 2
+ * for this client. A pending or unknown external version proves no line.
+ * Sandbox creates carry this result so launch uses the line readiness checked.
+ */
+export function newChatOpencodeLineFromProviders(
+  providers: ReadonlyArray<ProviderCliState>,
+): OpencodeLine | null {
+  const provider = providers.find((row) => row.providerId === "opencode");
+  if (provider === undefined || provider.availabilityPending) return null;
+  if (provider.selected.kind === "bundled") return provider.selected.line ?? 2;
+  const candidate = selectedExternalCandidate(provider);
+  if (candidate?.versionPending) return null;
+  if (candidate === undefined || !candidate.available) return 2;
+  return candidateOpencodeLine(candidate);
+}
+
+/**
+ * Positive launch proof for sandbox sends. Unlike Settings' legacy pack
+ * status below, missing state means keep preparing. OpenCode-family callers
+ * use OpenCode's per-line pack state. The host's `opencode-binary-guard.ts`
+ * `resolveOpencodeLine1Launch` (99-151) reads each sibling's own external
+ * selection; `resolveOpencodeLine2SiblingLaunch` (207-220) forces Managed 2.
+ * OpenCode's external selection chooses a sibling's new-chat line but cannot
+ * prove that sibling's engine runnable. Never use the legacy line-1 pack.
+ */
+export function providerPackPreparingForSandboxAgent(
+  harnessId: GuiHarnessId,
+  providers: ReadonlyArray<ProviderCliState>,
+  opencodeLine: OpencodeLine | null,
+): ProviderPackPreparing | null {
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  const provider = providers.find((row) => row.providerId === providerId);
+  if (!isOpencodeFamilyHarness(harnessId))
+    return sandboxProviderPackPreparing(provider);
+  const engine = providers.find((row) => row.providerId === "opencode");
+  const externalProvider =
+    harnessId === "opencode" || opencodeLine === 1 ? provider : undefined;
+  if (
+    opencodeLine === null ||
+    engine?.availabilityPending ||
+    externalProvider?.availabilityPending
+  )
+    return SANDBOX_AGENT_WAITING;
+  return sandboxOpencodePackPreparing(engine, externalProvider, opencodeLine);
+}
+
+function sandboxProviderPackPreparing(
+  provider: ProviderCliState | undefined,
+): ProviderPackPreparing | null {
+  if (provider === undefined || provider.availabilityPending)
+    return SANDBOX_AGENT_WAITING;
+  if (
+    provider.candidates.some(
+      (entry) => entry.available && !entry.versionPending,
+    )
+  )
+    return null;
+  if (provider.candidates.some((entry) => entry.versionPending))
+    return SANDBOX_AGENT_WAITING;
+  return sandboxPackPreparingFromState(provider.managedInstallState);
+}
+
+const SANDBOX_AGENT_WAITING: ProviderPackPreparing = {
+  kind: "downloading",
+  percent: null,
+  retryAtMs: null,
+  reason: null,
+  fallbackRunnable: false,
+};
+
+/** Managed line proof and external-version proof must describe the same engine. */
+function sandboxOpencodePackPreparing(
+  provider: ProviderCliState | undefined,
+  externalProvider: ProviderCliState | undefined,
+  opencodeLine: OpencodeLine,
+): ProviderPackPreparing | null {
+  const external =
+    externalProvider === undefined
+      ? undefined
+      : selectedExternalCandidate(externalProvider);
+  if (external?.versionPending) return SANDBOX_AGENT_WAITING;
+  if (external?.available) {
+    const externalLine = candidateOpencodeLine(external);
+    if (externalLine === null) return SANDBOX_AGENT_WAITING;
+    if (externalLine === opencodeLine) return null;
+    // Only line 1 substitutes Managed 1 for an external v2. The line-2
+    // engine refuses a selected external v1 instead of falling back.
+    if (opencodeLine === 2) return SANDBOX_AGENT_WAITING;
+  }
+  const managedLine = provider?.managedLines?.find(
+    (entry) => entry.line === opencodeLine,
+  );
+  return sandboxManagedLinePreparing(managedLine);
+}
+
+/** The managed pack and its own candidate must both prove launch readiness. */
+function sandboxManagedLinePreparing(
+  managedLine: ProviderManagedLine | undefined,
+): ProviderPackPreparing | null {
+  if (managedLine?.candidate.versionPending) return SANDBOX_AGENT_WAITING;
+  if (
+    managedLine?.managedInstallState?.status === "installed" &&
+    !managedLine.candidate.available
+  )
+    return SANDBOX_AGENT_WAITING;
+  return sandboxPackPreparingFromState(managedLine?.managedInstallState);
+}
+
+/** Null and absent are waiting states for a sandbox, never successful setup. */
+function sandboxPackPreparingFromState(
+  state: ProviderManagedInstallState | null | undefined,
+): ProviderPackPreparing | null {
+  if (state?.status === "installed") return null;
+  if (state?.status === "error") {
+    return {
+      kind: "error",
+      percent: null,
+      retryAtMs: state.retryAtMs,
+      reason: state.reason,
+      fallbackRunnable: false,
+    };
+  }
+  return state?.status === "downloading"
+    ? { ...SANDBOX_AGENT_WAITING, percent: state.percent }
+    : SANDBOX_AGENT_WAITING;
+}
+
 /**
  * Does the resolver have anything to spawn for this provider without the
  * managed pack? Mirrors `resolveProviderCli`'s own precedence (custom →
@@ -48,9 +208,9 @@ export interface ProviderPackPreparing {
  * missed, so a client that gates on the managed tier alone is stricter than
  * the host it is speaking for.
  *
- * `availabilityPending` counts as runnable, and that is the fail-open reading
- * this module has taken everywhere else. The pending flag means the shell-env
- * PATH probe has not settled, so `candidates` under-reports; the EXECUTE path
+ * The legacy pack-status projection below counts `availabilityPending` as
+ * runnable. Sandbox sends use positive launch proof above. The pending flag
+ * means the shell-env PATH probe has not settled, so `candidates` under-reports; the EXECUTE path
  * awaits that same probe before it decides, which means a PATH binary this
  * list has not seen yet is one the host would happily spawn. Gating on the
  * unsettled snapshot would dim a working provider for a poll tick; not gating

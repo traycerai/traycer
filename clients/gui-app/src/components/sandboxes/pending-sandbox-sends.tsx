@@ -12,6 +12,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -518,7 +519,11 @@ function executePendingReadiness(input: {
   }
   if (decision.effects.includes("fetch-model")) refetchModel();
   if (decision.effects.includes("report-not-sent")) notSent(surfaceKey);
-  if (!decision.effects.includes("prepare")) return;
+  if (
+    !decision.effects.includes("prepare") ||
+    requested.readiness?.kind !== "ready"
+  )
+    return;
   if (current.failure !== null)
     useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
   preparePendingReadySend({
@@ -527,6 +532,7 @@ function executePendingReadiness(input: {
     client,
     model: model.model,
     profiles: requested.profiles,
+    opencodeLine: requested.readiness.opencodeLine,
   });
 }
 
@@ -537,6 +543,7 @@ function preparePendingReadySend(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly model: string | null;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+  readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, stage, client } = input;
   const settings = {
@@ -557,9 +564,16 @@ function preparePendingReadySend(input: {
       stage,
       hostId,
       settings,
+      opencodeLine: input.opencodeLine,
     });
   else if (client !== null)
-    prepareAndDeliverSend({ send, hostId, client, settings });
+    prepareAndDeliverSend({
+      send,
+      hostId,
+      client,
+      settings,
+      opencodeLine: input.opencodeLine,
+    });
 }
 
 interface PendingAgentReadiness {
@@ -640,6 +654,7 @@ function useRequestedAgentOnHost(
         harnessId,
         harnesses.data?.harnesses,
         providerRows,
+        null,
       )
     : null;
   const profiles = useMemo(() => {
@@ -1018,6 +1033,7 @@ function prepareAndDeliverSend(input: {
   readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry>;
   readonly settings: PendingSandboxSend["settings"];
+  readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, hostId, settings } = input;
   const surfaceKey = pendingSendSurfaceKey(send.id);
@@ -1067,6 +1083,7 @@ function prepareAndDeliverSend(input: {
         settings,
         content: prepared.content,
         attachmentsByHash: prepared.attachmentsByHash,
+        opencodeLine: input.opencodeLine,
       });
     })
     .catch(() => {
@@ -1169,6 +1186,7 @@ function deliverPendingSend(input: {
   readonly settings: PendingSandboxSend["settings"];
   readonly content: JsonContent;
   readonly attachmentsByHash: boolean;
+  readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, hostId, settings } = input;
   if (send.request.kind !== "chat") return;
@@ -1179,6 +1197,9 @@ function deliverPendingSend(input: {
     title: "",
     chatId: uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL),
     settings,
+    ...(input.opencodeLine === null
+      ? {}
+      : { opencodeLine: input.opencodeLine }),
     workspaceMode: "folderless",
     worktreeIntent: null,
     initialMessage:
@@ -1212,6 +1233,7 @@ function deliverPendingFork(input: {
   readonly stage: StagedSandbox;
   readonly hostId: string;
   readonly settings: PendingSandboxSend["settings"];
+  readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, request, stage, hostId, settings } = input;
   const support = chatForkTargetSupport(
@@ -1244,6 +1266,9 @@ function deliverPendingFork(input: {
     title: request.title,
     chatId: uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL),
     settings,
+    ...(input.opencodeLine === null
+      ? {}
+      : { opencodeLine: input.opencodeLine }),
     workspaceMode: "folderless",
     worktreeIntent: null,
     initialMessage: null,
