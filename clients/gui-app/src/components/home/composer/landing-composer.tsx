@@ -1,3 +1,4 @@
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -827,6 +828,15 @@ export function LandingComposer(props: LandingComposerProps) {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const settingsKey = JSON.stringify(settings);
+      const generation = captureComposerSubmitGeneration(
+        () => runtimeStore.getState().contentRevision,
+      );
+      const content = buildSubmittedChatJSONContent(
+        editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
+        pickerStore.getState().knownSlashCommands,
+      );
 
       // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the draft and the chip stay.
@@ -836,17 +846,16 @@ export function LandingComposer(props: LandingComposerProps) {
           if (
             stagedSubmitAttempt.current !== attempt ||
             readStagedSandbox(composerSurfaceKey) !== staged ||
-            signedInUserId() !== account
+            signedInUserId() !== account ||
+            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
+              settingsKey ||
+            !generation.stillCurrent()
           )
             return false;
           if (signedOut !== null) {
             raiseHostNotice(signedOut);
             return false;
           }
-          const content = buildSubmittedChatJSONContent(
-            editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
-            pickerStore.getState().knownSlashCommands,
-          );
           const text = composerDisplayPlainText(content);
           // No host here can take the task (none at all, or only a resting
           // sandbox): the sandbox the stage provides comes up first, and this
@@ -855,7 +864,6 @@ export function LandingComposer(props: LandingComposerProps) {
             stagedSend.intercept(text, null);
             return false;
           }
-          const settings = pickedRunSettings(toolbarStore.getState());
           const refusal = actions.startTaskOnStagedSandbox({
             draftId: draftId ?? createdUnboundDraftIdRef.current,
             owner,
@@ -911,6 +919,7 @@ export function LandingComposer(props: LandingComposerProps) {
       owner,
       pickerStore,
       raiseHostNotice,
+      runtimeStore,
       setComposerExpanded,
       stagedSend,
       stagedSignInCheck,

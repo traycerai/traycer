@@ -1,3 +1,10 @@
+import type { QueryObserverResult } from "@tanstack/react-query";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import {
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import userEvent from "@testing-library/user-event";
 import {
   act,
@@ -5,6 +12,7 @@ import {
   fireEvent,
   render as renderComponent,
   screen,
+  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -98,6 +106,15 @@ const testState = vi.hoisted(() => ({
       } | null;
     } | null;
   },
+  realStagedGate: false,
+  refetchAuthUser:
+    vi.fn<
+      () => Promise<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >
+    >(),
+  editorContent: null as JsonContent | null,
+  editContent: null as ComposerBodyProps["onDocumentChange"] | null,
   /** What the staged send's offered-agent check says: `null` lets it through. */
   stagedRefusal: null as {
     readonly kind: "refused" | "mirror";
@@ -184,6 +201,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   return {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
+      testState.editContent = props.onDocumentChange;
       testState.startTerminal = props.onStartTerminal;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
@@ -358,8 +376,8 @@ function answerProviders(
   for (const listener of testState.providerListeners) listener();
 }
 
-// The gates' own reads are covered by their hook tests; here the composer's
-// use of their answers is what is under test.
+// Legacy cases supply gate answers; the held-auth cases run the real staged
+// gate against the auth-query boundary to exercise the Send continuation.
 // The Terminal-account line reads the host picker's options for the run's
 // host; with none named it is this computer.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -370,12 +388,29 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => testState.agentGate,
 }));
-vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => ({
-    check: () => testState.stagedRefusal,
-    beforeSend: () => Promise.resolve(testState.stagedRefusal),
-  }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-staged-send-sign-in-check",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-staged-send-sign-in-check")
+      >();
+    return {
+      useStagedSendSignInCheck: (
+        input: Parameters<typeof actual.useStagedSendSignInCheck>[0],
+      ) => {
+        const gate = actual.useStagedSendSignInCheck(input);
+        return testState.realStagedGate
+          ? gate
+          : {
+              check: () => testState.stagedRefusal,
+              beforeSend: () => Promise.resolve(testState.stagedRefusal),
+            };
+      },
+    };
+  },
+);
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
@@ -396,6 +431,7 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
+    signInUrl: "https://billing.test",
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths: readonly string[]) =>
@@ -553,10 +589,16 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 // The staged sandbox's send reads the account and the catalogue; this suite
 // has no auth runtime.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
-  useAuthUser: () => ({ data: null }),
+  useAuthUser: () => ({ data: null, refetch: testState.refetchAuthUser }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
+  useSandboxCatalogue: () => ({
+    data: {
+      providers: [],
+      offeredAgents: ["codex"],
+    } satisfies SandboxCatalogue,
+    isFetching: false,
+  }),
 }));
 // The setup line prices a resting sandbox from the account's list.
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
@@ -641,6 +683,10 @@ afterEach(() => {
   testState.packBlocked = false;
   testState.agentGate = { blocked: false, hint: null, notice: null };
   testState.stagedRefusal = null;
+  testState.realStagedGate = false;
+  testState.editorContent = null;
+  testState.editContent = null;
+  testState.refetchAuthUser.mockReset();
 });
 
 const SHAPE = {
@@ -719,6 +765,70 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
+  it.each(["draft", "agent"] as const)(
+    "keeps a changed %s after a held auth refresh, until another Send",
+    async (change) => {
+      testState.realStagedGate = true;
+      const refreshed =
+        Promise.withResolvers<
+          Pick<
+            QueryObserverResult<AuthenticatedUser | null>,
+            "data" | "isError"
+          >
+        >();
+      testState.refetchAuthUser.mockReturnValue(refreshed.promise);
+      const funded = userWith(
+        userSubscription({
+          totalPlanCredits: 10,
+          consumedFromPlan: 0,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [],
+      );
+      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+      const { rerender } = await sendFromComposer();
+      expect(testState.refetchAuthUser).toHaveBeenCalledOnce();
+      const replacement: JsonContent = {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "draft B" }] },
+        ],
+      };
+      act(() => {
+        if (change === "draft") {
+          testState.editorContent = replacement;
+          testState.editContent?.(replacement, { from: 1, to: 1 });
+        } else testState.pickHarness = "claude";
+      });
+      rerender();
+      await act(async () => {
+        refreshed.resolve({ data: funded, isError: false });
+        await refreshed.promise;
+      });
+      expect(testState.startTask).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(readStagedSandbox("landing:window-test")?.phase).toBe("staged");
+      testState.refetchAuthUser.mockResolvedValue({
+        data: funded,
+        isError: false,
+      });
+      await userEvent.click(
+        screen.getByRole("button", { name: "Submit landing" }),
+      );
+      if (change === "draft") {
+        await waitFor(() => expect(testState.startTask).toHaveBeenCalledOnce());
+        expect(onlyPendingSend().text).toBe("draft B");
+      } else {
+        expect((await screen.findByRole("alert")).textContent).toContain(
+          "Claude Code doesn't run on sandboxes",
+        );
+        expect(testState.startTask).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("lets a staged sandbox take a terminal agent's Start instead of launching it here", () => {
     useStagedSandboxStore.getState().stage("landing:window-test", {
       kind: "new",
@@ -1780,7 +1890,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
-    getJSON: () => DIRTY_CONTENT,
+    getJSON: () => testState.editorContent ?? DIRTY_CONTENT,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,

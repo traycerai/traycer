@@ -99,7 +99,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   useStagedSendSignInCheck: () => ({
     check: () => testState.stagedNotice,
-    beforeSend: () => Promise.resolve(testState.stagedNotice),
+    beforeSend: testState.beforeStagedSend,
   }),
 }));
 
@@ -142,6 +142,7 @@ const testState = vi.hoisted(() => ({
   agentGateNotice: null as ComposerHostNoticeState | null,
   /** What the staged send's catalogue check says: `null` lets it through. */
   stagedNotice: null as ComposerHostNoticeState | null,
+  beforeStagedSend: vi.fn<() => Promise<ComposerHostNoticeState | null>>(),
   /** Whether a sandbox is staged: the staged send then takes the Start. */
   staged: false,
   /** How many sends or Starts reached the staged send's intercept. */
@@ -607,6 +608,10 @@ function expectUnavailableNotice(): void {
 }
 
 beforeEach(() => {
+  testState.beforeStagedSend.mockReset();
+  testState.beforeStagedSend.mockImplementation(() =>
+    Promise.resolve(testState.stagedNotice),
+  );
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
@@ -647,6 +652,16 @@ afterEach(() => {
   // A case's answer stays on the shared toolbar store until it is unset.
   testState.toolbarStore?.setState({
     catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
+    values: {
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-6.1-sol",
+        profileId: null,
+      },
+      permission: "supervised",
+      reasoning: "high",
+      serviceTier: "",
+    },
   });
   gateState.blockedIds.clear();
   useNewConversationModalStore.getState().resetForTests();
@@ -846,6 +861,38 @@ describe("new-conversation modal refusals at Send", () => {
 });
 
 describe("new-conversation modal's send on a staged sandbox", () => {
+  it("keeps a changed selection while the staged Send check is pending", async () => {
+    const checked = deferred<ComposerHostNoticeState | null>();
+    testState.beforeStagedSend.mockReturnValue(checked.promise);
+    renderModal();
+    act(() =>
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX),
+    );
+    act(() => testState.bodySubmit?.());
+    expect(testState.beforeStagedSend).toHaveBeenCalledOnce();
+    act(() =>
+      testState.toolbarStore?.setState({
+        values: {
+          selection: {
+            harnessId: "claude",
+            modelSlug: "opus",
+            profileId: null,
+          },
+          permission: "supervised",
+          reasoning: "high",
+          serviceTier: "",
+        },
+      }),
+    );
+    await act(async () => {
+      checked.resolve(null);
+      await checked.promise;
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+    expect(draftSurvived()).toBe(true);
+  });
+
   it("attaches a team-staged chat before handing its draft to the sandbox", async () => {
     const attach = deferred<{ readonly attached: true }>();
     testState.attachEnvironment.mockReturnValue(attach.promise);

@@ -404,15 +404,19 @@ export function sandboxCreditShortLine(
   shortfallMc: number | null,
   waking: boolean,
 ): string {
-  const source =
-    creditSource ??
-    (configuration.kind === "team" ? "team-allowance" : "personal");
+  if (creditSource === null) {
+    if (!waking) return notEnoughCreditsLine(shortfallMc);
+    if (shortfallMc === null)
+      return "not enough credits to wake this sandbox for an hour.";
+    return `not enough credits. ${formatSandboxDollarsRequired(shortfallMc)} more wakes it for an hour.`;
+  }
+  const source = creditSource;
   const allowance =
     configuration.kind === "team" && source === "team-allowance";
-  if (!waking && source === "personal")
-    return notEnoughCreditsLine(shortfallMc);
-  if (!waking && allowance) {
-    return teamAllowanceShortLine(configuration.teamName, shortfallMc);
+  if (!waking) {
+    if (source === "personal") return notEnoughCreditsLine(shortfallMc);
+    if (allowance)
+      return teamAllowanceShortLine(configuration.teamName, shortfallMc);
   }
   const whose = waking ? "your" : "Your";
   const pot =

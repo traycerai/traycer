@@ -1737,6 +1737,8 @@ export function NewConversationModalBody(props: {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const settingsKey = JSON.stringify(settings);
       const revision =
         useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
           ?.revision ?? 0;
@@ -1750,6 +1752,8 @@ export function NewConversationModalBody(props: {
             stagedSubmitAttempt.current !== attempt ||
             readStagedSandbox(stagedKey) !== staged ||
             signedInUserId() !== account ||
+            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
+              settingsKey ||
             (useNewConversationModalStore.getState().draftPatchesByEpicId[
               epicId
             ]?.revision ?? 0) !== revision
@@ -1763,7 +1767,6 @@ export function NewConversationModalBody(props: {
             captured,
             pickerStore.getState().knownSlashCommands,
           );
-          const settings = pickedRunSettings(toolbarStore.getState());
           handStagedSandbox(stagedKey, staged, () => {
             const handed = handPendingSandboxSend({
               fromSurfaceKey: stagedKey,

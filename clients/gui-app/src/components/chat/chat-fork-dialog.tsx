@@ -876,6 +876,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const settingsKey = JSON.stringify(settings);
 
       // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the dialog stays as it was.
@@ -885,14 +887,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           if (
             stagedSubmitAttempt.current !== attempt ||
             readStagedSandbox(forkSurfaceKey) !== staged ||
-            signedInUserId() !== account
+            signedInUserId() !== account ||
+            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
+              settingsKey
           )
             return;
           if (signedOut !== null) {
             setStagedRefusal(signedOut);
             return;
           }
-          const settings = pickedRunSettings(toolbarStore.getState());
           const ownerUserId = useAuthStore.getState().profile?.userId ?? null;
           const hand = (): void => {
             const decision = transitionPendingSend(

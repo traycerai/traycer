@@ -1,3 +1,6 @@
+import type { QueryObserverResult } from "@tanstack/react-query";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
@@ -42,6 +45,13 @@ interface BlockedInput {
 }
 
 const dialogMocks = vi.hoisted(() => ({
+  toolbarStore: null as ComposerToolbarStore | null,
+  refetchAuthUser:
+    vi.fn<
+      () => Promise<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >
+    >(),
   createMutate: vi.fn<(input: unknown, options: unknown) => void>(),
   blocked: { current: false },
   blockedInputs: [] as Array<{
@@ -82,6 +92,10 @@ const dialogMocks = vi.hoisted(() => ({
     | { readonly kind: "personal" }
     | { readonly kind: "team"; readonly teamName: string },
   openProviders: vi.fn<() => void>(),
+}));
+
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null, refetch: dialogMocks.refetchAuthUser }),
 }));
 
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
@@ -260,10 +274,12 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: (props: {
+    readonly store: ComposerToolbarStore;
     readonly openForHarnessRef?: RefObject<
       ((harnessId: GuiHarnessId) => void) | null
     >;
   }) => {
+    dialogMocks.toolbarStore = props.store;
     useImperativeHandle(
       props.openForHarnessRef ?? null,
       () => dialogMocks.openForHarness,
@@ -540,6 +556,11 @@ function onlyPendingSend(): PendingSandboxSend {
 describe("ChatForkDialog on a New sandbox the chip picked", () => {
   beforeEach(() => {
     dialogMocks.createMutate.mockReset();
+    dialogMocks.refetchAuthUser.mockReset();
+    dialogMocks.refetchAuthUser.mockResolvedValue({
+      data: null,
+      isError: false,
+    });
     dialogMocks.onOpenChange.mockReset();
     dialogMocks.needsOwnHostToast.mockReset();
     dialogMocks.attachCalls.length = 0;
@@ -574,6 +595,46 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
+  });
+
+  it("keeps a new agent pick while auth refresh is pending and validates it on the next Fork", async () => {
+    const refreshed =
+      Promise.withResolvers<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >();
+    dialogMocks.refetchAuthUser.mockReturnValue(refreshed.promise);
+    dialogMocks.offeredAgents = ["claude"];
+    renderStaged(NEW_SANDBOX);
+    fillTitle();
+    fireEvent.click(forkButton());
+    await waitFor(() =>
+      expect(dialogMocks.refetchAuthUser).toHaveBeenCalledOnce(),
+    );
+    const toolbar = dialogMocks.toolbarStore;
+    if (toolbar === null) throw new Error("Expected the fork toolbar");
+    act(() =>
+      toolbar.getState().setSelection({
+        harnessId: "codex",
+        modelSlug: "gpt-6.1-sol",
+        profileId: null,
+      }),
+    );
+    await act(async () => {
+      refreshed.resolve({ data: null, isError: false });
+      await refreshed.promise;
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+    expect(toolbar.getState().values.selection.harnessId).toBe("codex");
+    dialogMocks.refetchAuthUser.mockResolvedValue({
+      data: null,
+      isError: false,
+    });
+    fireEvent.click(forkButton());
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Codex doesn't run on sandboxes",
+    );
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
   });
 
   it("opens with the sandbox staged and the host list's staging surface handed to the controls", () => {

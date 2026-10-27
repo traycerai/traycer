@@ -535,6 +535,30 @@ describe("useStagedSandboxSend's line after a refusal", () => {
     });
   });
 
+  it("keeps an unknown credit source generic on a team staged refusal", () => {
+    stageRefused({ kind: "credits", creditSource: null, shortfallMc: null });
+    const current = readStagedSandbox(SURFACE);
+    if (current === null) throw new Error("Expected the refused stage");
+    useStagedSandboxStore.setState({
+      bySurface: {
+        [SURFACE]: {
+          ...current,
+          target: {
+            ...current.target,
+            configuration: { kind: "team", teamId: "team-1", teamName: "Acme" },
+          },
+        },
+      },
+    });
+    mount(vi.fn());
+    expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
+      "Not enough credits to start this sandbox for an hour.",
+    );
+    expect(
+      screen.getByTestId("sandbox-refusal-line").textContent,
+    ).not.toContain("allowance");
+  });
+
   it("retries a create whose answer never came under its own key", () => {
     stageRefused({ kind: "unverified" });
     mount(vi.fn());

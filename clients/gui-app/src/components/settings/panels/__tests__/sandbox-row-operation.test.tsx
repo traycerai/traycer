@@ -410,6 +410,37 @@ describe("sandbox row operations", () => {
     },
   );
 
+  it("keeps an unknown credit source generic on a team resume refusal", async () => {
+    mocks.configuration = {
+      kind: "team",
+      teamId: "team-a",
+      teamName: "Acme",
+      environmentId: "team-env",
+    };
+    const testCase = CASES.find((entry) => entry.verb === "resume");
+    if (testCase === undefined) throw new Error("Expected the Resume case");
+    const { answer } = setup(testCase);
+    const row = await press(testCase);
+    await act(async () => {
+      answer.resolve({
+        ...refusal(402, "insufficient_credit"),
+        creditSource: null,
+        shortfallMc: null,
+      });
+      await answer.promise;
+    });
+    const failure = await within(row).findByRole("alert");
+    expect(failure.textContent).toContain(
+      "Couldn't resume build-box · not enough credits to wake this sandbox for an hour.",
+    );
+    expect(
+      within(failure)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Add credits ↗", "Retry", "Details"]);
+    expect(toastFromAuthError).not.toHaveBeenCalled();
+  });
+
   it("shows the Settings dialog's pending operation and its failure on the card too", async () => {
     const { answer, client, main } = setup(SUSPEND_CASE);
     render(
