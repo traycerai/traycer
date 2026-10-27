@@ -18,6 +18,7 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 /** The operating systems a script can be written for, in tab order. */
 const SCRIPT_OSES: ReadonlyArray<{
@@ -270,7 +271,7 @@ function SetupAttempts(): ReactNode {
                 {TRIGGER_TEXT[attempt.trigger]}
               </span>
               <span className="text-muted-foreground">
-                {new Date(attempt.startedAt).toLocaleString()}
+                {formatSettingsDate(attempt.startedAt, true)}
               </span>
               {attempt.stageReached !== null &&
               attempt.result !== "succeeded" ? (

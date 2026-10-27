@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   InstallRecordGroup,
   type InstallationDetailsRecord,
@@ -16,6 +16,7 @@ import {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 function installRecord(
@@ -53,6 +54,20 @@ function renderVerification(record: InstallationDetailsRecord): HTMLElement {
 }
 
 describe("<InstallRecordGroup /> Verification caption", () => {
+  it("uses Settings dates for installation and verification", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12));
+    const field = renderVerification(
+      installRecord({
+        installedAt: new Date(2025, 9, 25, 8, 35).toISOString(),
+        signatureVerifiedAt: new Date(2026, 9, 25, 8, 35).toISOString(),
+      }),
+    );
+
+    expect(screen.getByText("25 Oct 2025")).toBeTruthy();
+    expect(field.textContent).toBe("Verified 08:35");
+  });
+
   it("reads 'Unsigned local build' in amber for the CLI's unsigned sentinel key, never a green Verified", () => {
     // Pins the regression `signatureKeyId` exists to fix: an unsigned
     // local-file install stamps `signatureVerifiedAt` with the install time
