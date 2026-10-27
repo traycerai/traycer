@@ -922,7 +922,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
 
     expect(find.defaultPrevented).toBe(false);
     expect(next.defaultPrevented).toBe(false);
-    expect(findBarOpen()).toBeUndefined();
+    expect(findBarOpen()).toBe(false);
   });
 
   it("opens the find bar on non-mac Ctrl+F outside a terminal", () => {
