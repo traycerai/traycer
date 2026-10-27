@@ -65,10 +65,7 @@ describe("hook removal acknowledgment history outlives query garbage collection"
       name: "a new acknowledged id",
       seed: () => undefined,
       acknowledge: { ids: ["receipt-new"] },
-      stale: [
-        notice("receipt-new", 3_000),
-        notice("receipt-other", 3_000),
-      ],
+      stale: [notice("receipt-new", 3_000), notice("receipt-other", 3_000)],
       remaining: ["receipt-other"],
     },
     {
