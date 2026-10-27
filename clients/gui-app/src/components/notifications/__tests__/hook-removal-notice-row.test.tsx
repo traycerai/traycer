@@ -128,6 +128,9 @@ function removalEntry(
 function cloudRow(
   entry: HostNotificationCloudEntryV26,
 ): HostNotificationsCloudFeedRowV16 {
+  if (entry.sourceRef === null) {
+    throw new Error("Removal fixture requires a stable source reference");
+  }
   return {
     entryId: entry.id,
     originHostId: REMOTE_HOST,
