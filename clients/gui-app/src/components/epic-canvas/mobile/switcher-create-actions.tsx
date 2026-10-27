@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,13 +14,15 @@ import { SwitcherNewItemRow } from "@/components/epic-canvas/mobile/switcher-lis
 import {
   EPIC_NODE_ICONS,
   EPIC_NODE_LABELS,
+  type CreatableArtifactKind,
 } from "@/lib/artifacts/node-display";
 
-const ARTIFACT_KINDS: ReadonlyArray<MarkdownArtifactKind> = [
+const ARTIFACT_KINDS: ReadonlyArray<CreatableArtifactKind> = [
   "spec",
   "ticket",
   "story",
   "review",
+  "canvas",
 ];
 
 interface SwitcherCreateProps {
@@ -95,7 +96,7 @@ export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
 
 /**
  * "New artifact" affordance for the Artifacts category: a curated kind menu
- * (spec / ticket / story / review) that fires the exact desktop create path
+ * (spec / ticket / story / review / canvas) that fires the exact desktop create path
  * (`useEpicCreateArtifact` + open-when-projected). The artifact tile is not an
  * embed kind, so the sheet's watcher won't close on it; instead the create hook
  * closes the sheet (via `onClose`) the moment the tile opens, landing it as the

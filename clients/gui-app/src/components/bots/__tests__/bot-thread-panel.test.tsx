@@ -7,7 +7,8 @@
  * reply-jump suite. What is asserted is what the host RECEIVES: a first reply
  * under a question opens its thread, an option clicked in a thread is the
  * person's next message in it, and a thread hung off the bot's own row is
- * drawn as the bot's, with no request to show.
+ * drawn as the bot's, with no request to show. Every state opens on the
+ * channel row the thread answers, drawn by the channel's own row component.
  */
 import { StrictMode } from "react";
 import {
@@ -138,14 +139,17 @@ vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatEmptyState } = await import("@/components/chat/chat-empty-state");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
+    // As the real timeline does, a transcript with no row draws the empty state.
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {props.messages.length === 0 ? <ChatEmptyState /> : null}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -334,6 +338,11 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(mockRemoteHostEntry);
 }
 
+/** The post a thread opens on: the question nobody has replied under, or the listed thread's anchor. */
+function originOf(thread: BotThreadPanelThread): string {
+  return thread.kind === "unopened" ? "question-1" : "anchor-1";
+}
+
 function mountPanel(
   thread: BotThreadPanelThread,
   messages: ReadonlyArray<Message>,
@@ -352,7 +361,10 @@ function mountPanel(
             <BotThreadPanel
               botId={BOT_ID}
               hostId={HOST_ID}
+              boundHostId={HOST_ID}
               botTitle="Release Bot"
+              conversationId={CONVERSATION_ID}
+              originMessageId={originOf(thread)}
               thread={thread}
               anchorSenderLabel={(senderUserId) =>
                 senderUserId === null ? "You" : "Tess Teammate"
@@ -399,18 +411,21 @@ afterEach(() => {
 });
 
 describe("<BotThreadPanel /> a question or proposal nobody has replied under", () => {
-  it("sends the first reply with the announcement's id and no thread, and shows no transcript", async () => {
+  it("opens on the question, followed directly by the box, and sends the first reply with the announcement's id and no thread", async () => {
     const user = userEvent.setup();
-    mountPanel(
-      {
-        kind: "unopened",
-        conversationId: CONVERSATION_ID,
-        announcementId: "question-1",
-      },
-      [],
-    );
+    channelMessages = [announcement("question-1", "Ship the release today?")];
+    mountPanel({ kind: "unopened" }, []);
 
-    expect(screen.getByTestId("bot-thread-unopened")).toBeTruthy();
+    const origin = screen.getByTestId("bot-thread-anchor");
+    expect(within(origin).getByText("Release Bot")).toBeTruthy();
+    expect(within(origin).getByText("Ship the release today?")).toBeTruthy();
+    expect(within(origin).queryByTestId("bot-message-actions")).toBeNull();
+    expect(origin.nextElementSibling?.getAttribute("data-testid")).toBe(
+      "bot-thread-composer",
+    );
+    expect(
+      screen.queryByText("Reply to start a thread. The bot answers there."),
+    ).toBeNull();
     expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
     expect(screen.queryByTestId("bot-thread-reply-count")).toBeNull();
 
@@ -435,6 +450,42 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
 });
 
 describe("<BotThreadPanel /> a listed thread", () => {
+  it("puts the box right under the post of a listed thread with no reply yet, with no count or rule, and keeps its replies subscribed", () => {
+    const zero = listed("user-teammate");
+    if (zero.kind !== "listed") throw new Error("expected a listed thread");
+    mountPanel(
+      { kind: "listed", thread: { ...zero.thread, replyCount: 0 } },
+      [],
+    );
+
+    expect(screen.queryByTestId("bot-thread-reply-count")).toBeNull();
+    const replies = screen.getByTestId("bot-thread-replies");
+    expect(replies.getAttribute("data-has-replies")).toBe("false");
+    expect(replies.className).not.toContain("flex-1");
+    expect(within(replies).getByTestId("bot-chat-transcript")).toBeTruthy();
+    // The empty thread's transcript draws nothing between the post and the box.
+    expect(replies.textContent).toBe("");
+    expect(screen.queryByText("No replies yet.")).toBeNull();
+    expect(screen.getByTestId("bot-thread-anchor").nextElementSibling).toBe(
+      replies,
+    );
+
+    // The subscription held while empty brings the first reply in.
+    act(() => {
+      mocks.handle?.store.setState({ messages: [botReply(null)] });
+    });
+    expect(within(replies).getByText("Which way should I go?")).toBeTruthy();
+    cleanup();
+
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+    const listedReplies = screen.getByTestId("bot-thread-replies");
+    expect(listedReplies.getAttribute("data-has-replies")).toBe("true");
+    expect(listedReplies.className).toContain("flex-1");
+    expect(screen.getByTestId("bot-thread-reply-count").textContent).toBe(
+      "1 reply",
+    );
+  });
+
   it("posts the option a person clicks as their next message in that thread", async () => {
     const user = userEvent.setup();
     mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
@@ -505,7 +556,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     expect(
       (await screen.findByTestId("bot-thread-composer-send-failed"))
         .textContent,
-    ).toBe("Couldn't send. Edit and try again.");
+    ).toBe("Couldn't send. Try again.");
     // The host was asked and refused: a pick that never left would show the same notice.
     expect(sent.map((request) => request.text)).toEqual(["Hold"]);
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
@@ -548,7 +599,6 @@ describe("<BotThreadPanel /> the anchor", () => {
 
     const anchor = screen.getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
-    expect(within(anchor).queryByText("APP")).toBeNull();
     expect(within(anchor).queryByTestId("conversation-request")).toBeNull();
     expect(within(anchor).queryByText("Open")).toBeNull();
     expect(within(anchor).queryByTestId("bot-message-actions")).toBeNull();
@@ -571,6 +621,71 @@ describe("<BotThreadPanel /> the anchor", () => {
     const settled = screen.getByTestId("bot-thread-anchor");
     expect(within(settled).queryByTestId("conversation-request")).toBeNull();
     expect(within(settled).queryByText("Resolved")).toBeNull();
+  });
+
+  it("opens a listed thread on its post - writer, time and text - then the rule and reply count, then the replies", () => {
+    channelMessages = [
+      announcement("other-post", "Something else"),
+      {
+        role: "user",
+        messageId: "anchor-1",
+        sender: { type: "user", userId: "user-teammate" },
+        message: {
+          kind: "user",
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "Ship the release today?" }],
+              },
+            ],
+          },
+          browserAnnotations: [],
+        },
+        timestamp: 1_000,
+        sessionAnchor: null,
+        conversationRequest: {
+          requestId: "req-1",
+          resolvedAt: null,
+          resolvedByMessageId: null,
+        },
+      },
+    ];
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
+    expect(
+      within(anchor)
+        .getByTestId("chat-message-timestamp")
+        .getAttribute("datetime"),
+    ).toBe(new Date(1_000).toISOString());
+    expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
+    expect(within(anchor).queryByText("Something else")).toBeNull();
+    expect(within(anchor).queryByTestId("bot-message-actions")).toBeNull();
+    const count = screen.getByTestId("bot-thread-reply-count");
+    const replies = screen.getByTestId("chat-messages-stub");
+    expect(
+      anchor.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      count.compareDocumentPosition(replies) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(anchor).queryByText("Which way should I go?")).toBeNull();
+    expect(within(replies).getByText("Which way should I go?")).toBeTruthy();
+  });
+
+  it("opens a thread the list does not show yet on its post, above the wait", () => {
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    mountPanel({ kind: "pending" }, []);
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
+    expect(
+      anchor.compareDocumentPosition(screen.getByTestId("bot-thread-loading")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("heads the thread with its name, the bot's picture and the bot's title, without a hash", () => {
@@ -644,7 +759,6 @@ describe("<BotThreadPanel /> the anchor", () => {
 
     const anchor = screen.getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Release Bot")).toBeTruthy();
-    expect(within(anchor).getByText("APP")).toBeTruthy();
     expect(within(anchor).getByTestId("bot-avatar")).toBeTruthy();
     expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
     expect(within(anchor).queryByTestId("conversation-request")).toBeNull();
@@ -708,6 +822,13 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     return threadSession("failed", requestId);
   }
 
+  /** The member's message in the thread's transcript, not the post it opens on. */
+  function replyRow(): HTMLElement {
+    return within(screen.getByTestId("chat-messages-stub")).getByTestId(
+      "bot-member-row",
+    );
+  }
+
   /** The viewer's own reply in the thread, which the thread's session failed on. */
   function mountFailedReply(): void {
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
@@ -729,12 +850,16 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         land = resolve;
       });
     mountFailedReply();
-    const row = screen.getByTestId("bot-member-row");
+    const row = replyRow();
     expect(
       within(screen.getByTestId("bot-thread-anchor")).queryByTestId(
-        "bot-message-retry",
+        "bot-message-unanswered",
       ),
     ).toBeNull();
+    // The reply says it under its text, in the thread.
+    expect(within(row).getByTestId("bot-message-unanswered").textContent).toBe(
+      "Not answered · Retry · Edit",
+    );
 
     await user.click(within(row).getByTestId("bot-message-retry"));
 
@@ -773,11 +898,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     const box = screen.getByRole("textbox", { name: "Reply in the thread" });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
 
-    await user.click(
-      within(screen.getByTestId("bot-member-row")).getByTestId(
-        "bot-message-edit",
-      ),
-    );
+    await user.click(within(replyRow()).getByTestId("bot-message-edit"));
 
     expect((box as HTMLTextAreaElement).value).toBe("Hold for now");
     expect(
@@ -807,11 +928,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
   it("drops the edit and its text when the person cancels it", async () => {
     const user = userEvent.setup();
     mountFailedReply();
-    await user.click(
-      within(screen.getByTestId("bot-member-row")).getByTestId(
-        "bot-message-edit",
-      ),
-    );
+    await user.click(within(replyRow()).getByTestId("bot-message-edit"));
 
     await user.click(screen.getByTestId("bot-thread-composer-edit-cancel"));
 
@@ -836,8 +953,13 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     activityStore.setState({ activity: threadFailedOn(POST_REQUEST) });
     mountPanel(listed(VIEWER_USER_ID), []);
     const anchor = screen.getByTestId("bot-thread-anchor");
+    // The post it opens on says it, with nothing on hover.
+    expect(within(anchor).queryByTestId("bot-message-actions")).toBeNull();
+    expect(
+      within(anchor).getByTestId("bot-message-unanswered").textContent,
+    ).toBe("Not answered · Retry · Edit");
 
-    await user.click(within(anchor).getByTestId("bot-message-edit"));
+    await user.click(within(anchor).getByTestId("bot-message-unanswered-edit"));
 
     expect(onEditPost).toHaveBeenCalledWith({
       requestId: POST_REQUEST,
@@ -845,7 +967,9 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
 
-    await user.click(within(anchor).getByTestId("bot-message-retry"));
+    await user.click(
+      within(anchor).getByTestId("bot-message-unanswered-retry"),
+    );
 
     expect(sent).toEqual([
       {
@@ -884,10 +1008,11 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
 
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
     expect(screen.getByText("Hold for now")).toBeTruthy();
   });
 
-  it("offers neither on the reply nor on the anchor post when the host negotiated bot.conversation.send 1.0", () => {
+  it("says why on the reply and on the anchor post, with neither Retry nor Edit, when the host negotiated bot.conversation.send 1.0", () => {
     negotiateBotSend(HOST_ID, { major: 1, minor: 0 });
     channelMessages = [
       memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
@@ -916,9 +1041,105 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
 
     expect(screen.getByText("Hold for now")).toBeTruthy();
     expect(screen.getByText("Ship it?")).toBeTruthy();
+    expect(
+      within(replyRow()).getByTestId("bot-message-unanswered").textContent,
+    ).toBe("Not answered");
+    expect(
+      within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+        "bot-message-unanswered",
+      ).textContent,
+    ).toBe("Not answered");
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered-edit")).toBeNull();
   });
+
+  it("says why on a failed anchor post whose row has not loaded, offering Retry and Edit only once its text is there", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...threadFailedOn(POST_REQUEST).threads[THREAD_ID],
+            reason: {
+              summary: "Claude is signed out.",
+              code: null,
+              harnessId: "claude",
+              action: "sign-in",
+            },
+          },
+        },
+      },
+    });
+    mountPanel(listed(VIEWER_USER_ID), []);
+
+    const bare = screen.getByTestId("bot-thread-anchor");
+    expect(bare.getAttribute("data-loaded")).toBe("false");
+    expect(within(bare).getByTestId("bot-message-unanswered").textContent).toBe(
+      "Not answered: Claude is signed out. · Sign in",
+    );
+    expect(
+      within(bare).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
+    expect(
+      within(bare).queryByTestId("bot-message-unanswered-edit"),
+    ).toBeNull();
+
+    act(() => {
+      mocks.channelHandle?.store.setState({
+        messages: [
+          memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+        ],
+      });
+    });
+
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(anchor.getAttribute("data-loaded")).toBe("true");
+    expect(
+      within(anchor).getByTestId("bot-message-unanswered").textContent,
+    ).toBe("Not answered: Claude is signed out. · Retry · Edit · Sign in");
+    await user.click(
+      within(anchor).getByTestId("bot-message-unanswered-retry"),
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("Ship it?");
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
+    await user.click(within(anchor).getByTestId("bot-message-unanswered-edit"));
+    expect(onEditPost).toHaveBeenCalledWith({
+      requestId: POST_REQUEST,
+      text: "Ship it?",
+    });
+  });
+
+  it.each([
+    ["not listed yet", { kind: "pending" } as const],
+    ["failed to read", { kind: "failed", retry: () => undefined } as const],
+  ])(
+    "says a refused retry of the anchor post in the panel while the thread is %s",
+    async (_name, thread) => {
+      const user = userEvent.setup();
+      sendAnswer = () => Promise.reject(new Error("host refused the retry"));
+      channelMessages = [
+        memberMessage("anchor-1", POST_REQUEST, "Ship it?", VIEWER_USER_ID),
+      ];
+      activityStore.setState({ activity: threadFailedOn(POST_REQUEST) });
+      mountPanel(thread, []);
+      expect(screen.queryByTestId("bot-thread-send-failed")).toBeNull();
+
+      await user.click(
+        within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+          "bot-message-unanswered-retry",
+        ),
+      );
+
+      expect(sent).toHaveLength(1);
+      const notice = await screen.findByTestId("bot-thread-send-failed");
+      expect(notice.textContent).toBe("Couldn't send. Try again.");
+      expect(notice.textContent).not.toContain("Edit");
+    },
+  );
 
   it("offers Retry on a reply its thread's session parked on, re-delivered in the thread", async () => {
     const user = userEvent.setup();
@@ -934,11 +1155,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       ),
     ]);
 
-    await user.click(
-      within(screen.getByTestId("bot-member-row")).getByTestId(
-        "bot-message-retry",
-      ),
-    );
+    await user.click(within(replyRow()).getByTestId("bot-message-retry"));
 
     expect(sent).toHaveLength(1);
     expect(sent[0].redeliver).toEqual({ requestId: REPLY_REQUEST });
@@ -953,11 +1170,12 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     activityStore.setState({ activity: threadSession("parked", POST_REQUEST) });
     mountPanel(listed(VIEWER_USER_ID), []);
 
-    await user.click(
-      within(screen.getByTestId("bot-thread-anchor")).getByTestId(
-        "bot-message-retry",
-      ),
+    const line = within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+      "bot-message-unanswered",
     );
+    expect(line.getAttribute("data-state")).toBe("parked");
+    expect(line.textContent).toBe("Not answered · Retry");
+    await user.click(within(line).getByTestId("bot-message-unanswered-retry"));
 
     expect(sent).toHaveLength(1);
     expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
@@ -981,6 +1199,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(screen.getByText("Hold for now")).toBeTruthy();
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
   it("offers Retry and no Edit on a teammate's reply", async () => {
@@ -994,7 +1213,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         "user-teammate",
       ),
     ]);
-    const row = screen.getByTestId("bot-member-row");
+    const row = replyRow();
 
     expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
     await user.click(within(row).getByTestId("bot-message-retry"));
@@ -1012,7 +1231,11 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     mountPanel(listed("user-teammate"), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
-    expect(within(anchor).getByTestId("bot-message-retry")).toBeTruthy();
-    expect(within(anchor).queryByTestId("bot-message-edit")).toBeNull();
+    expect(
+      within(anchor).getByTestId("bot-message-unanswered-retry"),
+    ).toBeTruthy();
+    expect(
+      within(anchor).queryByTestId("bot-message-unanswered-edit"),
+    ).toBeNull();
   });
 });

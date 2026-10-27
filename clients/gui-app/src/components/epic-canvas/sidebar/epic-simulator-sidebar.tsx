@@ -44,8 +44,8 @@ import { cn } from "@/lib/utils";
  * booted ones first, each a row that places its tile at once (the tile does
  * the connecting, and the booting when needed).
  *
- * It follows the panel's host pin, so what it lists is the same machine the
- * browser rows above it are on. A host that cannot run simulators gets no
+ * It follows the panel's simulator device pin, independently of task-wide
+ * browser discovery. A host that cannot run simulators gets no
  * group at all; one with them turned off gets the one line that can change
  * that. The explanations live in the tile and in Settings - this panel is
  * for what can be opened.

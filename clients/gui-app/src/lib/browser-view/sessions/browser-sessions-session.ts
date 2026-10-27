@@ -20,6 +20,7 @@ import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport
 import { appLogger } from "@/lib/logger";
 
 export interface BrowserSessionsSessionCallbacks {
+  readonly onInventoryCapability?: (supported: boolean) => void;
   readonly onStatus: (
     lifecycle: BrowserSessionsLifecycle,
     errorMessage: string | null,
@@ -87,6 +88,9 @@ function openIpcSession(
     if (closed || !sameStreamKey(envelope.key, key)) return;
     const event = envelope.event;
     switch (event.kind) {
+      case "inventoryCapability":
+        args.callbacks.onInventoryCapability?.(event.supported);
+        return;
       case "status":
         args.callbacks.onStatus(event.lifecycle, event.errorMessage);
         return;
@@ -146,6 +150,8 @@ function openDirectSession(
       wsStreamClient: transport.wsStreamClient,
       scope: args.key.scope,
       callbacks: {
+        onInventoryCapability: (supported) =>
+          args.callbacks.onInventoryCapability?.(supported),
         onServerFrame: (frame) => {
           const ux = asUxServerFrame(frame);
           if (ux === null) return;

@@ -30,20 +30,14 @@ export function ChatEmptyState() {
 
 /**
  * An empty bot channel opens as Slack's does, with the bot's picture and
- * name and where the person's channel with it begins; an empty thread says
- * it has no reply yet.
+ * name and where the person's channel with it begins; an empty thread draws
+ * nothing, so its box follows the post it opens on (decision 90).
  */
 function BotEmptyState(props: {
   readonly channel: boolean;
   readonly title: string;
 }) {
-  if (!props.channel) {
-    return (
-      <p className="px-4 py-6 text-ui-sm text-muted-foreground">
-        No replies yet.
-      </p>
-    );
-  }
+  if (!props.channel) return null;
   return (
     <div
       className="flex h-full flex-col justify-end gap-1 px-6 pb-4"

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hostRpcRegistry,
   epicMentionArtifactsRequestSchema,
+  epicMentionArtifactsResponseSchema,
   epicMentionEpicsRequestSchema,
   epicMentionEpicsResponseSchema,
   epicMentionSpecsResponseSchema,
@@ -82,5 +83,48 @@ describe("epic mention host schemas", () => {
       hostRpcRegistry["epic.mentionReviews"][1].versions[0].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
+  });
+
+  it("lists artifacts of any kind through one optional method", () => {
+    expect(hostRpcRegistry["epic.mentionArtifacts"].degrade).toEqual({
+      kind: "unsupported",
+    });
+    expect(
+      hostRpcRegistry["epic.mentionArtifacts"][1].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+
+    const canvasRow = {
+      kind: "epic-artifact",
+      id: "canvas:epic-1:canvas-1",
+      token: "canvas:epic-1/canvas-1",
+      epicId: "epic-1",
+      epicTitle: "Login flow",
+      artifactId: "canvas-1",
+      artifactType: "canvas",
+      label: "Checkout screens",
+      description: "Login flow",
+      status: null,
+      updatedAt: 123,
+    };
+    const fileRow = {
+      ...canvasRow,
+      id: "file-artifact:epic-1:file-1",
+      token: "file-artifact:epic-1/file-1",
+      artifactId: "file-1",
+      artifactType: "file",
+      label: "logo.png",
+    };
+
+    expect(
+      epicMentionArtifactsResponseSchema.safeParse({
+        entries: [canvasRow, fileRow],
+      }).success,
+    ).toBe(true);
+    expect(
+      epicMentionArtifactsResponseSchema.safeParse({
+        entries: [{ ...canvasRow, artifactType: "unknown-kind" }],
+      }).success,
+    ).toBe(false);
   });
 });

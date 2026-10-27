@@ -53,6 +53,7 @@ import {
   editCommentRequestSchemaPreHtml,
   editCommentResponseSchema,
   epicMentionArtifactsRequestSchema,
+  epicMentionArtifactsResponseSchema,
   epicMentionEpicsRequestSchema,
   epicMentionEpicsResponseSchema,
   epicMentionReviewsResponseSchema,
@@ -865,6 +866,19 @@ export const epicMentionReviewsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: epicMentionArtifactsRequestSchema,
   responseSchema: epicMentionReviewsResponseSchema,
+});
+
+/**
+ * HTML artifacts, canvases and files joined the `@` picker after the released
+ * floor was frozen, so they ride one optional method (registered with
+ * `degrade: { kind: "unsupported" }`): a host that predates it simply lists
+ * none, and the picker still shows the four markdown kinds.
+ */
+export const epicMentionArtifactsV10 = defineRpcContract({
+  method: "epic.mentionArtifacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: epicMentionArtifactsRequestSchema,
+  responseSchema: epicMentionArtifactsResponseSchema,
 });
 
 /**
