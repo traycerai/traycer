@@ -24,6 +24,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
+  PERMISSIONS,
   PERMISSIONS_TABS,
   PERMISSIONS_TAB_GROUPS,
   isPermissionsTab,
@@ -118,7 +119,16 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
   }, [hostId, hostName, windowHostId, setPick]);
   return hostId === null ? (
     <TeamPermissions>
-      <PermissionsBrowserAgentAccess />
+      {/* A team's page has no tab bar, so the Browser tab's search anchor
+          lands on the region itself; the host page never renders this
+          wrapper, so its trigger stays the anchor's one target there. */}
+      <div
+        data-settings-anchor={
+          PERMISSIONS.definitions.browserTab.anchor ?? undefined
+        }
+      >
+        <PermissionsBrowserAgentAccess />
+      </div>
     </TeamPermissions>
   ) : null;
 }
@@ -139,6 +149,7 @@ function PermissionsBrowserAgentAccess(): ReactNode {
 const PERSONAL_PERMISSIONS_DESCRIPTION =
   "What your agents may do without asking, on every computer and sandbox.";
 
+/** A machine's Permissions: the five tabs, three of them host-gated. */
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const pick = useEnvironmentPick();

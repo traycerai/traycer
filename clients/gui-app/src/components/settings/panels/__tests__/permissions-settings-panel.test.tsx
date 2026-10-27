@@ -484,6 +484,12 @@ describe("PermissionsSettingsPanel", () => {
           .getByRole("switch", { name: "Let agents use the in-app browser" })
           .getAttribute("aria-checked"),
       ).toBe("true");
+      // No tab bar here, so the Browser tab's search anchor lands on the
+      // region: a "browser agent access" result still scrolls to the switch.
+      const anchored = screen
+        .getByTestId("team-permissions")
+        .querySelector('[data-settings-anchor="permissions-tab-browser"]');
+      expect(anchored?.contains(group)).toBe(true);
     });
 
     it("opens a composer's machine on its Judge tab, moving the pick to that machine's row, and spends the intent", () => {

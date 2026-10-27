@@ -4763,7 +4763,10 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     "playwright", "mcp" - live on the tab trigger, because the switch's own
     section (`browser-agent-access.definitions.ts`) is retired and never
     offered. A team's Permissions has no tabs, so there the same group is a
-    region below the policy (`TeamPermissions`' children).
+    region below the policy (`TeamPermissions`' children), and the tab's
+    anchor sits on that region instead, so a search result still scrolls to
+    the switch. The host page never renders that wrapper: its trigger stays
+    the anchor's one target.
 
 - `Agents` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers), tabs Selection guide and Definitions. Selection
