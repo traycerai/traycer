@@ -398,6 +398,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         SKELETON_RESUME_DB_NAME,
         VIEW_REPLICA_DB_NAME,
         "traycer-gui-app:tab-recovery",
+        "traycer-gui-app:browser-catalog-v1",
         CANVAS_BROWSER_DB_NAME,
       ].sort(),
     );
