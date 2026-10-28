@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentConfigurationSkillImportResponse } from "@traycer/protocol/host/environment/configuration-contracts";
+import {
+  ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS,
+  type EnvironmentConfigurationSkillImportResponse,
+} from "@traycer/protocol/host/environment/configuration-contracts";
 import type { ProviderSkillInspectCandidate } from "@traycer/protocol/host/provider-native-schemas";
 import {
   ImportFields,
@@ -24,6 +27,7 @@ import {
   IMPORT_SKILL_DESCRIPTION,
   IMPORT_SKILL_TITLE,
   IMPORT_SOURCE_HINT,
+  skillImportLimitLine,
   skillImportRefusal,
 } from "./mcp-skills-copy";
 
@@ -32,6 +36,19 @@ type Inspected = {
   readonly token: string;
   readonly candidates: readonly ProviderSkillInspectCandidate[];
 };
+
+/**
+ * What Select all chooses: the skills the configuration does not have yet,
+ * in the source's order, no more than one import installs.
+ */
+function selectableNames(
+  candidates: readonly ProviderSkillInspectCandidate[],
+): readonly string[] {
+  return candidates
+    .filter((candidate) => !candidate.installed)
+    .slice(0, ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS)
+    .map((candidate) => candidate.name);
+}
 
 /** What an import answer that installed nothing tells the person. */
 function importProblem(
@@ -71,6 +88,13 @@ export function EnvironmentSkillImportDialog(props: {
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const pending = importSkills.isPending;
+  const selectable =
+    inspected === null ? [] : selectableNames(inspected.candidates);
+  // More of the source's skills than one import installs.
+  const overLimit =
+    inspected !== null &&
+    inspected.candidates.filter((candidate) => !candidate.installed).length >
+      ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS;
 
   const inspect = (): void => {
     if (source.kind !== "pool") return;
@@ -89,11 +113,7 @@ export function EnvironmentSkillImportDialog(props: {
             return;
           }
           setInspected({ token: result.token, candidates: result.candidates });
-          setSelected(
-            result.candidates
-              .filter((candidate) => !candidate.installed)
-              .map((candidate) => candidate.name),
-          );
+          setSelected(selectableNames(result.candidates));
         },
       },
     );
@@ -151,8 +171,14 @@ export function EnvironmentSkillImportDialog(props: {
             <PickerFields
               candidates={inspected.candidates}
               selectedNames={selected}
-              note={null}
+              note={
+                overLimit
+                  ? skillImportLimitLine(ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS)
+                  : null
+              }
               disabled={pending}
+              selectableCount={selectable.length}
+              limit={ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS}
               onToggle={(candidateName) =>
                 setSelected(
                   selected.includes(candidateName)
@@ -160,18 +186,15 @@ export function EnvironmentSkillImportDialog(props: {
                     : [...selected, candidateName],
                 )
               }
-              onToggleAll={() => {
-                const names = inspected.candidates.map(
-                  (candidate) => candidate.name,
-                );
+              onToggleAll={() =>
                 setSelected(
-                  names.every((candidateName) =>
+                  selectable.every((candidateName) =>
                     selected.includes(candidateName),
                   )
                     ? []
-                    : names,
-                );
-              }}
+                    : selectable,
+                )
+              }
               onBack={() => {
                 setInspected(null);
                 setSelected([]);
@@ -206,7 +229,11 @@ export function EnvironmentSkillImportDialog(props: {
           ) : (
             <Button
               type="button"
-              disabled={pending || selected.length === 0}
+              disabled={
+                pending ||
+                selected.length === 0 ||
+                selected.length > ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS
+              }
               onClick={install}
             >
               {selected.length === 1

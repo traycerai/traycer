@@ -120,6 +120,8 @@ export function ProviderSkillComposerDialog(props: {
               selectedNames={draft.selectedNames}
               note={draft.pickerNote}
               disabled={props.pending}
+              selectableCount={draft.inspectSession.candidates.length}
+              limit={null}
               onToggle={(candidateName) => {
                 draft.setSelectedNames(
                   draft.selectedNames.includes(candidateName)
@@ -522,6 +524,8 @@ export function PickerFields({
   selectedNames,
   note,
   disabled,
+  selectableCount,
+  limit,
   onToggle,
   onToggleAll,
   onBack,
@@ -530,6 +534,10 @@ export function PickerFields({
   readonly selectedNames: readonly string[];
   readonly note: string | null;
   readonly disabled: boolean;
+  /** How many Select all chooses: what the toggle reads as all selected. */
+  readonly selectableCount: number;
+  /** The most that can be chosen at once, or `null` for no cap: past it, no other row can be checked. */
+  readonly limit: number | null;
   readonly onToggle: (name: string) => void;
   readonly onToggleAll: () => void;
   readonly onBack: () => void;
@@ -548,7 +556,7 @@ export function PickerFields({
         </span>
         <SelectAllToggle
           accessibleLabel="Select all skills"
-          selectableCount={candidates.length}
+          selectableCount={selectableCount}
           selectedCount={selectedNames.length}
           disabled={disabled}
           testId="skill-picker-select-all"
@@ -556,15 +564,19 @@ export function PickerFields({
         />
       </div>
       <ul className="flex flex-col gap-2">
-        {candidates.map((candidate) => (
-          <PickerRow
-            key={candidate.relPath}
-            candidate={candidate}
-            checked={selected.has(candidate.name)}
-            disabled={disabled}
-            onToggle={onToggle}
-          />
-        ))}
+        {candidates.map((candidate) => {
+          const checked = selected.has(candidate.name);
+          const full = limit !== null && selectedNames.length >= limit;
+          return (
+            <PickerRow
+              key={candidate.relPath}
+              candidate={candidate}
+              checked={checked}
+              disabled={disabled || (full && !checked)}
+              onToggle={onToggle}
+            />
+          );
+        })}
       </ul>
       <button
         type="button"

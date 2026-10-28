@@ -477,6 +477,9 @@ function SkillsPageList(props: {
   const [removing, setRemoving] = useState<EnvironmentSkillV11 | null>(null);
   const [pending, setPending] = useState<PendingSkillChoice | null>(null);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
+  // A list read this page awaits before it acts on the answer: nothing else
+  // starts meanwhile, so that answer never lands over a newer action's.
+  const [rereading, setRereading] = useState(false);
   const { skills, deletedBundled } = props.listed;
   const open = rowNamed(skills, openName);
   const removeIssue =
@@ -484,7 +487,19 @@ function SkillsPageList(props: {
       ? null
       : typedWriteIssue(remove.data, "Couldn't remove this skill.");
   const writing =
-    setPolicy.isPending || update.isPending || restoreBundled.isPending;
+    setPolicy.isPending ||
+    update.isPending ||
+    restoreBundled.isPending ||
+    rereading;
+
+  const whileRereading = async <T,>(work: () => Promise<T>): Promise<T> => {
+    setRereading(true);
+    try {
+      return await work();
+    } finally {
+      setRereading(false);
+    }
+  };
 
   const savePolicy = async (
     skill: EnvironmentSkillV11,
@@ -505,7 +520,7 @@ function SkillsPageList(props: {
       // nothing; a change that now replaces edits or stops updates asks
       // first, as a choice from the row does.
       if (result.outcome === "stale") {
-        const fresh = await props.reread();
+        const fresh = await whileRereading(props.reread);
         const row = fresh?.skills.find((entry) => entry.name === skill.name);
         if (fresh === null || row === undefined) {
           setIssue({ kind: "conflict", changedBy: null });
@@ -549,10 +564,11 @@ function SkillsPageList(props: {
 
   // The skill's files were replaced: list again, so a detail shows the
   // version it holds now, then read its files again from where the list is.
-  const rereadContent = async (): Promise<void> => {
-    await props.reread();
-    setContentEpoch((value) => value + 1);
-  };
+  const rereadContent = (): Promise<void> =>
+    whileRereading(async () => {
+      await props.reread();
+      setContentEpoch((value) => value + 1);
+    });
 
   const runUpdate = (skill: EnvironmentSkillV11, confirm: boolean): void => {
     if (source.kind !== "pool") return;
@@ -809,7 +825,7 @@ function SkillsPageList(props: {
           canEdit={editable(props.canEdit, open)}
           canUpdate={canUpdate(open)}
           updatePending={update.isPending}
-          replacing={update.isPending || restoreBundled.isPending}
+          actionsDisabled={writing}
           contentEpoch={contentEpoch}
           onRequestUpdate={() => requestUpdate(open)}
           onClose={() => setOpenName(null)}
@@ -948,10 +964,11 @@ function EnvironmentSkillDetail(props: {
   readonly canUpdate: boolean;
   readonly updatePending: boolean;
   /**
-   * An update or a restore is replacing skill files: no edit or second
-   * update starts meanwhile, so no draft is lost when they land.
+   * The page is writing or rereading what a write changed (an update or a
+   * restore replacing files included): no edit or second update starts
+   * meanwhile, so no draft is lost and no answer lands over a newer one.
    */
-  readonly replacing: boolean;
+  readonly actionsDisabled: boolean;
   /** Moves when an update or a restore replaced the skill's files. */
   readonly contentEpoch: number;
   readonly onRequestUpdate: () => void;
@@ -997,7 +1014,7 @@ function EnvironmentSkillDetail(props: {
       removal={{ kind: "hidden" }}
       removePending={false}
       // The flag disables Edit and Update too; Remove is not offered here.
-      removeDisabled={props.replacing}
+      removeDisabled={props.actionsDisabled}
       actionError={error}
       lockedNote={null}
       canEdit={props.canEdit}

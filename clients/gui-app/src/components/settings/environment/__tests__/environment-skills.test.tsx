@@ -1411,6 +1411,128 @@ describe("The Skills page's update policies", () => {
       });
     });
 
+    describe("while the page rereads the list", () => {
+      const LIST_METHOD = "environment.configuration.skills.list";
+
+      it("holds the row's policy control disabled through the reread of a stale answer, and frees it once the reread lands", async () => {
+        negotiateHosted();
+        let gate: Promise<void> | null = null;
+        let release: () => void = () => undefined;
+        let waiting = 0;
+        let chosen = false;
+        const harness = mountTeamPage(poolSource("editor"), {
+          ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+          [LIST_METHOD]: async () => {
+            if (gate !== null) {
+              waiting += 1;
+              await gate;
+            }
+            // The reread shows the skill already holding the choice.
+            return listed(
+              [{ ...REVIEW, policy: chosen ? "frozen" : "evolve" }],
+              "pol-2",
+            );
+          },
+          "environment.configuration.skills.setPolicy": () => {
+            chosen = true;
+            gate = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return stale;
+          },
+        });
+        render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+        await screen.findByText("review");
+        const group = within(rowOf("review")).getByRole("group", {
+          name: "Updates for review",
+        });
+        await userEvent.click(
+          within(group).getByRole("button", { name: "Frozen" }),
+        );
+
+        await waitFor(() => {
+          expect(waiting).toBeGreaterThan(0);
+        });
+        expect(group.getAttribute("aria-disabled")).toBe("true");
+
+        release();
+
+        await waitFor(() => {
+          expect(group.getAttribute("aria-disabled")).toBeNull();
+        });
+        expect(
+          harness.paramsOf("environment.configuration.skills.setPolicy"),
+        ).toHaveLength(1);
+      });
+
+      it("keeps Edit and Update from source disabled in an open dialog through the reread after an applied update", async () => {
+        negotiateHosted();
+        let gate: Promise<void> | null = null;
+        let release: () => void = () => undefined;
+        let waiting = 0;
+        const row: EnvironmentSkillV11 = {
+          ...REVIEW,
+          origin: "bundled",
+          policy: "evolve",
+          updateAvailable: true,
+        };
+        const harness = mountTeamPage(poolSource("editor"), {
+          ...handlers({
+            list: listed([row], "pol-1"),
+            hostSkills: [hostSkill("review", "managed")],
+          }),
+          [LIST_METHOD]: async () => {
+            if (gate !== null) {
+              waiting += 1;
+              await gate;
+            }
+            return listed([row], "pol-1");
+          },
+          [UPDATE]: () => {
+            gate = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            return applied;
+          },
+        });
+        render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+        await screen.findByText("review");
+        await userEvent.click(
+          within(rowOf("review")).getByRole("button", { name: "Edit" }),
+        );
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.click(
+          await within(dialog).findByRole("button", {
+            name: "Update from source",
+          }),
+        );
+
+        // The update has been answered; its reread is the one held.
+        await waitFor(() => {
+          expect(waiting).toBeGreaterThan(0);
+        });
+        for (const name of ["Edit", "Update from source"])
+          expect(
+            within(dialog)
+              .getByRole("button", { name })
+              .hasAttribute("disabled"),
+          ).toBe(true);
+
+        release();
+
+        await waitFor(() => {
+          for (const name of ["Edit", "Update from source"])
+            expect(
+              within(dialog)
+                .getByRole("button", { name })
+                .hasAttribute("disabled"),
+            ).toBe(false);
+        });
+      });
+    });
+
     it("restores a deleted built-in from the fold", async () => {
       negotiateHosted();
       const harness = mountTeamPage(poolSource("editor"), {
@@ -1762,6 +1884,61 @@ describe("The Skills page's skills from a source", () => {
       });
       await waitFor(() => {
         expect(screen.queryByRole("dialog")).toBeNull();
+      });
+    });
+
+    it("selects the first 64 of 70 uninstalled skills, stops at the cap, and installs exactly those in order", async () => {
+      const many = Array.from({ length: 70 }, (_, index) => {
+        const name = `skill-${String(index + 1).padStart(2, "0")}`;
+        return {
+          name,
+          description: null,
+          relPath: `skills/${name}`,
+          installed: false,
+        };
+      });
+      const names = many.map((candidate) => candidate.name);
+      const { harness, dialog } = await readSource((request) =>
+        request.step === "inspect"
+          ? { ...inspected, candidates: many }
+          : { outcome: "installed", names: names.slice(0, 64) },
+      );
+      const box = (name: string) =>
+        within(dialog).getByRole("checkbox", { name });
+
+      await within(dialog).findByRole("checkbox", { name: "skill-01" });
+      expect(
+        within(dialog).getByText("You can import up to 64 skills at a time."),
+      ).toBeTruthy();
+      expect(within(dialog).getByText("64 of 70 selected")).toBeTruthy();
+      expect(box("skill-64").getAttribute("data-state")).toBe("checked");
+      expect(box("skill-65").getAttribute("data-state")).toBe("unchecked");
+      expect(box("skill-65").hasAttribute("disabled")).toBe(true);
+
+      const all = within(dialog).getByRole("checkbox", {
+        name: "Select all skills",
+      });
+      await userEvent.click(all);
+      expect(within(dialog).getByText("0 of 70 selected")).toBeTruthy();
+      expect(box("skill-65").hasAttribute("disabled")).toBe(false);
+      await userEvent.click(all);
+      expect(within(dialog).getByText("64 of 70 selected")).toBeTruthy();
+      expect(box("skill-65").hasAttribute("disabled")).toBe(true);
+
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Import 64 skills" }),
+      );
+
+      await waitFor(() => {
+        expect(harness.paramsOf(IMPORT)).toEqual([
+          { step: "inspect", environmentId: "env-a", source: "acme/skills" },
+          {
+            step: "install",
+            environmentId: "env-a",
+            token: "tok-1",
+            names: names.slice(0, 64),
+          },
+        ]);
       });
     });
 

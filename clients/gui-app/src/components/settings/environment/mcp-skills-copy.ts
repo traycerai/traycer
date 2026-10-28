@@ -128,6 +128,11 @@ export function skillUpstreamLine(source: string, ref: string): string {
 
 export const CHECK_SKILL_UPDATES_LABEL = "Check for updates";
 export const IMPORT_SKILL_LABEL = "Import from source";
+
+/** A source holding more skills than one import installs. */
+export function skillImportLimitLine(max: number): string {
+  return `You can import up to ${String(max)} skills at a time.`;
+}
 export const IMPORT_SKILL_TITLE = "Import skills from a source";
 export const IMPORT_SKILL_DESCRIPTION =
   "Paste a public repository. Imported skills update from it on their own until you change their updates setting.";
