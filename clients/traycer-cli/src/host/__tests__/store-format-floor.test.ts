@@ -1874,7 +1874,7 @@ describe("the task store floor", () => {
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.2" }),
+        rollbackInput(logger, { targetVersion: "1.5.3" }),
       ),
     ).resolves.toBeUndefined();
     expect(
@@ -1991,13 +1991,13 @@ describe("the task store floor", () => {
     ).toBe(false);
   });
 
-  it("caps an on-disk 6: 1.5.2 passes, 1.4.2 still refuses naming 6", async () => {
+  it("caps an on-disk 6: 1.5.3 passes, 1.4.2 still refuses naming 6", async () => {
     await writeTaskStoreDb(6, false);
     const logger = fakeLogger();
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.2" }),
+        rollbackInput(logger, { targetVersion: "1.5.3" }),
       ),
     ).resolves.toBeUndefined();
 
