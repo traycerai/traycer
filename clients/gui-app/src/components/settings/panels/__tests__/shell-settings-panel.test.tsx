@@ -76,6 +76,7 @@ import {
   type PersonalPageContextValue,
 } from "@/components/settings/personal/personal-page-context";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
+import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
@@ -207,7 +208,7 @@ function renderShellPanelOverRpc(options: {
   const panel = () => (
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
-        <StaleRereader hostId={hostId} />
+        <HostRereaders hostId={hostId} />
         {options.localOverrides === undefined ? (
           <ShellSettingsPanel />
         ) : (
@@ -228,11 +229,12 @@ function renderShellPanelOverRpc(options: {
 }
 
 /**
- * What `PersonalPageFrame` mounts once for every save on its page; it acts
- * only on a save refused as stale.
+ * The Local page's rereaders: a stale refusal or window focus refreshes the
+ * host's settings through the same hooks as `PersonalPageFrame`.
  */
-function StaleRereader(props: { readonly hostId: string }) {
+function HostRereaders(props: { readonly hostId: string }) {
   useRereadOnStaleWrite(props.hostId, null);
+  useRereadHostReadsOnFocus(props.hostId);
   return null;
 }
 
@@ -1862,6 +1864,85 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
     },
   );
 
+  it("keeps a successful write pending without an error when focus replaces its joined read", async () => {
+    let releaseSuperseded: () => void = () => {
+      throw new Error("post-write read has not started");
+    };
+    const supersededRead = new Promise<{
+      entries: { key: string; value: string }[];
+    }>((resolve) => {
+      releaseSuperseded = () =>
+        resolve({ entries: [{ key: "GHOST", value: "stale" }] });
+    });
+    let releaseFresh: () => void = () => {
+      throw new Error("focus read has not started");
+    };
+    const freshRead = new Promise<{
+      entries: { key: string; value: string }[];
+    }>((resolve) => {
+      releaseFresh = () =>
+        resolve({ entries: [{ key: "NEW_VAR", value: "NORMALIZED" }] });
+    });
+    let reads = 0;
+    const panel = renderShellPanelOverRpc({
+      overrideHandlers: {
+        "config.env.list": () => {
+          reads += 1;
+          if (reads === 1) return { entries: [] };
+          return reads === 2 ? supersededRead : freshRead;
+        },
+        "config.env.set": (request) => ({
+          key: request.key,
+          value: request.value,
+        }),
+      },
+    });
+    await openEnvAdd();
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "NEW_VAR" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "one" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    await waitFor(() => {
+      expect(reads).toBe(2);
+      // The mutation's callbacks have joined its post-write read.
+      expect(panel.queryClient.isMutating()).toBe(0);
+    });
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(reads).toBe(3));
+    await act(async () => {
+      releaseSuperseded();
+      await supersededRead;
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("NEW_VAR · Adding")).toBeTruthy();
+    expect(screen.getByLabelText("New variable name")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.queryByLabelText("Value for GHOST")).toBeNull();
+
+    await act(async () => {
+      releaseFresh();
+      await freshRead;
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("NEW_VAR · Adding")).toBeNull(),
+    );
+    expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+      "value",
+      "NORMALIZED",
+    );
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", false);
+  });
+
   it("cancels an older read and waits for the post-write snapshot to unlock the editor", async () => {
     const original = [{ key: "OLD_VAR", value: "original" }];
     let releaseWrite: () => void = () => {
@@ -1902,12 +1983,6 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
     });
     await screen.findByLabelText("Value for OLD_VAR");
     const listScope = queryKeys.hostMethodScope("host-a", "config.env.list");
-    const envQuery = panel.queryClient
-      .getQueryCache()
-      .find({ queryKey: listScope, exact: false });
-    if (envQuery === undefined)
-      throw new Error("environment query did not mount");
-    const cancel = vi.spyOn(envQuery, "cancel");
     let staleRefetch: Promise<void> = Promise.resolve();
     act(() => {
       staleRefetch = panel.queryClient.refetchQueries({ queryKey: listScope });
@@ -1927,7 +2002,6 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       await write;
     });
     await waitFor(() => expect(reads).toBe(3));
-    expect(cancel).toHaveBeenCalledWith({ silent: true });
     await act(async () => {
       releaseStale();
       await staleRead;

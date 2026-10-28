@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
+import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for-shell-env-read";
 import type {
   ConfigShellProbeResponse,
   ConfigShellSetRequestV10,
@@ -124,12 +125,10 @@ export function useBridgeShellConfigController(props: {
     callbacks: ShellCommandCallbacks,
   ): ShellCommandCallbacks => ({
     onSuccess: () => {
-      void queryClient
-        .refetchQueries(
-          { queryKey: runnerQueryKeys.traycerEnvOverrideList(traycerCli) },
-          { cancelRefetch: false, throwOnError: true },
-        )
-        .then(callbacks.onSuccess, callbacks.onError);
+      void waitForShellEnvRead(
+        queryClient,
+        runnerQueryKeys.traycerEnvOverrideList(traycerCli),
+      ).then(callbacks.onSuccess, callbacks.onError);
     },
     onError: callbacks.onError,
   });
