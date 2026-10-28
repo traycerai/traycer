@@ -211,6 +211,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 3,
           lastReplyAt: Date.now() - 5 * 60_000,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         openThread,
@@ -239,6 +240,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 0,
           lastReplyAt: null,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         openThread,
@@ -276,6 +278,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 0,
           lastReplyAt: null,
           unread: false,
+          unreadCount: 0,
           replying: true,
         }),
         vi.fn(),
@@ -302,6 +305,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         vi.fn(),
@@ -338,6 +342,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 1,
           lastReplyAt: 1_000,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         vi.fn(),
@@ -359,7 +364,7 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(swatchIn(rowAvatar)).toBe(swatchIn(stack));
   });
 
-  it("marks a thread line unread with a dot, and a read one with none", () => {
+  it("marks a thread line unread with a dot where the host does not count, and a read one with none", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
@@ -368,6 +373,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: true,
+          unreadCount: null,
           replying: false,
         }),
         vi.fn(),
@@ -387,6 +393,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: false,
+          unreadCount: null,
           replying: false,
         }),
         vi.fn(),
@@ -395,6 +402,50 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(
       screen.getByTestId("bot-thread-line").getAttribute("data-unread"),
     ).toBe("false");
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+  });
+
+  it("counts a thread line's unread replies in a badge in place of the dot, and draws nothing at zero", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 5,
+          lastReplyAt: 1_000,
+          unread: true,
+          unreadCount: 2,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+    const line = screen.getByTestId("bot-thread-line");
+    expect(line.getAttribute("data-unread")).toBe("true");
+    expect(
+      within(within(line).getByTestId("bot-thread-unread-count")).getByText(
+        "2",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+    cleanup();
+
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 5,
+          lastReplyAt: 1_000,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+    expect(screen.getByTestId("bot-thread-line")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-unread-count")).toBeNull();
     expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
   });
 });
@@ -861,6 +912,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         replyCount: 2,
         lastReplyAt: 1_000,
         unread: false,
+        unreadCount: 0,
         replying: false,
       }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();

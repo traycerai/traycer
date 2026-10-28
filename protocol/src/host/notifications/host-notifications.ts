@@ -1938,10 +1938,28 @@ export type HostNotificationsIndicatorStateV10 = z.infer<
   typeof hostNotificationsIndicatorStateSchemaV10
 >;
 
-/** `indicatorState@1.1`: pending fork truth is independent of feed read state. */
-export const hostNotificationsIndicatorStateSchema = lazySchema(() =>
+/**
+ * Released `indicatorState@1.1` entity flags: pending fork truth is
+ * independent of feed read state. FROZEN.
+ */
+export const hostNotificationsIndicatorStateSchemaV11 = lazySchema(() =>
   hostNotificationsIndicatorStateSchemaV10.extend({
     pendingFork: z.boolean(),
+  }),
+);
+export type HostNotificationsIndicatorStateV11 = z.infer<
+  typeof hostNotificationsIndicatorStateSchemaV11
+>;
+
+/**
+ * `indicatorState@1.2`: how many of the entity's visible notifications are
+ * unread and cleared by reading it (prompts, failures and completions; an
+ * informational row is neither), beside the flags. `null` only when an `@1.1`
+ * host answered, which did not count: a client keeps the flags then.
+ */
+export const hostNotificationsIndicatorStateSchema = lazySchema(() =>
+  hostNotificationsIndicatorStateSchemaV11.extend({
+    unreadCount: z.number().int().nonnegative().nullable(),
   }),
 );
 export type HostNotificationsIndicatorState = z.infer<
@@ -1984,10 +2002,28 @@ export type HostNotificationsIndicatorStateResponseV10 = z.infer<
   typeof hostNotificationsIndicatorStateResponseSchemaV10
 >;
 
+/** Released `indicatorState@1.1` response. FROZEN. */
+export const hostNotificationsIndicatorStateResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    epics: z.record(z.string(), hostNotificationsIndicatorStateSchemaV11),
+    chats: z.record(z.string(), hostNotificationsIndicatorStateSchemaV11),
+  }),
+);
+export type HostNotificationsIndicatorStateResponseV11 = z.infer<
+  typeof hostNotificationsIndicatorStateResponseSchemaV11
+>;
+
+/**
+ * `@1.2` also says whether the answer is the host's whole origin (`complete:
+ * true`), or the empty local partition it serves while its cloud lane carries
+ * its rows (`false`). `null` only when an `@1.1` host answered, which did not
+ * say: a client keeps what the cloud lane told it then.
+ */
 export const hostNotificationsIndicatorStateResponseSchema = lazySchema(() =>
   z.object({
     epics: z.record(z.string(), hostNotificationsIndicatorStateSchema),
     chats: z.record(z.string(), hostNotificationsIndicatorStateSchema),
+    complete: z.boolean().nullable(),
   }),
 );
 export type HostNotificationsIndicatorStateResponse = z.infer<
@@ -3138,18 +3174,27 @@ export const hostNotificationsIndicatorStateV11 = defineRpcContract({
   method: "host.notifications.indicatorState",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: hostNotificationsIndicatorStateRequestSchemaV11,
+  responseSchema: hostNotificationsIndicatorStateResponseSchemaV11,
+});
+
+/** `@1.2` adds each entity's `unreadCount` and the answer's `complete`; the
+ * request is `@1.1`'s. */
+export const hostNotificationsIndicatorStateV12 = defineRpcContract({
+  method: "host.notifications.indicatorState",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: hostNotificationsIndicatorStateRequestSchemaV11,
   responseSchema: hostNotificationsIndicatorStateResponseSchema,
 });
 
 /**
  * The bare name is the LATEST, which is the convention the rest of this file
- * and the incoming mainline both use. Kept as an alias rather than a fourth
- * `defineRpcContract` so there is exactly one `@1.1` object: a second one would
- * be a distinct contract instance for the same version, and the registry's
- * `typeof` entries would then disagree about which is canonical.
+ * and the incoming mainline both use. Kept as an alias rather than another
+ * `defineRpcContract` so there is exactly one object per version: a second one
+ * would be a distinct contract instance for the same version, and the
+ * registry's `typeof` entries would then disagree about which is canonical.
  */
 export const hostNotificationsIndicatorState =
-  hostNotificationsIndicatorStateV11;
+  hostNotificationsIndicatorStateV12;
 
 /**
  * A v1.0 peer predates fork indicators. Default the new pending-class flag to
@@ -3180,11 +3225,42 @@ export const hostNotificationsIndicatorStateUpgradeV10ToV11 = defineUpgradePath<
 
 function addPendingForkDefault(
   states: Readonly<Record<string, HostNotificationsIndicatorStateV10>>,
-): Record<string, HostNotificationsIndicatorState> {
+): Record<string, HostNotificationsIndicatorStateV11> {
   return Object.fromEntries(
     Object.entries(states).map(([id, state]) => [
       id,
       { ...state, pendingFork: false },
+    ]),
+  );
+}
+
+/**
+ * A v1.1 peer did not count. Its entities say `unreadCount: null`, which a
+ * client reads as "draw the flags", never as zero: a zero would hide an
+ * unread entity the flags still light. Nor did it say whether it answered its
+ * whole origin, so `complete` is `null`.
+ */
+export const hostNotificationsIndicatorStateUpgradeV11ToV12 = defineUpgradePath<
+  typeof hostNotificationsIndicatorStateV11,
+  typeof hostNotificationsIndicatorStateV12
+>({
+  from: hostNotificationsIndicatorStateV11.schemaVersion,
+  to: hostNotificationsIndicatorStateV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    epics: addUnknownUnreadCount(response.epics),
+    chats: addUnknownUnreadCount(response.chats),
+    complete: null,
+  }),
+});
+
+function addUnknownUnreadCount(
+  states: Readonly<Record<string, HostNotificationsIndicatorStateV11>>,
+): Record<string, HostNotificationsIndicatorState> {
+  return Object.fromEntries(
+    Object.entries(states).map(([id, state]) => [
+      id,
+      { ...state, unreadCount: null },
     ]),
   );
 }

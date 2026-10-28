@@ -19,6 +19,8 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
+import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
   buildHomeBotsModel,
   type HomeBotsGroup,
@@ -45,7 +47,8 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * Slack's sidebar for a bot tab (Tracy Bots, decision 41): every environment
  * the person belongs to is a section, every bot in it a channel, drawn as
  * the bot's picture and name. A channel with a reply the person has not
- * read is bold, as Slack marks an unread channel. The sections list
+ * read is bold and carries how many, right-aligned, as Slack marks an unread
+ * channel. The sections list
  * channels and nothing else. The header of a section the person can add to
  * carries a + that opens its setup (`TeamBotSetupDialog`): a team's
  * onboarding while that is open, else the create form for one more bot, so
@@ -92,12 +95,16 @@ export function BotChannelSidebar(props: {
     chatIds: NO_CHAT_IDS,
     enabled: botIds.length > 0,
   });
-  const unreadBotIds = useMemo(() => {
-    const unread = new Set<string>();
+  const unreadByBotId = useMemo(() => {
+    // A channel with something unread, by how many; `null` where the host
+    // does not count.
+    const unread = new Map<string, number | null>();
     for (const botId of botIds) {
       if (!Object.hasOwn(indicators.epics, botId)) continue;
       const state = indicators.epics[botId];
-      if (state.unreadDone || state.unreadFailure) unread.add(botId);
+      if (indicatorHasUnread(state)) {
+        unread.set(botId, state.unreadCount);
+      }
     }
     return unread;
   }, [botIds, indicators.epics]);
@@ -127,7 +134,7 @@ export function BotChannelSidebar(props: {
           key={group.environmentId}
           group={group}
           activeBotId={activeBotId}
-          unreadBotIds={unreadBotIds}
+          unreadByBotId={unreadByBotId}
           onOpenChannel={openChannel}
           onSetUp={setSetup}
         />
@@ -146,11 +153,11 @@ export function BotChannelSidebar(props: {
 function SidebarSection(props: {
   readonly group: HomeBotsGroup;
   readonly activeBotId: string;
-  readonly unreadBotIds: ReadonlySet<string>;
+  readonly unreadByBotId: ReadonlyMap<string, number | null>;
   readonly onOpenChannel: (bot: BotRecord) => void;
   readonly onSetUp: (team: TeamBotSetupTarget) => void;
 }): ReactNode {
-  const { group, activeBotId, unreadBotIds, onOpenChannel, onSetUp } = props;
+  const { group, activeBotId, unreadByBotId, onOpenChannel, onSetUp } = props;
   const isTeam = group.canCreate && group.ownerKind === "organization";
   const isPersonal = group.canCreate && group.ownerKind === "user";
   const client = useTabHostClient();
@@ -215,7 +222,8 @@ function SidebarSection(props: {
               bot={bot}
               isMain={bot.botId === group.mainBotId}
               active={bot.botId === activeBotId}
-              unread={unreadBotIds.has(bot.botId)}
+              unread={unreadByBotId.has(bot.botId)}
+              unreadCount={unreadByBotId.get(bot.botId) ?? null}
               locked={locked}
               onOpen={() => onOpenChannel(bot)}
             />
@@ -231,10 +239,12 @@ function ChannelRow(props: {
   readonly isMain: boolean;
   readonly active: boolean;
   readonly unread: boolean;
+  /** Drawn right-aligned; `null` where the host does not count. */
+  readonly unreadCount: number | null;
   readonly locked: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, isMain, active, unread, locked, onOpen } = props;
+  const { bot, isMain, active, unread, unreadCount, locked, onOpen } = props;
   return (
     <button
       type="button"
@@ -253,13 +263,23 @@ function ChannelRow(props: {
       )}
     >
       <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />
-      <span className="truncate">{bot.title}</span>
-      {isMain ? (
-        <MainBotBadge
-          testId="bot-channel-row-main"
-          tone={active ? "current" : "muted"}
+      {/* The star sits on the name, before any count. */}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="truncate">{bot.title}</span>
+        {isMain ? (
+          <MainBotBadge
+            testId="bot-channel-row-main"
+            tone={active ? "current" : "muted"}
+          />
+        ) : null}
+      </span>
+      {unreadCount === null ? null : (
+        <UnreadCountBadge
+          count={unreadCount}
+          size="sm"
+          testId="bot-channel-row-unread-count"
         />
-      ) : null}
+      )}
     </button>
   );
 }

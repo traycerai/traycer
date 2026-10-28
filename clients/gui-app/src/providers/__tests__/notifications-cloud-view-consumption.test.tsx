@@ -254,7 +254,11 @@ function createHostClient(): HostClient<HostRpcRegistry> {
           calls.hostMarkRead.push(params);
           return {};
         },
-        "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+        "host.notifications.indicatorState": () => ({
+          epics: {},
+          chats: {},
+          complete: true,
+        }),
       },
     }),
   });

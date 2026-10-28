@@ -49,6 +49,7 @@ import {
 } from "@/hooks/bots/use-bot-activity";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
+import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
   botMemberName,
   type BotMemberResolver,
@@ -179,6 +180,7 @@ export function BotChannelView(props: {
     threadList,
     threadsByPost,
     isUnread,
+    unreadCountOf,
   } = useChannelThreads({ client, botId, hostId });
   const activity = useBotActivity(botId);
   const viewer = useAuthStore((s) => s.profile);
@@ -287,6 +289,7 @@ export function BotChannelView(props: {
           replyCount: thread.replyCount,
           lastReplyAt: thread.lastReplyAt,
           unread: isUnread(thread.threadId),
+          unreadCount: unreadCountOf(thread.threadId),
           // An open thread says it in its own panel, not under its post.
           replying:
             postMessageId !== openThreadPostId &&
@@ -316,6 +319,7 @@ export function BotChannelView(props: {
       directive,
       failedRequest,
       isUnread,
+      unreadCountOf,
       onOpenThread,
       openAnnouncementThread,
       openThreadPostId,
@@ -525,9 +529,9 @@ function channelTrunkReply(
 
 /**
  * The channel's threads, as the bound host lists them. A thread's unread
- * state is the notification its participants get on the verdict, keyed by
- * the bot and the thread; whoever never wrote in the thread has no such
- * notification and so no dot.
+ * state and count are the notifications its participants get on each
+ * verdict, keyed by the bot and the thread; whoever never wrote in the thread
+ * has no such notification and so no count.
  */
 function useChannelThreads(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -538,6 +542,8 @@ function useChannelThreads(args: {
   readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
   readonly threadsByPost: ReadonlyMap<string, BotThreadSummary>;
   readonly isUnread: (threadId: string) => boolean;
+  /** `null` where the host does not count. */
+  readonly unreadCountOf: (threadId: string) => number | null;
 } {
   const { client, botId, hostId } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -568,14 +574,19 @@ function useChannelThreads(args: {
     enabled: threadIds.length > 0,
   });
   const isUnread = useCallback(
-    (threadId: string): boolean => {
-      if (!Object.hasOwn(indicators.chats, threadId)) return false;
-      const state = indicators.chats[threadId];
-      return state.unreadDone || state.unreadFailure;
-    },
+    (threadId: string): boolean =>
+      Object.hasOwn(indicators.chats, threadId) &&
+      indicatorHasUnread(indicators.chats[threadId]),
     [indicators.chats],
   );
-  return { supported, threadList, threadsByPost, isUnread };
+  const unreadCountOf = useCallback(
+    (threadId: string): number | null =>
+      Object.hasOwn(indicators.chats, threadId)
+        ? indicators.chats[threadId].unreadCount
+        : 0,
+    [indicators.chats],
+  );
+  return { supported, threadList, threadsByPost, isUnread, unreadCountOf };
 }
 
 /**
@@ -646,7 +657,7 @@ function useReadChannelWhilePresented(args: {
     channelId !== null && Object.hasOwn(indicators.chats, channelId)
       ? indicators.chats[channelId]
       : null;
-  const unread = state !== null && (state.unreadDone || state.unreadFailure);
+  const unread = state !== null && indicatorHasUnread(state);
   const { mutate: markRead } = useNotificationMarkEntityRead(client);
   useEffect(() => {
     if (!presented || channelId === null || !unread) return;

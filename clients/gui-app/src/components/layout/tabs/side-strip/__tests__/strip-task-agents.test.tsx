@@ -21,6 +21,7 @@ const NO_FLAGS = {
   pendingFork: false,
   unreadFailure: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 function wrapperOf(chats: SurfaceNotificationIndicators["chats"]) {

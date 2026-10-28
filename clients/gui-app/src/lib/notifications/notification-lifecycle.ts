@@ -6,7 +6,11 @@ import type {
 import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
 import type { EnvironmentNotificationDetail } from "@/lib/notifications/environment-notification-detail";
 
-export type NotificationAttentionTier = "blocking" | "failure";
+/**
+ * Attention's classes, in order: prompts that block, failures, then a bot's
+ * answers to the person, which need them without anything having gone wrong.
+ */
+export type NotificationAttentionTier = "blocking" | "failure" | "answer";
 
 export interface NotificationLifecycleInput {
   readonly source: MergedNotificationSource;
@@ -17,6 +21,8 @@ export interface NotificationLifecycleInput {
   readonly hostKind?: HostNotificationKind | null;
   readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
   readonly environmentDetail?: EnvironmentNotificationDetail | null;
+  /** A bot's answer to the person (`isBotThreadVerdictNotification`). */
+  readonly botAnswer?: boolean;
 }
 
 export type NotificationLifecycleClassification =
@@ -38,8 +44,9 @@ export function isActionableNotice(row: NotificationLifecycleInput): boolean {
 /**
  * The single lifecycle classifier: every feed row belongs to Attention or
  * Recent, never both. Attention membership is unread host prompts,
- * unread host failures, unread app-local failures and unresolved actionable
- * notices. Collaboration rows are never attention-eligible.
+ * unread host failures, unread app-local failures, unresolved actionable
+ * notices and unread bot answers, as the hosts' summaries count them.
+ * Collaboration rows are never attention-eligible.
  */
 export function classifyNotificationLifecycle(
   row: NotificationLifecycleInput,
@@ -62,6 +69,9 @@ export function classifyNotificationLifecycle(
       ? { section: "attention", tier: "failure" }
       : { section: "recent" };
   }
+  if (row.botAnswer === true && row.readAt === null) {
+    return { section: "attention", tier: "answer" };
+  }
   return { section: "recent" };
 }
 
@@ -70,6 +80,7 @@ const ATTENTION_TIER_ORDER: Readonly<
 > = {
   blocking: 0,
   failure: 1,
+  answer: 2,
 };
 
 export interface AttentionOrderCandidate {
@@ -87,13 +98,22 @@ export function compareFeedIdAscending(a: string, b: string): number {
   return 0;
 }
 
-/** Blocking prompts before failures; newest first within each tier; a
- * stable `feedId` tie-break so equal timestamps still order deterministically. */
+/** Negative when tier `a` lists before tier `b`. */
+export function compareAttentionTiers(
+  a: NotificationAttentionTier,
+  b: NotificationAttentionTier,
+): number {
+  return ATTENTION_TIER_ORDER[a] - ATTENTION_TIER_ORDER[b];
+}
+
+/** Blocking prompts, then failures, then answers; newest first within each
+ * tier; a stable `feedId` tie-break so equal timestamps still order
+ * deterministically. */
 export function compareAttentionOrder(
   a: AttentionOrderCandidate,
   b: AttentionOrderCandidate,
 ): number {
-  const tierDelta = ATTENTION_TIER_ORDER[a.tier] - ATTENTION_TIER_ORDER[b.tier];
+  const tierDelta = compareAttentionTiers(a.tier, b.tier);
   if (tierDelta !== 0) return tierDelta;
   const createdAtDelta = b.createdAt - a.createdAt;
   if (createdAtDelta !== 0) return createdAtDelta;

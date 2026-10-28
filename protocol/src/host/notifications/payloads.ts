@@ -327,6 +327,34 @@ export function parseHostOperationCommonPayload(
  */
 export const HOST_OPERATION_WORKTREE_DELETION = "worktree.deletion";
 
+/**
+ * The `operation` identifier of a bot's answer to a person's post, minted
+ * once per participant. An unread one needs the person's attention: it is the
+ * answer they asked for, so it counts in the bell's number beside prompts and
+ * failures, as its own class after both.
+ */
+export const HOST_OPERATION_BOT_THREAD_VERDICT = "bot.thread.verdict";
+
+/**
+ * Whether a notification is a bot's answer: a `host.operation.finished` row
+ * whose payload names {@link HOST_OPERATION_BOT_THREAD_VERDICT}. Reads the
+ * payload as the open record it is on the wire, so a row of any version
+ * answers the same way.
+ */
+export function isBotThreadVerdictNotification(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  const payload = entry.payload;
+  return (
+    entry.kind === "host.operation.finished" &&
+    typeof payload === "object" &&
+    payload !== null &&
+    "operation" in payload &&
+    payload.operation === HOST_OPERATION_BOT_THREAD_VERDICT
+  );
+}
+
 export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
   "busy",
   "not_managed",

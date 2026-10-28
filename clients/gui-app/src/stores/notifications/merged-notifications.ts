@@ -39,6 +39,7 @@ import {
 } from "@/lib/notifications/notification-category";
 import {
   classifyNotificationLifecycle,
+  compareAttentionTiers,
   isActionableNotice,
   compareFeedIdAscending,
   type NotificationAttentionTier,
@@ -88,6 +89,7 @@ import {
 } from "@/stores/notifications/notifications-store";
 import {
   formatHostNotificationPresentation,
+  isBotThreadVerdictNotification,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationChatStoppedPayload,
   type HostNotificationKnownPayload,
@@ -149,6 +151,9 @@ export interface MergedNotificationRow {
   /** A `sandbox.notice` row's sandbox and what happened to it, for its
    * actions. Absent or `null` on every other row. */
   readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
+  /** A bot's answer to the person: Attention's last class while unread.
+   * Absent or `false` on every other row. */
+  readonly botAnswer?: boolean;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -487,7 +492,8 @@ interface AttentionOrderEntry {
   readonly tier: NotificationAttentionTier;
 }
 
-/** Attention, blocking-first then failures, newest first within each tier.
+/** Attention, blocking-first, then failures, then answers, newest first
+ * within each tier.
  * Never filtered - Attention is complete and filter-invariant by design.
  * Within the same tier, this machine's pack-store events sort ahead of other
  * machines' (D7 de-emphasis: listed, but local leads). */
@@ -527,7 +533,7 @@ export function useAttentionNotificationIds(): ReadonlyArray<string> {
 }
 
 /**
- * Attention keeps its severity tiers first; inside a tier, rows are newest
+ * Attention keeps its tiers first; inside a tier, rows are newest
  * first across both planes (`createdAt` is the origin clock in each), then
  * this machine's pack-store rows lead the ones it only heard about (D7).
  * `compareProviderPackLocalFirst` carries the newest-first then `feedId` tail
@@ -539,9 +545,8 @@ function comparePartitionedAttentionOrder(
   right: AttentionOrderEntry,
   viewing: ProviderPackViewingLocalityContext,
 ): number {
-  if (left.tier !== right.tier) {
-    return left.tier === "blocking" ? -1 : 1;
-  }
+  const tierDelta = compareAttentionTiers(left.tier, right.tier);
+  if (tierDelta !== 0) return tierDelta;
   const createdAtDelta = right.row.createdAt - left.row.createdAt;
   if (createdAtDelta !== 0) return createdAtDelta;
   const planeDelta =
@@ -2261,6 +2266,7 @@ function rowFromHostEntryForOrigin(
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     environmentDetail: environmentNotificationDetail(entry.kind, entry.payload),
     sandboxNotice: sandboxNoticeFromHostEntry(entry),
+    botAnswer: isBotThreadVerdictNotification(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2354,6 +2360,7 @@ export function rowFromCloudFeedRow(
       row.entry.payload,
     ),
     sandboxNotice: sandboxNoticeFromHostEntry(row.entry),
+    botAnswer: isBotThreadVerdictNotification(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,

@@ -11,6 +11,7 @@ import {
   hostNotificationsIndicatorState,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateV10,
+  hostNotificationsIndicatorStateV11,
   hostNotificationsListV10,
   hostNotificationsListV20,
   hostNotificationsListRequestSchema,
@@ -490,6 +491,7 @@ describe("host.notifications.indicatorState", () => {
           },
         },
         chats: {},
+        complete: true,
       }).success,
     ).toBe(false);
   });
@@ -534,6 +536,82 @@ describe("host.notifications.indicatorState", () => {
         },
       },
     });
+  });
+
+  const counted = {
+    pendingApproval: false,
+    pendingInterview: false,
+    pendingFork: false,
+    unreadFailure: false,
+    unreadDone: true,
+    unreadCount: 2,
+  } as const;
+
+  it("carries each entity's unread count and the answer's completeness at @1.2, and an @1.1 peer's parse drops both", () => {
+    const line = hostRpcRegistry["host.notifications.indicatorState"][1];
+    expect(line.latestMinor).toBe(2);
+    const response = {
+      epics: { "epic-1": counted },
+      chats: {},
+      complete: true,
+    };
+
+    expect(line.versions[2].contract.responseSchema.parse(response)).toEqual(
+      response,
+    );
+    expect(line.versions[1].contract.responseSchema.parse(response)).toEqual({
+      epics: {
+        "epic-1": {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone: true,
+        },
+      },
+      chats: {},
+    });
+  });
+
+  it("refuses an @1.2 entity without its count, and bridges an @1.1 host's answer to an unknown count rather than zero", () => {
+    const line = hostRpcRegistry["host.notifications.indicatorState"][1];
+    const { unreadCount: _dropped, ...uncounted } = counted;
+
+    expect(
+      line.versions[2].contract.responseSchema.safeParse({
+        epics: { "epic-1": uncounted },
+        chats: {},
+        complete: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      line.versions[2].upgradeFromPreviousVersion.upgradeResponse({
+        epics: { "epic-1": uncounted },
+        chats: { "chat-1": uncounted },
+      }),
+    ).toEqual({
+      epics: { "epic-1": { ...uncounted, unreadCount: null } },
+      chats: { "chat-1": { ...uncounted, unreadCount: null } },
+      complete: null,
+    });
+  });
+
+  it("refuses an @1.2 answer that does not say whether it is complete, and takes a partition that says it is not", () => {
+    const line = hostRpcRegistry["host.notifications.indicatorState"][1];
+
+    expect(
+      line.versions[2].contract.responseSchema.safeParse({
+        epics: { "epic-1": counted },
+        chats: {},
+      }).success,
+    ).toBe(false);
+    expect(
+      line.versions[2].contract.responseSchema.parse({
+        epics: {},
+        chats: {},
+        complete: false,
+      }),
+    ).toEqual({ epics: {}, chats: {}, complete: false });
   });
 });
 
@@ -1039,6 +1117,10 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsIndicatorStateV10);
     expect(
       hostRpcRegistry["host.notifications.indicatorState"][1].versions[1]
+        .contract,
+    ).toBe(hostNotificationsIndicatorStateV11);
+    expect(
+      hostRpcRegistry["host.notifications.indicatorState"][1].versions[2]
         .contract,
     ).toBe(hostNotificationsIndicatorState);
   });

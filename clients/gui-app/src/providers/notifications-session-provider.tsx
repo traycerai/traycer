@@ -7,6 +7,7 @@ import { consumePendingHookRemovalNotices } from "@/lib/notifications/hook-remov
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -44,6 +45,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import {
   openCloudNotificationsStream,
+  selectCloudLaneServing,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import {
@@ -91,6 +93,8 @@ import {
 } from "@/hooks/auth/use-auth-identity-transition";
 import {
   clearNotificationIndicatorCaches,
+  COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+  createCompleteNotificationIndicatorsReask,
   invalidateNotificationIndicators,
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
@@ -136,10 +140,7 @@ function poolCloudLane(): HostNotificationsCloudLane | null {
 }
 
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
-  serving: () => {
-    const state = useCloudNotificationsStore.getState();
-    return state.hasSnapshot && state.connectionState === "connected";
-  },
+  serving: () => selectCloudLaneServing(useCloudNotificationsStore.getState()),
   subscribe: (listener) => useCloudNotificationsStore.subscribe(listener),
 };
 
@@ -377,6 +378,18 @@ function NotificationsSessionBody(
     activityStreamVersion,
   );
   const queryClient = useQueryClient();
+  const completeIndicatorsReask = useMemo(
+    () =>
+      createCompleteNotificationIndicatorsReask(
+        queryClient,
+        COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+      ),
+    [queryClient],
+  );
+  useEffect(
+    () => () => completeIndicatorsReask.dispose(),
+    [completeIndicatorsReask],
+  );
   const authService = useAuthService();
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivationWithNavigate(props.navigate);
@@ -1306,6 +1319,7 @@ function NotificationsSessionBody(
                 semanticId: row.entryId,
               })),
             );
+            completeIndicatorsReask.schedule();
             void displayCloudSnapshotArrivals(arrivals, {
               showNotification,
               playChime: playNotificationChime,
@@ -1387,6 +1401,8 @@ function NotificationsSessionBody(
       servingStreamClient,
       cloudFeedStreamClient,
       recordCompletions,
+      // The cloud snapshot re-asks every host holding a whole-origin answer.
+      completeIndicatorsReask,
       servingHostId,
       windowId,
       showNotification,

@@ -100,6 +100,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
               unreadFailure: false,
               unreadDone: true,
               pendingFork: false,
+              unreadCount: 1,
             },
           },
         }}
@@ -136,6 +137,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
               unreadFailure: true,
               unreadDone: false,
               pendingFork: false,
+              unreadCount: 1,
             },
           },
         }}
