@@ -260,7 +260,13 @@ export function SimulatorInventoryView(props: {
   readonly hostLabel: string;
   readonly simulators: readonly SimulatorSummary[];
   readonly booting: readonly string[];
-  readonly targetSimulatorId: string;
+  /**
+   * This tile's row as its caller resolved it, which is not always one of
+   * `simulators`: a `@1.1` clone is listed only under its source's
+   * `instances`, so looking the id up here again would answer null for a
+   * clone that is running. Null only when the host lists nothing for it.
+   */
+  readonly target: SimulatorSummary | null;
   readonly targetName: string;
   /** Connects this tile's simulator; `null` when the host does not offer `simulator.open`. */
   readonly onConnect: ((simulator: SimulatorSummary) => void) | null;
@@ -269,13 +275,9 @@ export function SimulatorInventoryView(props: {
   /** Places another simulator's tile; `null` when the host cannot open one. */
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
 }) {
-  const ordered = orderSimulators(props.simulators);
-  const target =
-    ordered.find(
-      (simulator) => simulator.simulatorId === props.targetSimulatorId,
-    ) ?? null;
-  const others = ordered.filter(
-    (simulator) => simulator.simulatorId !== props.targetSimulatorId,
+  const { target } = props;
+  const others = orderSimulators(props.simulators).filter(
+    (simulator) => simulator.simulatorId !== target?.simulatorId,
   );
   const targetBusy =
     target !== null &&

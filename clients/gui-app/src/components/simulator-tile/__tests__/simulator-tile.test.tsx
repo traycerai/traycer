@@ -1047,6 +1047,64 @@ describe("SimulatorTile on a @1.1 host", () => {
     expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
   });
 
+  it("offers Connect for a still-running clone whose own session ended while an agent's remains", async () => {
+    // A clone is never a device on a `@1.1` host: it exists only under its
+    // source's `instances`, so a tile on one has no row of its own to find.
+    const CLONE = "udid-1-clone-2";
+    const cloneState: SimulatorState = {
+      ...READY_STATE,
+      simulators: READY_STATE.simulators.map((simulator) =>
+        simulator.simulatorId === UDID
+          ? {
+              ...simulator,
+              instances: [
+                {
+                  instanceKey: CLONE,
+                  name: "iPhone 16 · 2",
+                  booted: true,
+                  cloneOf: UDID,
+                  drivenByAgent: true,
+                  keepRunning: false,
+                  idleUntil: null,
+                },
+              ],
+            }
+          : simulator,
+      ),
+    };
+    const onClone = (session: SimulatorSession): SimulatorSession => ({
+      ...session,
+      simulatorId: CLONE,
+      instanceKey: CLONE,
+    });
+    fakes.sessions = sessions({
+      state: { ...cloneState, sessions: [onClone(PERSON_SESSION)] },
+    });
+    const rerender = renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: CLONE,
+        platform: "ios",
+        name: "iPhone 16 · 2",
+      }),
+    );
+    // Live first, so `wasLive` latches and the tile will not auto-attach when
+    // it comes back - the state the person is left in.
+    expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
+
+    // The person's session ends in another window; the agent's still holds it.
+    fakes.sessions = sessions({
+      state: { ...cloneState, sessions: [onClone(AGENT_SESSION)] },
+    });
+    rerender();
+
+    const inventory = await screen.findByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Connect",
+    );
+  });
+
   it("asks before powering off, names what it reaches, then sends simulator.powerOff by instance key", async () => {
     fakes.sessions = sessions({
       state: { ...READY_STATE, sessions: [PERSON_SESSION] },
