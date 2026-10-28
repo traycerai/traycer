@@ -20,7 +20,7 @@ import {
   within,
   type RenderResult,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1480,11 +1480,15 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect((box as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("drops an edit, keeping the text as it was typed, when the thread leaves the list, and does not put the failed text back when it returns", async () => {
-    const user = userEvent.setup();
+  /** The viewer's failed reply in the thread under the bot's direct reply, put back in the box by its Edit and typed on. */
+  async function editedAnswerReply(user: UserEvent): Promise<{
+    readonly panel: RenderResult;
+    readonly taking: BotThreadPanelThread;
+    readonly box: HTMLElement;
+  }> {
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
+    panelOrigin = "answer-1";
     const taking = listed(VIEWER_USER_ID);
-    if (taking.kind !== "listed") throw new Error("expected a listed thread");
     const panel = mountPanel(taking, [
       memberMessage(
         "member-reply-1",
@@ -1496,15 +1500,80 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     const box = screen.getByTestId("bot-thread-composer-input");
     await user.click(within(replyRow()).getByTestId("bot-message-edit"));
     await user.type(box, " please");
+    return { panel, taking, box };
+  }
+
+  it("keeps an edit and its text while a claim's list drops the thread and lists it again, and what is sent then replaces the failed reply", async () => {
+    const user = userEvent.setup();
+    const { panel, taking, box } = await editedAnswerReply(user);
 
     panel.rerender(
       panelTree({ kind: "unopened", retry: null, sendable: false }),
     );
-    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    expect(box).toHaveProperty("value", "Hold for now please");
+    expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
     panel.rerender(panelTree(taking));
-
     expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
     expect(box).toHaveProperty("value", "Hold for now please");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Hold for now please",
+        threadId: THREAD_ID,
+        announcementId: null,
+        redeliver: null,
+        supersedes: REPLY_REQUEST,
+      },
+    ]);
+  });
+
+  it("sends an edit from the box under the reply, while the list does not have its thread, as the failed reply's replacement", async () => {
+    const user = userEvent.setup();
+    const { panel } = await editedAnswerReply(user);
+
+    panel.rerender(
+      panelTree({ kind: "unopened", retry: null, sendable: true }),
+    );
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Hold for now please",
+        threadId: null,
+        announcementId: "answer-1",
+        redeliver: null,
+        supersedes: REPLY_REQUEST,
+      },
+    ]);
+  });
+
+  it("clears the box and ends the edit when an edit sent before the list dropped the thread lands", async () => {
+    const user = userEvent.setup();
+    let land: (response: BotConversationSendResponse) => void = () => {};
+    sendAnswer = () =>
+      new Promise<BotConversationSendResponse>((resolve) => {
+        land = resolve;
+      });
+    const { panel, taking, box } = await editedAnswerReply(user);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(sent.map((request) => request.supersedes)).toEqual([REPLY_REQUEST]);
+
+    panel.rerender(
+      panelTree({ kind: "unopened", retry: null, sendable: false }),
+    );
+    act(() => land(SEND_RESPONSE));
+
+    await waitFor(() => {
+      expect(box).toHaveProperty("value", "");
+    });
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    panel.rerender(panelTree(taking));
+    expect(box).toHaveProperty("value", "");
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
   });
 

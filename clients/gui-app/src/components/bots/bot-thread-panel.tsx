@@ -327,11 +327,12 @@ type BoxedThread = Exclude<
  */
 function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   const { thread } = props;
-  // A failed message of the thread, put back in the box by its Edit; a box
-  // that starts a thread has nothing to edit.
+  // A failed message of the thread, put back in the box by its Edit. It
+  // stays the box's edit while the list drops the thread and lists it again,
+  // so what is sent still replaces that message: the host takes the
+  // replacement under the post as it does in the thread.
   const [edit, setEdit] = useState<BotComposerEdit | null>(null);
   const endEdit = useCallback(() => setEdit(null), []);
-  if (thread.kind === "unopened" && edit !== null) setEdit(null);
   if (thread.kind === "pending" || thread.kind === "failed") {
     return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
   }
@@ -361,7 +362,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         label={box.label}
         testId="bot-thread-composer"
         failure={props.sendFailure}
-        edit={box.threadId === null ? null : edit}
+        edit={edit}
         onEditEnd={endEdit}
         onSent={keepOpenThread}
       />
