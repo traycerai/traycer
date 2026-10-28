@@ -37,6 +37,32 @@ export type BotTaskListPlace =
   | { readonly kind: "thread"; readonly threadId: string };
 
 /**
+ * Who set a task up, as the owning bot's own lists know it: its trunk, one of
+ * its threads (`thread` is `null` while the thread list is not read), or a
+ * thread of another bot, which set up an automation on this bot's list. That
+ * thread is not this bot's to name or open, and the task is listed here, on
+ * the bot that runs it, not in the creating thread's panel.
+ */
+type BotTaskCreator =
+  | { readonly kind: "trunk" }
+  | { readonly kind: "thread"; readonly thread: BotThreadSummary | null }
+  | { readonly kind: "another-bot" };
+
+function taskCreator(
+  task: BotTaskEntry,
+  threads: ReadonlyArray<BotThreadSummary> | null,
+): BotTaskCreator {
+  if (task.createdByChatId === null) return { kind: "trunk" };
+  if (threads === null) return { kind: "thread", thread: null };
+  const thread = threads.find(
+    (listed) => listed.threadId === task.createdByChatId,
+  );
+  return thread === undefined
+    ? { kind: "another-bot" }
+    : { kind: "thread", thread };
+}
+
+/**
  * A bot's tasks (Tracy Bots T82), one row each: the task's title, opening
  * the task, what the bot named it, the post it was set up for, the thread
  * that set it up, and an automation's interval. A one-off task shows no
@@ -47,8 +73,8 @@ export function BotTaskList(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
-  /** The bot's threads, as listed; empty while the list is not read. */
-  readonly threads: ReadonlyArray<BotThreadSummary>;
+  /** The bot's threads, as listed; `null` while the list is not read. */
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
   readonly place: BotTaskListPlace;
 }): ReactNode {
   const { botId, hostId, tasks, threads, place } = props;
@@ -73,14 +99,8 @@ export function BotTaskList(props: {
             title={
               contexts.tasksById.get(task.taskId)?.epic?.light?.title ?? null
             }
-            post={taskRequestPost(task, threads, channelId)}
-            creator={
-              task.createdByChatId === null
-                ? null
-                : (threads.find(
-                    (thread) => thread.threadId === task.createdByChatId,
-                  ) ?? null)
-            }
+            post={taskRequestPost(task, threads ?? [], channelId)}
+            creator={taskCreator(task, threads)}
             place={place}
           />
         </li>
@@ -95,8 +115,7 @@ function BotTaskRow(props: {
   readonly task: BotTaskEntry;
   readonly title: string | null;
   readonly post: BotTaskRequestPost | null;
-  /** The thread that set the task up, when the list has it. */
-  readonly creator: BotThreadSummary | null;
+  readonly creator: BotTaskCreator;
   readonly place: BotTaskListPlace;
 }): ReactNode {
   const { botId, hostId, task, title, post, creator, place } = props;
@@ -104,14 +123,6 @@ function BotTaskRow(props: {
   const navigate = useNavigate();
   const tracking = task.state === "tracking";
   const interval = describeTaskInterval(task);
-  // The thread is named only where the row does not already say it: not in
-  // its own panel, and not when the post the task was set up for opens it.
-  const namesCreator =
-    task.createdByChatId !== null &&
-    place.kind === "bot" &&
-    !(
-      post?.kind === "channel" && post.thread?.threadId === task.createdByChatId
-    );
   return (
     <div
       data-testid="bot-task-row"
@@ -165,22 +176,22 @@ function BotTaskRow(props: {
         {interval === null ? null : (
           <span data-testid="bot-task-interval">{interval}</span>
         )}
-        {post === null ? null : (
-          <TaskRequestLine
+        {place.kind === "bot" ? (
+          <BotViewOriginLines
             botId={botId}
             hostId={hostId}
             post={post}
-            place={place}
-          />
-        )}
-        {namesCreator ? (
-          <TaskCreatorLine
-            botId={botId}
-            hostId={hostId}
             creator={creator}
             place={place}
           />
-        ) : null}
+        ) : (
+          <ThreadPanelRequestLine
+            botId={botId}
+            hostId={hostId}
+            post={post}
+            threadId={place.threadId}
+          />
+        )}
         {task.endedReason === null ? null : <span>{task.endedReason}</span>}
       </span>
     </div>
@@ -188,74 +199,100 @@ function BotTaskRow(props: {
 }
 
 /**
- * "for <the post's first line>": in the bot's view a channel post, opening
- * its thread in the channel (or the box that starts one); in a thread's
- * panel the post or a message of that thread, as plain text. A message of
- * another thread is named by its thread instead, and a post whose row is not
- * loaded is named by nothing.
+ * Where a task came from, in the bot's view: "for <the post's first line>"
+ * for a channel post the channel has loaded, opening its thread (or the box
+ * that starts one), and "from <the thread's post>" for the thread that set
+ * the task up, opening that thread. The thread is left out only while the
+ * post's line is on screen and already opens it. A message inside a thread
+ * is named by its thread alone, and a thread of another bot as such, with
+ * nothing to open.
  */
-function TaskRequestLine(props: {
+function BotViewOriginLines(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly post: BotTaskRequestPost;
-  readonly place: BotTaskListPlace;
+  readonly post: BotTaskRequestPost | null;
+  readonly creator: BotTaskCreator;
+  readonly place: Extract<BotTaskListPlace, { readonly kind: "bot" }>;
 }): ReactNode {
-  const { botId, hostId, post, place } = props;
-  if (post.kind === "thread-message") {
-    if (place.kind !== "thread" || place.threadId !== post.threadId) {
-      return null;
-    }
-    return (
-      <PostLine
-        botId={botId}
-        hostId={hostId}
-        chatId={post.threadId}
-        messageId={post.messageId}
-        onOpen={null}
-      />
-    );
+  const { botId, hostId, post, creator, place } = props;
+  if (creator.kind === "another-bot") {
+    return <span data-testid="bot-task-thread">from another bot's thread</span>;
   }
-  const onOpen =
-    place.kind === "bot"
-      ? () =>
-          place.onOpenPost({
-            anchorMessageId: post.messageId,
-            announcement: post.thread === null,
-            sent: null,
-          })
-      : null;
-  return (
-    <PostLine
+  const creatorLine = (
+    <TaskCreatorLine
       botId={botId}
       hostId={hostId}
-      chatId={post.chatId}
-      messageId={post.messageId}
-      onOpen={onOpen}
+      creator={creator}
+      place={place}
     />
   );
-}
-
-function PostLine(props: {
-  readonly botId: string;
-  readonly hostId: string;
-  readonly chatId: string;
-  readonly messageId: string;
-  readonly onOpen: (() => void) | null;
-}): ReactNode {
-  const { botId, hostId, chatId, messageId, onOpen } = props;
+  if (post === null || post.kind === "thread-message") return creatorLine;
   return (
     <ChannelPost
       botId={botId}
       hostId={hostId}
-      conversationId={chatId}
-      messageId={messageId}
+      conversationId={post.chatId}
+      messageId={post.messageId}
       fetchCold={false}
     >
       {(row) => {
         const line = firstLineOf(postTextOf(row));
-        if (line === null) return null;
+        const opensCreator =
+          creator.kind === "thread" &&
+          creator.thread !== null &&
+          post.thread?.threadId === creator.thread.threadId;
         return (
-          <RowLink onOpen={onOpen} testId="bot-task-request">
+          <>
+            {line === null ? null : (
+              <RowLink
+                testId="bot-task-request"
+                onOpen={() =>
+                  place.onOpenPost({
+                    anchorMessageId: post.messageId,
+                    announcement: post.thread === null,
+                    sent: null,
+                  })
+                }
+              >
+                for {line}
+              </RowLink>
+            )}
+            {line !== null && opensCreator ? null : creatorLine}
+          </>
+        );
+      }}
+    </ChannelPost>
+  );
+}
+
+/**
+ * "for <the message's first line>" in a thread's panel, as plain text: the
+ * post the thread hangs off, or a message of this thread. Nothing while the
+ * row is not loaded.
+ */
+function ThreadPanelRequestLine(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly post: BotTaskRequestPost | null;
+  readonly threadId: string;
+}): ReactNode {
+  const { botId, hostId, post, threadId } = props;
+  if (post === null) return null;
+  if (post.kind === "thread-message" && post.threadId !== threadId) {
+    return null;
+  }
+  return (
+    <ChannelPost
+      botId={botId}
+      hostId={hostId}
+      conversationId={post.kind === "channel" ? post.chatId : post.threadId}
+      messageId={post.messageId}
+      fetchCold={false}
+    >
+      {(row) => {
+        const line = firstLineOf(postTextOf(row));
+        return line === null ? null : (
+          <RowLink onOpen={null} testId="bot-task-request">
             for {line}
           </RowLink>
         );
@@ -266,24 +303,27 @@ function PostLine(props: {
 
 /**
  * "from <the thread's post>", opening that thread in the channel; "from a
- * thread" while the list does not have it, or its post is gone.
+ * thread" while the list does not have it, or its post is gone or not
+ * loaded. Nothing for the trunk's own task.
  */
 function TaskCreatorLine(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly creator: BotThreadSummary | null;
+  readonly creator: Exclude<BotTaskCreator, { readonly kind: "another-bot" }>;
   readonly place: Extract<BotTaskListPlace, { readonly kind: "bot" }>;
 }): ReactNode {
   const { botId, hostId, creator, place } = props;
-  const anchor = creator?.anchor ?? null;
-  if (creator === null || anchor === null) {
+  if (creator.kind === "trunk") return null;
+  const thread = creator.thread;
+  const anchor = thread?.anchor ?? null;
+  if (thread === null || anchor === null) {
     return <span data-testid="bot-task-thread">from a thread</span>;
   }
   return (
     <ChannelPost
       botId={botId}
       hostId={hostId}
-      conversationId={creator.conversationId}
+      conversationId={thread.conversationId}
       messageId={anchor.messageId}
       fetchCold={false}
     >

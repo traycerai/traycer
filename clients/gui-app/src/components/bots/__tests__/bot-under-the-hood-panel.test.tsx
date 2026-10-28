@@ -204,19 +204,23 @@ function channelHandle(): ChatSessionStoreHandle {
   return mocks.state.channelHandle;
 }
 
-/** A thread answering a channel post whose text the channel's row carries. */
+/**
+ * A thread answering a member's channel post, whose row id its request id
+ * names and whose text the channel's row carries.
+ */
 function thread(
   threadId: string,
   text: string,
   overrides: Partial<BotThreadSummary>,
 ): BotThreadSummary {
-  mocks.state.channelPosts[`post-${threadId}`] = text;
+  const postId = conversationRequestMessageId(`req-${threadId}`);
+  mocks.state.channelPosts[postId] = text;
   return {
     threadId,
     conversationId: CHANNEL_ID,
     sessionChatId: `session-${threadId}`,
     anchor: {
-      messageId: `post-${threadId}`,
+      messageId: postId,
       requestId: `req-${threadId}`,
       senderUserId: "user-1",
       sentAt: 1_000,
@@ -705,7 +709,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(within(watch).queryByTestId("bot-task-thread")).toBeNull();
     await user.click(within(watch).getByTestId("bot-task-request"));
     expect(mocks.openPost).toHaveBeenLastCalledWith({
-      anchorMessageId: "post-thread-a",
+      anchorMessageId: conversationRequestMessageId("req-thread-a"),
       announcement: false,
       sent: null,
     });
@@ -720,7 +724,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     );
     await user.click(within(fix).getByTestId("bot-task-thread"));
     expect(mocks.openPost).toHaveBeenLastCalledWith({
-      anchorMessageId: "post-thread-a",
+      anchorMessageId: conversationRequestMessageId("req-thread-a"),
       announcement: false,
       sent: null,
     });
@@ -740,6 +744,103 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
 
     const section = screen.getByTestId("bot-tasks");
     expect(section.textContent).not.toMatch(/check-in|next|last|ago/i);
+  });
+
+  it("names and opens the thread that a reply under the bot's question opened, for the task that reply set up", async () => {
+    const user = userEvent.setup();
+    // The thread hangs off the bot's question; the reply that opened it,
+    // and set the task up, is the thread's own first message.
+    mocks.state.channelPosts["question-1"] = "Which release should I watch?";
+    mocks.state.threads = [
+      {
+        ...thread("thread-q", "unused", {}),
+        anchor: {
+          messageId: "question-1",
+          requestId: "req-opener",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+      },
+    ];
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-opener",
+        createdByChatId: "thread-q",
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-watch");
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(row).getByTestId("bot-task-thread").textContent).toBe(
+      "from Which release should I watch?",
+    );
+    await user.click(within(row).getByTestId("bot-task-thread"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "question-1",
+      announcement: false,
+      sent: null,
+    });
+  });
+
+  it("keeps the thread's link while the post the task came from is not loaded", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    mocks.state.channelPosts = {};
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-watch");
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    const from = within(row).getByTestId("bot-task-thread");
+    expect(from.textContent).toBe("from a thread");
+    await user.click(from);
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: conversationRequestMessageId("req-thread-a"),
+      announcement: false,
+      sent: null,
+    });
+  });
+
+  // Accepted residual: an automation a thread of another bot set up on this
+  // bot is listed here, on the bot that runs it, and not in that thread's
+  // panel. This bot's lists cannot name or open the other bot's thread.
+  it("says a task came from another bot's thread, with nothing to open, when no thread of this bot set it up", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    tasks = [
+      task("task-handoff", {
+        originRequestId: "req-elsewhere",
+        createdByChatId: "thread-of-another-bot",
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-handoff");
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    const from = within(row).getByTestId("bot-task-thread");
+    expect(from.textContent).toBe("from another bot's thread");
+    expect(from.tagName).toBe("SPAN");
+  });
+
+  it("says a thread set a task up, without naming which, while the thread list is not read", () => {
+    mocks.state.threadListAnswered = false;
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+    ];
+    renderPanel();
+
+    const from = within(taskRow("task-watch")).getByTestId("bot-task-thread");
+    expect(from.textContent).toBe("from a thread");
+    expect(from.tagName).toBe("SPAN");
   });
 
   it("draws a task from a host that does not say where it came from with its title and interval alone", () => {

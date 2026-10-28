@@ -147,7 +147,7 @@ export function BotUnderTheHoodPanel(props: {
             botId={botId}
             hostId={hostId}
             tasks={tasks}
-            threads={threads}
+            threadList={threadList}
             channelId={channelId}
             onOpenPost={onOpenPost}
           />
@@ -445,11 +445,11 @@ function BotTasksSection(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
-  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
   readonly channelId: string | null;
   readonly onOpenPost: (open: BotOpenThread) => void;
 }): ReactNode {
-  const { botId, hostId, tasks, threads, channelId, onOpenPost } = props;
+  const { botId, hostId, tasks, threadList, channelId, onOpenPost } = props;
   const place = useMemo(
     () => ({ kind: "bot" as const, channelId, onOpenPost }),
     [channelId, onOpenPost],
@@ -470,7 +470,7 @@ function BotTasksSection(props: {
           botId={botId}
           hostId={hostId}
           tasks={tasks}
-          threads={threads}
+          threads={threadList.data?.threads ?? null}
           place={place}
         />
       )}

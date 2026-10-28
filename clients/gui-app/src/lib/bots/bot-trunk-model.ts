@@ -135,12 +135,14 @@ export function tasksOfThread(
 }
 
 /**
- * Where the post a task was set up for is (Tracy Bots T82): a member's
- * message, whose row id its request id names. On the channel when it is a
- * thread's post (`thread`, the thread it opens) or the trunk set the task up;
- * in the creating thread's record (`thread-message`) otherwise. `null` for a
- * task set up for no request, and for a trunk's task while the channel is
- * not known.
+ * Where the message a task was set up for is (Tracy Bots T82): a member's
+ * message, whose row id its request id names. On the channel when it is the
+ * post a thread hangs off (`thread`, the thread it opens), or the trunk set
+ * the task up; in the creating thread's record (`thread-message`) otherwise,
+ * the reply that opened a thread under a question, proposal or direct post
+ * included: that thread's anchor is the post it replied under, while the
+ * request is the reply's. `null` for a task set up for no request, and for a
+ * trunk's task while the channel is not known.
  */
 export type BotTaskRequestPost =
   | {
@@ -160,18 +162,19 @@ export function taskRequestPost(
   threads: ReadonlyArray<BotThreadSummary>,
   channelId: string | null,
 ): BotTaskRequestPost | null {
-  const requestId = task.originRequestId;
-  if (requestId === null) return null;
-  for (const thread of threads) {
-    if (thread.anchor?.requestId !== requestId) continue;
+  if (task.originRequestId === null) return null;
+  const messageId = conversationRequestMessageId(task.originRequestId);
+  const opened = threads.find(
+    (thread) => thread.anchor?.messageId === messageId,
+  );
+  if (opened !== undefined) {
     return {
       kind: "channel",
-      chatId: thread.conversationId,
-      messageId: thread.anchor.messageId,
-      thread,
+      chatId: opened.conversationId,
+      messageId,
+      thread: opened,
     };
   }
-  const messageId = conversationRequestMessageId(requestId);
   if (task.createdByChatId !== null) {
     return {
       kind: "thread-message",

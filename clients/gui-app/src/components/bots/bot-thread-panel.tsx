@@ -289,7 +289,10 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
 
 /**
  * The tasks the thread's session set up (Tracy Bots T82), each with where it
- * came from; nothing when it set up none.
+ * came from; nothing when it set up none. The list scrolls in a bounded band,
+ * and gives way before the replies and the box do, however many there are.
+ * An automation this thread set up on another bot is that bot's, and is
+ * listed there, not here.
  */
 function ThreadTasks(props: {
   readonly botId: string;
@@ -310,19 +313,24 @@ function ThreadTasks(props: {
   return (
     <section
       aria-label="Tasks"
-      className="flex shrink-0 flex-col gap-1 px-4 pt-2"
+      className="flex max-h-[min(30dvh,16rem)] min-h-0 shrink flex-col gap-1 px-4 pt-2"
       data-testid="bot-thread-tasks"
     >
-      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+      <h3 className="shrink-0 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         Tasks
       </h3>
-      <BotTaskList
-        botId={botId}
-        hostId={hostId}
-        tasks={own}
-        threads={threads}
-        place={place}
-      />
+      <div
+        className="min-h-0 overflow-y-auto"
+        data-testid="bot-thread-tasks-scroll"
+      >
+        <BotTaskList
+          botId={botId}
+          hostId={hostId}
+          tasks={own}
+          threads={threads}
+          place={place}
+        />
+      </div>
     </section>
   );
 }

@@ -1502,7 +1502,10 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
   }
 
   it("lists only the tasks this thread set up, each with the message it was set up for and no link out", () => {
-    channelMessages = [announcement("anchor-1", "Please review the release")];
+    // The thread hangs off a member's post, whose row id its request names.
+    const postId = conversationRequestMessageId("req-1");
+    const summary = threadSummary("user-teammate");
+    channelMessages = [announcement(postId, "Please review the release")];
     panelTasks = [
       task("task-watch", {
         cadence: { kind: "every", seconds: 3_600 },
@@ -1513,12 +1516,24 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       task("task-trunk", { createdByChatId: null }),
       task("task-other", { createdByChatId: "thread-2" }),
     ];
-    mountPanel(listed("user-teammate"), [
-      announcement(
-        conversationRequestMessageId("req-followup"),
-        "Also rerun the flaky shard",
-      ),
-    ]);
+    mountPanel(
+      {
+        kind: "listed",
+        thread: {
+          ...summary,
+          anchor:
+            summary.anchor === null
+              ? null
+              : { ...summary.anchor, messageId: postId },
+        },
+      },
+      [
+        announcement(
+          conversationRequestMessageId("req-followup"),
+          "Also rerun the flaky shard",
+        ),
+      ],
+    );
 
     const section = screen.getByTestId("bot-thread-tasks");
     const rows = within(section).getAllByTestId("bot-task-row");
@@ -1544,6 +1559,26 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
     );
     expect(within(fix).queryByTestId("bot-task-interval")).toBeNull();
     expect(within(section).queryByTestId("bot-task-thread")).toBeNull();
+  });
+
+  it("names the reply that opened the thread under the bot's question, not the question, for the task it set up", () => {
+    // The thread's anchor is the bot's question; the request is the reply
+    // under it, the thread's own first message.
+    channelMessages = [
+      announcement("anchor-1", "Which release should I watch?"),
+    ];
+    panelTasks = [task("task-watch", { originRequestId: "req-1" })];
+    mountPanel(listed("user-teammate"), [
+      announcement(
+        conversationRequestMessageId("req-1"),
+        "Watch the 2.4 release",
+      ),
+    ]);
+
+    const section = screen.getByTestId("bot-thread-tasks");
+    expect(within(section).getByTestId("bot-task-request").textContent).toBe(
+      "for Watch the 2.4 release",
+    );
   });
 
   it("draws nothing when the thread set up no task", () => {
