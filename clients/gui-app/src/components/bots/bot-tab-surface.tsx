@@ -477,6 +477,7 @@ function BotTabContent(props: {
                 botId={botId}
                 hostId={hostId}
                 boundHostId={snapshot.boundHost.hostId}
+                boundHostEpoch={snapshot.boundHost.epoch}
                 botTitle={snapshot.bot.title}
                 directive={snapshot.bot.directive}
                 appConversationChatId={snapshot.bot.appConversationChatId}

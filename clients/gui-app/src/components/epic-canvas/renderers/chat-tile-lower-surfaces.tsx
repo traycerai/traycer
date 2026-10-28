@@ -200,6 +200,7 @@ export interface ChatLowerTurnState {
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /** Own live stream's draft-blob bridge capability. */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   /** Reads the live turn lifecycle, including ID-less activation boundaries. */
@@ -388,6 +389,8 @@ export function ChatLowerInteractionSurfaces(
     props.turn.autoPermissionModeProtocolSupported;
   const turnGetDraftBlobBridgeSupported =
     props.turn.getDraftBlobBridgeSupported;
+  const turnGetQueuedSteerRestartConfirmationSupported =
+    props.turn.getQueuedSteerRestartConfirmationSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
   const turnGetStopConfirmationTarget = props.turn.getStopConfirmationTarget;
 
@@ -438,6 +441,8 @@ export function ChatLowerInteractionSurfaces(
       autoPermissionModeProtocolSupported:
         turnAutoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported:
+        turnGetQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
       getStopConfirmationTarget: turnGetStopConfirmationTarget,
       stopDisabled: turnStopDisabled,
@@ -449,6 +454,7 @@ export function ChatLowerInteractionSurfaces(
       turnSteerProtocolSupported,
       turnAutoPermissionModeProtocolSupported,
       turnGetDraftBlobBridgeSupported,
+      turnGetQueuedSteerRestartConfirmationSupported,
       turnGetActiveTurnForSteer,
       turnGetStopConfirmationTarget,
       turnStopDisabled,
@@ -961,6 +967,9 @@ function LiveChatComposer(props: {
         model.turn.autoPermissionModeProtocolSupported
       }
       getDraftBlobBridgeSupported={model.turn.getDraftBlobBridgeSupported}
+      getQueuedSteerRestartConfirmationSupported={
+        model.turn.getQueuedSteerRestartConfirmationSupported
+      }
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}

@@ -75,7 +75,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.state.threads },
+    data: { threads: mocks.state.threads, threadAnchors: null },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -195,11 +195,13 @@ const LISTED_THREAD: BotThreadSummary = {
 const OPEN_LISTED_THREAD: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
+  answer: false,
   sent: null,
 };
 const OPEN_UNOPENED_THREAD: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
+  answer: false,
   sent: null,
 };
 
@@ -214,6 +216,7 @@ function mount(openThread: BotOpenThread | null): void {
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={HOST_ID}
+            boundHostEpoch={1}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={CHANNEL_ID}

@@ -45,10 +45,14 @@ import { TextSegment } from "./segments/text-segment";
  * itself (reply mode `direct`) replies in the channel, as a plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
- * Slack offers it on every message: a member's post and a question or
- * proposal open their own thread, and a direct reply opens the thread under
- * the post it answers, since a thread hangs off a post or a question, not
- * off a reply. Any other announcement takes no thread. A member's message
+ * Slack offers it on every message, and a thread roots on the row it is
+ * opened from (decision 114): a member's post, a question or proposal, and
+ * a direct reply each open their own thread, the reply's apart from the
+ * post's, and each carries its own thread line. A direct reply opens the
+ * thread under the post it answers instead, with no line of its own, where
+ * the bot's host does not say it takes replies under one
+ * (`answerThreads`). Any other announcement takes no thread. A member's
+ * message
  * the bot failed to answer adds Retry and Edit to them, and says under its
  * text that it was not answered and why, with the same actions inline.
  *
@@ -80,14 +84,8 @@ export function ChatBotMessage(props: {
     postId === null || presentation.threadLine === null
       ? null
       : presentation.threadLine(postId);
-  // A direct post has no thread until a member replies under it: its
-  // action opens the box whose first reply starts one, as under a question.
-  const openThread =
-    message.conversationRequest?.direct === true
-      ? presentation.openAnnouncementThread
-      : presentation.openThread;
   const replyInThread =
-    postId === null || openThread === null ? null : () => openThread(postId);
+    postId === null ? null : memberReplyInThread(message, postId, presentation);
   const failed = failedActionsOf(message, presentation);
   return (
     <BotMessageFrame
@@ -210,10 +208,29 @@ function BotRow(props: {
 }
 
 /**
+ * What a member's post opens from its hover actions: its own thread, or, for
+ * a direct post, which has no thread until a member replies under it, the
+ * box whose first reply starts one, as under a question. `null` in a thread.
+ */
+function memberReplyInThread(
+  message: ChatMessageModel,
+  postId: string,
+  presentation: ChatBotPresentation,
+): (() => void) | null {
+  if (message.conversationRequest?.direct !== true) {
+    const open = presentation.openThread;
+    return open === null ? null : () => open(postId);
+  }
+  const open = presentation.openAnnouncementThread;
+  return open === null ? null : () => open(postId, false);
+}
+
+/**
  * The thread a bot's row opens from its hover actions, and the line of it
- * the row carries: a question or proposal's own thread, and for a direct
- * reply the thread under the post it answers, whose line is under that
- * post. Any other row of the bot takes none.
+ * the row carries: a question's, a proposal's or a direct reply's own
+ * thread; for a direct reply where the bot's host does not take replies
+ * under one, the thread under the post it answers, with no line here. Any
+ * other row of the bot takes none.
  */
 function botRowThread(
   message: ChatMessageModel,
@@ -223,19 +240,22 @@ function botRowThread(
   readonly threadLine: ChatBotThreadLine | null;
 } {
   const kind = message.announcement?.kind ?? null;
-  const answerableId =
-    kind === "question" || kind === "proposal"
-      ? message.persistentMessageId
-      : null;
-  const anchorId = answerableId ?? message.repliesTo ?? null;
+  const answer =
+    kind === null &&
+    message.repliesTo !== undefined &&
+    presentation.answerThreads;
+  const ownThread = kind === "question" || kind === "proposal" || answer;
+  const anchorId = ownThread
+    ? message.persistentMessageId
+    : (message.repliesTo ?? null);
   const open = presentation.openAnnouncementThread;
   return {
     replyInThread:
-      anchorId === null || open === null ? null : () => open(anchorId),
+      anchorId === null || open === null ? null : () => open(anchorId, answer),
     threadLine:
-      answerableId === null || presentation.threadLine === null
+      !ownThread || anchorId === null || presentation.threadLine === null
         ? null
-        : presentation.threadLine(answerableId),
+        : presentation.threadLine(anchorId),
   };
 }
 

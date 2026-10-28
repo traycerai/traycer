@@ -134,6 +134,10 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 
 import { FirstTaskChatGuide } from "@/components/onboarding/first-task-guide";
 
+// The composer's Cmd/Ctrl+Enter steer confirms only a settings change; the
+// host turns every other cause into a labeled next-turn send.
+const SETTINGS_RESTART_REASONS = ["settings"] as const;
+
 // Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
 // handlers imports them from one place.
 export type { ChatComposerSideChatInput };
@@ -233,6 +237,7 @@ interface ChatComposerProps {
    * read, so the flag is the chat's own, never an app-wide one.
    */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
   /**
    * Reads the live active turn at submit time (not a reactive prop) so the
    * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
@@ -288,6 +293,12 @@ export interface ChatComposerSubmitInput {
    * that left with the send.
    */
   readonly restore: ChatSendRestore;
+  /**
+   * True only when the person confirmed ending the running turn in the
+   * composer's settings dialog. A queue edit's steer passes it on as its
+   * restart confirmation; a settings difference alone never stands for one.
+   */
+  readonly restartConfirmed: boolean;
 }
 
 /** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
@@ -426,6 +437,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
     getDraftBlobBridgeSupported,
+    getQueuedSteerRestartConfirmationSupported,
     suggestedPrompt,
     restingSandbox,
   } = props;
@@ -852,6 +864,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       onSubmitMessage: submitWithGuide,
       onSideChat,
       targetHostId: tabHostId,
@@ -1142,6 +1155,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         open={steerConflict.open}
         onOpenChange={steerConflict.onOpenChange}
         onRestart={steerConflict.onRestart}
+        reasons={SETTINGS_RESTART_REASONS}
         changed={steerConflict.changed}
       />
     </>

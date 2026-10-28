@@ -128,7 +128,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.threads },
+    data: { threads: mocks.threads, threadAnchors: null },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -400,6 +400,7 @@ function mountChannelWith(
               botId={BOT_ID}
               hostId={HOST_ID}
               boundHostId={boundHostId}
+              boundHostEpoch={1}
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}
@@ -681,7 +682,12 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, sent: null },
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        answer: false,
+        sent: null,
+      },
       memberPost(TEAMMATE_USER_ID),
     );
 
@@ -833,7 +839,12 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, sent: null },
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        answer: false,
+        sent: null,
+      },
       memberPost(VIEWER_USER_ID),
     );
 
@@ -1090,7 +1101,12 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, sent: null },
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        answer: false,
+        sent: null,
+      },
       memberPost(VIEWER_USER_ID),
     );
 

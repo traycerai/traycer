@@ -22,6 +22,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
+  BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -67,6 +68,8 @@ const mocks = vi.hoisted(() => {
       },
     },
     postIds: [] as string[],
+    // Of `postIds`, the bot's direct replies: their action says so.
+    answerIds: [] as string[],
     sendResponse,
     threadListCalls: [] as Array<{
       botId: string;
@@ -79,6 +82,11 @@ const mocks = vi.hoisted(() => {
       // What the bot record names as the channel; `null` from an older host.
       appConversationChatId: null as string | null,
       threads: [] as BotThreadSummary[],
+      // The rows the bot's host roots a thread on beyond a post, and the
+      // binding that said them (`threadAnchors`).
+      threadAnchors: null as BotThreadAnchors | null,
+      // The bot's binding, as the tab's snapshot names it.
+      binding: { hostId: "host-bound", epoch: 1 },
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
@@ -117,7 +125,10 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
     mocks.threadListCalls.push({ botId, ...args });
     return {
       data: mocks.state.threadListAnswered
-        ? { threads: mocks.state.threads }
+        ? {
+            threads: mocks.state.threads,
+            threadAnchors: mocks.state.threadAnchors,
+          }
         : undefined,
       isError: mocks.state.threadListError,
       refetch: mocks.refetchThreads,
@@ -168,6 +179,11 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
       <div
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
+        data-answer-threads={
+          surface !== null && surface.kind === "channel"
+            ? String(surface.answerThreads)
+            : ""
+        }
       >
         {surface !== null && surface.kind === "channel"
           ? mocks.postIds.map((postId) => (
@@ -202,6 +218,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     conversationId: string;
     threadId: string | null;
     announcementId: string | null;
+    sendable: boolean;
     placeholder: string;
     testId: string;
     failure: { readonly failed: boolean };
@@ -212,6 +229,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
       data-conversation-id={props.conversationId}
       data-thread-id={props.threadId ?? "none"}
       data-announcement-id={props.announcementId ?? "none"}
+      data-sendable={String(props.sendable)}
       data-placeholder={props.placeholder}
     >
       {props.failure.failed ? (
@@ -244,7 +262,9 @@ function PostStub(props: {
   readonly postId: string;
   readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
   readonly openThread: ((postMessageId: string) => void) | null;
-  readonly openAnnouncementThread: ((announcementId: string) => void) | null;
+  readonly openAnnouncementThread:
+    | ((announcementId: string, answer: boolean) => void)
+    | null;
 }): ReactNode {
   const line = props.threadLine(props.postId);
   const openThread = props.openThread;
@@ -285,7 +305,12 @@ function PostStub(props: {
         <button
           type="button"
           data-testid={`stub-open-announcement-${props.postId}`}
-          onClick={() => openAnnouncementThread(props.postId)}
+          onClick={() =>
+            openAnnouncementThread(
+              props.postId,
+              mocks.answerIds.includes(props.postId),
+            )
+          }
         />
       )}
     </div>
@@ -302,6 +327,15 @@ const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** What the stub box reports it sent. */
 const POSTED_TEXT = "Ship the release today?";
 const HOST_ID = "host-bound";
+
+/** The thread anchors `kinds`, as `hostId` said them at `epoch`. */
+function saidBy(
+  hostId: string,
+  epoch: number,
+  kinds: string[],
+): BotThreadAnchors {
+  return { hostId, epoch, kinds };
+}
 
 const resolveMember: BotMemberResolver = (userId) =>
   userId === "user-teammate"
@@ -352,6 +386,7 @@ interface MountOptions {
 const QUESTION_1: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
+  answer: false,
   sent: null,
 };
 
@@ -373,7 +408,8 @@ function mount(options: MountOptions): {
           <BotChannelView
             botId={BOT_ID}
             hostId={HOST_ID}
-            boundHostId={HOST_ID}
+            boundHostId={mocks.state.binding.hostId}
+            boundHostEpoch={mocks.state.binding.epoch}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
@@ -393,6 +429,7 @@ function mount(options: MountOptions): {
       : {
           anchorMessageId: options.openThreadPostId,
           announcement: false,
+          answer: false,
           sent: null,
         };
   const result = render(tree(current));
@@ -424,6 +461,9 @@ beforeEach(() => {
   ];
   mocks.state.appConversationChatId = "conversation-channel";
   mocks.state.threads = [];
+  mocks.state.threadAnchors = null;
+  mocks.state.binding = { hostId: HOST_ID, epoch: 1 };
+  mocks.answerIds = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
   mocks.state.sending = false;
@@ -591,6 +631,7 @@ describe("<BotChannelView /> channel", () => {
     expect(onOpenThread).toHaveBeenCalledWith({
       anchorMessageId: "post-a",
       announcement: false,
+      answer: false,
       sent: null,
     });
   });
@@ -618,6 +659,365 @@ describe("<BotChannelView /> channel", () => {
     expect(composer.getAttribute("data-conversation-id")).toBe(
       "conversation-channel",
     );
+  });
+
+  it("lets a direct reply open its own thread only where the bot's binding names it among the rows a thread roots on", () => {
+    const answerThreads = (): string | null =>
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-answer-threads");
+    mocks.state.threadAnchors = saidBy(HOST_ID, 1, ["answer"]);
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(answerThreads()).toBe("true");
+
+    // A host that predates the anchors, or one whose room is not written yet.
+    mocks.state.threadAnchors = null;
+    rerender();
+    expect(answerThreads()).toBe("false");
+
+    // An anchor this build does not know opens nothing new.
+    mocks.state.threadAnchors = saidBy(HOST_ID, 1, ["later-kind"]);
+    rerender();
+    expect(answerThreads()).toBe("false");
+
+    // Said by another host, or by this one under another epoch.
+    mocks.state.threadAnchors = saidBy("host-earlier", 1, ["answer"]);
+    rerender();
+    expect(answerThreads()).toBe("false");
+    mocks.state.threadAnchors = saidBy(HOST_ID, 0, ["answer"]);
+    rerender();
+    expect(answerThreads()).toBe("false");
+
+    // A host without the thread list has nothing to say.
+    mocks.state.threadAnchors = saidBy(HOST_ID, 1, ["answer"]);
+    mocks.state.threadListSupported = false;
+    rerender();
+    expect(answerThreads()).toBe("false");
+  });
+
+  it("withdraws a direct reply's own thread the moment the bot is claimed, keeps it withdrawn through the earlier binding's answer, and blocks the open box's send until the new binding says it", () => {
+    const answerThreads = (): string | null =>
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-answer-threads");
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    mocks.postIds = ["answer-1"];
+    mocks.answerIds = ["answer-1"];
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    const { reopen } = mount({ openThreadPostId: null });
+    expect(answerThreads()).toBe("true");
+    reopen({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+    expect(sendable()).toBe("true");
+
+    // The bot moves to an older host. The list read under the new binding is
+    // still pending: what it holds is the capable host's answer.
+    mocks.state.binding = { hostId: "host-older", epoch: 4 };
+    reopen({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+    expect(answerThreads()).toBe("false");
+    expect(sendable()).toBe("false");
+    // The box is the same one, so what the person typed stays in it.
+    expect(
+      screen
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-announcement-id"),
+    ).toBe("answer-1");
+
+    // A read that started before the claim answers late, for the earlier binding.
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    reopen({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+    expect(answerThreads()).toBe("false");
+    expect(sendable()).toBe("false");
+
+    // The new binding's own answer: the older host names nothing.
+    mocks.state.threadAnchors = null;
+    reopen({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+    expect(sendable()).toBe("false");
+
+    // Claimed again by a host that roots threads on an answer.
+    mocks.state.binding = { hostId: "host-capable", epoch: 5 };
+    mocks.state.threadAnchors = saidBy("host-capable", 5, ["answer"]);
+    reopen({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+    expect(answerThreads()).toBe("true");
+    expect(sendable()).toBe("true");
+  });
+
+  it("takes no send in a listed thread under a direct reply once the bot is claimed onto a binding that does not open it, and takes one again once a binding does", () => {
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    const ANSWER_THREAD: BotOpenThread = {
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    mocks.state.threads = [
+      thread("thread-answer", "answer-1", {
+        replyCount: 2,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(ANSWER_THREAD);
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-answer");
+    expect(sendable()).toBe("true");
+
+    // Claimed by an older host; the cached list still lists the thread.
+    mocks.state.binding = { hostId: "host-older", epoch: 4 };
+    reopen(ANSWER_THREAD);
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-answer");
+    expect(sendable()).toBe("false");
+
+    mocks.state.binding = { hostId: "host-capable", epoch: 5 };
+    mocks.state.threadAnchors = saidBy("host-capable", 5, ["answer"]);
+    reopen(ANSWER_THREAD);
+    expect(sendable()).toBe("true");
+  });
+
+  it("keeps the box under a direct reply mounted, beside Retry, through a failed read of the list after a claim, and sending once the read recovers", async () => {
+    const user = userEvent.setup();
+    const ANSWER_THREAD: BotOpenThread = {
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(ANSWER_THREAD);
+    const box = screen.getByTestId("stub-bot-thread-composer");
+
+    // Claimed, and the read of the list that follows fails.
+    mocks.state.binding = { hostId: "host-capable", epoch: 4 };
+    mocks.state.threadListError = true;
+    reopen(ANSWER_THREAD);
+
+    expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
+    expect(box.getAttribute("data-sendable")).toBe("false");
+    await user.click(
+      within(screen.getByTestId("bot-thread-error")).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
+
+    mocks.state.threadListError = false;
+    mocks.state.threadAnchors = saidBy("host-capable", 4, ["answer"]);
+    reopen(ANSWER_THREAD);
+
+    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
+    expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
+    expect(box.getAttribute("data-sendable")).toBe("true");
+  });
+
+  it("keeps the one box of a direct reply's thread while a claim's list drops the thread and lists it again", () => {
+    const ANSWER_THREAD: BotOpenThread = {
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    mocks.state.threads = [
+      thread("thread-answer", "answer-1", {
+        replyCount: 2,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(ANSWER_THREAD);
+    const box = screen.getByTestId("stub-bot-thread-composer");
+    expect(box.getAttribute("data-thread-id")).toBe("thread-answer");
+
+    // Claimed: the list reads fine, and holds none of the earlier host's threads.
+    mocks.state.binding = { hostId: "host-capable", epoch: 4 };
+    mocks.state.threads = [];
+    reopen(ANSWER_THREAD);
+    expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
+    expect(box.getAttribute("data-thread-id")).toBe("none");
+    expect(box.getAttribute("data-announcement-id")).toBe("answer-1");
+
+    mocks.state.threadAnchors = saidBy("host-capable", 4, ["answer"]);
+    mocks.state.threads = [
+      thread("thread-answer", "answer-1", {
+        replyCount: 2,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    reopen(ANSWER_THREAD);
+    expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
+    expect(box.getAttribute("data-thread-id")).toBe("thread-answer");
+    expect(box.getAttribute("data-sendable")).toBe("true");
+  });
+
+  it("says a failed read of the list after a claim beside the thread it last listed, with Retry, and takes a send once the read recovers", async () => {
+    const user = userEvent.setup();
+    const ANSWER_THREAD: BotOpenThread = {
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    mocks.state.threads = [
+      thread("thread-answer", "answer-1", {
+        replyCount: 2,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(ANSWER_THREAD);
+
+    // Claimed by another capable host; the read that follows fails, and the
+    // list still holds what it last returned.
+    mocks.state.binding = { hostId: "host-other", epoch: 4 };
+    mocks.state.threadListError = true;
+    reopen(ANSWER_THREAD);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-answer");
+    expect(
+      within(panel)
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable"),
+    ).toBe("false");
+    await user.click(
+      within(within(panel).getByTestId("bot-thread-error")).getByRole(
+        "button",
+        { name: "Retry" },
+      ),
+    );
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
+
+    mocks.state.threadListError = false;
+    mocks.state.threadAnchors = saidBy("host-other", 4, ["answer"]);
+    reopen(ANSWER_THREAD);
+    expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
+    expect(
+      within(panel)
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable"),
+    ).toBe("true");
+  });
+
+  it("keeps the box under a question sending whatever the bot's binding says of answers", () => {
+    mocks.postIds = ["question-1"];
+    mocks.state.threadAnchors = null;
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(QUESTION_1);
+
+    expect(
+      screen
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable"),
+    ).toBe("true");
+  });
+
+  it("keeps a direct post's thread and its reply's thread apart: each row its own line, each opening its own thread", async () => {
+    const user = userEvent.setup();
+    mocks.postIds = ["post-1", "answer-1"];
+    mocks.answerIds = ["answer-1"];
+    mocks.state.threadAnchors = saidBy(HOST_ID, 1, ["answer"]);
+    mocks.state.threads = [
+      thread("thread-post", "post-1", { replyCount: 1, lastReplyAt: 7_000 }),
+      {
+        ...thread("thread-answer", "answer-1", {
+          replyCount: 3,
+          lastReplyAt: 8_000,
+        }),
+        anchor: {
+          messageId: "answer-1",
+          requestId: "req-under-answer",
+          senderUserId: null,
+          sentAt: 1_500,
+          resolvedAt: null,
+        },
+      },
+    ];
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+
+    expect(
+      screen.getByTestId("stub-line-post-1").getAttribute("data-reply-count"),
+    ).toBe("1");
+    expect(
+      screen.getByTestId("stub-line-answer-1").getAttribute("data-reply-count"),
+    ).toBe("3");
+
+    await user.click(screen.getByTestId("stub-open-announcement-answer-1"));
+    await user.click(screen.getByTestId("stub-open-announcement-post-1"));
+
+    expect(onOpenThread.mock.calls).toEqual([
+      [
+        {
+          anchorMessageId: "answer-1",
+          announcement: true,
+          answer: true,
+          sent: null,
+        },
+      ],
+      [
+        {
+          anchorMessageId: "post-1",
+          announcement: true,
+          answer: false,
+          sent: null,
+        },
+      ],
+    ]);
+    reopen({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-answer");
+    reopen({
+      anchorMessageId: "post-1",
+      announcement: true,
+      answer: false,
+      sent: null,
+    });
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-post");
   });
 
   it("shows the question's thread, not the box that starts one, once the thread is listed", async () => {
@@ -648,7 +1048,12 @@ describe("<BotChannelView /> channel", () => {
     mocks.postIds = ["post-a"];
     const { reopen } = mount({ openThreadPostId: null });
 
-    reopen({ anchorMessageId: "post-a", announcement: false, sent: null });
+    reopen({
+      anchorMessageId: "post-a",
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
 
     const waiting = screen.getByTestId("bot-thread-panel");
     expect(within(waiting).getByTestId("bot-thread-loading")).toBeTruthy();
@@ -657,7 +1062,12 @@ describe("<BotChannelView /> channel", () => {
     ).toBeNull();
 
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 0 })];
-    reopen({ anchorMessageId: "post-a", announcement: false, sent: null });
+    reopen({
+      anchorMessageId: "post-a",
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
@@ -1033,6 +1443,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
   const POSTED: BotOpenThread = {
     anchorMessageId: "post-new",
     announcement: false,
+    answer: false,
     sent: {
       threadId: "thread-new",
       requestId: "request-new",

@@ -711,6 +711,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: conversationRequestMessageId("req-thread-a"),
       announcement: false,
+      answer: false,
       sent: null,
     });
 
@@ -726,6 +727,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: conversationRequestMessageId("req-thread-a"),
       announcement: false,
+      answer: false,
       sent: null,
     });
 
@@ -739,6 +741,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: directPost,
       announcement: true,
+      answer: false,
       sent: null,
     });
 
@@ -780,6 +783,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "question-1",
       announcement: false,
+      answer: false,
       sent: null,
     });
   });
@@ -804,6 +808,7 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: conversationRequestMessageId("req-thread-a"),
       announcement: false,
+      answer: false,
       sent: null,
     });
   });

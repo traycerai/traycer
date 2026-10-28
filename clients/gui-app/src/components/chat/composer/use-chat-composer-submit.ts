@@ -168,6 +168,7 @@ interface UseChatComposerSubmitArgs {
    * of this that is true when it is asked.
    */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
 }
 
 export interface ChatComposerSideChatInput {
@@ -238,6 +239,7 @@ export function useChatComposerSubmit(
     targetHostId,
     queueEditTargetId,
     getDraftBlobBridgeSupported,
+    getQueuedSteerRestartConfirmationSupported,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
   const { connectionStatus } = use(QueuedMessageStagesContext);
@@ -687,10 +689,15 @@ export function useChatComposerSubmit(
             content: liveContent,
             browserAnnotations: liveAnnotationRecords,
           },
+          restartConfirmed: false,
         };
         if (
           deliveryPolicy === "after_safe_point" &&
-          liveSteerInputs.steerCapable
+          liveSteerInputs.steerCapable &&
+          !(
+            queueEditTargetId !== null &&
+            getQueuedSteerRestartConfirmationSupported?.() === true
+          )
         ) {
           const originTurn = getActiveTurnForSteer();
           const decision = decideSteerSettings(originTurn, settings);
@@ -1007,6 +1014,7 @@ export function useChatComposerSubmit(
       getActiveTurnForSteer,
       queueEditTargetId,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       noteRefusedSubmit,
       refusedSubmitLogDue,
       submitBlocked,
@@ -1091,6 +1099,7 @@ export function useChatComposerSubmit(
           settings: pendingConflict.settings,
           deliveryPolicy,
           restore: pendingConflict.restore,
+          restartConfirmed: true,
         })
       ) {
         setPendingConflict(null);

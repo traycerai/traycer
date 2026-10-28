@@ -250,6 +250,8 @@ function BotViewOriginLines(props: {
                   place.onOpenPost({
                     anchorMessageId: post.messageId,
                     announcement: post.thread === null,
+                    // A member's post, never the bot's own reply.
+                    answer: false,
                     sent: null,
                   })
                 }
@@ -334,6 +336,8 @@ function TaskCreatorLine(props: {
             place.onOpenPost({
               anchorMessageId: anchor.messageId,
               announcement: false,
+              // An existing thread, opened as its row in the channel opens it.
+              answer: false,
               sent: null,
             })
           }

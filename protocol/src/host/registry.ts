@@ -404,6 +404,7 @@ import {
   chatSubscribeV137,
   chatSubscribeV138,
   chatSubscribeV139,
+  chatSubscribeV140,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -647,6 +648,8 @@ import {
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
   botThreadListV10,
+  botThreadListV11,
+  botThreadListUpgradeV10ToV11,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
@@ -9246,11 +9249,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botThreadListV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the rows the bound host roots a thread on beyond a
+        // post, a question, a proposal and a direct post (T85).
+        1: {
+          contract: botThreadListV11,
+          upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -15579,7 +15588,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 39,
+      latestMinor: 40,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15789,6 +15798,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (projection: the host omits it below @1.39). @1.35 to @1.38 are
         // frozen at their seven-arm queue.
         39: { contract: chatSubscribeV139 },
+        // @1.40: a queued steer that would restart the turn needs the person's
+        // confirmation (`queueSteerNow.restartConfirmed`), and a refused one
+        // names its causes (`actionAck.steerRestartReasons`, stripped below).
+        40: { contract: chatSubscribeV140 },
       },
     },
   },

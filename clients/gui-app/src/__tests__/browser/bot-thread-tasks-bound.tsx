@@ -175,7 +175,12 @@ export function Pane(): ReactElement {
                   conversationId="channel-1"
                   originMessageId="post-1"
                   sent={null}
-                  thread={{ kind: "listed", thread }}
+                  thread={{
+                    kind: "listed",
+                    thread,
+                    retry: null,
+                    sendable: true,
+                  }}
                   tasks={tasks}
                   anchorSenderLabel={() => "You"}
                   resolveMember={UNRESOLVED_BOT_MEMBERS}

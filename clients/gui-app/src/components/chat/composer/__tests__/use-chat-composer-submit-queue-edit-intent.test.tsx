@@ -18,6 +18,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -308,4 +309,115 @@ describe("F1: queue-edit submit intent invalidation", () => {
     expect(typeof atoms[0]?.b64content).toBe("string");
     expect(editor.clearCount).toBe(1);
   });
+});
+
+describe("steering a queue edit that changes settings", () => {
+  // The toolbar sends codex/gpt-5; the running turn is on another model, so
+  // the composer's own preflight would ask before sending.
+  const runningOnOtherModel: ChatActiveTurn = {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
+    turnId: "turn-1",
+    status: "running",
+    harnessId: "codex",
+    model: "gpt-5-mini",
+    profileId: null,
+    userMessageId: "message-turn-1",
+    startedAt: 3,
+    updatedAt: 3,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+
+  function steerSubmit(input: {
+    readonly queueEditTargetId: string | null;
+    readonly hostConfirmsRestarts: boolean;
+  }) {
+    const editor = mutableFakeEditor(docWithText("steer this"));
+    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
+    const toolbarStore = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "queue-edit-steer-restart",
+      values: {
+        permission: "supervised",
+        selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
+        reasoning: "medium",
+        serviceTier: "auto",
+      },
+      onSettingsChange: null,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      hostId: null,
+    });
+    const hook = renderHook(() =>
+      useChatComposerSubmit({
+        taskId: "chat-queue-edit-steer",
+        editorRef: { current: editor.handle },
+        pickerStore: createComposerPickerStore(),
+        toolbarStore,
+        activeTurnStatus: "running",
+        steerCapable: true,
+        steerEnabled: true,
+        steerProtocolSupported: true,
+        getActiveTurnForSteer: () => runningOnOtherModel,
+        hasPendingApprovals: false,
+        sendDisabled: false,
+        sendDisabledHint: null,
+        workspaceBlocked: false,
+        imagesUnsupported: false,
+        attachmentPreparationPending: false,
+        onSubmitMessage: submit,
+        onSideChat: null,
+        targetHostId: null,
+        queueEditTargetId: input.queueEditTargetId,
+        getDraftBlobBridgeSupported: () => false,
+        getQueuedSteerRestartConfirmationSupported: () =>
+          input.hostConfirmsRestarts,
+      }),
+    );
+    return { hook, submit };
+  }
+
+  it("submits the edit unconfirmed on a host that asks for restarts, leaving the question to its refusal", async () => {
+    const { hook, submit } = steerSubmit({
+      queueEditTargetId: "Q",
+      hostConfirmsRestarts: true,
+    });
+
+    act(() => {
+      hook.result.current.submitDraft("mod-enter");
+    });
+
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+    expect(submit.mock.calls[0][0]).toMatchObject({
+      deliveryPolicy: "after_safe_point",
+      restartConfirmed: false,
+    });
+    expect(hook.result.current.steerConflict.open).toBe(false);
+  });
+
+  it.each([
+    ["an ordinary new send", null, true],
+    ["a queue edit on a host that predates restart confirmation", "Q", false],
+  ] as const)(
+    "still asks locally for %s",
+    async (_label, queueEditTargetId, hostConfirmsRestarts) => {
+      const { hook, submit } = steerSubmit({
+        queueEditTargetId,
+        hostConfirmsRestarts,
+      });
+
+      act(() => {
+        hook.result.current.submitDraft("mod-enter");
+      });
+
+      await waitFor(() => {
+        expect(hook.result.current.steerConflict.open).toBe(true);
+      });
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -142,11 +142,11 @@ const SURFACES = [
 ] as const;
 
 describe("chat.subscribe@1.39 registration", () => {
-  it("binds chatSubscribeV139 as the registry head and the live frame schema", () => {
-    expect(line.latestMinor).toBe(39);
+  it("binds chatSubscribeV139 under the 1.40 head, frozen below the live frame schema", () => {
+    expect(line.latestMinor).toBe(40);
     expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(chatSubscribeV139.schemaVersion).toEqual({ major: 1, minor: 39 });
-    expect(chatSubscribeV139.serverFrameSchema).toBe(
+    expect(chatSubscribeV139.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(CHAT_SUBSCRIBE_NOTIFICATION_DIGEST_MINOR).toBe(39);
