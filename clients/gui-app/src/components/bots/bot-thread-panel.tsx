@@ -290,8 +290,9 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
 /**
  * The tasks the thread's session set up (Tracy Bots T82), each with where it
  * came from; nothing when it set up none. The list scrolls in a bounded band
- * and, in a short pane, gives way to its heading and a row before the
- * replies give up their share, so the conversation stays readable.
+ * and, in a short pane, gives way first, down to nothing, before the replies
+ * give up their share, so the conversation stays readable and the box stays
+ * in the pane.
  * An automation this thread set up on another bot is that bot's, and is
  * listed there, not here.
  */
@@ -314,10 +315,10 @@ function ThreadTasks(props: {
   return (
     <section
       aria-label="Tasks"
-      className="flex max-h-[min(30dvh,16rem)] min-h-[min(4rem,10dvh)] shrink-100 flex-col gap-1 px-4 pt-2"
+      className="flex max-h-[min(30dvh,16rem)] min-h-0 shrink-100 flex-col gap-1 overflow-hidden px-4"
       data-testid="bot-thread-tasks"
     >
-      <h3 className="shrink-0 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+      <h3 className="shrink-0 pt-2 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         Tasks
       </h3>
       <div
