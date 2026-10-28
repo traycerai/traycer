@@ -657,11 +657,12 @@ export type EnvironmentSkillPolicy = z.infer<
 
 /**
  * One skill on `skills.list@1.1`: the `@1.0` row, plus the policy in force
- * (`evolve` for a skill with nothing to follow, neither bundled nor
- * installed from a source, whatever its entry says), its version (the build
- * for a bundled skill, the installed commit for one from a source, `null`
- * otherwise), whether a newer upstream is there that the policy holds back,
- * and where a skill from a source came from.
+ * (for a skill with nothing to follow, neither bundled nor installed from a
+ * source, `auto-update` or no entry reads as `evolve`, while `evolve` and
+ * `frozen` hold as written), its version (the build for a bundled skill, the
+ * installed commit for one from a source, `null` otherwise), whether a newer
+ * upstream is there that the policy holds back, and where a skill from a
+ * source came from.
  */
 export const environmentSkillSchemaV11 = lazySchema(() =>
   z.object({

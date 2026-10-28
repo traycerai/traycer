@@ -1657,8 +1657,63 @@ describe("The Skills page's update policies", () => {
         name: "Auto-update",
       }),
     ).toBeTruthy();
+    const options = (name: string): string[] =>
+      within(
+        within(rowOf(name)).getByRole("group", {
+          name: `Updates for ${name}`,
+        }),
+      )
+        .getAllByRole("button")
+        .map((button) => button.textContent);
+    expect(options("review")).toEqual(["Evolve", "Frozen"]);
+    expect(options("find-skills")).toEqual(["Auto-update", "Evolve", "Frozen"]);
+  });
+
+  it("freezes a room skill with no upstream without a confirm, and offers Preview and no Edit once it reads frozen", async () => {
+    negotiateMethods(POLICIES);
+    let frozen = false;
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.list": () =>
+        listed([{ ...REVIEW, policy: frozen ? "frozen" : "evolve" }], "pol-1"),
+      "environment.configuration.skills.setPolicy": () => {
+        frozen = true;
+        return saved;
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("review");
     expect(
-      within(rowOf("review")).queryByRole("button", { name: "Auto-update" }),
+      within(rowOf("review")).getByRole("button", { name: "Edit" }),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(rowOf("review")).getByRole("button", { name: "Frozen" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        within(rowOf("review"))
+          .getByRole("button", { name: "Frozen" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      harness.paramsOf("environment.configuration.skills.setPolicy"),
+    ).toEqual([
+      {
+        environmentId: "env-a",
+        name: "review",
+        policy: "frozen",
+        revision: "pol-1",
+      },
+    ]);
+    expect(
+      within(rowOf("review")).getByRole("button", { name: "Preview" }),
+    ).toBeTruthy();
+    expect(
+      within(rowOf("review")).queryByRole("button", { name: "Edit" }),
     ).toBeNull();
   });
 });
