@@ -181,6 +181,11 @@ export interface SandboxSetupLineFacts {
   readonly smallerShapeAffordable: boolean;
   /** The agents sandboxes run, which Choose a model opens on; `null` unknown. */
   readonly offeredAgents: ReadonlyArray<string> | null;
+  /**
+   * The created sandbox's row reads `creating`, `starting` or `resuming`:
+   * Stop is not offered until it is awake.
+   */
+  readonly sandboxBooting: boolean;
 }
 
 /**
@@ -213,7 +218,10 @@ export function SandboxSetupLine(props: {
         }
       : {
           ...props.actions,
-          onStop: stage.createdSandboxId === null ? null : props.actions.onStop,
+          onStop:
+            stage.createdSandboxId !== null && !props.facts.sandboxBooting
+              ? props.actions.onStop
+              : null,
         };
   const failure = stage.failure;
   if (failure !== null && isRefusal(failure)) {

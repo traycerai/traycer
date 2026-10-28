@@ -6810,6 +6810,45 @@ describe("a task deleted while its message waits on a sandbox", () => {
   );
 });
 
+describe("Stop while the sandbox boots", () => {
+  let restoreLocks: () => void = () => undefined;
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(() => {
+    restoreLocks();
+  });
+
+  it.each(["creating", "starting", "resuming"] as const)(
+    "offers no Stop while the row is %s, and offers it once the row is awake",
+    async (state) => {
+      seed({ ...SEEDED, phase: "creating", elapsedSeconds: 7 });
+      answerSandboxRows(
+        [sandboxSummaryFixture({ id: SANDBOX_ID, hostId: SANDBOX_HOST, state })],
+        Date.now() + 60_000,
+      );
+      mount();
+
+      const line = await screen.findByTestId("sandbox-setup-line");
+      expect(line.textContent).toContain("Starting sandbox");
+      expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "awake",
+          }),
+        ],
+        Date.now() + 120_000,
+      );
+      expect(await screen.findByTestId("sandbox-setup-stop")).toBeDefined();
+      expect(mocks.stopSandbox).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("choosing Stop on an unclaimed send", () => {
   const FRESH = Date.now() + 60_000;
   const BACK_IN_COMPOSER_RECEIPT =

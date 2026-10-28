@@ -461,6 +461,15 @@ export function useSetupLineFacts(
       ? null
       : { awakeMcPerHour: row.priceMcPerHour.awakeMc, exact: true };
   }, [sandboxes, stage]);
+  const createdId = stage?.createdSandboxId ?? null;
+  const createdState =
+    createdId === null
+      ? undefined
+      : sandboxes?.find((candidate) => candidate.id === createdId)?.state;
+  const sandboxBooting =
+    createdState === "creating" ||
+    createdState === "starting" ||
+    createdState === "resuming";
   return useMemo(() => {
     if (stage === null) return null;
     if (stage.target.kind === "existing" || catalogue === null) {
@@ -477,6 +486,7 @@ export function useSetupLineFacts(
         shapeLabel: "",
         smallerShapeAffordable: false,
         offeredAgents: catalogue?.offeredAgents ?? null,
+        sandboxBooting,
       };
     }
     const { shape, configuration } = stage.target;
@@ -508,8 +518,9 @@ export function useSetupLineFacts(
           smallest.awakeMcPerHour,
         ),
       offeredAgents: catalogue.offeredAgents ?? null,
+      sandboxBooting,
     };
-  }, [catalogue, existingPrice, stage, user]);
+  }, [catalogue, existingPrice, sandboxBooting, stage, user]);
 }
 
 /**
