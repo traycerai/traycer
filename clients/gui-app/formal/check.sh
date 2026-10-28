@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Runs TLC on one config: formal/check.sh <Config> [TLC args...]
+# <Config> names <Config>.cfg in this directory; the spec is ChatScroll.tla.
+# Needs Java 11+ and formal/tools/tla2tools.jar (gitignored; see README.md).
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+config="${1:?usage: check.sh <Config> [TLC args...]}"
+shift
+jar="$here/tools/tla2tools.jar"
+if [ ! -f "$jar" ]; then
+  echo "missing $jar; fetch it with:" >&2
+  echo "  gh release download v1.7.4 -R tlaplus/tlaplus -p tla2tools.jar -D $here/tools" >&2
+  exit 2
+fi
+# macOS ships a /usr/bin/java stub that exits 0 with no runtime behind it, so
+# a keg-only Homebrew JDK is preferred when present.
+java_bin="${JAVA:-java}"
+if [ -z "${JAVA:-}" ] && [ -x /opt/homebrew/opt/openjdk@17/bin/java ]; then
+  java_bin=/opt/homebrew/opt/openjdk@17/bin/java
+fi
+cd "$here"
+# -deadlock: a behaviour whose budgets are spent and whose tile is quiet
+# stops; that is quiescence, not a deadlock.
+exec "$java_bin" -XX:+UseParallelGC -Xmx"${JAVA_XMX:-3g}" -cp "$jar" tlc2.TLC \
+  -config "$config.cfg" -metadir "$here/states/$(basename "$config")" \
+  -workers "${TLC_WORKERS:-2}" -deadlock "$@" ChatScroll.tla
