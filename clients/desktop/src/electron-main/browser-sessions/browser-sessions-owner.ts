@@ -659,6 +659,18 @@ class BrowserSessionsStream {
   retainRenderer(): void {
     if (this.rendererHeld || this.disposed) return;
     this.rendererHeld = true;
+    // A socket that is over stays registered only while a native tab holds
+    // it. Replaying its `closed` would answer every open, the renderer's Retry
+    // included, with a stream that never comes back, so the renderer's return
+    // starts it again. `rendererHeld` is set first: the teardown inside must
+    // not release the stream it is about to restart.
+    if (this.connectionStatus === "closed") {
+      log.info("[browser-sessions] restarting a closed stream for a renderer", {
+        hostId: this.hostId,
+      });
+      this.restart();
+      return;
+    }
     this.emitStatus(
       browserSessionsLifecycle(this.connectionStatus, null),
       null,
@@ -900,6 +912,10 @@ class BrowserSessionsStream {
     log.info("[browser-sessions] restarting a stream on a rotated bearer", {
       hostId: this.hostId,
     });
+    this.restart();
+  }
+
+  private restart(): void {
     this.teardown();
     this.terminal = false;
     this.start();
