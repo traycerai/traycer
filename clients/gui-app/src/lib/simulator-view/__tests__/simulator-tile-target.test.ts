@@ -33,6 +33,8 @@ const IPHONE: SimulatorSummary = {
   booted: false,
   physical: false,
 };
+/** A `@1.0` host, or a `@1.1` one with nothing open on this machine. */
+const NO_SESSIONS: readonly SimulatorSession[] = [];
 
 describe("findSimulatorForTile", () => {
   it("matches by id first, and an Android serial's tile by AVD name once the serial is gone", () => {
@@ -41,15 +43,23 @@ describe("findSimulatorForTile", () => {
       platform: "android",
       name: "Pixel_8_API_35",
     } as const;
-    expect(findSimulatorForTile([COLD_AVD, BOOTED_EMULATOR], serialTile)).toBe(
-      BOOTED_EMULATOR,
-    );
+    expect(
+      findSimulatorForTile(
+        [COLD_AVD, BOOTED_EMULATOR],
+        serialTile,
+        NO_SESSIONS,
+      ),
+    ).toBe(BOOTED_EMULATOR);
     // Powered off: the host lists the AVD cold under its name.
-    expect(findSimulatorForTile([IPHONE, COLD_AVD], serialTile)).toBe(COLD_AVD);
+    expect(
+      findSimulatorForTile([IPHONE, COLD_AVD], serialTile, NO_SESSIONS),
+    ).toBe(COLD_AVD);
     // Booted again elsewhere under a new serial: that row, to connect to.
     const rebooted = { ...BOOTED_EMULATOR, simulatorId: "emulator-5556" };
-    expect(findSimulatorForTile([rebooted], serialTile)).toBe(rebooted);
-    expect(findSimulatorForTile([IPHONE], serialTile)).toBeNull();
+    expect(findSimulatorForTile([rebooted], serialTile, NO_SESSIONS)).toBe(
+      rebooted,
+    );
+    expect(findSimulatorForTile([IPHONE], serialTile, NO_SESSIONS)).toBeNull();
   });
 
   it("never matches an iOS tile by name: a udid is for life", () => {
@@ -58,7 +68,7 @@ describe("findSimulatorForTile", () => {
       platform: "ios",
       name: "iPhone 16",
     } as const;
-    expect(findSimulatorForTile([IPHONE], tile)).toBeNull();
+    expect(findSimulatorForTile([IPHONE], tile, NO_SESSIONS)).toBeNull();
   });
 });
 
@@ -95,7 +105,7 @@ describe("findSimulatorForTile on a @1.1 host", () => {
 
   it("finds a clone's tile under its source's instances, with the source's version", () => {
     // A clone is never listed as a device on @1.1, so only `instances` has it.
-    expect(findSimulatorForTile([source], cloneTile)).toEqual({
+    expect(findSimulatorForTile([source], cloneTile, NO_SESSIONS)).toEqual({
       simulatorId: "udid-clone",
       platform: "ios",
       name: "iPhone 16 · 2",
@@ -107,8 +117,134 @@ describe("findSimulatorForTile on a @1.1 host", () => {
 
   it("answers null for a clone the host no longer lists", () => {
     expect(
-      findSimulatorForTile([{ ...source, instances: [] }], cloneTile),
+      findSimulatorForTile(
+        [{ ...source, instances: [] }],
+        cloneTile,
+        NO_SESSIONS,
+      ),
     ).toBeNull();
+  });
+});
+
+describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
+  const OWN_INSTANCE = {
+    instanceKey: "Pixel_8_API_35",
+    name: "Pixel_8_API_35",
+    booted: true,
+    cloneOf: null,
+    drivenByAgent: false,
+    keepRunning: false,
+    idleUntil: null,
+  } as const;
+  /**
+   * The host keys an Android instance by its AVD name and lists the device
+   * under the serial its emulator runs on, so a clone's key and the serial
+   * its own tile carries are different strings - and one source's clones all
+   * differ from one another only by key.
+   */
+  const source: SimulatorSummary = {
+    ...BOOTED_EMULATOR,
+    instances: [
+      OWN_INSTANCE,
+      {
+        ...OWN_INSTANCE,
+        instanceKey: "Pixel_8_API_35_traycer_2",
+        name: "Pixel_8_API_35 · 2",
+        cloneOf: OWN_INSTANCE.instanceKey,
+        drivenByAgent: true,
+      },
+      {
+        ...OWN_INSTANCE,
+        instanceKey: "Pixel_8_API_35_traycer_3",
+        name: "Pixel_8_API_35 · 3",
+        cloneOf: OWN_INSTANCE.instanceKey,
+        drivenByAgent: true,
+      },
+    ],
+  };
+  const cloneTile = {
+    simulatorId: "emulator-5558",
+    platform: "android",
+    name: "Pixel_8_API_35 · 3",
+  } as const;
+  const base = {
+    epicId: "epic-1",
+    ownerUserId: "user-1",
+    hostId: "host-1",
+    platform: "android",
+    openedAt: "2026-10-18T00:00:00.000Z",
+    agentId: "agent-1",
+  } as const;
+  const agentOnTheClone: SimulatorSession = {
+    ...base,
+    sessionId: "session-agent-3",
+    simulatorId: cloneTile.simulatorId,
+    instanceKey: "Pixel_8_API_35_traycer_3",
+  };
+  const agentOnTheSibling: SimulatorSession = {
+    ...base,
+    sessionId: "session-agent-2",
+    simulatorId: "emulator-5556",
+    instanceKey: "Pixel_8_API_35_traycer_2",
+  };
+  const personOnSource: SimulatorSession = {
+    ...base,
+    sessionId: "session-person",
+    simulatorId: BOOTED_EMULATOR.simulatorId,
+    instanceKey: OWN_INSTANCE.instanceKey,
+    agentId: null,
+  };
+
+  it("takes the instance the tile's own serial is named with, through the sessions", () => {
+    // Only a session ties the AVD-name key to the serial the tile holds, and
+    // an agent's counts: it is the host's mapping, not a hold on the device.
+    // The sibling clone's session names its own serial, never this one's.
+    expect(
+      findSimulatorForTile([source], cloneTile, [
+        personOnSource,
+        agentOnTheSibling,
+        agentOnTheClone,
+      ]),
+    ).toEqual({
+      simulatorId: cloneTile.simulatorId,
+      platform: "android",
+      name: "Pixel_8_API_35 · 3",
+      version: "Android 15.0",
+      booted: true,
+      physical: false,
+    });
+  });
+
+  it("answers null when no session names this tile's serial, or the host lists no instance", () => {
+    expect(
+      findSimulatorForTile([source], cloneTile, [
+        personOnSource,
+        agentOnTheSibling,
+      ]),
+    ).toBeNull();
+    expect(
+      findSimulatorForTile([{ ...source, instances: [] }], cloneTile, [
+        agentOnTheClone,
+      ]),
+    ).toBeNull();
+  });
+
+  it("still boots a cold AVD by name for a root device's serial tile", () => {
+    // A root device always has a row of its own - cold under its AVD name
+    // once its emulator has exited - so its instance is never synthesised:
+    // that would offer the dead serial to boot instead of the AVD.
+    const cold: SimulatorSummary = {
+      ...COLD_AVD,
+      instances: [{ ...OWN_INSTANCE, booted: false }],
+    };
+    const serialTile = {
+      simulatorId: BOOTED_EMULATOR.simulatorId,
+      platform: "android",
+      name: "Pixel_8_API_35",
+    } as const;
+    expect(findSimulatorForTile([cold], serialTile, [personOnSource])).toBe(
+      cold,
+    );
   });
 });
 
