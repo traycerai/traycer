@@ -17,6 +17,12 @@ export type ChatSandboxState =
       readonly lastContactMinutes: number | null;
     };
 
+/** A suspended, stopped or frozen sandbox: the next message wakes it. */
+export type RestingChatSandbox = Extract<
+  ChatSandboxState,
+  { readonly kind: "resting" }
+>;
+
 /** Sending can wake an owned chat; stream and approval rights stay separate. */
 export function restingChatSandbox(
   state: ChatSandboxState,
@@ -25,7 +31,7 @@ export function restingChatSandbox(
     readonly ownedByViewer: boolean;
     readonly environmentOwned: boolean;
   },
-): Extract<ChatSandboxState, { readonly kind: "resting" }> | undefined {
+): RestingChatSandbox | undefined {
   if (
     state.kind !== "resting" ||
     !canEdit ||

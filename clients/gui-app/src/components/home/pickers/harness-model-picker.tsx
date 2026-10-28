@@ -223,10 +223,14 @@ export interface HarnessModelPickerEmbedding {
   readonly footer: ReactNode | null;
 }
 
+/** `ActiveModelPickerController.openForHarness`, for a surface's own ref. */
+export type OpenForHarness = (
+  harnessId: GuiHarnessId,
+  offeredAgents: ReadonlyArray<string> | null,
+) => void;
+
 interface HarnessModelPickerProps {
-  readonly openForHarnessRef?: RefObject<
-    ((harnessId: GuiHarnessId) => void) | null
-  >;
+  readonly openForHarnessRef?: RefObject<OpenForHarness | null>;
   readonly presentation?: boolean;
   readonly maxModeContext: MaxModeContext;
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -427,8 +431,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeRowId,
     hoveredRowId,
     openVersion,
+    offeredAgents,
     visibleOpen,
     handleOpenChange,
+    openOnOfferedAgents,
     handleQueryChange,
     setActiveRailEntry,
     setActiveRowId,
@@ -442,6 +448,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const openForHarness = useOpenHarnessModels(
     props.openForHarnessRef,
     handleOpenChange,
+    openOnOfferedAgents,
     setActiveRailEntry,
   );
   useEmbeddingOpenHandle(embedding, handleOpenChange);
@@ -715,9 +722,16 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // In terminal mode the rail/rows only offer TUI-capable harnesses; GUI-only
   // providers (e.g. `traycer`) are filtered out of the catalog up front so every
   // derived structure (active provider, rows, rail) inherits the restriction.
+  // A sandbox refusal's remedy narrows it the same way, to what sandboxes run.
   const catalogHarnesses = useMemo(
-    () => orderModelPickerHarnesses(restrictToTui(catalog.harnesses, tuiOnly)),
-    [catalog.harnesses, tuiOnly],
+    () =>
+      orderModelPickerHarnesses(
+        restrictToOffered(
+          restrictToTui(catalog.harnesses, tuiOnly),
+          offeredAgents,
+        ),
+      ),
+    [catalog.harnesses, offeredAgents, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalogForClient(runTargetClient);
   const runTargetReadiness = useReactiveHostReadiness(runTargetClient);
@@ -931,12 +945,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         preparingByHarnessId,
         profilesByHarnessId,
         activeProfileIdByHarnessId,
+        offeredAgents,
       }),
     [
       activeProfileIdByHarnessId,
       catalogHarnesses,
       degradedHarnessIds,
       harnesses,
+      offeredAgents,
       preparingByHarnessId,
       profilesByHarnessId,
     ],
@@ -1304,6 +1320,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onKeyDown={handleKeyDown}
         catalogHarnesses={catalogHarnesses}
         fallbackHarnesses={harnesses}
+        offeredAgents={offeredAgents}
         profilesByHarnessId={profilesByHarnessId}
         resolvedActiveProviderId={resolvedActiveProviderId}
         activeProfileId={activePanelProfileId}
@@ -1402,19 +1419,24 @@ function markedModelRowId(
 
 /** Opens a harness rail without committing a different composer selection. */
 function useOpenHarnessModels(
-  openRef: RefObject<((harnessId: GuiHarnessId) => void) | null> | undefined,
+  openRef: RefObject<OpenForHarness | null> | undefined,
   handleOpenChange: (open: boolean) => void,
+  openOnOfferedAgents: (offeredAgents: ReadonlyArray<string>) => void,
   setActiveRailEntry: (
     providerId: ProviderId,
     profileId: string | null,
   ) => void,
-): (harnessId: GuiHarnessId) => void {
+): OpenForHarness {
   const open = useCallback(
-    (harnessId: GuiHarnessId): void => {
-      handleOpenChange(true);
+    (
+      harnessId: GuiHarnessId,
+      offeredAgents: ReadonlyArray<string> | null,
+    ): void => {
+      if (offeredAgents === null) handleOpenChange(true);
+      else openOnOfferedAgents(offeredAgents);
       setActiveRailEntry(harnessId, null);
     },
-    [handleOpenChange, setActiveRailEntry],
+    [handleOpenChange, openOnOfferedAgents, setActiveRailEntry],
   );
   useImperativeHandle(openRef ?? null, () => open, [open]);
   return open;
@@ -1781,6 +1803,15 @@ function restrictToTui<T extends HarnessOption>(
   tuiOnly: boolean,
 ): ReadonlyArray<T> {
   return tuiOnly ? harnesses.filter(isTuiCapable) : harnesses;
+}
+
+function restrictToOffered<T extends HarnessOption>(
+  harnesses: ReadonlyArray<T>,
+  offeredAgents: ReadonlyArray<string> | null,
+): ReadonlyArray<T> {
+  return offeredAgents === null
+    ? harnesses
+    : harnesses.filter((harness) => offeredAgents.includes(harness.id));
 }
 
 /**

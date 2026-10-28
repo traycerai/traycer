@@ -51,6 +51,7 @@ function facts(smallerShapeAffordable: boolean): SandboxSetupLineFacts {
     regionLabel: "US East",
     shapeLabel: "2 vCPU · 4 GB",
     smallerShapeAffordable,
+    offeredAgents: null,
   };
 }
 

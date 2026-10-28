@@ -81,7 +81,13 @@ const dialogMocks = vi.hoisted(() => ({
   /** The harness's sign-in on the dialog's host. */
   authStatus: "authenticated" as "authenticated" | "unauthenticated",
   offeredAgents: undefined as readonly string[] | undefined,
-  openForHarness: vi.fn<(harnessId: GuiHarnessId) => void>(),
+  openForHarness:
+    vi.fn<
+      (
+        harnessId: GuiHarnessId,
+        offeredAgents: ReadonlyArray<string> | null,
+      ) => void
+    >(),
   publication: { kind: "unknown" } as ChatForkPublicationState,
   publicationReads: [] as Array<{
     readonly enabled: boolean;
@@ -276,7 +282,11 @@ vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: (props: {
     readonly store: ComposerToolbarStore;
     readonly openForHarnessRef?: RefObject<
-      ((harnessId: GuiHarnessId) => void) | null
+      | ((
+          harnessId: GuiHarnessId,
+          offeredAgents: ReadonlyArray<string> | null,
+        ) => void)
+      | null
     >;
   }) => {
     dialogMocks.toolbarStore = props.store;
@@ -1048,7 +1058,42 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       ).toBe("Sibling fork");
 
       fireEvent.click(screen.getByTestId("composer-host-notice-action"));
-      expect(dialogMocks.openForHarness).toHaveBeenCalledWith("traycer");
+      expect(dialogMocks.openForHarness).toHaveBeenCalledWith("traycer", [
+        "traycer",
+      ]);
+    });
+
+    it("follows the pick after the refusal: another unoffered agent switches the line, an offered one clears it", async () => {
+      dialogMocks.offeredAgents = ["traycer"];
+      renderStaged(NEW_SANDBOX);
+      fillTitle();
+      fireEvent.click(forkButton());
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        NOT_OFFERED,
+      );
+      const toolbar = dialogMocks.toolbarStore;
+      if (toolbar === null) throw new Error("Expected the fork toolbar");
+
+      act(() =>
+        toolbar.getState().setSelection({
+          harnessId: "codex",
+          modelSlug: "gpt-6.1-sol",
+          profileId: null,
+        }),
+      );
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      );
+
+      act(() =>
+        toolbar.getState().setSelection({
+          harnessId: "traycer",
+          modelSlug: "claude-sonnet-5.5",
+          profileId: null,
+        }),
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
 
     it("refuses the same unoffered agent on a team sandbox before attaching", async () => {

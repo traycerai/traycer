@@ -179,6 +179,8 @@ export interface SandboxSetupLineFacts {
   readonly shapeLabel: string;
   /** A cheaper shape the balance covers exists. */
   readonly smallerShapeAffordable: boolean;
+  /** The agents sandboxes run, which Choose a model opens on; `null` unknown. */
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }
 
 /**
@@ -355,6 +357,7 @@ function SandboxRefusalLine(props: {
           failure={failure}
           label={label}
           actions={actions}
+          offeredAgents={props.facts.offeredAgents}
         />
       );
       break;
@@ -417,8 +420,9 @@ function SandboxAgentRefusalRemedies(props: {
   readonly failure: AgentRefusalFailure;
   readonly label: string;
   readonly actions: SandboxSetupLineActions;
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }): ReactNode {
-  const { failure, actions, label } = props;
+  const { failure, actions, label, offeredAgents } = props;
   return (
     <>
       {failure.kind === "agent-not-offered" &&
@@ -429,7 +433,7 @@ function SandboxAgentRefusalRemedies(props: {
           onClick={
             actions.onChooseModel ??
             (() => {
-              openActiveModelPickerForHarness("traycer", null);
+              openActiveModelPickerForHarness("traycer", null, offeredAgents);
             })
           }
         />

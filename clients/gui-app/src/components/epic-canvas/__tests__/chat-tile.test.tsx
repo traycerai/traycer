@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -220,6 +221,29 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 // runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
 // an unrelated component (~55 tests across these files). Enumeration fails the
 // useful way instead: vitest names the missing export and the module.
+// The cloud catalogue: the real read, unless a test says what it answered.
+const sandboxCatalogueTestState = vi.hoisted(() => ({
+  catalogue: null as SandboxCatalogue | null,
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+      >();
+    return {
+      ...actual,
+      useSandboxCatalogue: (enabled: boolean) => {
+        const result = actual.useSandboxCatalogue(enabled);
+        return sandboxCatalogueTestState.catalogue === null
+          ? result
+          : { ...result, data: sandboxCatalogueTestState.catalogue };
+      },
+    };
+  },
+);
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useOptionalHostClient: () => null,
@@ -530,6 +554,10 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
+import {
+  convertReplicaChat,
+  createPublishedChatSessionHandle,
+} from "@/lib/chats/published-chat-session";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -1730,6 +1758,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
     vi.restoreAllMocks();
@@ -2143,6 +2172,11 @@ describe("<ChatTile />", () => {
     }
     liveTile.unmount();
 
+    // The send wakes the sandbox only for an agent the catalogue offers.
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
     renderRestingCopy(handle);
 
     await waitFor(() => {
@@ -2175,6 +2209,28 @@ describe("<ChatTile />", () => {
     });
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {
+    renderRestingCopy(
+      createPublishedChatSessionHandle({
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        ownerUserId: "owner-1",
+        title: CHAT_ARTIFACT.name,
+        createdAt: 1,
+        updatedAt: 1,
+        conversion: convertReplicaChat([], []),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    });
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+    expect(
+      screen.queryByText("Reconnecting to the host — sending is paused"),
+    ).toBeNull();
   });
 
   it("keeps resting-copy composer settings local while live settings persist", async () => {

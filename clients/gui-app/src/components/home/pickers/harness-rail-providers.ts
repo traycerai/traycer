@@ -123,6 +123,11 @@ export interface VisibleRailEntriesInput {
    * falls back to its first selectable profile (typically ambient).
    */
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
+  /**
+   * The agents a sandbox refusal's remedy opened the picker on, or `null` for
+   * the host's own rail; see `offeredRailHarnesses`.
+   */
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }
 
 /**
@@ -143,13 +148,18 @@ export function visibleRailEntries(
     preparingByHarnessId,
     profilesByHarnessId,
     activeProfileIdByHarnessId,
+    offeredAgents,
   } = input;
-  return visibleRailHarnesses(
-    harnesses,
-    fallbackHarnesses,
-    degradedHarnessIds,
-    preparingByHarnessId,
-  ).map((harness) =>
+  const railHarnesses =
+    offeredAgents === null
+      ? visibleRailHarnesses(
+          harnesses,
+          fallbackHarnesses,
+          degradedHarnessIds,
+          preparingByHarnessId,
+        )
+      : offeredRailHarnesses(harnesses, fallbackHarnesses, offeredAgents);
+  return railHarnesses.map((harness) =>
     buildRailEntry({
       harness,
       profiles: profilesByHarnessId.get(harness.id) ?? [],
@@ -215,6 +225,23 @@ export function visibleRailHarnesses(
   };
   return sortGuiHarnessesByProviderOrder(visible).toSorted(
     (left, right) => deprioritized(left) - deprioritized(right),
+  );
+}
+
+/**
+ * The rail a sandbox refusal's remedy opens on. It answers what the SANDBOX
+ * runs, not what this host does, so this host's settings stop deciding what
+ * shows: it lists exactly the offered agents, one this host has turned off
+ * included, and nothing else.
+ */
+function offeredRailHarnesses(
+  harnesses: ReadonlyArray<HarnessOption>,
+  fallbackHarnesses: ReadonlyArray<HarnessOption>,
+  offeredAgents: ReadonlyArray<string>,
+): ReadonlyArray<HarnessOption> {
+  const source = harnesses.length > 0 ? harnesses : fallbackHarnesses;
+  return sortGuiHarnessesByProviderOrder(
+    source.filter((harness) => offeredAgents.includes(harness.id)),
   );
 }
 
