@@ -64,6 +64,11 @@ const state = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
   controlUnavailable: null as string | null,
 }));
+// These cases are about the sandboxes-on behaviour: the retirement is driven by
+// the sandbox list, whose query is disabled on any other verdict.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
 vi.mock("@/lib/host", async (original) => ({
   ...(await original<typeof import("@/lib/host")>()),
   useHostBinding: () => state.binding,

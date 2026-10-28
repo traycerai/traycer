@@ -46,6 +46,11 @@ const mocks = vi.hoisted(() => ({
   entry: null as RemoteHostDirectoryEntry | null,
   configuration: { kind: "personal" } as SandboxPageConfiguration,
 }));
+// These cases are about the sandboxes-on behaviour: without it the rows read an
+// empty list and the staging surface is withheld.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,

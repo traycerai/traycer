@@ -1,3 +1,8 @@
+// These cases are about the environments-on behaviour: the Secrets page's
+// queries are disabled on any other verdict.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),

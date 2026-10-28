@@ -63,6 +63,12 @@ const world = vi.hoisted(() => ({
   activateTab: vi.fn(),
 }));
 
+// These cases are about the sandboxes-on behaviour: the Automations shell and
+// the new-terminal picker's staging are withheld on any other verdict.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => world.runnerHost,
   useRunnerHostOrNull: () => world.runnerHost,

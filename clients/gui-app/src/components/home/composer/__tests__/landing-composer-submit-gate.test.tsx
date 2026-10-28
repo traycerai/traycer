@@ -191,6 +191,13 @@ function claudeCodeProvider(
   };
 }
 
+// These cases are about the preview features' on behaviour: a team stage is
+// offered only on a sandboxes-on verdict, and the reauth banner reads
+// environments.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
