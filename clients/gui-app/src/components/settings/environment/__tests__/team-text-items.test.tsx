@@ -79,13 +79,16 @@ describe("TeamTextItems kind collisions", () => {
       }),
     });
     const user = userEvent.setup();
-    const view = (items: readonly EnvironmentConfigurationItem[]): ReactNode => (
-      <RenderBoundary>{textItems(items)}</RenderBoundary>
-    );
+    const view = (
+      items: readonly EnvironmentConfigurationItem[],
+    ): ReactNode => <RenderBoundary>{textItems(items)}</RenderBoundary>;
     const { rerender } = render(view([shell]), { wrapper: harness.Wrapper });
 
     await user.type(screen.getByLabelText("Variable name"), "shell");
-    await user.type(screen.getByLabelText("New variable value"), "custom-shell");
+    await user.type(
+      screen.getByLabelText("New variable value"),
+      "custom-shell",
+    );
     await user.click(screen.getByRole("button", { name: "Add a variable" }));
 
     expect(await screen.findByRole("status")).toHaveProperty(
@@ -105,7 +108,10 @@ describe("TeamTextItems kind collisions", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Variable name")).toHaveProperty("value", "");
+      expect(screen.getByLabelText("Variable name")).toHaveProperty(
+        "value",
+        "",
+      );
     });
     expect(screen.getByLabelText("shell value")).toHaveProperty(
       "value",
@@ -160,8 +166,87 @@ describe("TeamTextItems kind collisions", () => {
 
     await waitFor(() => {
       expect(screen.queryByRole("region", { name: "shell" })).toBeNull();
-      expect(screen.getByLabelText("Variable name")).toHaveProperty("disabled", false);
+      expect(screen.getByLabelText("Variable name")).toHaveProperty(
+        "disabled",
+        false,
+      );
     });
     expect(screen.queryByRole("status")).toBeNull();
   });
+});
+
+describe("TeamTextItems revision changes during writes", () => {
+  it.each(["put", "delete"] as const)(
+    "reconciles a %s and unlocks the editors after the row remounts",
+    async (action) => {
+      const variable = configurationItem({
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "any",
+        value: { value: "development" },
+      });
+      const write =
+        Promise.withResolvers<EnvironmentConfigurationItemWriteResponse>();
+      const method =
+        action === "put"
+          ? "environment.configuration.items.put"
+          : "environment.configuration.items.delete";
+      const harness = mountTeamPage(poolSource("editor"), {
+        [method]: () => write.promise,
+      });
+      const user = userEvent.setup();
+      const { rerender } = render(textItems([variable]), {
+        wrapper: harness.Wrapper,
+      });
+      const originalEditor = screen.getByLabelText("NODE_ENV value");
+
+      if (action === "put") {
+        await user.clear(originalEditor);
+        await user.type(originalEditor, "production");
+      }
+      await user.click(
+        within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+          "button",
+          { name: action === "put" ? "Save" : "Delete" },
+        ),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf(method)).toHaveLength(1);
+      });
+
+      // A poll observes a newer revision before the write answers.
+      rerender(
+        textItems([
+          { ...variable, revision: 2, value: { value: "production" } },
+        ]),
+      );
+      expect(screen.getByLabelText("NODE_ENV value")).not.toBe(originalEditor);
+      expect(screen.getByLabelText("Variable name")).toHaveProperty(
+        "disabled",
+        true,
+      );
+
+      await act(async () => {
+        write.resolve({ outcome: "saved", revision: 2 });
+        await write.promise;
+      });
+      if (action === "delete") rerender(textItems([]));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Variable name")).toHaveProperty(
+          "disabled",
+          false,
+        );
+        expect(screen.queryByRole("status")).toBeNull();
+      });
+      if (action === "put") {
+        expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+          "value",
+          "production",
+        );
+      } else {
+        expect(screen.queryByRole("region", { name: "NODE_ENV" })).toBeNull();
+      }
+    },
+  );
 });
