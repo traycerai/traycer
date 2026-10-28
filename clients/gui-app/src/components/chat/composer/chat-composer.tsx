@@ -275,9 +275,10 @@ interface ChatComposerProps {
   readonly suggestedPrompt: string | undefined;
   /**
    * The sandbox this chat is bound to, while it rests and the next message
-   * wakes it; `null` otherwise. Such a chat is drawn by its published copy,
-   * bound to the host SERVING that copy, so the tab's host is not where the
-   * send runs: the run gates and the toolbar's pick answer for the sandbox.
+   * wakes it; `null` otherwise. The tab's host is not where that send runs: it
+   * serves the chat's published copy, or - a tab opened while the sandbox was
+   * awake - it is the resting sandbox itself, which answers nothing. So the
+   * run gates and the toolbar's pick answer for the sandbox.
    */
   readonly restingSandbox: RestingChatSandbox | null;
 }
@@ -568,7 +569,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // and their catalog subscriptions. Visible split partners retain their body.
   // The catalog is the TAB host's (`hostClient`), like every other read in
   // this composer - a tab bound to another host offers that host's harnesses
-  // and models, never the app-wide default's.
+  // and models, never the app-wide default's. A resting chat's Traycer models
+  // are the cloud catalog's instead (`sendsToRestingSandbox`).
   const toolbarStore = useComposerToolbarStore(
     focused ? "chat-tile" : null,
     seedSource,

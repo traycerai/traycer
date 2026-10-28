@@ -27,7 +27,10 @@ import {
   type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
-import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type {
+  ComposerToolbarStore,
+  ComposerToolbarStoreState,
+} from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import {
   commitProfileSelection,
@@ -397,6 +400,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
+  const sandboxPick = useSandboxTraycerPick(store, selection.harnessId);
   const reasoning = useStore(store, (s) => s.reasoning);
   const serviceTier = useStore(store, (s) => s.serviceTier);
   const setReasoning = useStore(store, (s) => s.setReasoning);
@@ -601,7 +605,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // user disabled or that isn't available. `harness-runtime.ts`'s
   // `prewarmCatalog` re-checks provider enablement for the same reason.
   const selectedHarnessRefetchGate =
-    activityEnabled && selectedHarnessAvailable;
+    activityEnabled &&
+    hostAnswersSelectedHarness(selectedHarnessAvailable, sandboxPick);
   const selectedModelsQuery = useGuiHarnessModelsQueryForClient(
     runTargetClient,
     selection.harnessId,
@@ -727,7 +732,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // A sandbox refusal's remedy narrows it the same way, to what sandboxes run,
   // and lists Traycer's models from the cloud catalog: the picker's host may
   // have Traycer off, and its list says nothing about a sandbox.
-  const cloudTraycer = useCloudTraycerModels(offeredAgents, catalogActive);
+  const cloudTraycer = useCloudTraycerModels(
+    offeredAgents,
+    sandboxPick.target !== null,
+    catalogActive,
+  );
   const catalogHarnesses = useMemo(
     () =>
       orderModelPickerHarnesses(
@@ -751,17 +760,25 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     runTargetHostId,
     runTargetReadiness.hasRpcEndpoint,
     runTargetReachability,
+    sandboxPick.target,
   );
   const handleRefreshCatalog = useCallback(async () => {
     await refreshCatalog();
   }, [refreshCatalog]);
-  const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
-  // "Pending" has to mean a fetch is actually coming. A disabled query with no
-  // cached data reports `isPending` forever, so reading it raw would leave an
-  // inactive surface spinning in place of its provider icon for a fetch it is
-  // deliberately not making.
-  const modelsPending =
-    selectedHarnessRefetchGate && selectedModelsQuery.isPending;
+  const selected = selectedModelsState({
+    sandboxPick,
+    hostModels: selectedModelsQuery.data?.models ?? EMPTY_MODELS,
+    // "Pending" has to mean a fetch is actually coming. A disabled query with
+    // no cached data reports `isPending` forever, so reading it raw would
+    // leave an inactive surface spinning in place of its provider icon for a
+    // fetch it is deliberately not making.
+    hostModelsPending:
+      selectedHarnessRefetchGate && selectedModelsQuery.isPending,
+    hostAvailable: selectedHarnessAvailable,
+    activityEnabled,
+  });
+  const selectedModels = selected.models;
+  const modelsPending = selected.pending;
   const harnessesPending = harnessesQueryPending(
     activityEnabled,
     runTargetClient,
@@ -778,7 +795,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         maxModeContext,
         harnessesPending,
         modelsPending,
-        selectedHarnessAvailable,
+        selectedHarnessAvailable: selected.available,
         selectedHarnessProfiles:
           profilesByHarnessId.get(selection.harnessId) ?? [],
       }),
@@ -787,7 +804,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       modelsPending,
       profilesByHarnessId,
       reasoningFooter,
-      selectedHarnessAvailable,
+      selected.available,
       selectedModels,
       selectedModel,
       selection,
@@ -1820,6 +1837,70 @@ function restrictToTui<T extends HarnessOption>(
   return tuiOnly ? harnesses.filter(isTuiCapable) : harnesses;
 }
 
+type SandboxRunTarget = ComposerToolbarStoreState["sandboxRunTarget"];
+
+/** Where this composer's send runs, and its Traycer models if it is a sandbox. */
+interface SandboxTraycerPick {
+  readonly target: SandboxRunTarget;
+  /**
+   * The cloud catalog's models, as the store reads them, for a Traycer pick
+   * sent to a sandbox; `null` for any other pick, which its host answers.
+   */
+  readonly models: ReadonlyArray<ModelOption> | null;
+  readonly modelsLoaded: boolean;
+}
+
+/**
+ * A Traycer pick sent to a sandbox is answered by the cloud catalog, which
+ * the store already reads: the run-target host's own list says nothing about
+ * it, and a resting sandbox answers nothing at all.
+ */
+function useSandboxTraycerPick(
+  store: ComposerToolbarStore,
+  harnessId: ProviderId,
+): SandboxTraycerPick {
+  const target = useStore(store, (s) => s.sandboxRunTarget);
+  const models = useStore(store, (s) => s.catalog.models);
+  const modelsLoaded = useStore(store, (s) => s.catalog.modelsLoaded);
+  const fromCloud = target !== null && harnessId === "traycer";
+  return { target, models: fromCloud ? models : null, modelsLoaded };
+}
+
+/** Whether the run-target host is the one to ask for the selected models. */
+function hostAnswersSelectedHarness(
+  hostAvailable: boolean,
+  sandboxPick: SandboxTraycerPick,
+): boolean {
+  return hostAvailable && sandboxPick.models === null;
+}
+
+/** The selected harness's models, from the cloud for a sandbox's Traycer pick. */
+function selectedModelsState(input: {
+  readonly sandboxPick: SandboxTraycerPick;
+  readonly hostModels: ReadonlyArray<ModelOption>;
+  readonly hostModelsPending: boolean;
+  readonly hostAvailable: boolean;
+  readonly activityEnabled: boolean;
+}): {
+  readonly models: ReadonlyArray<ModelOption>;
+  readonly pending: boolean;
+  readonly available: boolean;
+} {
+  const { sandboxPick } = input;
+  if (sandboxPick.models === null) {
+    return {
+      models: input.hostModels,
+      pending: input.hostModelsPending,
+      available: input.hostAvailable,
+    };
+  }
+  return {
+    models: sandboxPick.models,
+    pending: input.activityEnabled && !sandboxPick.modelsLoaded,
+    available: true,
+  };
+}
+
 /** Traycer's models for a sandbox, from the cloud catalog read. */
 interface CloudTraycerModels {
   readonly models: ReadonlyArray<ModelOption>;
@@ -1830,16 +1911,19 @@ interface CloudTraycerModels {
 const EMPTY_CLOUD_MODELS: ReadonlyArray<ModelOption> = [];
 
 /**
- * The cloud catalog's Traycer models while the picker is narrowed to what
- * sandboxes run and Traycer is among them; `null` otherwise, and nothing is
- * read. Read only while the picker's catalog is active.
+ * The cloud catalog's Traycer models while the composer sends to a sandbox, or
+ * the picker is narrowed to what sandboxes run and Traycer is among them;
+ * `null` otherwise, and nothing is read. Read only while the picker's catalog
+ * is active.
  */
 function useCloudTraycerModels(
   offeredAgents: ReadonlyArray<string> | null,
+  sendsToSandbox: boolean,
   catalogActive: boolean,
 ): CloudTraycerModels | null {
   const sandboxTraycer =
-    offeredAgents !== null && offeredAgents.includes("traycer");
+    sendsToSandbox ||
+    (offeredAgents !== null && offeredAgents.includes("traycer"));
   const query = useSandboxTraycerModels(catalogActive && sandboxTraycer);
   const { data, error, isPending } = query;
   return useMemo(
@@ -2104,7 +2188,10 @@ function modelPickerHostUnavailableLabel(
   hostId: string | null,
   hasRpcEndpoint: boolean,
   reachability: HostReachability,
+  sandboxRunTarget: SandboxRunTarget,
 ): string | null {
+  // A resting sandbox is not an offline host: its next message wakes it.
+  if (sandboxRunTarget === "resting") return null;
   if (hasRpcEndpoint && reachability.status !== "unreachable") {
     return null;
   }
