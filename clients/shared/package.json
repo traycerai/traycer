@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "compile": "tsgo --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "compile": "tsrs --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "lint": "bun run lint:files .",
     "lint:files": "oxlint -c oxlint.config.ts --fix --deny-warnings --no-error-on-unmatched-pattern",
     "format": "oxfmt .",

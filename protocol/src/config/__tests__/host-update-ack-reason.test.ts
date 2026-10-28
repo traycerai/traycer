@@ -44,7 +44,7 @@ const BASE_REASONS = [
 describe("dispatch ack reason", () => {
   it("the leaf imports NOTHING from `node:` - the property that makes it renderer-safe", () => {
     // Read as SOURCE, deliberately. This is the one defect in this module that
-    // neither `tsgo` nor this suite can otherwise see: a `node:` import here
+    // neither `tsrs` nor this suite can otherwise see: a `node:` import here
     // type-checks, passes under vitest's node environment, and fails only in
     // the renderer's production bundle - which is exactly how the vocabulary
     // ended up unreachable from the GUI in the first place (`host-update-ack.ts`
