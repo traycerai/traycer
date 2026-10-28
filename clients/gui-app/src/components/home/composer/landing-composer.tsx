@@ -127,7 +127,10 @@ import {
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
-import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import {
+  ComposerHostNotice,
+  type ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
 import { useLandingOwner } from "@/hooks/home/use-landing-owner";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
@@ -176,6 +179,21 @@ function landingComposerCanSubmit(args: {
     args.workspaceCanStart &&
     args.hasSubmittableContent
   );
+}
+
+/**
+ * What Send would be refused for now: the stage's check while a stage takes
+ * the send, else the sandbox host's own. Read on every render, so a refusal
+ * already shown follows the pick and the placement.
+ */
+function landingSendRefusal(
+  stage: StagedSandbox | null,
+  check: (stage: StagedSandbox) => ComposerHostNoticeState | null,
+  hostRefusal: ComposerHostNoticeState | null,
+): ComposerHostNoticeState | null {
+  return stage !== null && stage.phase !== "handoff"
+    ? check(stage)
+    : hostRefusal;
 }
 
 export function LandingComposer(props: LandingComposerProps) {
@@ -386,6 +404,7 @@ export function LandingComposer(props: LandingComposerProps) {
       // The landing composer has no chat yet - see `ComposerBody`.
       chatLineCarriesAutoMode: null,
       stagedSurfaceKey: composerSurfaceKey,
+      sendsToRestingSandbox: false,
     },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
@@ -548,9 +567,15 @@ export function LandingComposer(props: LandingComposerProps) {
       dismissHostNotice();
     },
   });
+  const stagedNow = readStagedSandbox(composerSurfaceKey);
   const stagedCatalogueNotice = stagedSandboxCheckingNotice(
-    readStagedSandbox(composerSurfaceKey),
+    stagedNow,
     stagedSignInCheck.check,
+  );
+  const sendRefusal = landingSendRefusal(
+    stagedNow,
+    stagedSignInCheck.check,
+    sandboxAgentGate.notice,
   );
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
     workspaceDisabledHint: workspaceGate.disabledHint,
@@ -664,8 +689,9 @@ export function LandingComposer(props: LandingComposerProps) {
   const {
     notice: hostNotice,
     raise: raiseHostNotice,
+    raiseSendRefusal,
     dismiss: dismissHostNotice,
-  } = useComposerHostNotice(resolvedHostId);
+  } = useComposerHostNotice(resolvedHostId, sendRefusal);
   // G4: this composer FOLLOWS the effective host only when nothing else
   // answered its placement - no override, no pin IN FORCE - and only then
   // does a derivation move re-point it and its host-dependent state must not
@@ -854,7 +880,7 @@ export function LandingComposer(props: LandingComposerProps) {
           )
             return false;
           if (signedOut !== null) {
-            raiseHostNotice(signedOut);
+            raiseSendRefusal();
             return false;
           }
           const text = composerDisplayPlainText(content);
@@ -920,6 +946,7 @@ export function LandingComposer(props: LandingComposerProps) {
       owner,
       pickerStore,
       raiseHostNotice,
+      raiseSendRefusal,
       runtimeStore,
       setComposerExpanded,
       stagedSend,
@@ -942,7 +969,7 @@ export function LandingComposer(props: LandingComposerProps) {
     // An agent that cannot run on this sandbox is refused at Send, with the
     // configuration's Providers; the draft and the chip stay as they were.
     if (sandboxAgentGate.notice !== null) {
-      raiseHostNotice(sandboxAgentGate.notice);
+      raiseSendRefusal();
       return false;
     }
     const toolbar = toolbarStore.getState();
@@ -990,6 +1017,7 @@ export function LandingComposer(props: LandingComposerProps) {
     pickerStore,
     composerSurfaceKey,
     raiseHostNotice,
+    raiseSendRefusal,
     sandboxAgentGate.notice,
     setComposerExpanded,
     submitStagedSandbox,

@@ -86,6 +86,7 @@ function SampleModelPickerBody(): ReactNode {
       activeDescendant={undefined}
       catalogHarnesses={SAMPLE_HARNESSES}
       fallbackHarnesses={SAMPLE_HARNESSES}
+      offeredAgents={null}
       profilesByHarnessId={NO_PROFILES}
       resolvedActiveProviderId={SAMPLE_SELECTION.harnessId}
       activeProfileId={null}

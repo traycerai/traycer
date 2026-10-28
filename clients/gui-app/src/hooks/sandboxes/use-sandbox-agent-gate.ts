@@ -9,6 +9,7 @@ import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-que
 import {
   sandboxAgentNotOfferedNotice,
   sandboxAgentSecondaryActions,
+  sandboxAgentsUncheckedNotice,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -20,6 +21,7 @@ import {
 } from "@/lib/provider-ordering";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  CHECKING_SANDBOX_AGENTS,
   configurationLabel,
   openProvidersLabel,
   enableSandboxInferenceLine,
@@ -42,6 +44,20 @@ const NOT_BLOCKED: SandboxAgentGate = {
   hint: null,
   notice: null,
 };
+
+/** An agent sandboxes don't run, refused with "Choose a model" on what they do. */
+function notOfferedGate(
+  harnessId: GuiHarnessId,
+  offeredAgents: ReadonlyArray<string> | undefined,
+  remedies: SandboxAgentRemedies,
+): SandboxAgentGate {
+  const notice = sandboxAgentNotOfferedNotice(
+    harnessId,
+    offeredAgents ?? null,
+    remedies,
+  );
+  return { blocked: true, hint: notice.message, notice };
+}
 
 /** The pending notice holds Send while the destination proves launch readiness. */
 function sandboxAgentPreparingGate(harnessId: GuiHarnessId): SandboxAgentGate {
@@ -84,20 +100,16 @@ export function useSandboxAgentGate(
     input.active && configuration !== null && configuration.kind === "team",
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
-  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId)) {
-    const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
-    return { blocked: true, hint: notice.message, notice };
-  }
+  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId))
+    return notOfferedGate(input.harnessId, offeredAgents, input);
   const readiness = requestedAgentReadiness(
     input.harnessId,
     harnesses.data?.harnesses,
     providers.data?.providers,
     opencodeLine,
   );
-  if (readiness.kind === "not-offered") {
-    const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
-    return { blocked: true, hint: notice.message, notice };
-  }
+  if (readiness.kind === "not-offered")
+    return notOfferedGate(input.harnessId, offeredAgents, input);
   if (readiness.kind === "ready") return NOT_BLOCKED;
   if (readiness.kind === "waiting")
     return sandboxAgentPreparingGate(input.harnessId);
@@ -120,4 +132,47 @@ export function useSandboxAgentGate(
       secondaryActions: sandboxAgentSecondaryActions(input),
     },
   };
+}
+
+const CHECKING_OFFERED_AGENTS: SandboxAgentGate = {
+  blocked: true,
+  hint: CHECKING_SANDBOX_AGENTS,
+  notice: {
+    kind: "mirror",
+    message: CHECKING_SANDBOX_AGENTS,
+    pending: true,
+    action: null,
+  },
+};
+
+/**
+ * `useSandboxAgentGate` for a chat whose sandbox rests. Its chat is drawn by
+ * the published copy, bound to the host SERVING that copy, so no host this
+ * composer can read is the one the send runs on, and the sandbox itself
+ * answers nothing until it is awake. The cloud catalogue decides here, before
+ * any wake: an agent sandboxes don't offer is refused, and an offered one
+ * passes, leaving its readiness to the woken sandbox. So does every agent when
+ * an older server's catalogue names none. A read that ended with no catalogue
+ * holds Send with Retry, since a pass would wake the sandbox unchecked.
+ *
+ * Read whenever the chat rests, focused or not, so a pane that never asked is
+ * not mistaken for one whose read failed. Inert while `resting` is false.
+ */
+export function useRestingSandboxAgentGate(input: {
+  readonly resting: boolean;
+  readonly harnessId: GuiHarnessId | null;
+}): SandboxAgentGate {
+  const catalogue = useSandboxCatalogue(input.resting);
+  if (!input.resting || input.harnessId === null) return NOT_BLOCKED;
+  if (catalogue.data === undefined) {
+    if (catalogue.isFetching) return CHECKING_OFFERED_AGENTS;
+    const notice = sandboxAgentsUncheckedNotice(() => {
+      void catalogue.refetch();
+    });
+    return { blocked: true, hint: notice.message, notice };
+  }
+  const offeredAgents = catalogue.data.offeredAgents;
+  if (offeredAgents === undefined || offeredAgents.includes(input.harnessId))
+    return NOT_BLOCKED;
+  return notOfferedGate(input.harnessId, offeredAgents, {});
 }

@@ -13,6 +13,8 @@ import { domAnimation, LazyMotion } from "motion/react";
 import type { ReactElement, ReactNode } from "react";
 import type { OpenChatQueuedPromptItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PICKED_SETTINGS } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 
 const composerProps = vi.hoisted(
   () =>
@@ -22,6 +24,7 @@ const composerProps = vi.hoisted(
       editingQueueItemId: string | null;
       canCancelEdit: boolean;
       hasWorkspaceControls: boolean;
+      restingSandbox: RestingChatSandbox | null;
     }>,
 );
 vi.mock("@/components/chat/composer/chat-composer", () => ({
@@ -31,6 +34,7 @@ vi.mock("@/components/chat/composer/chat-composer", () => ({
     readonly editingQueueItemId: string | null;
     readonly onCancelQueueEdit: (() => void) | undefined;
     readonly workspaceControls: ReactNode;
+    readonly restingSandbox: RestingChatSandbox | null;
   }) => {
     composerProps.push({
       sendDisabled: props.sendDisabled,
@@ -38,6 +42,7 @@ vi.mock("@/components/chat/composer/chat-composer", () => ({
       editingQueueItemId: props.editingQueueItemId,
       canCancelEdit: typeof props.onCancelQueueEdit === "function",
       hasWorkspaceControls: props.workspaceControls !== null,
+      restingSandbox: props.restingSandbox,
     });
     return <div data-testid="composer-stub" />;
   },
@@ -205,6 +210,18 @@ const FRESH_ACCESS = {
   readOnlyNotice: null,
 } as const;
 
+const RESTING: RestingChatSandbox = {
+  kind: "resting",
+  sandbox: sandboxSummaryFixture({
+    id: "sbx-rest",
+    hostId: "host-rest",
+    state: "suspended",
+    displayName: "e2e-sbx-rest",
+  }),
+  configuration: { kind: "personal" },
+  wakeChangesPayer: false,
+};
+
 function lastComposer() {
   return composerProps.at(-1);
 }
@@ -215,10 +232,10 @@ afterEach(() => {
 });
 
 describe("the composer of a chat on a resting sandbox", () => {
-  it("lets a reconnecting non-viewer send, with no disabled hint", () => {
+  it("lets a reconnecting non-viewer send, with no disabled hint, and hands the composer the sandbox its send wakes", () => {
     render(
       <ChatLowerInteractionSurfaces
-        {...props({ ...FRESH_ACCESS, restingSandbox: true }, null)}
+        {...props({ ...FRESH_ACCESS, restingSandbox: RESTING }, null)}
       />,
     );
 
@@ -227,6 +244,7 @@ describe("the composer of a chat on a resting sandbox", () => {
       sendDisabled: false,
       hint: null,
       hasWorkspaceControls: true,
+      restingSandbox: RESTING,
     });
   });
 
@@ -236,6 +254,7 @@ describe("the composer of a chat on a resting sandbox", () => {
     expect(lastComposer()).toMatchObject({
       sendDisabled: true,
       hasWorkspaceControls: true,
+      restingSandbox: null,
     });
     expect(lastComposer()?.hint).not.toBeNull();
   });
@@ -251,7 +270,7 @@ describe("the composer of a chat on a resting sandbox", () => {
               isCopy: true,
               canAct: false,
               readOnlyNotice: null,
-              restingSandbox: true,
+              restingSandbox: RESTING,
             },
             null,
           )}
@@ -316,7 +335,7 @@ describe("the composer of a chat on a resting sandbox", () => {
     render(
       <ChatLowerInteractionSurfaces
         {...props(
-          { ...FRESH_ACCESS, isCopy: true, restingSandbox: true },
+          { ...FRESH_ACCESS, isCopy: true, restingSandbox: RESTING },
           editing,
         )}
       />,

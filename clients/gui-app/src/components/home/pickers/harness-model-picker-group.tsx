@@ -59,6 +59,8 @@ interface ProviderRailProps {
   readonly onOpenProviderSettings: (focusTab: string) => void;
   readonly onRefresh: () => Promise<void>;
   readonly refreshDisabledReason: string | undefined;
+  /** See `VisibleRailEntriesInput.offeredAgents`. */
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }
 
 export function ProviderRail(props: ProviderRailProps) {
@@ -77,6 +79,7 @@ export function ProviderRail(props: ProviderRailProps) {
     onOpenProviderSettings,
     onRefresh,
     refreshDisabledReason,
+    offeredAgents,
   } = props;
   const entries = visibleRailEntries({
     harnesses,
@@ -85,6 +88,7 @@ export function ProviderRail(props: ProviderRailProps) {
     preparingByHarnessId,
     profilesByHarnessId,
     activeProfileIdByHarnessId,
+    offeredAgents,
   });
   const activeEntryKey = railEntryKey(activeProviderId);
 

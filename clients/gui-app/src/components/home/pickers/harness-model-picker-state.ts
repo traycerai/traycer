@@ -11,6 +11,12 @@ interface HarnessModelPickerState {
   readonly activeRowId: string;
   readonly hoveredRowId: string;
   readonly openVersion: number;
+  /**
+   * The agents a sandbox refusal's remedy opened the rail on, or `null` for
+   * the host's own rail. Each open sets it, so it never outlives the open
+   * that asked for it.
+   */
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }
 
 type HarnessModelPickerStateAction =
@@ -19,6 +25,7 @@ type HarnessModelPickerStateAction =
       readonly open: boolean;
       readonly selectedProviderId: ProviderId;
       readonly selectedProfileId: string | null;
+      readonly offeredAgents: ReadonlyArray<string> | null;
     }
   | { readonly type: "closeOnly" }
   | { readonly type: "closeForDisabled" }
@@ -34,6 +41,8 @@ type HarnessModelPickerStateAction =
 interface HarnessModelPickerStateController extends HarnessModelPickerState {
   readonly visibleOpen: boolean;
   readonly handleOpenChange: (next: boolean) => void;
+  /** Opens on a sandbox's offered agents only; see `offeredAgents`. */
+  readonly openOnOfferedAgents: (offeredAgents: ReadonlyArray<string>) => void;
   readonly handleQueryChange: (next: string) => void;
   readonly setActiveRailEntry: (
     providerId: ProviderId,
@@ -72,6 +81,23 @@ export function useHarnessModelPickerState(
         open: next,
         selectedProviderId,
         selectedProfileId,
+        offeredAgents: null,
+      });
+    },
+    [disabled, selectedProviderId, selectedProfileId],
+  );
+  const openOnOfferedAgents = useCallback(
+    (offeredAgents: ReadonlyArray<string>) => {
+      if (disabled) {
+        dispatch({ type: "closeForDisabled" });
+        return;
+      }
+      dispatch({
+        type: "setOpen",
+        open: true,
+        selectedProviderId,
+        selectedProfileId,
+        offeredAgents,
       });
     },
     [disabled, selectedProviderId, selectedProfileId],
@@ -99,6 +125,7 @@ export function useHarnessModelPickerState(
     ...state,
     visibleOpen: state.open && !disabled,
     handleOpenChange,
+    openOnOfferedAgents,
     handleQueryChange,
     setActiveRailEntry,
     setActiveRowId,
@@ -119,6 +146,7 @@ function initialHarnessModelPickerState(seed: {
     activeRowId: "",
     hoveredRowId: "",
     openVersion: 0,
+    offeredAgents: null,
   };
 }
 
@@ -138,6 +166,7 @@ function harnessModelPickerStateReducer(
           activeProfileId: action.selectedProfileId,
           hoveredRowId: "",
           activeRowId: "",
+          offeredAgents: action.offeredAgents,
         };
       }
       return {

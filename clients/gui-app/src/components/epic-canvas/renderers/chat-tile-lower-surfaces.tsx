@@ -75,6 +75,7 @@ import {
   ChatComposerDeliveryStatus,
 } from "@/components/chat/composer/chat-composer-delivery-status";
 import { ChatComposerOpencodeLineHeld } from "@/components/chat/composer/chat-composer-opencode-line-held";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -144,8 +145,11 @@ export interface ChatLowerRuntimeState {
 }
 
 export interface ChatLowerAccessState {
-  /** Only the composer can enqueue a message for its resting sandbox. */
-  readonly restingSandbox?: boolean;
+  /**
+   * The sandbox this chat's next message wakes; only the composer can enqueue
+   * one for it.
+   */
+  readonly restingSandbox?: RestingChatSandbox;
   /** The serving host has a copy, not authority over the owner's workspace. */
   readonly isCopy: boolean;
   readonly isViewer: boolean;
@@ -808,7 +812,7 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  if (model.access.isViewer && model.access.restingSandbox !== true) {
+  if (model.access.isViewer && model.access.restingSandbox === undefined) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -928,7 +932,8 @@ function LiveChatComposer(props: {
   const { model } = props;
   const tabHostId = useTabHostId();
   const restingMessage =
-    model.access.restingSandbox === true && model.queue.editingItem === null;
+    model.access.restingSandbox !== undefined &&
+    model.queue.editingItem === null;
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
@@ -982,6 +987,7 @@ function LiveChatComposer(props: {
         </>
       }
       suggestedPrompt={model.composer.suggestedPrompt}
+      restingSandbox={model.access.restingSandbox ?? null}
     />
   );
 }

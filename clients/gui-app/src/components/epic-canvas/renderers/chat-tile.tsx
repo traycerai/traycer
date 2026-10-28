@@ -3911,7 +3911,7 @@ function useChatTileSessionViewModel(
       isViewer: accessFlags.isViewer,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
-      restingSandbox: props.restingSandbox !== undefined,
+      restingSandbox: props.restingSandbox,
     }),
     [
       isCopy,
@@ -4085,13 +4085,17 @@ function useChatTileSessionViewModel(
         pendingActions: state.pendingActions,
       }),
       onCheckDelivery: chatActions.checkSendDelivery,
+      // A published copy's stream is not down, it never existed: the copy is
+      // frozen `closed`, and nothing will ever reconnect it.
       streamReconnecting:
+        !isCopy &&
         state.snapshotLoaded &&
         state.connectionStatus !== "open" &&
         state.fatalClose === null,
       connectionStatus: state.connectionStatus,
     }),
     [
+      isCopy,
       chatActions.checkSendDelivery,
       state.connectionStatus,
       state.fatalClose,
