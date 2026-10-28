@@ -176,11 +176,13 @@ function renderPinMenu(
       <ContextMenuTrigger>Open menu</ContextMenuTrigger>
       <TabContextMenuContent
         tab={EPIC_TAB}
+        canClose
         canCloseOtherTabs
         canOpenInNewWindow={false}
         canEditTitle={false}
         taskPinnedState={taskPinnedState}
         isTaskPinPending={false}
+        onClose={() => undefined}
         onCloseOtherTabs={() => undefined}
         onDuplicateTab={() => undefined}
         onOpenInNewWindow={() => undefined}
@@ -253,11 +255,13 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
         <ContextMenuTrigger>Open menu</ContextMenuTrigger>
         <TabContextMenuContent
           tab={DUPLICATABLE_TAB}
+          canClose
           canCloseOtherTabs
           canOpenInNewWindow={false}
           canEditTitle={false}
           taskPinnedState={null}
           isTaskPinPending={false}
+          onClose={() => undefined}
           onCloseOtherTabs={() => undefined}
           onDuplicateTab={() => undefined}
           onOpenInNewWindow={() => undefined}
@@ -285,11 +289,13 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
         <ContextMenuTrigger>Open menu</ContextMenuTrigger>
         <TabContextMenuContent
           tab={DUPLICATABLE_TAB}
+          canClose
           canCloseOtherTabs
           canOpenInNewWindow={false}
           canEditTitle={false}
           taskPinnedState={null}
           isTaskPinPending={false}
+          onClose={() => undefined}
           onCloseOtherTabs={() => undefined}
           onDuplicateTab={onDuplicateTab}
           onOpenInNewWindow={() => undefined}
@@ -515,6 +521,73 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
   });
 });
 
+describe("the Close Tab item", () => {
+  afterEach(() => {
+    cleanup();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+  });
+
+  function renderCloseMenu(
+    canClose: boolean,
+    onClose: (tab: HeaderTab) => void,
+  ): void {
+    renderWithQueryClient(
+      <ContextMenu open>
+        <ContextMenuTrigger>Open menu</ContextMenuTrigger>
+        <TabContextMenuContent
+          tab={EPIC_TAB}
+          canClose={canClose}
+          canCloseOtherTabs
+          canOpenInNewWindow={false}
+          canEditTitle={false}
+          taskPinnedState={CLOUD_UNPINNED_KNOWN}
+          isTaskPinPending={false}
+          onClose={onClose}
+          onCloseOtherTabs={() => undefined}
+          onDuplicateTab={() => undefined}
+          onOpenInNewWindow={() => undefined}
+          onSplitCommand={() => undefined}
+          onEditTitle={() => undefined}
+          onSetTaskPinned={() => undefined}
+        />
+      </ContextMenu>,
+    );
+  }
+
+  it("sits right before Close Other Tabs, shows the strip tab's chord, and closes the menu's tab", async () => {
+    const onClose = vi.fn<(tab: HeaderTab) => void>();
+    renderCloseMenu(true, onClose);
+
+    const close = await screen.findByTestId(
+      `tab-close-${EPIC_TAB.kind}-${EPIC_TAB.id}-menu`,
+    );
+    const closeOthers = screen.getByTestId(
+      `tab-close-others-${EPIC_TAB.kind}-${EPIC_TAB.id}`,
+    );
+    expect(close.nextElementSibling).toBe(closeOthers);
+    // The chord is `epic.close`, the strip tab's own. `tab.close` (⌘W) closes
+    // the active tile inside the task, which is not what this item does.
+    expect(close.textContent).toContain(formatChordForDisplay("mod+shift+w"));
+    expect(close.textContent).not.toContain(formatChordForDisplay("mod+w"));
+
+    fireEvent.click(close);
+
+    expect(onClose).toHaveBeenCalledWith(EPIC_TAB);
+  });
+
+  it("is disabled for a tab the strip cannot close", async () => {
+    const onClose = vi.fn<(tab: HeaderTab) => void>();
+    renderCloseMenu(false, onClose);
+
+    const close = await screen.findByTestId(
+      `tab-close-${EPIC_TAB.kind}-${EPIC_TAB.id}-menu`,
+    );
+    expect(close.getAttribute("data-disabled")).not.toBeNull();
+    fireEvent.click(close);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
 describe("the Tabs placement radio group", () => {
   afterEach(() => {
     cleanup();
@@ -601,11 +674,13 @@ describe("the Tabs placement radio group", () => {
           </ContextMenuTrigger>
           <TabContextMenuContent
             tab={EPIC_TAB}
+            canClose
             canCloseOtherTabs
             canOpenInNewWindow={false}
             canEditTitle={false}
             taskPinnedState={CLOUD_UNPINNED_KNOWN}
             isTaskPinPending={false}
+            onClose={() => undefined}
             onCloseOtherTabs={() => undefined}
             onDuplicateTab={() => undefined}
             onOpenInNewWindow={() => undefined}
