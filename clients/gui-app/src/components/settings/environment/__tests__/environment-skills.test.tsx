@@ -1339,6 +1339,78 @@ describe("The Skills page's update policies", () => {
       expect(screen.getByRole("dialog")).toBe(dialog);
     });
 
+    it("disables Edit and Update from source in an open dialog while the update is pending, and frees both once it lands", async () => {
+      negotiateHosted();
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reread = false;
+      const row = (): EnvironmentSkillV11 => ({
+        ...REVIEW,
+        origin: "bundled",
+        policy: "evolve",
+        // A further update stays available, so the button is still drawn.
+        version: reread ? "2.0.0" : "1.0.0",
+        updateAvailable: true,
+      });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([row()], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+        "environment.configuration.skills.list": () => listed([row()], "pol-1"),
+        [UPDATE]: async () => {
+          await held;
+          reread = true;
+          return applied;
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await screen.findByText("review");
+      await userEvent.click(
+        within(rowOf("review")).getByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      const update = await within(dialog).findByRole("button", {
+        name: "Update from source",
+      });
+      const edit = within(dialog).getByRole("button", { name: "Edit" });
+      expect(update.hasAttribute("disabled")).toBe(false);
+      expect(edit.hasAttribute("disabled")).toBe(false);
+
+      await userEvent.click(update);
+
+      await waitFor(() => {
+        expect(harness.paramsOf(UPDATE)).toHaveLength(1);
+      });
+      const pending = within(dialog).getByRole("button", {
+        name: "Update from source",
+      });
+      expect(pending.hasAttribute("disabled")).toBe(true);
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Edit" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+
+      release();
+
+      await waitFor(() => {
+        expect(
+          within(dialog)
+            .getByRole("button", { name: "Update from source" })
+            .hasAttribute("disabled"),
+        ).toBe(false);
+        expect(
+          within(dialog)
+            .getByRole("button", { name: "Edit" })
+            .hasAttribute("disabled"),
+        ).toBe(false);
+      });
+    });
+
     it("restores a deleted built-in from the fold", async () => {
       negotiateHosted();
       const harness = mountTeamPage(poolSource("editor"), {

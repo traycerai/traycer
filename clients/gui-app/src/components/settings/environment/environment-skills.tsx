@@ -809,6 +809,7 @@ function SkillsPageList(props: {
           canEdit={editable(props.canEdit, open)}
           canUpdate={canUpdate(open)}
           updatePending={update.isPending}
+          replacing={update.isPending || restoreBundled.isPending}
           contentEpoch={contentEpoch}
           onRequestUpdate={() => requestUpdate(open)}
           onClose={() => setOpenName(null)}
@@ -946,6 +947,11 @@ function EnvironmentSkillDetail(props: {
   readonly canEdit: boolean;
   readonly canUpdate: boolean;
   readonly updatePending: boolean;
+  /**
+   * An update or a restore is replacing skill files: no edit or second
+   * update starts meanwhile, so no draft is lost when they land.
+   */
+  readonly replacing: boolean;
   /** Moves when an update or a restore replaced the skill's files. */
   readonly contentEpoch: number;
   readonly onRequestUpdate: () => void;
@@ -990,8 +996,8 @@ function EnvironmentSkillDetail(props: {
       sourceLabel={skillSourcePhrase(props.skill.origin, name)}
       removal={{ kind: "hidden" }}
       removePending={false}
-      // The flag disables Edit too, and Remove is not offered here.
-      removeDisabled={false}
+      // The flag disables Edit and Update too; Remove is not offered here.
+      removeDisabled={props.replacing}
       actionError={error}
       lockedNote={null}
       canEdit={props.canEdit}
