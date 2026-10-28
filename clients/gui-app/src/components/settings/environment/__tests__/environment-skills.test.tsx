@@ -1167,8 +1167,9 @@ describe("A provider's skill switch while its own write is in flight", () => {
     async ({ skills }) => {
       negotiateMethods(SWITCHES);
       const write = gate();
-      let resolveRead: (answer: EnvironmentConfigurationSkillsListResponse) => void =
-        () => undefined;
+      let resolveRead: (
+        answer: EnvironmentConfigurationSkillsListResponse,
+      ) => void = () => undefined;
       let nextRead = new Promise<EnvironmentConfigurationSkillsListResponse>(
         (resolve) => {
           resolveRead = resolve;
