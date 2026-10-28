@@ -64,6 +64,14 @@ const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
   value: "local",
 }));
 
+// The hook-removal notice is not behind a preview feature, but the notification
+// centre and the Notifications settings page it opens both reach one, and
+// `usePreviewFeature` reads the user record through `useAuthUser`: without this,
+// the harness mounts outside a `HostRuntimeProvider` and throws.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/lib/host", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/host")>()),
   useHostBinding: () => binding.current,
