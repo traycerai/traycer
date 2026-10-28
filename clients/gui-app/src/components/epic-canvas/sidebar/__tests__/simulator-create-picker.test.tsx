@@ -392,8 +392,9 @@ describe("SimulatorCreatePicker", () => {
         { name: "Boot another" },
       ),
     ).toHaveProperty("disabled", true);
-    expect(screen.getByText("Asking Studio Mac about mobile simulators.")).
-      toBeTruthy();
+    expect(
+      screen.getByText("Asking Studio Mac about mobile simulators."),
+    ).toBeTruthy();
   });
 
   it("says a machine whose manifest lacks the read needs an update, and asks it nothing", async () => {
