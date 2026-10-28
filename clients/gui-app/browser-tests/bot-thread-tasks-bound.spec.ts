@@ -23,6 +23,7 @@ const REPLIES = '[data-testid="bot-thread-replies"]';
 const COMPOSER = '[data-testid="bot-thread-composer"]';
 const COMPOSER_INPUT = '[data-testid="bot-thread-composer-input"]';
 const COMPOSER_SEND = '[data-testid="bot-thread-composer-send"]';
+const CLOSE = '[data-testid="bot-thread-close"]';
 
 const ReadingSchema = z.object({
   paneBottom: z.number(),
@@ -130,6 +131,19 @@ test.describe("a window-high pane", () => {
     });
     await expect(scroll.locator('[data-task-id="task-40"]')).toBeInViewport();
   });
+
+  test("Tab from Close thread reaches the thread's tasks", async ({ page }) => {
+    await openPanel(page, "");
+    await expect(page.locator(TASKS)).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+    await page.locator(CLOSE).focus();
+    await page.keyboard.press("Tab");
+    await expect(
+      page.locator('[data-task-id="task-1"] [data-testid="bot-task-open"]'),
+    ).toBeFocused();
+  });
 });
 
 // A split column shorter than the window: the band's cap, a share of the
@@ -157,5 +171,34 @@ test.describe("a pane shorter than the band's cap", () => {
     page,
   }) => {
     expectReachable(await openPanel(page, "?pane=260"));
+  });
+
+  test("Tab from Close thread skips the collapsed tasks and lands on the reply box", async ({
+    page,
+  }) => {
+    await openPanel(page, "?pane=260");
+    await expect(page.locator(TASKS)).toHaveAttribute("data-collapsed", "true");
+    await page.locator(CLOSE).focus();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(COMPOSER_INPUT)).toBeFocused();
+  });
+
+  test("the tasks come back into the tab order when the pane grows", async ({
+    page,
+  }) => {
+    await openPanel(page, "?pane=260");
+    await expect(page.locator(TASKS)).toHaveAttribute("data-collapsed", "true");
+    await page.locator(PANE).evaluate((pane) => {
+      if (pane instanceof HTMLElement) pane.style.height = "900px";
+    });
+    await expect(page.locator(TASKS)).toHaveAttribute(
+      "data-collapsed",
+      "false",
+    );
+    await page.locator(CLOSE).focus();
+    await page.keyboard.press("Tab");
+    await expect(
+      page.locator('[data-task-id="task-1"] [data-testid="bot-task-open"]'),
+    ).toBeFocused();
   });
 });

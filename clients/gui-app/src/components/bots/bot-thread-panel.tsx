@@ -1,4 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
@@ -292,7 +298,8 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
  * came from; nothing when it set up none. The list scrolls in a bounded band
  * and, in a short pane, gives way first, down to nothing, before the replies
  * give up their share, so the conversation stays readable and the box stays
- * in the pane.
+ * in the pane. Collapsed, it is inert: its rows leave the tab order and the
+ * accessibility tree until the band has room again.
  * An automation this thread set up on another bot is that bot's, and is
  * listed there, not here.
  */
@@ -311,17 +318,22 @@ function ThreadTasks(props: {
     () => ({ kind: "thread" as const, threadId }),
     [threadId],
   );
+  const [band, setBand] = useState<HTMLDivElement | null>(null);
+  const collapsed = useCollapsed(band);
   if (own.length === 0) return null;
   return (
     <section
       aria-label="Tasks"
       className="flex max-h-[min(30dvh,16rem)] min-h-0 shrink-100 flex-col gap-1 overflow-hidden px-4"
       data-testid="bot-thread-tasks"
+      data-collapsed={collapsed ? "true" : "false"}
+      inert={collapsed}
     >
       <h3 className="shrink-0 pt-2 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         Tasks
       </h3>
       <div
+        ref={setBand}
         className="min-h-0 overflow-y-auto"
         data-testid="bot-thread-tasks-scroll"
       >
@@ -335,6 +347,25 @@ function ThreadTasks(props: {
       </div>
     </section>
   );
+}
+
+/**
+ * Whether a band the layout gave way has no height left, as its resize
+ * observations report it; `false` until the first one, and where nothing
+ * observes.
+ */
+function useCollapsed(element: HTMLElement | null): boolean {
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    if (element === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry !== undefined) setCollapsed(entry.contentRect.height <= 0);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return collapsed;
 }
 
 /** The origin's row: no thread to open, no jump, no options to pick. */
