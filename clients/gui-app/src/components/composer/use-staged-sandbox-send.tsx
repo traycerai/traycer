@@ -46,6 +46,10 @@ import {
   type StagePrice,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  useSandboxOperation,
+  type SandboxRowOperation,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import {
@@ -445,6 +449,23 @@ export function useStagedSandboxSend(input: {
 }
 
 /**
+ * Stop needs the row's word that the sandbox is awake. A listed row can still
+ * read its resting state while a start or resume runs: the stage's boot step
+ * and the row's own verb say so first.
+ */
+function stopOffered(
+  stage: StagedSandbox | null,
+  row: SandboxSummary | undefined,
+  operation: SandboxRowOperation | null,
+): boolean {
+  const waking =
+    (stage?.step === "booting" && stage.failure === null) ||
+    (operation?.kind === "pending" &&
+      (operation.verb === "start" || operation.verb === "resume"));
+  return row?.state === "awake" && !waking;
+}
+
+/**
  * The facts the setup line reads beyond its stage: the cost line, and for the
  * shape refusal the region, the shape and whether a smaller one is affordable.
  * `null` while there is no stage.
@@ -465,11 +486,8 @@ export function useSetupLineFacts(
       : sandboxes?.find((candidate) => candidate.id === stageSandboxId);
   const sandboxAwake =
     stageRow === undefined ? null : stageRow.state === "awake";
-  const sandboxStoppable =
-    stageRow !== undefined &&
-    stageRow.state !== "creating" &&
-    stageRow.state !== "starting" &&
-    stageRow.state !== "resuming";
+  const operation = useSandboxOperation(stageSandboxId ?? "");
+  const sandboxStoppable = stopOffered(stage, stageRow, operation);
   // A resting sandbox of the person's costs what its row says.
   const existingPrice = useMemo<StagePrice | null>(() => {
     if (stage === null || stage.target.kind !== "existing") return null;

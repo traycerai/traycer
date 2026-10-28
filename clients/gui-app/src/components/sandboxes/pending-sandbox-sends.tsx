@@ -3190,7 +3190,7 @@ function useOpenTerminalWhenUp(
 /**
  * Ends the send and puts the message back in this task's new-agent
  * composer, where the person picks a host again; `restage` stages the same
- * sandbox there, for a shape change, and `keepHost` picks the sandbox the
+ * sandbox there, for a shape change, and `keepHost` names the sandbox the
  * send was made on (a Stop's give-back, a model recovery). A fork has no
  * message to put back: it ends, and the chat it came from is where to fork
  * again.
@@ -3240,7 +3240,9 @@ function endSendBackToComposer(input: {
     tabId: input.tabId,
     placement: returned.kind === "task" ? returned.placement : null,
     parentId: returned.kind === "task" ? returned.parentId : null,
-    hostId: null,
+    // Named, not only pinned: a pin on an offline sandbox falls back to
+    // another host, and a named one sends there or nowhere.
+    hostId: input.keepHost ? input.stage.createdHostId : null,
     modelPickerHarnessId: input.modelPickerHarnessId,
   });
   return returned;

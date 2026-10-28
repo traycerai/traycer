@@ -6902,7 +6902,7 @@ describe("Stop while the sandbox boots", () => {
     ["resuming", ["resuming"]],
     ["not yet listed", []],
   ] as const)(
-    "offers no Stop while the row is %s, and offers it once the row is awake",
+    "offers no Stop while the row is %s, and offers it once the run sees the row awake",
     async (_label, states) => {
       seed({ ...SEEDED, phase: "creating", elapsedSeconds: 7 });
       answerSandboxRows(
@@ -6927,6 +6927,11 @@ describe("Stop while the sandbox boots", () => {
         ],
         Date.now() + 120_000,
       );
+      act(() => {
+        useStagedSandboxStore
+          .getState()
+          .report(SURFACE, { step: "applying", stepAt: Date.now() });
+      });
       expect(await screen.findByTestId("sandbox-setup-stop")).toBeDefined();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
     },
@@ -7052,49 +7057,14 @@ describe("choosing Stop on an unclaimed send", () => {
   }
 
   /** A resting row was read after the strip mounted, before the person chose Stop. */
-  async function chooseStopOverCachedRest(): Promise<void> {
-    seed({ ...SEEDED, elapsedSeconds: 120 });
-    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
-    await screen.findByTestId("sandbox-setup-line");
-    // Read after the strip mounted, before Stop is chosen.
-    const readAt = Date.now();
-    const resting = sandboxSummaryFixture({
-      id: SANDBOX_ID,
-      hostId: SANDBOX_HOST,
-      state: "stopped",
-    });
-    mocks.listSandboxes.mockResolvedValue(listAnswers([resting]));
-    answerSandboxRows([resting], readAt);
-    // A refusal that holds the send at rest: the read neither wakes the
-    // sandbox nor gives the message back.
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "failed", code: "wake", step: "booting" },
-      });
-    });
-    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
-  }
-
-  it("keeps the message and Stop while the stop is unanswered, though a stopped row was read before Stop was chosen", async () => {
-    const answer = deferred<SandboxVerbOutcome>();
-    mocks.verbAnswer = answer.promise;
-    await chooseStopOverCachedRest();
-
-    await waitFor(() => {
-      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expectSendKept();
-    await settleStop(answer);
-  });
-
   it("shows Stop on the created sandbox's collapsed and expanded setup line, then marks it pending", async () => {
     const answer = deferred<SandboxVerbOutcome>();
     mocks.verbAnswer = answer.promise;
     seed({ ...SEEDED, phase: "creating", created: true, elapsedSeconds: 0 });
+    // The run saw the created sandbox awake and moved on to its settings.
+    useStagedSandboxStore
+      .getState()
+      .report(SURFACE, { step: "applying", stepAt: Date.now() });
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
     mount();
 
@@ -7118,21 +7088,6 @@ describe("choosing Stop on an unclaimed send", () => {
     );
     expectSendKept();
     await settleStop(answer);
-  });
-
-  it("keeps the message, the stage and Stop, and says why, when the stop fails, though a stopped row was read before Stop was chosen", async () => {
-    mocks.verbAnswer = Promise.reject(new Error("The sandbox would not stop."));
-    mocks.verbAnswer.catch(() => undefined);
-    await chooseStopOverCachedRest();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
-        "Couldn't stop api-refactor · SBX-0701",
-      );
-    });
-    expectSendKept();
-    expect(screen.getByTestId("sandbox-setup-stop")).toBeDefined();
-    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the message and Stop when a list request sent before Stop was chosen resolves at rest after it", async () => {
@@ -7309,9 +7264,11 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
     ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
+    // Named, so the composer stays on the sandbox though its lease is offline.
     expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
       epicId: "epic-1",
       tabId: "tab-1",
+      hostId: SANDBOX_HOST,
     });
     // On the sandbox it was sent to, never the composer's default host.
     expect(

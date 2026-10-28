@@ -185,8 +185,8 @@ export interface SandboxSetupLineFacts {
   /** Whether the stage's sandbox is awake now; `null` before its row is listed. */
   readonly sandboxAwake: boolean | null;
   /**
-   * The stage's sandbox is listed and not `creating`, `starting` or
-   * `resuming`: Stop is offered only then.
+   * The stage's sandbox is listed awake and no start or resume of it is
+   * under way: Stop is offered only then.
    */
   readonly sandboxStoppable: boolean;
 }
