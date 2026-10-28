@@ -121,8 +121,9 @@ export function SecretsPage(props: {
     }
   };
 
-  // A failed read shows only its line: never the empty state or stale rows.
-  const { secrets, removing } = secretRows(read.failed ? undefined : list.data);
+  // Keep the last answer beside a refetch error instead of replacing its rows
+  // with an empty claim while their completion is still unknown.
+  const { secrets, removing } = secretRows(list.data);
   const pick = useEnvironmentPick();
   const personal = pick.kind === "personal";
   return (

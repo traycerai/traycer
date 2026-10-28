@@ -967,7 +967,11 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         crossHostMessaging: null,
         sessions: null,
       }),
-      "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      "host.notifications.indicatorState": () => ({
+        epics: {},
+        chats: {},
+        complete: true,
+      }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
       "providers.list": () => FIXTURE_PROVIDERS,
       "host.getRateLimitUsage": (params) =>
@@ -1130,7 +1134,7 @@ function buildProbe(): LayoutCanvasProbe {
     // Stands in for the host's reply; `applyFixtureIndicators` keeps every
     // indicator entry answered with it, including ones that appear later.
     setIndicators: (epics, chats) => {
-      fixtureIndicators = { epics, chats };
+      fixtureIndicators = { epics, chats, complete: true };
       applyFixtureIndicators();
     },
     setActivity: (byEpic) => {
@@ -1182,7 +1186,7 @@ function buildProbe(): LayoutCanvasProbe {
       strip.setCollapsed(VARIANT.collapsed);
       useSettingsStore.getState().setTheme("system");
       useLeftPanelStore.getState().setMainCollapsed(EPIC_SURFACE_ID, false);
-      fixtureIndicators = { epics: {}, chats: {} };
+      fixtureIndicators = { epics: {}, chats: {}, complete: true };
       applyFixtureIndicators();
       __setAgentActivityStateForTests({}, "local", null);
       document.documentElement.style.removeProperty(

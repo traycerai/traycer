@@ -224,6 +224,7 @@ export function ComposerBody({
                 onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
                 onDrop={chatPasteActive ? paste.onDrop : NOOP}
                 onKeyDown={undefined}
+                interceptKeyDown={null}
                 onFocus={NOOP}
                 onBlur={NOOP}
                 onEditorReady={onEditorReady}

@@ -693,12 +693,10 @@ export function CanvasArtifactEditor({
       play: activeFullscreen !== null,
       commenting,
       setCommenting,
-      viewOnly: readOnly,
       order: snapshot.order,
       sourceForBoard,
       revealBoard: revealCommentBoard,
       revealCanvasPoint,
-      setTool,
       clearNodeSelection,
     });
     return () => frameEvents?.onCanvasView?.(null);

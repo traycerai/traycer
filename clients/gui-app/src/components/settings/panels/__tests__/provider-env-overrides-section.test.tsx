@@ -11,6 +11,13 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+const navigation = vi.hoisted(() => ({
+  toSection: vi.fn<(id: string) => boolean>(() => true),
+}));
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigation.toSection,
+}));
+
 const hostBindingMock = vi.hoisted(
   (): { current: { readonly hostClient: unknown } | null } => ({
     current: null,
@@ -166,7 +173,7 @@ function renderSection(input: {
 }
 
 describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
-  it("states native-config-only scope applies to native config/MCP, not chat turns", () => {
+  it("states the variables are used to set Cursor up, not when it runs", () => {
     // Cursor is the production carrier of this scope, but the copy must be
     // driven by the descriptor — not by providerId === "cursor".
     renderSection({
@@ -176,7 +183,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
 
     expect(
       screen.getByText(
-        /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
+        "Used when Traycer sets Cursor up, not when Cursor runs.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/each time it starts/)).toBeNull();
@@ -189,9 +196,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     });
 
     expect(
-      screen.getByText(
-        /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
-      ),
+      screen.getByText("Used when Traycer sets Codex up, not when Codex runs."),
     ).toBeTruthy();
     expect(screen.queryByText(/each time it starts/)).toBeNull();
   });
@@ -934,6 +939,130 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       const row = await screen.findByTestId("env-masked-row");
       expect(within(row).getByTestId("env-key-refusal")).toBeTruthy();
       expect(screen.queryByTestId("env-claimed-row")).toBeNull();
+    });
+
+    describe("an Add draft named for a variable a secret sets", () => {
+      const CLAIM = "ENV_R2_S3_CLAIM";
+      const codexSecret: EnvironmentSecretV12 = {
+        ...secretSettingIt,
+        secretId: "sec-codex",
+        name: "R2_S3",
+        providerVariables: [{ providerId: "codex", name: CLAIM }],
+      };
+
+      async function apply(name: string, value: string): Promise<void> {
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Add a variable" }),
+        );
+        fireEvent.change(screen.getByLabelText("New variable name"), {
+          target: { value: name },
+        });
+        fireEvent.change(screen.getByLabelText("New variable value"), {
+          target: { value },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+      }
+
+      /** A saved row another secret sets: its claim row is the sign the secrets have loaded. */
+      const LOADED = "ENV_R2_LOADED";
+      const loadedSecret: EnvironmentSecretV12 = {
+        ...codexSecret,
+        secretId: "sec-loaded",
+        name: "R2_LOADED",
+        providerVariables: [{ providerId: "codex", name: LOADED }],
+      };
+
+      async function renderCodexEnvTab(
+        secrets: readonly EnvironmentSecretV12[],
+      ): Promise<void> {
+        mountOnPersonalPage(
+          [],
+          { localOverrides: [], secrets: [loadedSecret, ...secrets] },
+          <ProviderEnvOverridesSection
+            providerId="codex"
+            onOpenAccount={null}
+            overrides={[{ key: LOADED, value: HELD_VALUE }]}
+            envOverrideScope="harness-and-native-config"
+          />,
+        );
+        await screen.findByTestId("env-claimed-row");
+      }
+
+      it("shows the secret in place of the value and saves nothing, with a link to Secrets", async () => {
+        await renderCodexEnvTab([codexSecret]);
+        await apply(CLAIM, "plain-value");
+
+        const claim = await screen.findByTestId("env-draft-claimed-row");
+        expect(claim.textContent).toBe(
+          `${CLAIM} · from the secret R2_S3 · Secrets`,
+        );
+        expect(screen.queryByLabelText("New variable value")).toBeNull();
+        expect(
+          screen
+            .getByRole("button", { name: "Apply variable" })
+            .hasAttribute("disabled"),
+        ).toBe(true);
+        expect(
+          screen.getByRole("button", { name: "Discard variable" }),
+        ).toBeTruthy();
+        expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+
+        fireEvent.click(within(claim).getByRole("button", { name: "Secrets" }));
+        expect(navigation.toSection).toHaveBeenCalledWith("secrets");
+      });
+
+      it("shows the claim rather than the key refusal for a claimed credential-shaped name that a saved row also holds", async () => {
+        renderClaudeEnvTab(
+          { localOverrides: [], secrets: [secretSettingIt] },
+          TOKEN_ROW,
+        );
+        await screen.findByTestId("env-claimed-row");
+        await apply("ANTHROPIC_AUTH_TOKEN", HELD_VALUE);
+
+        expect(
+          (await screen.findByTestId("env-draft-claimed-row")).textContent,
+        ).toBe("ANTHROPIC_AUTH_TOKEN · from the secret CLAUDE_TOKEN · Secrets");
+        expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+        expect(screen.queryByText(/already/i)).toBeNull();
+        expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+      });
+
+      it("lets a plain override use the storage name of a secret that sets no provider variable", async () => {
+        await renderCodexEnvTab([{ ...codexSecret, providerVariables: [] }]);
+        await apply(CLAIM, "plain-value");
+
+        await waitFor(() =>
+          expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+        );
+        expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toMatchObject({
+          providerId: "codex",
+          key: CLAIM,
+        });
+        expect(screen.queryByTestId("env-draft-claimed-row")).toBeNull();
+      });
+
+      it("gives the value field back when the name is corrected, then saves normally", async () => {
+        await renderCodexEnvTab([codexSecret]);
+        await apply(CLAIM, "plain-value");
+        await screen.findByTestId("env-draft-claimed-row");
+
+        fireEvent.change(screen.getByLabelText("New variable name"), {
+          target: { value: "ENV_R2_OTHER" },
+        });
+
+        expect(screen.queryByTestId("env-draft-claimed-row")).toBeNull();
+        const value =
+          screen.getByLabelText<HTMLInputElement>("New variable value");
+        fireEvent.change(value, { target: { value: "plain-value" } });
+        fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+        await waitFor(() =>
+          expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+        );
+        expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toMatchObject({
+          providerId: "codex",
+          key: "ENV_R2_OTHER",
+        });
+      });
     });
   });
 });

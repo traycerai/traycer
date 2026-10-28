@@ -1,3 +1,4 @@
+import { pendingSandboxMessageOwnsAction } from "@/lib/sandboxes/pending-sandbox-send";
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -113,6 +114,13 @@ export function useInitialChatHandoffDriver(
 
   useEffect(() => {
     const state = handle.store.getState();
+    if (
+      state.failedSendRestoration !== null &&
+      pendingSandboxMessageOwnsAction(
+        state.failedSendRestoration.clientActionId,
+      )
+    )
+      return;
     const step = nextHandoffTransition(handoff, {
       nodeId,
       snapshotLoaded,

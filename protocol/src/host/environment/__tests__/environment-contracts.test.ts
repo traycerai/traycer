@@ -8,6 +8,7 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  environmentConfigurationRevisionV10,
   environmentConfigurationGuideGetUpgradeV10ToV11,
   environmentConfigurationGuideGetV10,
   environmentConfigurationGuideGetV11,
@@ -662,6 +663,14 @@ const ITEM_ADDRESS = {
 };
 
 const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
+  {
+    method: "environment.configuration.revision",
+    contract: environmentConfigurationRevisionV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: { environmentId: "" },
+    response: { revision: "9007199254740993" },
+    badResponse: { revision: 15 },
+  },
   {
     method: "environment.move.plan",
     contract: environmentMovePlanV10,

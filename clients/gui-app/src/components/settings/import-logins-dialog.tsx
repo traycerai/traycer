@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +32,7 @@ export function ImportLoginsDialog(props: {
   readonly browserView: BrowserViewBridge;
 }): ReactNode {
   const pending =
-    useIsMutating({ mutationKey: browserMutationKeys.importLogins() }) > 0;
+    useIsMutatingOf({ mutationKey: browserMutationKeys.importLogins() }) > 0;
   const close = (): void => {
     if (pending) return;
     props.onOpenChange(false);

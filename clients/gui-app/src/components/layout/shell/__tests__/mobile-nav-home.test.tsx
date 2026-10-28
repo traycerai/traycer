@@ -35,6 +35,7 @@ import "../../../../../__tests__/test-browser-apis";
  */
 
 import type { UseNavigateResult } from "@tanstack/react-router";
+import type { HostNotificationsIndicatorState } from "@traycer/protocol/host/notifications/contracts";
 import {
   cleanup,
   fireEvent,
@@ -126,8 +127,14 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   }),
 }));
 
+// The notification host's answer for the bot's epic; each test sets it.
+const indicators = vi.hoisted(
+  (): { epics: Record<string, HostNotificationsIndicatorState> } => ({
+    epics: {},
+  }),
+);
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
-  useNotificationIndicators: () => ({ epics: {}, chats: {} }),
+  useNotificationIndicators: () => ({ epics: indicators.epics, chats: {} }),
 }));
 
 const openLink = vi.hoisted(() => vi.fn());
@@ -230,6 +237,7 @@ describe("MobileNavDrawer rows", () => {
     useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
     TabNav.__resetTabNavigationControllerForTesting();
     directory.connectable = { hostIds: [], resolved: true };
+    indicators.epics = {};
     useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
   });
 
@@ -321,5 +329,84 @@ describe("MobileNavDrawer rows", () => {
     ).toBe("host-a");
     expect(useMobileNavStore.getState().open).toBe(false);
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(TRACY));
+  });
+
+  describe("the Tracy row's unread count", () => {
+    function openTracyRow(): void {
+      useBotTabsStore.getState().openBotTab({
+        botId: TRACY.id,
+        hostId: "host-a",
+        title: "Release Notes",
+      });
+      useBotTabsStore.getState().setFixedBotId(TRACY.id);
+      useTabsStore.setState({
+        ...emptyTabStripLayout(),
+        items: [{ kind: "tab", id: tabItemId(TRACY), ref: TRACY }],
+        stripOrder: [TRACY],
+      });
+    }
+
+    function tracyIndicators(
+      unreadDone: boolean,
+      unreadCount: number | null,
+    ): void {
+      indicators.epics = {
+        [TRACY.id]: {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone,
+          unreadCount,
+        },
+      };
+    }
+
+    it.each([
+      { unreadCount: 3, shown: "3" },
+      { unreadCount: 120, shown: "99+" },
+    ])(
+      "draws $shown on the glyph and names it, bold",
+      async ({ unreadCount, shown }) => {
+        openTracyRow();
+        tracyIndicators(true, unreadCount);
+        renderDrawer();
+
+        const row = await screen.findByTestId("mobile-nav-tracy");
+        expect(
+          within(row).getByTestId("tracy-entry-unread-count").textContent,
+        ).toBe(shown);
+        expect(row.getAttribute("aria-label")).toBe(`Tracy, ${shown} unread`);
+        expect(row.hasAttribute("data-unread")).toBe(true);
+        expect(within(row).getByText("Tracy").className).toContain(
+          "font-semibold",
+        );
+      },
+    );
+
+    it("draws no count at zero", async () => {
+      openTracyRow();
+      tracyIndicators(false, 0);
+      renderDrawer();
+
+      const row = await screen.findByTestId("mobile-nav-tracy");
+      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
+      expect(row.getAttribute("aria-label")).toBe("Tracy");
+      expect(row.hasAttribute("data-unread")).toBe(false);
+    });
+
+    it("keeps the bold name and draws no count for a host that does not count", async () => {
+      openTracyRow();
+      tracyIndicators(true, null);
+      renderDrawer();
+
+      const row = await screen.findByTestId("mobile-nav-tracy");
+      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
+      expect(row.getAttribute("aria-label")).toBe("Tracy");
+      expect(row.hasAttribute("data-unread")).toBe(true);
+      expect(within(row).getByText("Tracy").className).toContain(
+        "font-semibold",
+      );
+    });
   });
 });

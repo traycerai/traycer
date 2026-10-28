@@ -1,3 +1,4 @@
+import { notificationHooksRemovedMessage } from "@traycer/protocol/host/notifications/presentation";
 import { useState, type ReactNode } from "react";
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
 import { AlertCircle, CheckCircle2, Copy, Plus, RefreshCw } from "lucide-react";
@@ -27,13 +28,7 @@ type HookEntry = NonNullable<
   NotificationHooksStatusQuery["data"]
 >["hooks"][number];
 
-/**
- * Settings surface for the host's notification hooks. The JSON file on the
- * host stays the source of truth and remains hand-editable; this form is a
- * second editor over it. Each save rewrites the whole file from the hooks the
- * form last read, so a save built on a stale read wins over an outside edit
- * (last write wins - deliberate, see the hooks file docs).
- */
+/** Whole-list editor: every write carries the revision of its actual read. */
 export function NotificationHooksSection(props: {
   readonly statusQuery: NotificationHooksStatusQuery;
   readonly testHook: NotificationHooksTestMutation;
@@ -48,6 +43,18 @@ export function NotificationHooksSection(props: {
       dataTestId="notification-hooks-manager"
       fill
     >
+      {data?.pendingRemovalNotices.map((notice) => (
+        <div
+          key={notice.id}
+          role="alert"
+          className="border-b border-warning/30 bg-warning/10 px-4 py-3 text-ui-sm text-warning-foreground"
+        >
+          <p className="font-medium">Notification hooks removed</p>
+          <p>
+            {notificationHooksRemovedMessage(notice.hostName, notice.count)}
+          </p>
+        </div>
+      ))}
       {renderManager({
         data,
         errorMessage: error?.message ?? null,
@@ -140,6 +147,7 @@ function renderManager(args: {
   return (
     <HooksEditor
       hooks={data.hooks}
+      configurationRevision={data.configurationRevision}
       configPath={data.configPath}
       onRefresh={onRefresh}
       testHook={testHook}
@@ -255,14 +263,23 @@ function InlineManagerState(props: {
   );
 }
 
+interface HookSnapshot {
+  readonly hooks: readonly NotificationHookConfig[];
+  readonly configurationRevision: string | null;
+}
 type EditorState =
   | { readonly kind: "closed" }
-  | { readonly kind: "add" }
-  | { readonly kind: "edit"; readonly hook: HookEntry };
+  | { readonly kind: "add"; readonly snapshot: HookSnapshot }
+  | {
+      readonly kind: "edit";
+      readonly hook: HookEntry;
+      readonly snapshot: HookSnapshot;
+    };
 
 function HooksEditor(props: {
   readonly hooks: readonly HookEntry[];
   readonly configPath: string;
+  readonly configurationRevision: string | null;
   readonly onRefresh: () => void;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
@@ -272,19 +289,41 @@ function HooksEditor(props: {
   // editor and its typed draft survive without being parked anywhere. A real
   // host switch remounts through the gate's key and correctly starts closed.
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
-  const [pendingDelete, setPendingDelete] = useState<HookEntry | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    readonly hook: HookEntry;
+    readonly snapshot: HookSnapshot;
+  } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Every write rebuilds the whole file from the hooks this render read, so
-  // there is no long-lived draft of the entire file to drift out of date.
-  const configs = props.hooks.map(toConfig);
-  const saveAll = (hooks: readonly NotificationHookConfig[], done: string) => {
+  const snapshot: HookSnapshot = {
+    hooks: props.hooks.map(toConfig),
+    configurationRevision: props.configurationRevision,
+  };
+  const saveAll = (
+    hooks: readonly NotificationHookConfig[],
+    revision: string | null,
+    done: string,
+  ) => {
+    setSaveError(null);
     props.saveHooks.mutate(
-      { hooks: [...hooks], executableWriteGrant: null },
+      {
+        hooks: [...hooks],
+        executableWriteGrant: null,
+        configurationRevision: revision,
+      },
       {
         onSuccess: () => {
           setEditor({ kind: "closed" });
           setPendingDelete(null);
           toast.success(done);
+        },
+        onError: (error) => {
+          setEditor({ kind: "closed" });
+          setPendingDelete(null);
+          setSaveError(
+            `${error.message} Review the refreshed hooks before saving again.`,
+          );
+          props.onRefresh();
         },
       },
     );
@@ -297,9 +336,17 @@ function HooksEditor(props: {
       addDisabled={props.saveHooks.isPending}
       onRefresh={props.onRefresh}
       onAdd={() => {
-        setEditor({ kind: "add" });
+        setEditor({ kind: "add", snapshot });
       }}
     >
+      {saveError === null ? null : (
+        <div
+          role="alert"
+          className="border-b border-destructive/30 bg-destructive/10 px-4 py-3 text-ui-sm text-destructive"
+        >
+          {saveError}
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
         {props.hooks.length === 0 ? (
           <div
@@ -320,7 +367,7 @@ function HooksEditor(props: {
               variant="outline"
               size="sm"
               onClick={() => {
-                setEditor({ kind: "add" });
+                setEditor({ kind: "add", snapshot });
               }}
             >
               <Plus aria-hidden className="size-3.5" />
@@ -336,18 +383,19 @@ function HooksEditor(props: {
                 testHook={props.testHook}
                 saving={props.saveHooks.isPending}
                 onEdit={() => {
-                  setEditor({ kind: "edit", hook });
+                  setEditor({ kind: "edit", hook, snapshot });
                 }}
                 onToggleEnabled={(enabled) => {
                   saveAll(
-                    configs.map((entry) =>
+                    snapshot.hooks.map((entry) =>
                       entry.id === hook.id ? { ...entry, enabled } : entry,
                     ),
+                    snapshot.configurationRevision,
                     enabled ? "Hook enabled" : "Hook disabled",
                   );
                 }}
                 onDelete={() => {
-                  setPendingDelete(hook);
+                  setPendingDelete({ hook, snapshot });
                 }}
               />
             ))}
@@ -370,9 +418,15 @@ function HooksEditor(props: {
           onSave={(hook) => {
             const next =
               editor.kind === "add"
-                ? [...configs, hook]
-                : configs.map((entry) => (entry.id === hook.id ? hook : entry));
-            saveAll(next, editor.kind === "add" ? "Hook added" : "Hook saved");
+                ? [...editor.snapshot.hooks, hook]
+                : editor.snapshot.hooks.map((entry) =>
+                    entry.id === hook.id ? hook : entry,
+                  );
+            saveAll(
+              next,
+              editor.snapshot.configurationRevision,
+              editor.kind === "add" ? "Hook added" : "Hook saved",
+            );
           }}
         />
       )}
@@ -382,7 +436,7 @@ function HooksEditor(props: {
           blockedReason={null}
           open
           title="Delete hook?"
-          description={`"${pendingDelete.name ?? pendingDelete.id}" will be removed from the hooks file on the host.`}
+          description={`"${pendingDelete.hook.name ?? pendingDelete.hook.id}" will be removed from the hooks file on the host.`}
           cascadeSummary={null}
           actionLabel="Delete"
           isPending={props.saveHooks.isPending}
@@ -391,7 +445,10 @@ function HooksEditor(props: {
           }}
           onConfirm={() => {
             saveAll(
-              configs.filter((entry) => entry.id !== pendingDelete.id),
+              pendingDelete.snapshot.hooks.filter(
+                (entry) => entry.id !== pendingDelete.hook.id,
+              ),
+              pendingDelete.snapshot.configurationRevision,
               "Hook deleted",
             );
           }}
@@ -441,6 +498,9 @@ function HookRow(props: {
             {hook.action.type === "http" ? "HTTP" : "Script"}
           </Badge>
           {hook.enabled ? null : <Badge variant="secondary">disabled</Badge>}
+          {hook.localOnly === true ? (
+            <Badge variant="outline">On this computer</Badge>
+          ) : null}
         </div>
         <p className="truncate font-mono text-ui-xs text-muted-foreground">
           {hook.action.type === "http"

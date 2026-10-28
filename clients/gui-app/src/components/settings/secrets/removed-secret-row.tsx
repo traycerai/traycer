@@ -33,6 +33,7 @@ export function RemovedSecretRow(props: {
     client: props.client,
     hostId: props.hostId,
     secret: { secretId: removed.id, currentVersionId: null },
+    removing: true,
     onChanged: props.onChanged,
   });
   const environmentId = useDetailsEnvironmentId(props.client);
@@ -43,7 +44,11 @@ export function RemovedSecretRow(props: {
     actions.versions.data?.removal ?? removed.removal,
     removed.removal,
   );
-  if (removal.outcome === "destroyed") return null;
+  if (
+    removed.removal.outcome === "destroyed" ||
+    removal.outcome === "destroyed"
+  )
+    return null;
   return (
     <li
       className="flex flex-col gap-1.5 border-b border-border/60 py-3 opacity-75 last:border-b-0"

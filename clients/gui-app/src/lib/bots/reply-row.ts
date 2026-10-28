@@ -1,5 +1,8 @@
+import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
 /**
@@ -48,58 +51,14 @@ export function replyFollowsPost(
   );
 }
 
-/** A post as the line above a direct reply names it. */
-export interface ChatBotRepliedPost {
-  readonly senderLabel: string;
-  /** The post's first line, cut. */
-  readonly excerpt: string;
-}
-
-/** Characters of a post's first line the line above a direct reply shows. */
-const REPLIED_POST_EXCERPT_MAX = 80;
-
 /**
- * The post a bot's direct reply answers, as the reply's line names it (Tracy
- * Bots, reply mode `direct`): its sender and its first line. `null` when no
- * rendered row carries it.
+ * The text of a channel row - a member's post or one of the bot's own rows
+ * - as the chat's store holds it (Tracy Bots T65): a thread names the post
+ * it answers by id only, and wherever a thread shows its post, the text is
+ * read from the channel. `null` when the store has not loaded that row.
  */
-export function repliedPostOf(
-  messages: ReadonlyArray<ChatMessage>,
-  messageId: string,
-): ChatBotRepliedPost | null {
-  const post = messages.find(
-    (message) =>
-      message.role === "user" && message.persistentMessageId === messageId,
-  );
-  if (post === undefined) return null;
-  const text = rowText(post);
-  const firstLine =
-    text
-      .split("\n")
-      .find((line) => line.trim().length > 0)
-      ?.trim() ?? "";
-  return {
-    senderLabel: post.senderLabel ?? "Member",
-    excerpt:
-      firstLine.length > REPLIED_POST_EXCERPT_MAX
-        ? `${firstLine.slice(0, REPLIED_POST_EXCERPT_MAX - 1)}…`
-        : firstLine,
-  };
-}
-
-/**
- * The text of the channel row `messageId` - a member's post or one of the
- * bot's own rows - as the chat's store holds it (Tracy Bots T65): a thread
- * names the post it answers by id only, and wherever a thread shows its
- * post, the text is read from the channel. `null` when the store has not
- * loaded that row.
- */
-export function postTextOf(
-  messages: ReadonlyArray<OpenMessage>,
-  messageId: string,
-): string | null {
-  const post = messages.find((message) => message.messageId === messageId);
-  if (post === undefined) return null;
+export function postTextOf(post: OpenMessage | null): string | null {
+  if (post === null) return null;
   if (post.role === "user") {
     return extractPlainTextFromComposerJSONContent(post.message.content);
   }
@@ -108,8 +67,154 @@ export function postTextOf(
     .join("\n");
 }
 
-function rowText(message: ChatMessage): string {
-  return message.segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
-    .join("\n");
+/**
+ * The post a thread opens on, as the channel's row draws it. `loaded` once
+ * it is read from the channel's own row, the authoritative post that Retry
+ * and Edit act on. Before that the row stands in for it: the post as the
+ * person sent it (its text, writer, time and request), or what the thread
+ * list says of it (its writer, its time and its request, no text), and
+ * nothing can send it again.
+ */
+export interface ThreadOriginRow {
+  readonly row: ChatMessage;
+  readonly loaded: boolean;
+}
+
+/**
+ * The post a thread opens on (Tracy Bots, decision 90): from the channel's
+ * row once it is loaded, else from the post as the person sent it (a send
+ * the host queued has no row until the bot's host takes it), else from the
+ * thread list's anchor. A member's post carries its request, so a post the
+ * bot failed to answer says so here as in the channel; the bot's own
+ * question or proposal carries its announcement. `null` while none is known.
+ */
+export function threadOriginRow(input: {
+  /** The post's message id. */
+  readonly messageId: string;
+  readonly post: OpenMessage | null;
+  readonly sent: BotSentPost | null;
+  readonly anchor: BotThreadAnchor | null;
+  /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
+  readonly senderLabel: (senderUserId: string | null) => string;
+  readonly senderAvatarUrl: (senderUserId: string) => string | null;
+}): ThreadOriginRow | null {
+  const { post, sent, anchor, senderLabel, senderAvatarUrl } = input;
+  if (post !== null) {
+    return { row: loadedOriginRow(post, input), loaded: true };
+  }
+  if (sent !== null) {
+    const row = memberOriginRow(
+      originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+      sent.senderUserId,
+      {
+        requestId: sent.requestId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+      { senderLabel, senderAvatarUrl },
+    );
+    return { row, loaded: false };
+  }
+  if (anchor === null) return null;
+  const base = originRowBase(
+    anchor.messageId,
+    anchor.senderUserId === null ? "assistant" : "user",
+    anchor.sentAt,
+    "",
+  );
+  if (anchor.senderUserId === null) return { row: base, loaded: false };
+  const row = memberOriginRow(
+    base,
+    anchor.senderUserId,
+    {
+      requestId: anchor.requestId,
+      resolvedAt: anchor.resolvedAt,
+      resolvedByMessageId: null,
+    },
+    { senderLabel, senderAvatarUrl },
+  );
+  return { row, loaded: false };
+}
+
+function loadedOriginRow(
+  post: OpenMessage,
+  names: {
+    readonly senderLabel: (senderUserId: string | null) => string;
+    readonly senderAvatarUrl: (senderUserId: string) => string | null;
+  },
+): ChatMessage {
+  const text = postTextOf(post) ?? "";
+  if (post.role === "assistant") {
+    return {
+      ...originRowBase(post.messageId, "assistant", post.timestamp, text),
+      ...(post.announcement === undefined
+        ? {}
+        : { announcement: post.announcement }),
+    };
+  }
+  const userId = post.sender.type === "user" ? post.sender.userId : null;
+  return memberOriginRow(
+    originRowBase(post.messageId, "user", post.timestamp, text),
+    userId,
+    post.conversationRequest ?? null,
+    names,
+  );
+}
+
+function memberOriginRow(
+  base: ChatMessage,
+  userId: string | null,
+  request: ConversationRequest | null,
+  names: {
+    readonly senderLabel: (senderUserId: string | null) => string;
+    readonly senderAvatarUrl: (senderUserId: string) => string | null;
+  },
+): ChatMessage {
+  const avatarUrl = userId === null ? null : names.senderAvatarUrl(userId);
+  return {
+    ...base,
+    senderLabel: names.senderLabel(userId),
+    ...(userId === null ? {} : { senderUserId: userId }),
+    ...(avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl }),
+    ...(request === null ? {} : { conversationRequest: request }),
+  };
+}
+
+function originRowBase(
+  messageId: string,
+  role: "user" | "assistant",
+  sentAt: number,
+  text: string,
+): ChatMessage {
+  return {
+    id: messageId,
+    role,
+    content: text,
+    segments:
+      text.length > 0
+        ? [
+            {
+              id: `${messageId}:text`,
+              kind: "text",
+              markdown: text,
+              isStreaming: false,
+            },
+          ]
+        : [],
+    structuredContent: null,
+    attachments: [],
+    settings: null,
+    createdAt: sentAt,
+    completedAt: null,
+    stopped: null,
+    persistentMessageId: messageId,
+    senderLabel: null,
+    assistantMeta: null,
+    statusLabel: null,
+    agentSenderInfo: null,
+    agentMessage: null,
+    runState: null,
+    sessionAnchor: null,
+    steerBadge: null,
+  };
 }

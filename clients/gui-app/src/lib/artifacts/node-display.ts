@@ -59,7 +59,7 @@ export function isEpicArtifactKind(
   );
 }
 
-// Markdown editing, sidebar comments and composer mentions require a Markdown body.
+// Markdown editing and sidebar comments require a Markdown body.
 export function isMarkdownArtifactKind(
   value: string | null | undefined,
 ): value is MarkdownArtifactKind {
@@ -69,6 +69,19 @@ export function isMarkdownArtifactKind(
     value === "story" ||
     value === "review"
   );
+}
+
+/**
+ * Kinds the create menus author themselves: a markdown body, or an empty
+ * canvas the host seeds and projects to disk. HTML and file artifacts still
+ * need a source file, so they are created by writing files.
+ */
+export type CreatableArtifactKind = MarkdownArtifactKind | "canvas";
+
+export function isCreatableArtifactKind(
+  value: string | null | undefined,
+): value is CreatableArtifactKind {
+  return isMarkdownArtifactKind(value) || value === "canvas";
 }
 
 const EPIC_NODE_KIND_SET: ReadonlySet<string> = new Set(EPIC_NODE_KINDS);

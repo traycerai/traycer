@@ -43,8 +43,9 @@ function sandboxCatalogueQueryOptions(
 
 /**
  * `GET /api/sandboxes/catalogue`: shapes, regions, prices and the nearest
- * region, for the create form, and each provider's suspend fidelity, for
- * the sandbox card. Only an open form or a mounted card reads it (`enabled`).
+ * region for the create form, each provider's suspend fidelity for the card,
+ * and offered agents for staged Send checks. A staged target starts this read
+ * before Send so its offer is normally cached by the first action.
  */
 export function useSandboxCatalogue(
   enabled: boolean,

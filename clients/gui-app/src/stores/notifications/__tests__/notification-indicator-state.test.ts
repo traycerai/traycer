@@ -1,14 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { hostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
+  HostNotificationsIndicatorState,
+  HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
+  indicatorHasUnread,
   mergeHostPendingForkIntoCloudIndicators,
+  mergeLocalPartitionIntoCloudIndicators,
   selectCloudNotificationIndicatorProjection,
   selectCloudNotificationIndicators,
   selectNotificationIndicatorState,
+  type NotificationIndicatorRecords,
+  type RequestedIndicatorIds,
 } from "@/stores/notifications/notification-indicator-state";
+
+/** An entity whose unread rows light no glyph: they are counted and nothing
+ * else. `null` is a host that does not count. */
+function counted(unreadCount: number | null): HostNotificationsIndicatorState {
+  return {
+    pendingApproval: false,
+    pendingInterview: false,
+    pendingFork: false,
+    unreadFailure: false,
+    unreadDone: false,
+    unreadCount,
+  };
+}
 
 describe("notification indicator state", () => {
   it("merges an unread app-local failure into host indicator flags", () => {
@@ -39,6 +59,7 @@ describe("notification indicator state", () => {
             pendingApproval: true,
             pendingInterview: false,
             unreadDone: true,
+            unreadCount: 1,
           },
         },
       },
@@ -175,6 +196,41 @@ describe("cloud notification indicator derivation", () => {
     });
   }
 
+  /** A bot's answer: the `done` row the host mints once per participant, on
+   * the bot's epic and the thread's chat. */
+  function botAnswer(
+    entryId: string,
+    threadId: string,
+    readAt: number | null,
+  ): HostNotificationsCloudFeedRowV16 {
+    return {
+      entryId,
+      originHostId: "host-b",
+      coalesceKey: `host.operation.finished:${entryId}`,
+      entry: {
+        id: entryId,
+        updatedAt: 1,
+        readAt,
+        kind: "host.operation.finished",
+        sourceRef: null,
+        severity: "done",
+        outcome: "completed",
+        epicId: "bot-1",
+        chatId: threadId,
+        payload: {
+          kind: "bot_thread_verdict",
+          operation: "bot.thread.verdict",
+          title: "Tracy answered",
+          message: "Your question about the release",
+          botId: "bot-1",
+          threadId,
+          replyMessageId: entryId,
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+  }
+
   /** The payload is inert for indicator derivation (only kind, severity and
    * the markers are read), but it is still shaped the way its entry kind's
    * producer shapes it, so the fixture is not a misleading example of a
@@ -210,13 +266,13 @@ describe("cloud notification indicator derivation", () => {
   }
 
   function rowsById(
-    rows: ReadonlyArray<HostNotificationsCloudFeedRow>,
-  ): Record<string, HostNotificationsCloudFeedRow> {
+    rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
+  ): Record<string, HostNotificationsCloudFeedRowV16> {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
-  it("does not light the chat's approval glyph for an unresolved browser prompt", () => {
-    const browserRow: HostNotificationsCloudFeedRowV15 = {
+  it("does not light the chat's approval glyph for an unresolved browser prompt, though its unread row is counted", () => {
+    const browserRow: HostNotificationsCloudFeedRowV16 = {
       entryId: "browser-1",
       originHostId: "host-b",
       coalesceKey: "browser.human.needed:chat-1",
@@ -248,8 +304,8 @@ describe("cloud notification indicator derivation", () => {
       ["chat-1"],
     );
 
-    expect(result.chats).toEqual({});
-    expect(result.epics).toEqual({});
+    expect(result.chats).toEqual({ "chat-1": counted(1) });
+    expect(result.epics).toEqual({ "epic-1": counted(1) });
   });
 
   it("uses the origin's durable terminal ordering cursor", () => {
@@ -280,6 +336,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: false,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -311,6 +368,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: true,
       unreadDone: false,
+      unreadCount: 2,
     });
   });
 
@@ -348,7 +406,7 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("lets a silent automatic recovery clear Error without replacing it with Done", () => {
+  it("lets a silent automatic recovery clear Error without replacing it with Done, the failure row still counted", () => {
     const failure = stoppedAt({
       entryId: "0001-agent-failure",
       severity: "failure",
@@ -381,7 +439,10 @@ describe("cloud notification indicator derivation", () => {
       ["chat-1"],
     );
 
-    expect(result).toEqual({ epics: {}, chats: {} });
+    expect(result).toEqual({
+      epics: { "epic-1": counted(1) },
+      chats: { "chat-1": counted(1) },
+    });
   });
 
   it("does not let automatic recovery erase an unread Done", () => {
@@ -449,6 +510,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: false,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -482,6 +544,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: true,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -565,6 +628,7 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: true,
       unreadDone: true,
+      unreadCount: 2,
     });
   });
 
@@ -581,6 +645,7 @@ describe("cloud notification indicator derivation", () => {
             pendingFork: false,
             unreadFailure: true,
             unreadDone: true,
+            unreadCount: 1,
           },
         },
         chats: {},
@@ -649,7 +714,7 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"]).toBeUndefined();
   });
 
-  it("keeps a read completion as the quiet winner over an older failure", () => {
+  it("keeps a read completion as the quiet winner over an older failure, which stays counted", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
         stoppedAt({
@@ -671,7 +736,10 @@ describe("cloud notification indicator derivation", () => {
       ["chat-1"],
     );
 
-    expect(result).toEqual({ epics: {}, chats: {} });
+    expect(result).toEqual({
+      epics: { "epic-1": counted(1) },
+      chats: { "chat-1": counted(1) },
+    });
   });
 
   it("lights an approval while it is unresolved, including after it is read", () => {
@@ -692,7 +760,7 @@ describe("cloud notification indicator derivation", () => {
     );
 
     expect(unresolved.chats["chat-1"].pendingApproval).toBe(true);
-    expect(resolvedButUnread.chats["chat-1"]).toBeUndefined();
+    expect(resolvedButUnread.chats["chat-1"]).toEqual(counted(1));
     expect(unresolvedButRead.chats["chat-1"].pendingApproval).toBe(true);
   });
 
@@ -725,17 +793,62 @@ describe("cloud notification indicator derivation", () => {
       pendingFork: false,
       unreadFailure: false,
       unreadDone: false,
+      unreadCount: 1,
     });
   });
 
-  it("lights nothing for an unread info row", () => {
+  it("neither counts nor lights an unread info row, so the entity cannot read as unread", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([stopped("info", "info", null)]),
       ["epic-1"],
       ["chat-1"],
     );
+    const resolved = selectNotificationIndicatorState(
+      { byId: {} },
+      { epicId: "epic-1", chatId: "chat-1" },
+      null,
+      result,
+    );
 
     expect(result).toEqual({ epics: {}, chats: {} });
+    expect(resolved).toEqual({
+      unreadFailure: false,
+      unreadNonTerminalFailure: false,
+      unreadTerminalFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: false,
+    });
+  });
+
+  it("counts only the rows reading the entity clears when an info row sits beside them", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([stopped("info", "info", null), stopped("done", "done", null)]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"].unreadCount).toBe(1);
+    expect(result.epics["epic-1"].unreadCount).toBe(1);
+  });
+
+  it("counts each unread row on its epic and its chat, and gives a thread with only read rows no entry", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        botAnswer("answer-1", "thread-1", null),
+        botAnswer("answer-2", "thread-1", null),
+        botAnswer("answer-3", "thread-1", 5),
+        botAnswer("answer-4", "thread-2", 5),
+      ]),
+      ["bot-1"],
+      ["thread-1", "thread-2"],
+    );
+
+    expect(result).toEqual({
+      epics: { "bot-1": counted(2) },
+      chats: { "thread-1": counted(2) },
+    });
   });
 
   it("ignores entities the surface did not ask about", () => {
@@ -749,6 +862,307 @@ describe("cloud notification indicator derivation", () => {
   });
 });
 
+describe("an entity's unread count", () => {
+  const BOTH: RequestedIndicatorIds = {
+    epicIds: ["epic-1"],
+    chatIds: ["chat-1"],
+  };
+
+  /** One origin's rows as the cloud holds them, on an epic and a chat. */
+  function partition(count: number | null): NotificationIndicatorRecords {
+    return {
+      epics: { "epic-1": counted(count) },
+      chats: { "chat-1": counted(count) },
+    };
+  }
+
+  /** A host's `home: "local"` answer. */
+  function answer(
+    records: NotificationIndicatorRecords,
+    complete: boolean | null,
+  ): HostNotificationsIndicatorStateResponse {
+    return { ...records, complete };
+  }
+
+  it("counts a notification once when the cloud snapshot and the host's whole-origin answer both hold it", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { ...partition(1), byOriginHostId: { "host-a": partition(1) } },
+      answer(partition(1), true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(1) });
+    expect(merged.chats).toEqual({ "chat-1": counted(1) });
+    expect(merged.byOriginHostId).toEqual({ "host-a": partition(1) });
+  });
+
+  it.each([
+    { name: "the empty partition", complete: false },
+    { name: "an answer that does not say", complete: null },
+  ])(
+    "keeps a thread's count from the cloud when the bound host answers $name",
+    ({ complete }) => {
+      const merged = mergeLocalPartitionIntoCloudIndicators(
+        {
+          epics: {},
+          chats: { "thread-1": counted(1) },
+          byOriginHostId: {
+            "host-b": { epics: {}, chats: { "thread-1": counted(1) } },
+          },
+        },
+        { epics: {}, chats: {}, complete },
+        "host-b",
+        { epicIds: [], chatIds: ["thread-1"] },
+      );
+
+      expect(merged.chats).toEqual({ "thread-1": counted(1) });
+      expect(merged.byOriginHostId?.["host-b"].chats).toEqual({
+        "thread-1": counted(1),
+      });
+    },
+  );
+
+  it("keeps the cloud's count, and takes the host's flags, when the answer does not say it is the whole origin", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        epics: { "epic-1": counted(2) },
+        chats: {},
+        byOriginHostId: {
+          "host-a": { epics: { "epic-1": counted(2) }, chats: {} },
+        },
+      },
+      answer(
+        {
+          epics: {
+            "epic-1": counted(5),
+            "epic-2": { ...counted(4), pendingFork: true },
+          },
+          chats: {},
+        },
+        null,
+      ),
+      "host-a",
+      { epicIds: ["epic-1", "epic-2"], chatIds: [] },
+    );
+
+    // `epic-2` has no cloud record, so the host's own count stands for it.
+    expect(merged.epics).toEqual({
+      "epic-1": counted(2),
+      "epic-2": { ...counted(4), pendingFork: true },
+    });
+    expect(merged.byOriginHostId?.["host-a"].epics["epic-1"]).toEqual(
+      counted(2),
+    );
+  });
+
+  it("lets the host's whole-origin answer replace the bound origin's cloud count but keeps every other origin's rows", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        ...partition(3),
+        byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
+      },
+      answer(partition(1), true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(3) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(1));
+    expect(merged.byOriginHostId?.["host-b"]).toEqual(partition(2));
+  });
+
+  it("drops the bound origin's cloud rows from the count once the host has read them", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        ...partition(3),
+        byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
+      },
+      answer({ epics: {}, chats: {} }, true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(0));
+  });
+
+  it("counts an asked id the whole-origin answer omits as zero in the bound origin's bucket", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { epics: {}, chats: {}, byOriginHostId: { "host-a": partition(1) } },
+      answer({ epics: {}, chats: {} }, true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(0));
+  });
+
+  it("leaves a host that does not count unknown where the cloud holds nothing", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { epics: {}, chats: {}, byOriginHostId: { "host-a": partition(1) } },
+      answer({ epics: { "epic-9": counted(null) }, chats: {} }, true),
+      "host-a",
+      { epicIds: ["epic-9"], chatIds: [] },
+    );
+
+    expect(merged.epics).toEqual({ "epic-9": counted(null) });
+    expect(merged.byOriginHostId?.["host-a"].epics["epic-9"]).toEqual(
+      counted(null),
+    );
+  });
+
+  it("lights an unread thread from a v1.1 host as unknown, never as a counted zero, where the cloud holds no record", () => {
+    // The answer a v1.1 host actually yields after the protocol bridge: no
+    // counts and no word on completeness. Hand-building `complete: true` with
+    // null counts describes no host that exists.
+    const bridged = hostRpcRegistry[
+      "host.notifications.indicatorState"
+    ][1].versions[2].upgradeFromPreviousVersion.upgradeResponse({
+      epics: {},
+      chats: {
+        "thread-1": {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone: true,
+        },
+      },
+    });
+    expect(bridged.complete).toBeNull();
+
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { epics: {}, chats: {}, byOriginHostId: {} },
+      bridged,
+      "host-b",
+      { epicIds: [], chatIds: ["thread-1"] },
+    );
+
+    const unknown = { ...counted(null), unreadDone: true };
+    expect(merged.chats).toEqual({ "thread-1": unknown });
+    expect(merged.byOriginHostId?.["host-b"].chats).toEqual({
+      "thread-1": unknown,
+    });
+    expect(indicatorHasUnread(merged.chats["thread-1"])).toBe(true);
+  });
+
+  it("leaves an entity unknown when a host that does not count overlaps the cloud rows it would replace", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { ...partition(1), byOriginHostId: { "host-a": partition(1) } },
+      answer(partition(null), true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(null) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(null));
+  });
+
+  it("keeps another origin's count for an entity whose host cannot count", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        ...partition(3),
+        byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
+      },
+      answer(partition(null), true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(null));
+  });
+
+  it("leaves an id the answer was not asked about at the cloud's count", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        epics: { "epic-1": counted(2) },
+        chats: { "chat-1": counted(3) },
+        byOriginHostId: {
+          "host-a": {
+            epics: { "epic-1": counted(2) },
+            chats: { "chat-1": counted(3) },
+          },
+        },
+      },
+      answer({ epics: {}, chats: { "chat-1": counted(1) } }, true),
+      "host-a",
+      { epicIds: [], chatIds: ["chat-1"] },
+    );
+
+    expect(merged.chats).toEqual({ "chat-1": counted(1) });
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual({
+      epics: { "epic-1": counted(2) },
+      chats: { "chat-1": counted(1) },
+    });
+  });
+
+  it("counts from the cloud alone when the host answers with no origin to attribute it to", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      partition(2),
+      answer(partition(1), true),
+      null,
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.chats).toEqual({ "chat-1": counted(2) });
+  });
+
+  it.each([true, false, null])(
+    "ORs the flags across planes when the answer's completeness is %s",
+    (complete) => {
+      const merged = mergeLocalPartitionIntoCloudIndicators(
+        {
+          epics: { "epic-1": { ...counted(1), unreadFailure: true } },
+          chats: {},
+          byOriginHostId: {
+            "host-a": {
+              epics: { "epic-1": { ...counted(1), unreadFailure: true } },
+              chats: {},
+            },
+          },
+        },
+        answer(
+          {
+            epics: { "epic-1": { ...counted(1), pendingFork: true } },
+            chats: {},
+          },
+          complete,
+        ),
+        "host-a",
+        BOTH,
+      );
+
+      expect(merged.epics["epic-1"]).toMatchObject({
+        pendingFork: true,
+        unreadFailure: true,
+        unreadCount: 1,
+      });
+    },
+  );
+
+  it.each([
+    { name: "a count above zero", state: counted(1), unread: true },
+    { name: "a count of zero", state: counted(0), unread: false },
+    { name: "no count and nothing lit", state: counted(null), unread: false },
+    {
+      name: "no count and an unread done",
+      state: { ...counted(null), unreadDone: true },
+      unread: true,
+    },
+    {
+      name: "no count and an unread failure",
+      state: { ...counted(null), unreadFailure: true },
+      unread: true,
+    },
+  ])("reads $name as unread: $unread", ({ state, unread }) => {
+    expect(indicatorHasUnread(state)).toBe(unread);
+  });
+});
+
 describe("cloud notification indicator authority", () => {
   it("merges only the connected host's pending fork bit into cloud flags", () => {
     const cloud = {
@@ -759,6 +1173,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: false,
           unreadFailure: false,
           unreadDone: true,
+          unreadCount: 1,
         },
       },
       chats: {
@@ -768,6 +1183,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: false,
           unreadFailure: false,
           unreadDone: false,
+          unreadCount: 1,
         },
       },
     };
@@ -780,6 +1196,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: true,
           unreadFailure: true,
           unreadDone: true,
+          unreadCount: 3,
         },
       },
     };
@@ -793,6 +1210,7 @@ describe("cloud notification indicator authority", () => {
           pendingFork: true,
           unreadFailure: false,
           unreadDone: false,
+          unreadCount: 1,
         },
       },
     });

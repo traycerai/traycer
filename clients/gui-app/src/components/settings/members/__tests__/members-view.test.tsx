@@ -435,7 +435,9 @@ describe("MembersView preview completions", () => {
     });
 
     const dialog = await screen.findByTestId("members-remove-preview");
-    expect(dialog.textContent).toContain("Remove Grace from Acme");
+    expect(dialog.textContent).toContain(
+      "Remove Grace (u-admin2@acme.test) from Acme",
+    );
     expect(dialog.textContent).not.toContain("priya-box");
     expect(
       within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")

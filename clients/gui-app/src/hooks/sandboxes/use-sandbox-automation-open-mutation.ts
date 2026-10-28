@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
@@ -42,7 +42,9 @@ interface SandboxAutomationOpenContext {
  * read, the sandbox list and the host list (one prefix covers all three, see
  * `sandboxQueryKeys.automation`) and the directory are refreshed.
  */
-export function useSandboxAutomationOpen(): UseMutationResult<
+export function useSandboxAutomationOpen(
+  feedback: "toast" | "inline",
+): UseMutationResult<
   SandboxAutomationOpened,
   Error,
   SandboxAutomationOpenTarget | null,
@@ -67,7 +69,7 @@ export function useSandboxAutomationOpen(): UseMutationResult<
       if (result.kind === "ok") {
         return { sandbox: result.sandbox, settled: result.settled };
       }
-      throw new Error(sandboxFailureMessage(result));
+      throw new SandboxOperationError(result);
     },
     onSettled: (_data, _error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;
@@ -79,12 +81,17 @@ export function useSandboxAutomationOpen(): UseMutationResult<
     // A team pod's open reports here, not at the call: the picker that
     // started it closes on run, and a call-site callback dies with it.
     onSuccess: (opened, target, context) => {
-      if (target === null || !settledForStartingAccount(context)) return;
+      if (
+        feedback === "inline" ||
+        target === null ||
+        !settledForStartingAccount(context)
+      )
+        return;
       if (opened.settled) toast.success("The team pod is open");
       else toast.info("Opening the team pod…");
     },
     onError: (error, target, context) => {
-      if (!settledForStartingAccount(context)) return;
+      if (feedback === "inline" || !settledForStartingAccount(context)) return;
       toastFromAuthError(
         error,
         target === null

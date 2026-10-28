@@ -117,6 +117,24 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
   useHostDirectoryEntry: () => null,
 }));
 
+// The chat's sandbox state reads the viewer's configurations through the auth
+// user query, which needs a host runtime this suite does not mount: no
+// configurations is the answer for a render with no account. The real
+// `sandboxConfigurationOf` stays, so the state resolver is the production one.
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: () => ({
+      configurations: [],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+    }),
+  }),
+);
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));

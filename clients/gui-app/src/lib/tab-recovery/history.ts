@@ -432,17 +432,24 @@ export function pruneRecoveryTiles(
 }
 /** Permanent deletion must not be undone by a later reopen command. */
 export function pruneRecoveryDraft(draftId: string): void {
-  if (!useTabRecoveryHistory.getState().ready) pendingDraftPrunes.add(draftId);
+  const { ready, entries } = useTabRecoveryHistory.getState();
+  if (!ready) pendingDraftPrunes.add(draftId);
+  // A replace writes the whole history to IndexedDB, and a drafts listing
+  // calls this once per tombstone: an id no entry holds writes nothing.
+  const held = entries.some((entry) =>
+    entry.items.some(
+      (item) => item.kind === "draft" && item.draftId === draftId,
+    ),
+  );
+  if (!held) return;
   replaceEntries(
-    useTabRecoveryHistory
-      .getState()
-      .entries.flatMap<TabRecoveryEntry>((entry) => {
-        const items = entry.items.filter(
-          (item) => item.kind !== "draft" || item.draftId !== draftId,
-        );
-        if (items.length === entry.items.length) return [entry];
-        return items.length === 0 ? [] : [{ ...entry, items }];
-      }),
+    entries.flatMap<TabRecoveryEntry>((entry) => {
+      const items = entry.items.filter(
+        (item) => item.kind !== "draft" || item.draftId !== draftId,
+      );
+      if (items.length === entry.items.length) return [entry];
+      return items.length === 0 ? [] : [{ ...entry, items }];
+    }),
   );
 }
 

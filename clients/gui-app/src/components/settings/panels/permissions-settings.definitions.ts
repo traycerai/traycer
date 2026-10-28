@@ -2,29 +2,23 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
-// is not gated. The page's four tab triggers are always rendered - the tab bar
+// is not gated. The page's five tab triggers are always rendered - the tab bar
 // sits above `HostScopeGate`, which wraps only the Judge, Rules and Activity
 // BODIES - so each tab anchors on its trigger, and a search that lands there
 // opens the tab. Everything inside a gated body (a host that predates Auto
 // mode, or a scope that is connecting, unreachable or vanished, renders none of
 // it) contributes to its tab's trigger instead. The Modes row is the one row
 // with an anchor of its own: its tab is not gated, because the setting is
-// app-wide.
+// app-wide. The Browser tab's switch is not gated either - it reads the
+// configuration through the ambient host binding and answers for itself when
+// the host cannot - but it belongs to a retired section of its own
+// (`browser-agent-access.definitions.ts`), so its words live on the trigger.
 export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Permissions",
     description: "What your agents may do without asking.",
-    // Browser agent access is a region of this page, below the tabs.
-    keywords: [
-      "permissions",
-      "approve",
-      "approval",
-      "ask before",
-      "browser agent access",
-      "browser",
-      "playwright",
-    ],
+    keywords: ["permissions", "approve", "approval", "ask before"],
   },
   modesTab: {
     kind: "group",
@@ -70,6 +64,22 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     breadcrumb: "Permissions",
     availableWhen: alwaysAvailable,
     keywords: ["activity", "recent decisions", "history", "log"],
+  },
+  browserTab: {
+    kind: "group",
+    search: { anchor: "permissions-tab-browser" },
+    label: "Browser",
+    description: "Whether your agents can use Traycer's in-app browser.",
+    breadcrumb: "Permissions",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "browser agent access",
+      "browser",
+      "in-app browser",
+      "playwright",
+      "mcp",
+      "web",
+    ],
   },
   // The card the Modes row renders in. A contributor, not the tab's own group:
   // the tab's anchor is on its TRIGGER, and a card carrying it too would give
@@ -203,6 +213,7 @@ export const PERMISSIONS_TABS = [
   "judge",
   "rules",
   "activity",
+  "browser",
 ] as const;
 
 export type PermissionsTab = (typeof PERMISSIONS_TABS)[number];
@@ -219,6 +230,7 @@ export const PERMISSIONS_TAB_GROUPS = {
   judge: PERMISSIONS.definitions.judgeTab,
   rules: PERMISSIONS.definitions.rulesTab,
   activity: PERMISSIONS.definitions.activityTab,
+  browser: PERMISSIONS.definitions.browserTab,
 } as const;
 
 /**

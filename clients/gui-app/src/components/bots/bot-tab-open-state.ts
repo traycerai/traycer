@@ -29,7 +29,7 @@ export function botPausedCopy(
   switch (reason) {
     case "host-not-in-environment":
       return {
-        text: `Paused: the computer this bot runs on is away, and this one doesn't run ${environmentLabel}'s bots. Messages you send are delivered when it's back.`,
+        text: `Paused: the host this bot runs on is away, and this one doesn't run ${environmentLabel}'s bots. Messages you send are delivered when it's back.`,
         retry: false,
       };
     // Neither answer says the bot is stopped - a teammate's machine is outside

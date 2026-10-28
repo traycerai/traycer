@@ -2,7 +2,10 @@ import { useMemo, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotNotificationSubscription,
+  BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   BotThreadListResponse,
@@ -16,8 +19,9 @@ import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-pa
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import { postTextOf } from "@/lib/bots/reply-row";
 import { BotSessionsElsewhere } from "@/components/bots/bot-sessions-elsewhere";
-import { ChannelPostText } from "@/components/bots/bot-channel-post-text";
+import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
@@ -35,6 +39,7 @@ import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-
 import {
   deliveredTaskCheckins,
   describeCadence,
+  describeNotificationWatch,
   pendingTaskCheckins,
   pendingTaskOverdue,
   sortTasksForDisplay,
@@ -78,6 +83,8 @@ export function BotUnderTheHoodPanel(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The stream's open-request hint; `null` is unknown and renders nothing. */
   readonly openRequestCount: number | null;
+  /** The chats watching the person's notifications; `null` renders nothing. */
+  readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
   /** The host that runs the bot, as the stream names it. */
   readonly boundHost: {
     readonly hostId: string | null;
@@ -98,6 +105,7 @@ export function BotUnderTheHoodPanel(props: {
     trunkChatId,
     tasks,
     openRequestCount,
+    notificationSubscriptions,
     boundHost,
     environmentLabel,
     environmentBots,
@@ -142,6 +150,12 @@ export function BotUnderTheHoodPanel(props: {
             />
           ) : null}
           <BotTasksList tasks={tasks} />
+          <BotNotificationWatches
+            botId={botId}
+            hostId={hostId}
+            watches={notificationSubscriptions}
+            threads={threads}
+          />
           {!boundHost.isThisHost ? null : (
             <BotTrunkState
               botId={botId}
@@ -196,6 +210,7 @@ export function BotUnderTheHoodPanel(props: {
               }
               surface={null}
               resolveMember={UNRESOLVED_BOT_MEMBERS}
+              showConnecting
             />
           )}
         </div>
@@ -242,15 +257,15 @@ function ThreadExcerpt(props: {
   const { botId, hostId, thread, prefix, fetchCold } = props;
   if (thread.anchor === null) return `${prefix}Thread`;
   return (
-    <ChannelPostText
+    <ChannelPost
       botId={botId}
       hostId={hostId}
       conversationId={thread.conversationId}
       messageId={thread.anchor.messageId}
       fetchCold={fetchCold}
     >
-      {(text) => `${prefix}${threadExcerpt(text)}`}
-    </ChannelPostText>
+      {(post) => `${prefix}${threadExcerpt(postTextOf(post))}`}
+    </ChannelPost>
   );
 }
 
@@ -465,6 +480,78 @@ function BotTasksList(props: {
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * The bot's chats watching the person's notifications: the trunk and each
+ * subscribed thread, one line each. The bot sets these itself; there is
+ * nothing to change here.
+ */
+function BotNotificationWatches(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly watches: ReadonlyArray<BotNotificationSubscription> | null;
+  readonly threads: ReadonlyArray<BotThreadSummary>;
+}): ReactNode {
+  const { botId, hostId, watches, threads } = props;
+  if (watches === null || watches.length === 0) return null;
+  return (
+    <section
+      aria-label="Notifications"
+      className="flex flex-col gap-1"
+      data-testid="bot-notification-watches"
+    >
+      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+        Notifications
+      </h3>
+      <ul className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
+        {watches.map((watch) => {
+          const target = watch.target;
+          return (
+            <li
+              key={target.kind === "trunk" ? "trunk" : target.threadId}
+              className="flex min-w-0 flex-col"
+              data-testid="bot-notification-watch"
+            >
+              <span className="truncate text-foreground">
+                {target.kind === "trunk" ? (
+                  "Trunk"
+                ) : (
+                  <WatchingThreadLabel
+                    botId={botId}
+                    hostId={hostId}
+                    thread={
+                      threads.find((t) => t.threadId === target.threadId) ??
+                      null
+                    }
+                  />
+                )}
+              </span>
+              <span>{describeNotificationWatch(watch)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** A watching thread, named from the listing when it has loaded. */
+function WatchingThreadLabel(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly thread: BotThreadSummary | null;
+}): ReactNode {
+  if (props.thread === null) return "A thread";
+  return (
+    <ThreadExcerpt
+      botId={props.botId}
+      hostId={props.hostId}
+      thread={props.thread}
+      prefix="Thread: "
+      fetchCold={false}
+    />
   );
 }
 

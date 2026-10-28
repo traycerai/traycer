@@ -10,16 +10,30 @@ import {
 } from "@/lib/browser-view/browser-tab-display";
 import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 
+export interface BrowserSidebarTab extends Pick<
+  BrowserTabInfo,
+  "tabId" | "url" | "title" | "drivenBy"
+> {
+  readonly status: BrowserTabInfo["status"] | null;
+}
+
+export interface BrowserSidebarSession {
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly profile: BrowserSessionInfo["profile"] | null;
+  readonly tabs: readonly BrowserSidebarTab[];
+}
+
 export interface BrowserSidebarTabRow {
   readonly key: string;
-  readonly session: BrowserSessionInfo;
-  readonly tab: BrowserTabInfo;
+  readonly session: BrowserSidebarSession;
+  readonly tab: BrowserSidebarTab;
   readonly identity: SettledTabIdentity;
 }
 
 function nextBrowserSidebarTabRows(
   previous: readonly BrowserSidebarTabRow[],
-  sessions: readonly BrowserSessionInfo[],
+  sessions: readonly BrowserSidebarSession[],
 ): readonly BrowserSidebarTabRow[] {
   const previousByKey = new Map(previous.map((row) => [row.key, row]));
   const next = sessions.flatMap((session) =>
@@ -57,7 +71,7 @@ function nextBrowserSidebarTabRows(
  * back to "Browser" between the commit and the new document's title.
  */
 export function useBrowserSidebarTabRows(
-  sessions: readonly BrowserSessionInfo[],
+  sessions: readonly BrowserSidebarSession[],
 ): readonly BrowserSidebarTabRow[] {
   const [state, setState] = useState(() => ({
     sessions,

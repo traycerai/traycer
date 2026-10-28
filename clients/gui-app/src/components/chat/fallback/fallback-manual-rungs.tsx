@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
 import { Info } from "lucide-react";
 import { create, useStore } from "zustand";
 import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
@@ -8,6 +8,7 @@ import type {
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -419,7 +420,7 @@ function ManualRungAffordances({
   // Any rung in flight for this chat - a bare button here or a pick in the
   // picker - quiets every control, so one press cannot race another.
   const rungsInFlight =
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: chatFallbackMutationKeys.runManualRung(chatId),
     }) > 0;
 

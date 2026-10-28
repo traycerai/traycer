@@ -1,3 +1,5 @@
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,6 +35,12 @@ export function useConfigurationMcpServersQuery(): UseQueryResult<
   HostRpcError
 > {
   const source = useConfigurationSource();
+  const client = usePoolTierHostClient(useHostClient());
+  const { hostId } = useReactiveHostReadiness(client);
+  const revisionSupported = useHostMethodSupport(
+    hostId,
+    "environment.configuration.revision",
+  );
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -43,7 +51,7 @@ export function useConfigurationMcpServersQuery(): UseQueryResult<
     readonly EnvironmentMcpServer[]
   >({
     cacheKeyIdentity: [viewerId],
-    client: usePoolTierHostClient(useHostClient()),
+    client,
     method: "environment.configuration.mcpServers.list",
     params: {
       environmentId: source.kind === "pool" ? source.environmentId : "",
@@ -53,6 +61,7 @@ export function useConfigurationMcpServersQuery(): UseQueryResult<
     ),
     mapResponse: ({ response }) => response.servers,
     options: {
+      poll: revisionSupported !== true,
       enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
     },
   });
@@ -69,6 +78,12 @@ export function useSecretMcpServerNames(
   enabled: boolean,
 ): readonly string[] {
   const { environmentId, resolved } = useAddressedEnvironment();
+  const client = usePoolTierHostClient(useHostClient());
+  const { hostId } = useReactiveHostReadiness(client);
+  const revisionSupported = useHostMethodSupport(
+    hostId,
+    "environment.configuration.revision",
+  );
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -79,7 +94,7 @@ export function useSecretMcpServerNames(
     readonly EnvironmentMcpServer[]
   >({
     cacheKeyIdentity: [viewerId],
-    client: usePoolTierHostClient(useHostClient()),
+    client,
     method: "environment.configuration.mcpServers.list",
     params: { environmentId: environmentId ?? "" },
     preflight: cloudVerdictPreflight(
@@ -87,6 +102,7 @@ export function useSecretMcpServerNames(
     ),
     mapResponse: ({ response }) => response.servers,
     options: {
+      poll: revisionSupported !== true,
       enabled:
         enabled &&
         resolved &&

@@ -116,13 +116,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 1,
   "gui-app/src/components/canvas-artifact/use-canvas-structure-gesture.ts": 1,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
-  // Bare ArrowRight accepts an offered suggestion: a named platform
-  // navigation/acceptance key, not a registered physical chord.
-  "gui-app/src/components/chat/composer/chat-composer-editor-slot.tsx": 1,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 3,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
-  "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
   // Enter and Space activate a folded agent row's `role="button"` text (#2441):
   // a button's own activation keys, named, not a registered chord.
   "gui-app/src/components/chat/queued-message-surface.tsx": 2,

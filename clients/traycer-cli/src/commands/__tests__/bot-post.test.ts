@@ -199,6 +199,8 @@ describe("bot post", () => {
         text: "ship it",
         threadId: null,
         announcementId: null,
+        redeliver: null,
+        supersedes: null,
       },
     ]);
     expect(result.human).toBe(
@@ -373,6 +375,8 @@ describe("bot reply", () => {
         text: "and the docs?",
         threadId: THREAD_ID,
         announcementId: null,
+        redeliver: null,
+        supersedes: null,
       },
     ]);
     expect(result.human).toBe(

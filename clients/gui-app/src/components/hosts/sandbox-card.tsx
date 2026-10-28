@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/card";
 import { SandboxRunwayWarningLine } from "@/components/hosts/sandbox-balance-banner";
 import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import {
   formatSandboxDay,
@@ -51,6 +52,10 @@ import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutatio
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import {
+  useSandboxOperation,
+  type SandboxRowOperation,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { sandboxRegionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import {
@@ -65,6 +70,7 @@ import {
   formatSandboxCost,
   formatSandboxDollars,
   hourlyRate,
+  sandboxVerbPendingLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -589,6 +595,7 @@ function SandboxSecretsSection(props: {
           key={summary.hostId}
           hostId={summary.hostId}
           awake={awake}
+          guestConfigured={summary.guestConfigured}
           routeAddresses={sandboxRouteAddresses(grantsSummary)}
         />
       )}
@@ -758,6 +765,7 @@ function SandboxSecretsLive(props: {
   readonly hostId: string;
   readonly awake: boolean;
   readonly routeAddresses: ReadonlyMap<string, string>;
+  readonly guestConfigured: boolean | null | undefined;
 }): ReactNode {
   const events = useSandboxEgressEvents(props.awake ? props.hostId : null);
   const lines = sandboxCardEgressEventLines(events);
@@ -781,7 +789,12 @@ function SandboxSecretsLive(props: {
           ))}
         </ul>
       )}
-      {props.awake ? <SandboxRepairAction hostId={props.hostId} /> : null}
+      {props.awake ? (
+        <SandboxRepairAction
+          hostId={props.hostId}
+          guestConfigured={props.guestConfigured}
+        />
+      ) : null}
     </>
   );
 }
@@ -819,14 +832,17 @@ function SandboxEgressEventRow(props: {
  * Re-applies the sandbox's setup (trust files, host aliases, environment, git)
  * and refetches it. Offered only on a host that serves the verb.
  */
-function SandboxRepairAction(props: { readonly hostId: string }): ReactNode {
+function SandboxRepairAction(props: {
+  readonly hostId: string;
+  readonly guestConfigured: boolean | null | undefined;
+}): ReactNode {
   const supported = useHostSupportsMethod(
     props.hostId,
     "host.sandbox.repairGuestConfiguration",
   );
   const repair = useSandboxRepairGuestConfiguration();
   const list = useSandboxList();
-  if (!supported) return null;
+  if (!supported || props.guestConfigured !== false) return null;
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button
@@ -879,18 +895,18 @@ function SandboxCardFooter(props: {
   readonly teamOwned: boolean;
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
-  if (props.actions.length === 0) return null;
+  const operation = useSandboxOperation(props.summary.id);
+  if (props.actions.length === 0 && operation === null) return null;
   return (
     <CardFooter className="flex flex-wrap gap-2">
-      {props.actions.length === 0 ? null : (
-        <SandboxActions
-          summary={props.summary}
-          actions={props.actions}
-          frozen={props.frozen}
-          teamOwned={props.teamOwned}
-          onDestroyed={props.onDestroyed}
-        />
-      )}
+      <SandboxActions
+        summary={props.summary}
+        actions={props.actions}
+        frozen={props.frozen}
+        teamOwned={props.teamOwned}
+        onDestroyed={props.onDestroyed}
+        operation={operation}
+      />
     </CardFooter>
   );
 }
@@ -901,12 +917,25 @@ function SandboxActions(props: {
   readonly frozen: boolean;
   readonly teamOwned: boolean;
   readonly onDestroyed: (() => void) | null;
+  readonly operation: SandboxRowOperation | null;
 }): ReactNode {
   const { summary } = props;
   const verb = useSandboxVerb(summary.id);
-  const pendingVerb = verb.isPending ? verb.variables : null;
+  const destroy = useSandboxDestroy(summary);
+  const pendingVerb =
+    props.operation?.kind === "pending" ? props.operation.verb : null;
   return (
     <>
+      {pendingVerb !== null && !props.actions.includes(pendingVerb) ? (
+        <Button type="button" variant="outline" size="sm" disabled>
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+          <span role="status">{sandboxVerbPendingLine(pendingVerb)}</span>
+        </Button>
+      ) : null}
       {props.actions.map((action) =>
         action === "destroy" ? (
           // Not gated on a pending verb: a verb can wait out the server's
@@ -925,7 +954,7 @@ function SandboxActions(props: {
               action === "resume" || action === "start" ? "default" : "outline"
             }
             size="sm"
-            disabled={verb.isPending}
+            disabled={pendingVerb !== null}
             data-testid={`sandbox-card-${action}`}
             onClick={() => {
               const run = (): void => {
@@ -948,10 +977,40 @@ function SandboxActions(props: {
                 variant={undefined}
               />
             ) : null}
-            {SANDBOX_CARD_ACTION_LABEL[action]}
+            {pendingVerb === action ? (
+              <span role="status">{sandboxVerbPendingLine(action)}</span>
+            ) : (
+              SANDBOX_CARD_ACTION_LABEL[action]
+            )}
           </Button>
         ),
       )}
+      <SandboxOperationFailure
+        sandboxId={summary.id}
+        name={summary.displayName}
+        hostId={summary.hostId}
+        operation={props.operation}
+        busy={pendingVerb !== null}
+        onRetry={(pressed) => {
+          if (pressed === "destroy") {
+            destroy.mutate(
+              props.operation?.kind === "failed"
+                ? props.operation.destroyRequest
+                : undefined,
+              {
+                onSuccess: (gone) => {
+                  if (gone) props.onDestroyed?.();
+                },
+              },
+            );
+          } else {
+            verb.mutate(pressed, {
+              onSuccess: (outcome) =>
+                toastSandboxVerbOutcome(pressed, outcome, summary.displayName),
+            });
+          }
+        }}
+      />
     </>
   );
 }
@@ -961,25 +1020,30 @@ function SandboxDestroyAction(props: {
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const destroy = useSandboxDestroy(props.summary);
+  const operation = useSandboxOperation(props.summary.id);
+  const pending = operation?.kind === "pending" && operation.verb === "destroy";
   return (
     <>
       <Button
         type="button"
         variant="destructive"
         size="sm"
-        disabled={destroy.isPending}
+        disabled={pending}
         data-testid="sandbox-card-destroy"
         onClick={() => setConfirmOpen(true)}
       >
-        {destroy.isPending ? (
+        {pending ? (
           <AgentSpinningDots
             className={undefined}
             testId="sandbox-card-destroy-spinner"
             variant={undefined}
           />
         ) : null}
-        Destroy
+        {pending ? (
+          <span role="status">{sandboxVerbPendingLine("destroy")}</span>
+        ) : (
+          "Destroy"
+        )}
       </Button>
       <SandboxDestroyDialog
         sandbox={props.summary}

@@ -90,6 +90,7 @@ const NO_FLAGS = {
   pendingFork: false,
   unreadFailure: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 /**
@@ -328,6 +329,7 @@ function replying(step: string | null): BotActivity {
       startedAt: Date.now() - 3 * 60_000,
       step,
       requestId: "req-1",
+      reason: null,
     },
     threads: {},
   };
@@ -839,13 +841,20 @@ describe("the fixed Tracy entry - signals", () => {
 
   it("shows the timer and the step while a thread replies and the trunk is idle", async () => {
     scripted.activity = {
-      trunk: { state: "idle", startedAt: null, step: null, requestId: null },
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
       threads: {
         "thread-1": {
           state: "replying",
           startedAt: Date.now() - 2 * 60_000,
           step: "Reading the diff",
           requestId: "req-9",
+          reason: null,
         },
       },
     };
@@ -871,6 +880,7 @@ describe("the fixed Tracy entry - signals", () => {
           startedAt: Date.now() - 4 * 60_000,
           step: null,
           requestId: null,
+          reason: null,
         },
       },
     };
@@ -889,6 +899,7 @@ describe("the fixed Tracy entry - signals", () => {
         startedAt: null,
         step: "bun test",
         requestId: null,
+        reason: null,
       },
       threads: {},
     };
@@ -905,7 +916,13 @@ describe("the fixed Tracy entry - signals", () => {
 
   it("shows no timer and an Idle hover while Tracy is not replying", async () => {
     scripted.activity = {
-      trunk: { state: "idle", startedAt: null, step: null, requestId: null },
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
       threads: {},
     };
     mountTopStrip("/");
@@ -986,6 +1003,101 @@ describe("the fixed Tracy entry - signals", () => {
       expect(entry.hasAttribute("data-unread")).toBe(unreadDone);
     },
   );
+
+  describe("the unread count", () => {
+    const PLACEMENTS = [
+      { placement: "top strip", mountEntry: () => mountTopStrip("/") },
+      { placement: "vertical strip", mountEntry: () => mountSideStrip("/") },
+      {
+        placement: "collapsed rail",
+        mountEntry: () => {
+          useSideTabStripStore.setState({ collapsed: true });
+          return mountSideStrip("/");
+        },
+      },
+    ];
+
+    function tracyIndicators(
+      state: Partial<Omit<typeof NO_FLAGS, "unreadCount">> & {
+        readonly unreadCount: number | null;
+      },
+    ): void {
+      scripted.indicators = {
+        epics: { [TRACY]: { ...NO_FLAGS, ...state } },
+        chats: {},
+      };
+    }
+
+    it.each(PLACEMENTS)(
+      "is drawn on the glyph in the $placement and named by the entry",
+      async ({ mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: 3 });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        expect(
+          within(entry).getByTestId("tracy-entry-unread-count").textContent,
+        ).toBe("3");
+        expect(entry.getAttribute("aria-label")).toBe("Tracy, 3 unread");
+        expect(entry.hasAttribute("data-unread")).toBe(true);
+        // The count stands for the rail's unread badge.
+        expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
+      },
+    );
+
+    it("reads 99+ past ninety-nine", async () => {
+      tracyIndicators({ unreadDone: true, unreadCount: 120 });
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(
+        within(entry).getByTestId("tracy-entry-unread-count").textContent,
+      ).toBe("99+");
+      expect(entry.getAttribute("aria-label")).toBe("Tracy, 99+ unread");
+    });
+
+    it.each(PLACEMENTS)(
+      "is not drawn in the $placement while nothing is unread",
+      async ({ mountEntry }) => {
+        tracyIndicators({ unreadCount: 0 });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        expect(
+          within(entry).queryByTestId("tracy-entry-unread-count"),
+        ).toBeNull();
+        expect(entry.getAttribute("aria-label")).toBe("Tracy");
+        expect(entry.hasAttribute("data-unread")).toBe(false);
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "is not drawn in the $placement for a host that does not count, which keeps the bold name or the rail's unread badge",
+      async ({ placement, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: null });
+        mountEntry();
+
+        const entry = await screen.findByTestId("tab-tracy");
+        expect(
+          within(entry).queryByTestId("tracy-entry-unread-count"),
+        ).toBeNull();
+        expect(entry.getAttribute("aria-label")).toBe("Tracy");
+        expect(entry.hasAttribute("data-unread")).toBe(true);
+        if (placement === "top strip") {
+          expect(within(entry).getByText("Tracy").className).toContain(
+            "font-semibold",
+          );
+        }
+        if (placement === "collapsed rail") {
+          expect(
+            within(entry)
+              .getByTestId("side-tab-rail-badge")
+              .getAttribute("data-kind"),
+          ).toBe("unread");
+        }
+      },
+    );
+  });
 });
 
 describe("the fixed Tracy entry - a main bot with any title", () => {

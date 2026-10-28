@@ -25,6 +25,7 @@ vi.mock(
 );
 
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -127,6 +128,8 @@ function removal(
 
 interface Host {
   removal: EnvironmentSecretRemovalV12 | null;
+  /** The host finishes the removal when it answers a destroy. */
+  finishesOnDestroy: boolean;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
   secrets: EnvironmentSecretV12[];
   /** The list's `removed`: secrets revoked within the last 30 days. */
@@ -160,7 +163,10 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
       versions: versionsFixture(),
       removal: host.removal,
     }),
-    "environment.secrets.destroy": () => host.destroyAnswer,
+    "environment.secrets.destroy": () => {
+      if (host.finishesOnDestroy) host.removal = removal("destroyed");
+      return host.destroyAnswer;
+    },
     "environment.secrets.rotation": () => ({
       rotation: null,
       lastVerify: null,
@@ -236,6 +242,7 @@ function mountPersonalRowAtDestroy10(host: Host): TeamPageHarness {
 function freshHost(overrides: Partial<Host>): Host {
   return {
     removal: null,
+    finishesOnDestroy: false,
     destroyAnswer: { outcome: "revoked" },
     secrets: [secretFixture()],
     removed: [],
@@ -373,9 +380,12 @@ describe("Remove on a Personal host that negotiated destroy@1.0", () => {
 
 describe("a secret with a removal", () => {
   it.each(["revoked", "cleanup_requested"] as const)(
-    "keeps a %s row, offers Retry, and retries the same current version",
+    "keeps a %s row and offers Retry, which destroys the same current version while the host still reports it pending",
     async (outcome) => {
-      const host = freshHost({ removal: removal(outcome) });
+      const host = freshHost({
+        removal: removal(outcome),
+        finishesOnDestroy: true,
+      });
       const harness = mountRow(host);
       const user = userEvent.setup();
 
@@ -385,7 +395,6 @@ describe("a secret with a removal", () => {
       );
       expect(screen.getByTestId("secret-row")).toBeTruthy();
 
-      host.removal = removal("destroyed");
       await user.click(within(status).getByRole("button", { name: "Retry" }));
 
       await waitFor(() => {
@@ -401,12 +410,30 @@ describe("a secret with a removal", () => {
         method: "environment.secrets.destroy",
         version: { major: 1, minor: 1 },
       });
-      // Destroyed is the one outcome that takes the row out of the list.
+      // Destroyed is the one outcome that takes the row out of the list: the
+      // host finished on that destroy, and the versions read after it says so.
       await waitFor(() => {
         expect(screen.queryByTestId("secret-row")).toBeNull();
       });
     },
   );
+
+  it("sends no destroy when Retry is pressed after the host has already finished the removal", async () => {
+    const host = freshHost({ removal: removal("cleanup_requested") });
+    const harness = mountRow(host);
+    const user = userEvent.setup();
+    const status = await screen.findByTestId("secret-removal-status");
+
+    // Finished since the row last read it: Retry reads the versions fresh,
+    // finds Destroyed and has nothing left to destroy.
+    host.removal = removal("destroyed");
+    await user.click(within(status).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("secret-row")).toBeNull();
+    });
+    expect(destroyCalls(harness)).toEqual([]);
+  });
 
   it("counts the hosts still holding a copy", async () => {
     const pending = removal("cleanup_requested");
@@ -510,20 +537,50 @@ describe("the Versions list", () => {
     });
   });
 
-  it("does not poll versions while a removal is pending", async () => {
+  it("polls a pending removal's versions every few seconds, and stops once the host answers Destroyed", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const harness = mountRow(
-        freshHost({ removal: removal("cleanup_requested") }),
-      );
+      const host = freshHost({ removal: removal("cleanup_requested") });
+      const harness = mountRow(host);
       await screen.findByTestId("secret-removal-status");
       const reads = (): number =>
         harness.paramsOf("environment.secrets.versions").length;
-      const before = reads();
+      const advance = async (ms: number): Promise<void> => {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ms);
+        });
+      };
 
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      // Pending: the row reads its versions again on its own.
+      const first = reads();
+      await advance(5_000);
+      await waitFor(() => {
+        expect(reads()).toBeGreaterThan(first);
+      });
+      const second = reads();
+      await advance(5_000);
+      await waitFor(() => {
+        expect(reads()).toBeGreaterThan(second);
+      });
 
-      expect(reads()).toBe(before);
+      // The host finishes: the next read hides the row.
+      host.removal = removal("destroyed");
+      await advance(5_000);
+      await waitFor(() => {
+        expect(screen.queryByTestId("secret-row")).toBeNull();
+      });
+
+      // Nothing keeps reading a removal that is done, with the page still
+      // mounted and then once it is gone.
+      await waitFor(() => {
+        expect(harness.queryClient.isFetching()).toBe(0);
+      });
+      const settled = reads();
+      await advance(60_000);
+      expect(reads()).toBe(settled);
+      cleanup();
+      await advance(60_000);
+      expect(reads()).toBe(settled);
     } finally {
       vi.useRealTimers();
     }

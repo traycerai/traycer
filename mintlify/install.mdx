@@ -177,7 +177,7 @@ Some host updates need a newer CLI first. The host's Overview then shows **Needs
   </Step>
   <Step title="Remove the app">
     - **macOS:** drag Traycer from Applications to the Trash. If you installed it with Homebrew, run `brew uninstall --cask traycer-desktop`.
-    - **Windows:** uninstall Traycer from **Settings › Apps › Installed apps**. The `.exe` installer's uninstaller also removes the task that starts the host at logon.
+    - **Windows:** uninstall Traycer from **Settings › Apps › Installed apps**. The `.exe` installer's uninstaller removes the host's logon task only when Desktop installed the CLI. If you installed the CLI separately, its host autostart is kept.
     - **Linux:** remove the package with `apt` or `dnf`, or delete the AppImage.
   </Step>
   <Step title="Remove the CLI, if you installed it">

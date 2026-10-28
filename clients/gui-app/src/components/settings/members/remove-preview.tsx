@@ -80,6 +80,7 @@ function removePreviewRows(
 export function RemovePreviewDialog(props: {
   readonly open: boolean;
   readonly memberName: string;
+  readonly memberEmail: string | null;
   /** The confirm button's name for the member: their first name. */
   readonly confirmName: string;
   readonly teamName: string;
@@ -99,7 +100,11 @@ export function RemovePreviewDialog(props: {
       >
         <DialogHeader>
           <DialogTitle>
-            {removePreviewTitle(props.memberName, props.teamName)}
+            {removePreviewTitle(
+              props.memberName,
+              props.memberEmail,
+              props.teamName,
+            )}
           </DialogTitle>
           <DialogDescription>
             {removePreviewLead(props.memberName, props.teamName)}

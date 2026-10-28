@@ -10,7 +10,7 @@ import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-export type PushMutedSeveritiesQuery = UseQueryResult<readonly PushSeverity[]>;
+type PushMutedSeveritiesQuery = UseQueryResult<readonly PushSeverity[]>;
 
 /**
  * The severities this phone is not pushed for, as the phone stored them for

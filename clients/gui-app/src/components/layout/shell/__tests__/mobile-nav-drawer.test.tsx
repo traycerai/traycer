@@ -57,6 +57,7 @@ const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
   pendingApproval: false,
   pendingInterview: false,
   unreadDone: true,
+  unreadCount: 1,
 };
 
 // The two status sources behind the shared row indicator. Live activity is

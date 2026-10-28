@@ -169,6 +169,9 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(transcriptImageMetaDbName(accountId));
   names.add(SKELETON_RESUME_DB_NAME);
   names.add(VIEW_REPLICA_DB_NAME);
+  // The retired browser catalog store has no reader left, so only this wipe
+  // reclaims the URLs and titles an earlier build saved there.
+  names.add(persistKey("browser-catalog-v1"));
   // Canvas state and recovery history must be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the

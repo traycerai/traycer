@@ -70,6 +70,7 @@ import type {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import {
   buildOverviewHostFixture,
   buildOverviewManagement,
@@ -361,11 +362,7 @@ describe("Overview ▸ Installation — About this host", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(HOST_ID);
     });
-    // Worded the way the code words it, so the assertion does not pin a locale.
-    const added = new Date(Date.parse(item.createdAt)).toLocaleDateString(
-      undefined,
-      { year: "numeric", month: "short", day: "numeric" },
-    );
+    const added = formatSettingsDate(Date.parse(item.createdAt), false);
     expect(
       within(about).getByTestId("host-overview-about-added").textContent,
     ).toBe(added);

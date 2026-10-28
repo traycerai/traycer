@@ -102,7 +102,11 @@ function renderMinimap(
         scroll: options.scroll ?? 1050,
         scrollLength: 160,
       })}
-      rows={transcriptListRows({ window: null, rendered: messages })}
+      rows={transcriptListRows({
+        window: null,
+        rendered: messages,
+        splitLongTurns: true,
+      })}
       transcriptWindow={null}
       onSelect={onSelect}
       shown={options.shown ?? true}
@@ -131,7 +135,11 @@ function renderRegisteredMinimap(input: {
         bottomInset={0}
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
-        rows={transcriptListRows({ window: null, rendered: messages })}
+        rows={transcriptListRows({
+          window: null,
+          rendered: messages,
+          splitLongTurns: true,
+        })}
         transcriptWindow={null}
         onSelect={onSelect}
         shown
@@ -344,6 +352,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
           inViewRefreshRef={{ current: () => undefined }}
           listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
           rows={transcriptListRows({
+            splitLongTurns: true,
             window: null,
             rendered: makeTranscript(3),
           })}
@@ -461,6 +470,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: true,
         shown: false,
         mobileViewport: false,
+        botChannel: false,
       }),
     ).toBe(false);
     expect(
@@ -468,6 +478,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: true,
         shown: false,
         mobileViewport: true,
+        botChannel: false,
       }),
     ).toBe(true);
     expect(
@@ -475,6 +486,26 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: false,
         shown: true,
         mobileViewport: true,
+        botChannel: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("never mounts in a bot channel, whatever the region or viewport says", () => {
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        shown: true,
+        mobileViewport: false,
+        botChannel: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        shown: false,
+        mobileViewport: true,
+        botChannel: true,
       }),
     ).toBe(false);
   });

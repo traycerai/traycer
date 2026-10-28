@@ -1,4 +1,5 @@
 export interface ChatTileActivationQueryPolicyInput {
+  readonly isCopy: boolean;
   readonly readOnlyNotice: string | null;
   readonly surfaceVisible: boolean;
   readonly surfaceFocused: boolean;
@@ -13,14 +14,14 @@ export interface ChatTileActivationQueryPolicy {
 }
 
 /**
- * Activation queries serve actions that a locked published-chat copy cannot
- * perform. Keep them live for every ordinary chat surface, including viewers;
- * `readOnlyNotice` is the explicit copy marker and is null on live surfaces.
+ * Copies cannot act on the serving host's workspace or command catalog, even
+ * when their resting sandbox accepts a message. Ordinary unlocked surfaces,
+ * including viewers, keep their activation queries.
  */
 export function chatTileActivationQueryPolicy(
   input: ChatTileActivationQueryPolicyInput,
 ): ChatTileActivationQueryPolicy {
-  const liveSurface = input.readOnlyNotice === null;
+  const liveSurface = !input.isCopy && input.readOnlyNotice === null;
   return {
     refreshMissingWorktreePaths:
       liveSurface && input.surfaceVisible && input.hasWorktreeBinding,

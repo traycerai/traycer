@@ -1,99 +1,80 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  migratePrPanelPersistedState,
   PR_PANEL_PERSIST_KEY,
   usePrPanelStore,
+  type PrStateFilter,
 } from "../pr-panel-store";
 
-function readPersistedOpenOnly(): unknown {
+function readPersisted(): unknown {
   const raw = window.localStorage.getItem(PR_PANEL_PERSIST_KEY);
   if (raw === null) return undefined;
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== "object" || parsed === null || !("state" in parsed)) {
-    return undefined;
-  }
-  return parsed.state;
+  return JSON.parse(raw);
+}
+
+async function rehydrateFrom(state: unknown, version: number): Promise<void> {
+  window.localStorage.setItem(
+    PR_PANEL_PERSIST_KEY,
+    JSON.stringify({ state, version }),
+  );
+  await usePrPanelStore.persist.rehydrate();
 }
 
 describe("pr-panel-store", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    usePrPanelStore.setState({ openOnly: false });
+    usePrPanelStore.setState({ stateFilter: "open" });
   });
 
-  it("starts with every pull request shown", () => {
+  it("starts with open pull requests listed", () => {
     // The initial state, not the `beforeEach` reset.
-    expect(usePrPanelStore.getInitialState().openOnly).toBe(false);
+    expect(usePrPanelStore.getInitialState().stateFilter).toBe("open");
   });
 
-  it("sets and toggles the open-only filter", () => {
-    usePrPanelStore.getState().setOpenOnly(true);
-    expect(usePrPanelStore.getState().openOnly).toBe(true);
+  it("persists the chosen filter under its own key", () => {
+    expect(PR_PANEL_PERSIST_KEY).toBe("traycer-gui-app:pr-panel");
+    usePrPanelStore.getState().setStateFilter("merged");
 
-    usePrPanelStore.getState().toggleOpenOnly();
-    expect(usePrPanelStore.getState().openOnly).toBe(false);
-
-    usePrPanelStore.getState().toggleOpenOnly();
-    expect(usePrPanelStore.getState().openOnly).toBe(true);
+    expect(usePrPanelStore.getState().stateFilter).toBe("merged");
+    expect(readPersisted()).toEqual({
+      state: { stateFilter: "merged" },
+      version: 2,
+    });
   });
 
   it("does not replace state when set to the value it already holds", () => {
     const before = usePrPanelStore.getState();
-    usePrPanelStore.getState().setOpenOnly(false);
+    usePrPanelStore.getState().setStateFilter("open");
     expect(usePrPanelStore.getState()).toBe(before);
   });
 
-  it("persists the filter under its own key", () => {
-    expect(PR_PANEL_PERSIST_KEY).toBe("traycer-gui-app:pr-panel");
-    usePrPanelStore.getState().setOpenOnly(true);
-
-    expect(readPersistedOpenOnly()).toEqual({ openOnly: true });
-  });
-
   it("restores a persisted filter on rehydrate", async () => {
-    window.localStorage.setItem(
-      PR_PANEL_PERSIST_KEY,
-      JSON.stringify({ state: { openOnly: true }, version: 1 }),
-    );
-    await usePrPanelStore.persist.rehydrate();
+    await rehydrateFrom({ stateFilter: "closed" }, 2);
 
-    expect(usePrPanelStore.getState().openOnly).toBe(true);
+    expect(usePrPanelStore.getState().stateFilter).toBe("closed");
   });
 
-  it("coerces a corrupt persisted blob to the default on rehydrate", async () => {
-    window.localStorage.setItem(
-      PR_PANEL_PERSIST_KEY,
-      JSON.stringify({ state: { openOnly: "yes" }, version: 1 }),
-    );
-    await usePrPanelStore.persist.rehydrate();
+  it("coerces a corrupt current-version blob to the default on rehydrate", async () => {
+    usePrPanelStore.setState({ stateFilter: "all" });
+    await rehydrateFrom({ stateFilter: "draft" }, 2);
 
-    expect(usePrPanelStore.getState().openOnly).toBe(false);
+    expect(usePrPanelStore.getState().stateFilter).toBe("open");
   });
 
-  describe("migratePrPanelPersistedState", () => {
-    it("tolerates a missing or non-object blob", () => {
-      expect(migratePrPanelPersistedState(null)).toEqual({ openOnly: false });
-      expect(migratePrPanelPersistedState(undefined)).toEqual({
-        openOnly: false,
-      });
-      expect(migratePrPanelPersistedState("garbage")).toEqual({
-        openOnly: false,
-      });
-    });
+  describe("migration from the v1 openOnly flag", () => {
+    it.each<[string, unknown, PrStateFilter]>([
+      ["openOnly on lists open rows", { openOnly: true }, "open"],
+      ["openOnly off lists every row", { openOnly: false }, "all"],
+      ["a non-boolean openOnly takes the default", { openOnly: "yes" }, "open"],
+      ["a non-object blob takes the default", "garbage", "open"],
+    ])("%s", async (_name, persisted, expected) => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      await rehydrateFrom(persisted, 1);
 
-    it("rejects a non-boolean openOnly", () => {
-      expect(migratePrPanelPersistedState({ openOnly: "yes" })).toEqual({
-        openOnly: false,
-      });
-      expect(migratePrPanelPersistedState({})).toEqual({ openOnly: false });
-    });
-
-    it("keeps a boolean openOnly", () => {
-      expect(migratePrPanelPersistedState({ openOnly: true })).toEqual({
-        openOnly: true,
-      });
-      expect(migratePrPanelPersistedState({ openOnly: false })).toEqual({
-        openOnly: false,
+      expect(usePrPanelStore.getState().stateFilter).toBe(expected);
+      // Written back at the current version, so the next load skips this.
+      expect(readPersisted()).toEqual({
+        state: { stateFilter: expected },
+        version: 2,
       });
     });
   });

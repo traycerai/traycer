@@ -17,13 +17,18 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * suppresses only its own rail, because the tile bar's button reads the
  * outline it registers and that button deliberately ignores the region's
  * `shown` value.
+ *
+ * A bot channel never mounts it: the rail is an outline of an agent's turns,
+ * and a channel is people's posts and a bot's replies, which the outline has
+ * no vocabulary for. The region setting still governs every agent chat.
  */
 export function shouldMountChatTurnMinimap(input: {
   readonly hasContent: boolean;
   readonly shown: boolean;
   readonly mobileViewport: boolean;
+  readonly botChannel: boolean;
 }): boolean {
-  if (!input.hasContent) return false;
+  if (!input.hasContent || input.botChannel) return false;
   return input.shown || input.mobileViewport;
 }
 

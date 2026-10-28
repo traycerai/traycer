@@ -14,11 +14,7 @@ import {
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import {
-  repliedPostOf,
-  replyFollowsPost,
-  replyRowIdFor,
-} from "@/lib/bots/reply-row";
+import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
   botUserSenderId,
@@ -35,6 +31,7 @@ import {
 } from "@/components/chat/chat-messages";
 import {
   ChatBotPresentationContext,
+  type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
 } from "@/components/chat/chat-bot-presentation-context";
@@ -86,6 +83,11 @@ export type BotTranscriptSurface =
         | null;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** A post the bot failed to answer, by its request id and writer, and what can be done about it. */
+      readonly failedRequest: (
+        requestId: string,
+        senderUserId: string | null,
+      ) => ChatBotFailedRequest | null;
       /** What the top of the channel says while nobody has written in it. */
       readonly intro: {
         readonly botTitle: string;
@@ -96,6 +98,11 @@ export type BotTranscriptSurface =
       readonly kind: "thread";
       /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** A message the bot failed to answer, by its request id and writer, and what can be done about it. */
+      readonly failedRequest: (
+        requestId: string,
+        senderUserId: string | null,
+      ) => ChatBotFailedRequest | null;
     };
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
@@ -231,6 +238,10 @@ function useResubscribeOnNextSend(input: {
  *
  * `resolveMember` names and pictures the members whose messages the chat
  * carries; a member it does not know shows as their user id.
+ *
+ * `showConnecting` holds the transcript's place with a spinner while its
+ * session connects; without it nothing is drawn until then, for a thread
+ * with no reply yet whose box follows its post.
  */
 export function BotChatTranscript(props: {
   readonly botId: string;
@@ -240,11 +251,13 @@ export function BotChatTranscript(props: {
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
+  readonly showConnecting: boolean;
 }): ReactNode {
   const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
     props;
   const handle = useChatSessionHandleForContainer(botId, chatId, hostId, true);
   if (handle === null) {
+    if (!props.showConnecting) return null;
     return (
       <div
         className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
@@ -515,24 +528,24 @@ function BotChatTranscriptBody(props: {
         botTitle: title,
         scrollToMessage,
         replyFollowsPost: followsPost,
-        repliedPost: null,
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
         chooseOption: surface.chooseOption,
+        failedRequest: surface.failedRequest,
       };
     }
     return {
       botTitle: title,
       // A thread post's verdict is in its thread, which the thread line
-      // opens; a direct post's reply, and the post it answers, are here.
+      // opens; a direct post's reply is here.
       scrollToMessage,
       replyFollowsPost: followsPost,
-      repliedPost: (messageId) => repliedPostOf(messages, messageId),
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
       chooseOption: surface.chooseOption,
+      failedRequest: surface.failedRequest,
     };
   }, [messages, scrollToMessage, surface, title]);
 

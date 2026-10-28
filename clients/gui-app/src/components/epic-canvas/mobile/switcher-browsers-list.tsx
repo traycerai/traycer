@@ -1,48 +1,30 @@
 import { useCallback, useMemo, useState, type MouseEvent } from "react";
-import { Bot, ListFilter, Moon, Plus, TriangleAlert, X } from "lucide-react";
+import { Bot, Moon, TriangleAlert, X } from "lucide-react";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
-import {
-  SwitcherListHeader,
-  SwitcherListRow,
-} from "@/components/epic-canvas/mobile/switcher-list-row";
-import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
-import { SwitcherSimulatorsSection } from "@/components/epic-canvas/mobile/switcher-simulators-section";
-import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
+import { SwitcherListHeader, SwitcherListRow } from "./switcher-list-row";
+import { SwitcherSearchField } from "./switcher-search-field";
+import { SwitcherSimulatorsSection } from "./switcher-simulators-section";
+import { useSwitcherActivate } from "./use-switcher-activate";
 import { browserTabDriverNames } from "@/components/epic-canvas/sidebar/browser-driver-coalescing";
 import { browserTabOrigin } from "@/lib/browser-view/browser-tab-display";
-import {
-  BrowserHostFilterChoices,
-  BROWSERS_PANEL_ID,
-} from "@/components/epic-canvas/sidebar/epic-browser-sidebar-header";
-import {
-  BrowsersPanelEmptyState,
-  BrowsersPanelLoadingState,
-  BrowsersPanelNoResultsState,
-  BrowsersPanelUnavailableState,
-} from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
-import { useEpicBrowsersElsewhere } from "@/components/epic-canvas/sidebar/use-epic-browsers-elsewhere";
+import { BrowserOfflineFilter } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-header";
+import { BrowserCreatePicker } from "@/components/epic-canvas/sidebar/browser-create-picker";
+import { BrowserDeviceGroup } from "@/components/epic-canvas/sidebar/browser-device-group";
+import { BrowserListFeedback } from "@/components/epic-canvas/sidebar/browser-list-feedback";
+import { useBrowserListModel } from "@/components/epic-canvas/sidebar/use-browser-list-model";
 import { useCoalescedBrowserTabDrivers } from "@/components/epic-canvas/sidebar/use-coalesced-browser-tab-drivers";
-import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
 import {
   browserTabCloseLabel,
   useBrowserTabClose,
 } from "@/components/epic-canvas/sidebar/use-browser-tab-close";
 import {
-  filterBrowserTabRows,
-  useBrowserSidebarTabRows,
   useBrowserTabRowLabels,
   type BrowserSidebarTabRow,
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
-import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import { useBrowserListTabClose } from "@/components/epic-canvas/sidebar/use-browser-list-tab-close";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
@@ -60,62 +42,21 @@ interface SwitcherListProps {
   readonly onClose: () => void;
 }
 
-/**
- * Browsers category: every tab of every browser session the surface's host is
- * running, as a flat list.
- *
- * The rows, their settled identities, the search predicate, the four
- * load/unavailable/empty/no-results states and the close-and-retire-the-tile
- * action all come from the desktop Browsers panel's own layer, so the phone
- * lists exactly what the rail does and neither surface owns a private copy of
- * the rules. This file owns the touch chrome: 44px rows instead of the
- * desktop's 30px hover rows, the URL as a second line where desktop puts it in
- * a hover tooltip a finger can never summon, and the header's search / add /
- * host-filter cluster inline rather than in a rail header slot the sheet has
- * no room for.
- *
- * The host filter is the desktop panel's, reading and writing the same surface
- * pin, so a host chosen on either surface is the host both list from.
- */
+/** Task-wide browser discovery with touch controls; simulators retain their own selected host. */
 export function SwitcherBrowsersList(props: SwitcherListProps) {
-  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
-  return (
-    <BrowserSessionsHostBoundary
-      hostId={hostPin.resolvedHostId}
-      scope={{ kind: "epic", epicId: props.epicId }}
-    >
-      <SwitcherBrowsersListLive {...props} />
-    </BrowserSessionsHostBoundary>
-  );
-}
-
-function SwitcherBrowsersListLive(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
-  const sessions = useBrowserSessionsContext();
-  const surfaceKey = useTabSurfaceKey("browsers", tabId);
-  const hostPin = useSurfaceHostPin(surfaceKey);
-  // Query state is the sheet's, not the panel-header search store's - see the
-  // Agents list for why a query must not outlive a sheet that closes on the
-  // first tap.
+  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", tabId));
   const [searchQuery, setSearchQuery] = useState("");
-  // Built once for the list, as the desktop panel builds it once in
-  // `BrowsersPanelBodyLive` - a per-row map would redo the work for every
-  // visible row on every chat update.
+  const model = useBrowserListModel(epicId, searchQuery, null);
   const chats = useEpicChatRecords();
   const chatById = useMemo(
     () => new Map(chats.map((chat) => [chat.id, chat])),
     [chats],
   );
-  const tabs = useBrowserSidebarTabRows(sessions.items);
-  const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
-  const filteredTabs = useMemo(
-    () => filterBrowserTabRows(tabs, searchQuery),
-    [searchQuery, tabs],
+  const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(
+    model.rows,
   );
-  // Leave when a tile opens, including request-only chrome. Preflight
-  // refusals keep the sheet's Retry available; PiP waits for the result.
-  const { add: handleAdd, isAdding } = useAddBrowserAction(tabId, onClose);
-
+  const closeTab = useBrowserListTabClose(epicId);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SwitcherListHeader
@@ -130,137 +71,64 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
           />
         }
         action={
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label="Add browser"
-            data-testid="switcher-new-browser"
-            disabled={isAdding}
-            onClick={handleAdd}
-          >
-            <Plus className="size-4" />
-          </Button>
-        }
-        viewMenu={
-          <SwitcherBrowserHostFilterMenu
-            surfaceKey={surfaceKey}
-            isPinned={hostPin.isPinned}
+          <BrowserCreatePicker
+            epicId={epicId}
+            tabId={tabId}
+            onOpened={onClose}
+            testId="switcher-new-browser"
+            trigger="icon"
           />
         }
+        viewMenu={<BrowserOfflineFilter epicId={epicId} tabId={tabId} mobile />}
       />
-      <SwitcherBrowsersBody
-        tabs={tabs}
-        filteredTabs={filteredTabs}
-        secondaryByKey={secondaryByKey}
-        duplicateTitles={duplicateTitles}
-        chatById={chatById}
-        epicId={epicId}
-        tabId={tabId}
-        onClose={onClose}
-        onAddBrowser={handleAdd}
-        isAddingBrowser={isAdding}
-      />
-    </div>
-  );
-}
-
-function SwitcherBrowsersBody(props: {
-  readonly tabs: readonly BrowserSidebarTabRow[];
-  readonly filteredTabs: readonly BrowserSidebarTabRow[];
-  readonly secondaryByKey: ReadonlyMap<string, string | null>;
-  readonly duplicateTitles: ReadonlySet<string>;
-  readonly chatById: ReadonlyMap<
-    string,
-    { readonly id: string; readonly title: string }
-  >;
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly onClose: () => void;
-  readonly onAddBrowser: () => void;
-  readonly isAddingBrowser: boolean;
-}) {
-  const sessions = useBrowserSessionsContext();
-  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
-  const elsewhere = useEpicBrowsersElsewhere({
-    epicId: props.epicId,
-    resolvedHostId: hostPin.resolvedHostId,
-  });
-  const { tabs, filteredTabs } = props;
-  const isUnavailable =
-    sessions.lifecycle === "failed" ||
-    sessions.lifecycle === "closed" ||
-    sessions.lifecycle === "unsupported";
-  const isLoading =
-    (sessions.lifecycle === "connecting" ||
-      sessions.lifecycle === "reconnecting") &&
-    tabs.length === 0;
-  const isEmpty = !isLoading && !isUnavailable && tabs.length === 0;
-  const hasNoResults = tabs.length > 0 && filteredTabs.length === 0;
-  return (
-    <>
-      {isLoading ? <BrowsersPanelLoadingState /> : null}
-      {/* Rendered ABOVE the rows rather than instead of them, as the desktop
-          panel does: a stream that drops does not un-open the tabs, and the
-          rows are still the only way to reach them. Replacing the list with
-          the banner would strand a phone user with tabs they can see nothing
-          of. */}
-      {isUnavailable ? (
-        <BrowsersPanelUnavailableState
-          message={sessions.errorMessage}
-          onRetry={sessions.lifecycle === "unsupported" ? null : sessions.retry}
-        />
-      ) : null}
-      {/* One scroller for everything below the header: the empty or
-          no-results state, the browser rows and the Simulators section, as
-          the desktop panel stacks its two groups. The empty and no-results
-          states ride inside it in a wrapper that grows but never shrinks: on
-          a host with no Simulators section they fill the sheet and centre as
-          before, and above a long simulator list they keep their natural
-          height and scroll with it. As a sibling of the scroller they would
-          be flex items competing with a list taller than the sheet, and
-          `min-h-0` let them collapse to nothing with the Add button clipped. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-        {isEmpty ? (
-          <div className="flex shrink-0 grow flex-col">
-            <BrowsersPanelEmptyState
-              onAddBrowser={props.onAddBrowser}
-              isAdding={props.isAddingBrowser}
-              elsewhere={elsewhere}
-              onShowHost={hostPin.setSelection}
-            />
-          </div>
-        ) : null}
-        {hasNoResults ? (
-          <div className="flex shrink-0 grow flex-col">
-            <BrowsersPanelNoResultsState />
-          </div>
-        ) : null}
-        {filteredTabs.length > 0 ? (
-          <div className="flex flex-col gap-0.5">
-            {filteredTabs.map((row) => (
-              <SwitcherBrowserRow
-                key={row.key}
-                row={row}
-                secondaryLabel={props.secondaryByKey.get(row.key) ?? null}
-                isDuplicateTitle={props.duplicateTitles.has(row.identity.title)}
-                chatById={props.chatById}
-                epicId={props.epicId}
-                tabId={props.tabId}
-                onClose={props.onClose}
-                onCloseTab={sessions.closeTab}
-              />
-            ))}
-          </div>
-        ) : null}
+        <BrowserListFeedback
+          model={model}
+          epicId={epicId}
+          tabId={tabId}
+          query={searchQuery}
+          onClearSearch={() => setSearchQuery("")}
+          onOpened={onClose}
+        />
+        <div className="min-w-0 space-y-1">
+          {model.groups.map((group) => (
+            <BrowserDeviceGroup
+              key={group.hostId}
+              group={group}
+              mobile
+              onExpandedChange={(hostId, expanded) =>
+                model.preferences.setCollapsed(hostId, !expanded)
+              }
+            >
+              <div className="flex flex-col gap-0.5">
+                {group.rows.map((row) => (
+                  <SwitcherBrowserRow
+                    key={row.key}
+                    row={row}
+                    secondaryLabel={secondaryByKey.get(row.key) ?? null}
+                    isDuplicateTitle={duplicateTitles.has(row.identity.title)}
+                    chatById={chatById}
+                    epicId={epicId}
+                    tabId={tabId}
+                    onClose={onClose}
+                    unavailable={group.offline}
+                    onCloseTab={(_sessionId, tabId) =>
+                      closeTab(row.session, tabId)
+                    }
+                  />
+                ))}
+              </div>
+            </BrowserDeviceGroup>
+          ))}
+        </div>
         <SwitcherSimulatorsSection
-          epicId={props.epicId}
-          tabId={props.tabId}
+          epicId={epicId}
+          tabId={tabId}
           hostId={hostPin.resolvedHostId}
-          onClose={props.onClose}
+          onClose={onClose}
         />
       </div>
-    </>
+    </div>
   );
 }
 
@@ -276,6 +144,7 @@ function SwitcherBrowserRow(props: {
   readonly tabId: string;
   readonly onClose: () => void;
   readonly onCloseTab: (sessionId: string, tabId: string) => Promise<void>;
+  readonly unavailable: boolean;
 }) {
   const { row, epicId, tabId, onClose } = props;
   const { session, tab, identity } = row;
@@ -334,6 +203,7 @@ function SwitcherBrowserRow(props: {
       badge={<SwitcherBrowserStateBadge status={tab.status} />}
       active={isActive}
       onSelect={onSelect}
+      disabled={props.unavailable}
       selectTestId={`switcher-browser-row-${tab.tabId}`}
       actions={
         <SwitcherBrowserRowActions
@@ -345,6 +215,7 @@ function SwitcherBrowserRow(props: {
           tabId={tabId}
           onClose={onClose}
           onCloseTab={props.onCloseTab}
+          unavailable={props.unavailable}
         />
       }
     />
@@ -358,7 +229,7 @@ function SwitcherBrowserRow(props: {
  * rendered as a real button in the actions slot beside it instead.
  */
 function SwitcherBrowserStateBadge(props: {
-  readonly status: BrowserTabInfo["status"];
+  readonly status: BrowserTabInfo["status"] | null;
 }) {
   if (props.status === "crashed") {
     return (
@@ -397,6 +268,7 @@ function SwitcherBrowserRowActions(props: {
   readonly tabId: string;
   readonly onClose: () => void;
   readonly onCloseTab: (sessionId: string, tabId: string) => Promise<void>;
+  readonly unavailable: boolean;
 }) {
   const { row, epicId, tabId, onClose } = props;
   const { session, tab, identity } = row;
@@ -429,7 +301,7 @@ function SwitcherBrowserRowActions(props: {
         type="button"
         variant="muted-destructive"
         size="icon-sm"
-        disabled={isClosing}
+        disabled={isClosing || props.unavailable}
         aria-label={closeLabel}
         data-testid={`switcher-browser-close-${tab.tabId}`}
         className="shrink-0"
@@ -506,50 +378,5 @@ function SwitcherBrowserDriverButton(props: {
     >
       <Bot className="size-4" aria-hidden />
     </Button>
-  );
-}
-
-/**
- * The desktop panel's host filter, in the switcher's view-menu slot. The
- * desktop rail reaches it through a submenu because a rail has no width for
- * the host rows; the sheet has, so the choices are listed directly.
- */
-function SwitcherBrowserHostFilterMenu(props: {
-  readonly surfaceKey: string;
-  readonly isPinned: boolean;
-}) {
-  const label = props.isPinned
-    ? "Filter browsers by host, 1 filter active"
-    : "Filter browsers by host";
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label={label}
-          data-testid={`switcher-${BROWSERS_PANEL_ID}-filter`}
-          className="relative"
-        >
-          <ListFilter className="size-4" />
-          {props.isPinned ? (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
-            >
-              1
-            </span>
-          ) : null}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="max-h-[min(50dvh,20rem)] max-w-64 min-w-52 overflow-y-auto"
-        data-testid={`switcher-${BROWSERS_PANEL_ID}-filter-menu`}
-      >
-        <BrowserHostFilterChoices surfaceKey={props.surfaceKey} />
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

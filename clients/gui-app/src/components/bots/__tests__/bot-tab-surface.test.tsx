@@ -244,6 +244,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
     hostId: string;
+    boundHostId: string | null;
     botTitle: string;
     appConversationChatId: string | null;
     resolveMember: (
@@ -253,6 +254,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     <div
       data-testid="stub-channel"
       data-host-id={props.hostId}
+      data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-teammate-name={
@@ -333,6 +335,7 @@ function snapshot(): BotSubscriptionSnapshot {
     tasks: [],
     openRequestCount: 0,
     conversationsRevision: null,
+    notificationSubscriptions: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
     activity: null,
   };
@@ -671,7 +674,7 @@ describe("<BotTabSurface /> paused", () => {
   }> = [
     {
       reason: "host-not-in-environment",
-      text: "Paused: the computer this bot runs on is away, and this one doesn't run Acme's bots. Messages you send are delivered when it's back.",
+      text: "Paused: the host this bot runs on is away, and this one doesn't run Acme's bots. Messages you send are delivered when it's back.",
       retry: false,
     },
     {
@@ -724,6 +727,14 @@ describe("<BotTabSurface /> paused", () => {
     expect(
       screen.getByTestId("stub-channel").getAttribute("data-host-id"),
     ).toBe(TAB_HOST);
+  });
+
+  it("hands the channel view the tab's host for its reads and sends, and the bot's bound host for signing a provider in again", () => {
+    render(surface());
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-host-id")).toBe(TAB_HOST);
+    expect(channel.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
   });
 
   it("hands the channel view the conversation the bot record names as its channel", () => {
@@ -1001,7 +1012,7 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the bot's picture, the channel's name, its two views and the settings ⋮ only, even for the environment's main bot", () => {
+  it("draws the header as the bot's picture, the channel's name with the main bot's star, its two views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -1019,6 +1030,22 @@ describe("<BotTabSurface /> main bot", () => {
     expect(
       within(header).getByRole("button", { name: "Channel settings" }),
     ).toBe(screen.getByTestId("bot-channel-settings-open"));
+    expect(screen.getByTestId("bot-tab-title").nextElementSibling).toBe(
+      within(header).getByRole("img", { name: "Main bot" }).parentElement,
+    );
+  });
+
+  it.each([
+    ["is not main", { "env-team": OTHER_BOT_ID }],
+    ["is not known", null],
+  ])("draws no star in the header when the bot %s", (_name, mainBotIds) => {
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    mocks.state.mainBotIds = mainBotIds;
+    render(surface());
+
+    const header = screen.getByTestId("bot-tab-title").closest("header");
+    if (header === null) throw new Error("expected the channel header");
+    expect(within(header).queryByRole("img", { name: "Main bot" })).toBeNull();
   });
 
   it.each([

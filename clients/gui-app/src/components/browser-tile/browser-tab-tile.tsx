@@ -717,11 +717,6 @@ function useRuntimeDemotionNote(
   return { visible: demotedRevision !== null, dismiss };
 }
 
-/**
- * The sessions context this reads is the TILE's host stream: the host surface
- * puts every tile's subtree behind a `BrowserSessionsHostBoundary` for
- * `node.hostId`, so there is no per-tile boundary here.
- */
 export function BrowserTabTile(props: BrowserTabTileProps) {
   const sessions = useBrowserSessionsContext();
   const attachTab = sessions.attachTab;

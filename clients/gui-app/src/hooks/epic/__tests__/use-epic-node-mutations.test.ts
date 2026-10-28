@@ -68,14 +68,17 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 
 const capturedOptions: Record<string, unknown> = {};
 const capturedClients: Record<string, unknown> = {};
+const capturedFloors: Record<string, unknown> = {};
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: (args: {
     method: string;
     options: unknown;
     client: unknown;
+    requiredHostMethodVersion: unknown;
   }) => {
     capturedOptions[args.method] = args.options;
     capturedClients[args.method] = args.client;
+    capturedFloors[args.method] = args.requiredHostMethodVersion;
     return { mutate: vi.fn(), isPending: false };
   },
 }));
@@ -158,6 +161,18 @@ describe("useEpicCreateArtifact", () => {
     expect(toast.error).toHaveBeenCalledWith(
       "You don't have permission to do that.",
     );
+  });
+
+  it("requires epic.createArtifact 1.1 for a canvas and no floor for markdown", () => {
+    renderHook(() => useEpicCreateArtifact());
+    const floor = capturedFloors["epic.createArtifact"] as (variables: {
+      artifactType: string;
+    }) => unknown;
+    expect(floor({ artifactType: "canvas" })).toEqual({
+      method: "epic.createArtifact",
+      version: { major: 1, minor: 1 },
+    });
+    expect(floor({ artifactType: "spec" })).toBeNull();
   });
 });
 

@@ -256,6 +256,9 @@ describe("release-target-electron-builder", () => {
     expect(nsis).toContain(
       '!define TRAYCER_HOST_LAUNCHER "$PROFILE\\.traycer\\cli\\staging\\host-start-hidden.vbs"',
     );
+    expect(nsis).toContain(
+      '!define TRAYCER_CLI_MANIFEST_TAIL ".traycer\\cli\\staging\\manifest.json"',
+    );
     expect(nsis).toContain('!include "uninstall-host-autostart.nsh"');
   });
 
@@ -268,6 +271,15 @@ describe("release-target-electron-builder", () => {
     });
     expect(readFileSync(fixture.generatedPath, "utf8")).toContain(
       '!define TRAYCER_WINDOWS_TASK_NAME "\\Traycer\\Host"',
+    );
+    // The CLI manifest the uninstaller reads is the one beside the launcher
+    // it removes, in the same install root.
+    const nsis = readFileSync(fixture.generatedPath, "utf8");
+    expect(nsis).toContain(
+      '!define TRAYCER_CLI_MANIFEST_TAIL ".traycer\\cli\\manifest.json"',
+    );
+    expect(nsis).toContain(
+      '!define TRAYCER_HOST_LAUNCHER "$PROFILE\\.traycer\\cli\\host-start-hidden.vbs"',
     );
   });
 

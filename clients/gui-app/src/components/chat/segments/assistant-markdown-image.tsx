@@ -475,13 +475,18 @@ function DeduplicatedImageChip(props: {
 function mountedGenerationCard(
   target: AssistantMarkdownImageTarget,
 ): HTMLElement | null {
-  const row = [
+  // Every mounted item of the row, not the first: a long turn is drawn as
+  // several list items and the card can be in any of them.
+  const rows = [
     ...document.querySelectorAll<HTMLElement>("[data-message-id]"),
-  ].find((element) => element.dataset.messageId === target.rowId);
-  if (row === undefined) return null;
-  return (
-    [...row.querySelectorAll<HTMLElement>("[data-image-generation-card]")].find(
+  ].filter((element) => element.dataset.messageId === target.rowId);
+  for (const row of rows) {
+    const card = [
+      ...row.querySelectorAll<HTMLElement>("[data-image-generation-card]"),
+    ].find(
       (element) => element.dataset.imageGenerationCard === target.toolBlockId,
-    ) ?? null
-  );
+    );
+    if (card !== undefined) return card;
+  }
+  return null;
 }

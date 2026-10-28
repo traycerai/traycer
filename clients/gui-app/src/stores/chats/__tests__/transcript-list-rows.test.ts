@@ -11,7 +11,10 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import {
   applyIndexChange,
   applyRangeResponse,
@@ -84,6 +87,13 @@ function model(id: string): ChatMessageModel {
     sessionAnchor: null,
     steerBadge: null,
   };
+}
+
+function textSegment(
+  id: string,
+  markdown: string,
+): Extract<MessageSegment, { kind: "text" }> {
+  return { id, kind: "text", markdown, isStreaming: false };
 }
 
 function modelWithPersistentMessageId(
@@ -348,6 +358,7 @@ describe("transcriptListRows", () => {
       statusLabel: "Completed" as const,
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -380,6 +391,7 @@ describe("transcriptListRows", () => {
     };
     const setupRowId = "setup-card:chat-1:3:2";
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -419,6 +431,7 @@ describe("transcriptListRows", () => {
     const firstRowId = "setup-card:chat-1:2:2";
     const secondRowId = "setup-card:chat-1:3:2";
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -450,6 +463,7 @@ describe("transcriptListRows", () => {
     // its own ordinal - appending it as an unplaced row draws it twice, once
     // out of order at the end and once as the placeholder still standing.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 4,
         spans: [span(2, ["r-2"])],
@@ -473,6 +487,7 @@ describe("transcriptListRows", () => {
     // The other side of the same guard: a live/pending record has no skeleton
     // entry, and must keep landing after every ordinal.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [span(0, ["r-0", "r-1"])],
@@ -512,6 +527,7 @@ describe("transcriptListRows", () => {
     };
     const projectedRowId = assistantRowId(turnId);
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -554,6 +570,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [],
@@ -574,7 +591,11 @@ describe("transcriptListRows", () => {
   it("is the identity mapping on the legacy line", () => {
     const rendered = [model("a"), model("b")];
 
-    const rows = transcriptListRows({ window: null, rendered });
+    const rows = transcriptListRows({
+      window: null,
+      rendered,
+      splitLongTurns: true,
+    });
 
     expect(kinds(rows)).toEqual(["H:a", "H:b"]);
     expect(rows.every((row) => row.ordinal === null)).toBe(true);
@@ -582,6 +603,7 @@ describe("transcriptListRows", () => {
 
   it("fills unhydrated ordinals with placeholders so the list is rowCount long", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 5,
         spans: [span(3, ["r-3", "r-4"])],
@@ -607,6 +629,7 @@ describe("transcriptListRows", () => {
     // would fail here, drop `r-1` through to the tail, and render it twice -
     // once as content at the bottom and once as a placeholder at ordinal 1.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         spans: [span(1, ["r-1"])],
@@ -623,6 +646,7 @@ describe("transcriptListRows", () => {
 
   it("keys a placeholder on its skeleton rowId, or on the ordinal while it is a hole", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [],
@@ -642,6 +666,7 @@ describe("transcriptListRows", () => {
   it("changes a row's kind when it hydrates, which no comparator can look past", () => {
     const skeleton = [skeletonEntry("r-0")];
     const before = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -652,6 +677,7 @@ describe("transcriptListRows", () => {
       rendered: [],
     });
     const after = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [span(0, ["r-0"])],
@@ -671,6 +697,7 @@ describe("transcriptListRows", () => {
 
   it("puts rows that own no ordinal after every ordinal", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [span(0, ["r-0"])],
@@ -688,6 +715,7 @@ describe("transcriptListRows", () => {
 
   it("keeps the ordinal space mounted when the index is void", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 9,
         spans: [span(0, ["r-0"])],
@@ -716,6 +744,7 @@ describe("transcriptListRows", () => {
 
   it("does not expose a known nonempty void as an empty chat", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 5_000,
         spans: [],
@@ -737,6 +766,7 @@ describe("transcriptListRows", () => {
   it("does not append a span-backed synthetic row after void placeholders", () => {
     const syntheticId = "forked-chat-link:event-1";
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [span(0, [syntheticId])],
@@ -774,6 +804,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -793,6 +824,7 @@ describe("transcriptListRows", () => {
 
   it("keeps a genuinely pending null-record row after void placeholders", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -829,7 +861,9 @@ describe("transcriptListRows", () => {
       invalidated: false,
     });
     const rendered = [model("u-1"), model("a-1"), model("u-2")];
-    const drawn = kinds(transcriptListRows({ window: before, rendered }));
+    const drawn = kinds(
+      transcriptListRows({ window: before, rendered, splitLongTurns: true }),
+    );
     expect(drawn).toEqual(["H:u-1", "H:a-1", "H:u-2"]);
 
     const voided = applyIndexChange(before, {
@@ -843,9 +877,11 @@ describe("transcriptListRows", () => {
 
     // Same rows under the same keys: the void is invisible, and the list
     // never remounts a row it had already measured.
-    expect(kinds(transcriptListRows({ window: voided, rendered }))).toEqual(
-      drawn,
-    );
+    expect(
+      kinds(
+        transcriptListRows({ window: voided, rendered, splitLongTurns: true }),
+      ),
+    ).toEqual(drawn);
   });
 
   it("keeps an orphaned steer projected from the live assistant during invalidation", () => {
@@ -885,6 +921,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -952,6 +989,7 @@ describe("transcriptListRows", () => {
       messages: [steeredUser],
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [retainedSpan],
@@ -999,6 +1037,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -1046,6 +1085,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [span(0, [""])],
@@ -1063,6 +1103,7 @@ describe("transcriptListRows", () => {
   it("does not append a synthetic row from an unresolved tail span", () => {
     const syntheticId = "forked-chat-link:event-unresolved";
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [span(0, [""])],
@@ -1084,8 +1125,13 @@ describe("transcriptListRows", () => {
       skeletonComplete: false,
       invalidated: true,
     });
-    const first = transcriptListRows({ window, rendered: [] });
+    const first = transcriptListRows({
+      window,
+      rendered: [],
+      splitLongTurns: true,
+    });
     const streamed = transcriptListRows({
+      splitLongTurns: true,
       window,
       rendered: [pendingModel("pending-user")],
     });
@@ -1096,6 +1142,7 @@ describe("transcriptListRows", () => {
 
   it("drops a span row that claims an ordinal past rowCount", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [span(1, ["r-1", "r-2-past-end"])],
@@ -1121,6 +1168,7 @@ describe("transcriptListRows", () => {
     // recently demoted. Suppressing it here is how an active row disappears
     // until replacement hydration arrives.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [],
@@ -1141,6 +1189,7 @@ describe("transcriptListRows", () => {
     // placeholder rather than being published at the tail, a position it
     // never had.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [],
@@ -1168,6 +1217,7 @@ describe("transcriptListRows", () => {
     // ids - `withholds a sibling slice of a stale-held record from the live
     // tail` is that case, and it must keep its placeholder.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [],
@@ -1207,6 +1257,7 @@ describe("transcriptListRows", () => {
     };
     const newer: SpanFixture = { ...span(4, ["dup"]), servedAt: 9 };
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 6,
         spans: [],
@@ -1240,6 +1291,7 @@ describe("transcriptListRows", () => {
     // no record. Both id channels therefore miss, and pre-rebase steer content
     // is published at the live tail - a position it never had.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -1281,6 +1333,7 @@ describe("transcriptListRows", () => {
     vi.mocked(projectTranscriptRows).mockClear();
 
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -1315,6 +1368,7 @@ describe("transcriptListRows", () => {
     // at the tail instead of hiding it until replacement hydration arrives.
     const streaming = steeredAssistant("turn-steered", "q-1");
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -1448,6 +1502,7 @@ describe("transcriptListRows", () => {
     const part0Id = assistantSliceRowId(turnId, 0, true);
     const part1Id = assistantSliceRowId(turnId, 1, true);
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         spans: [],
         rowCount: 4,
@@ -1523,6 +1578,7 @@ describe("transcriptListRows", () => {
     const secondSteer = queueSteerRowId(secondQueueId);
 
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 5,
         spans: [],
@@ -1576,6 +1632,7 @@ describe("transcriptListRows", () => {
     const steerId = queueSteerRowId(queueItemId);
 
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         spans: [],
@@ -1689,6 +1746,7 @@ describe("transcriptListRows", () => {
     const part0Id = assistantSliceRowId(turnId, 0, true);
     const part1Id = assistantSliceRowId(turnId, 1, true);
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         // The served range: the prior user row and, at ordinal 2, the steered
@@ -1805,6 +1863,7 @@ describe("transcriptListRows", () => {
 
     const assistantId = assistantRowId(turnId);
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         spans: [],
@@ -1848,6 +1907,7 @@ describe("Codex retry row suppression", () => {
     const steer = queueSteerRowId("queue-retry-sparse");
     const part1 = assistantSliceRowId("turn-retry-sparse", 1, true);
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         spans: [span(0, [part0, steer, part1])],
@@ -1887,6 +1947,7 @@ describe("tier-parameterized backing", () => {
     // placeholder instead of ever drawing.
     const pendingRowId = "pending-named-in-skeleton";
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -1927,6 +1988,7 @@ describe("tier-parameterized backing", () => {
     };
     const setupRowId = "setup-card:chat-1:0:2";
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -1954,6 +2016,7 @@ describe("tier-parameterized backing", () => {
     // backs" pins, with a Pending model added alongside to show the tier
     // boundary does not swallow it too.
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
         spans: [],
@@ -2015,6 +2078,7 @@ describe("tier-parameterized backing", () => {
     };
     const steerRowId = queueSteerRowId("queue-seated");
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
         spans: [],
@@ -2149,6 +2213,7 @@ describe("the carried skeleton through a void", () => {
     const pending = pendingModel("pending-send");
     const before = opened(ids);
     const beforeRows = transcriptListRows({
+      splitLongTurns: true,
       window: before,
       rendered: [pending],
     });
@@ -2158,6 +2223,7 @@ describe("the carried skeleton through a void", () => {
     const voided = reindexed(before, 2, 7);
     expect(voided.invalidated).toBe(true);
     const voidRows = transcriptListRows({
+      splitLongTurns: true,
       window: voided,
       rendered: [pending],
     });
@@ -2176,6 +2242,7 @@ describe("the carried skeleton through a void", () => {
 
     const partial = chunk(voided, 0, heterogeneous(["r-0", "r-1"]), false);
     const partialRows = transcriptListRows({
+      splitLongTurns: true,
       window: partial,
       rendered: [pending],
     });
@@ -2189,6 +2256,7 @@ describe("the carried skeleton through a void", () => {
     const snapshotted = snapshot(partial, 2, 7);
     expect(snapshotted.invalidated).toBe(false);
     const snapshotRows = transcriptListRows({
+      splitLongTurns: true,
       window: snapshotted,
       rendered: [pending],
     });
@@ -2213,6 +2281,7 @@ describe("the carried skeleton through a void", () => {
     );
     const hydratedModels = [model("r-0"), model("r-1"), pending];
     const rangeRows = transcriptListRows({
+      splitLongTurns: true,
       window: ranged,
       rendered: hydratedModels,
     });
@@ -2227,6 +2296,7 @@ describe("the carried skeleton through a void", () => {
       false,
     );
     const restreamRows = transcriptListRows({
+      splitLongTurns: true,
       window: restreaming,
       rendered: hydratedModels,
     });
@@ -2246,6 +2316,7 @@ describe("the carried skeleton through a void", () => {
     );
     expect(complete.skeletonComplete).toBe(true);
     const completeRows = transcriptListRows({
+      splitLongTurns: true,
       window: complete,
       rendered: hydratedModels,
     });
@@ -2279,7 +2350,11 @@ describe("the carried skeleton through a void", () => {
     const shifted = chunk(voided, 0, heterogeneous(["new", "a"]), false);
     expect(shifted.invalidated).toBe(true);
 
-    const shiftedRows = transcriptListRows({ window: shifted, rendered: [] });
+    const shiftedRows = transcriptListRows({
+      window: shifted,
+      rendered: [],
+      splitLongTurns: true,
+    });
     expect(keys(shiftedRows)).toEqual([
       "new",
       "a",
@@ -2298,67 +2373,106 @@ describe("the carried skeleton through a void", () => {
     // `b`'s old seat is authority's now, so it is absent - not duplicated -
     // until the chunk naming it arrives.
     const complete = chunk(shifted, 2, heterogeneous(["b", "c", "d"]), true);
-    const completeRows = transcriptListRows({ window: complete, rendered: [] });
+    const completeRows = transcriptListRows({
+      window: complete,
+      rendered: [],
+      splitLongTurns: true,
+    });
     expect(keys(completeRows)).toEqual(["new", "a", "b", "c", "d"]);
     expectUniqueKeys(shiftedRows);
-    expectUniqueKeys(completeRows);
   });
 
   it("drops a carried row the complete replacement never names", () => {
     const voided = reindexed(opened(["a", "b", "c"]), 2, 2);
     // Ordinals past the new `rowCount` are never emitted.
-    expect(keys(transcriptListRows({ window: voided, rendered: [] }))).toEqual([
-      "a",
-      "b",
-    ]);
+    expect(
+      keys(
+        transcriptListRows({
+          window: voided,
+          rendered: [],
+          splitLongTurns: true,
+        }),
+      ),
+    ).toEqual(["a", "b"]);
 
     const partial = chunk(voided, 0, heterogeneous(["a"]), false);
-    expect(keys(transcriptListRows({ window: partial, rendered: [] }))).toEqual(
-      ["a", "b"],
-    );
+    expect(
+      keys(
+        transcriptListRows({
+          window: partial,
+          rendered: [],
+          splitLongTurns: true,
+        }),
+      ),
+    ).toEqual(["a", "b"]);
 
     const complete = chunk(partial, 1, heterogeneous(["c"]), true);
     expect(complete.carriedSkeleton).toEqual([]);
     expect(
-      keys(transcriptListRows({ window: complete, rendered: [] })),
+      keys(
+        transcriptListRows({
+          window: complete,
+          rendered: [],
+          splitLongTurns: true,
+        }),
+      ),
     ).toEqual(["a", "c"]);
   });
 
   it("keeps the first carry through a repeated void", () => {
     const first = reindexed(opened(["a", "b", "c"]), 2, 4);
     const second = reindexed(first, 3, 5);
-    expect(keys(transcriptListRows({ window: second, rendered: [] }))).toEqual([
-      "a",
-      "b",
-      "c",
-      unplacedRowKey(3),
-      unplacedRowKey(4),
-    ]);
+    expect(
+      keys(
+        transcriptListRows({
+          window: second,
+          rendered: [],
+          splitLongTurns: true,
+        }),
+      ),
+    ).toEqual(["a", "b", "c", unplacedRowKey(3), unplacedRowKey(4)]);
   });
 
   it("carries a partial replacement into a second void", () => {
     const voided = reindexed(opened(["a", "b", "c"]), 2, 3);
     const partial = chunk(voided, 0, heterogeneous(["a"]), false);
     const second = reindexed(partial, 3, 3);
-    expect(keys(transcriptListRows({ window: second, rendered: [] }))).toEqual([
-      "a",
-      unplacedRowKey(1),
-      unplacedRowKey(2),
-    ]);
+    expect(
+      keys(
+        transcriptListRows({
+          window: second,
+          rendered: [],
+          splitLongTurns: true,
+        }),
+      ),
+    ).toEqual(["a", unplacedRowKey(1), unplacedRowKey(2)]);
   });
 
   it("empties the list on a zero-row void and carries nothing past it", () => {
     const zeroed = reindexed(opened(["a", "b"]), 2, 0);
-    expect(transcriptListRows({ window: zeroed, rendered: [] })).toEqual([]);
+    expect(
+      transcriptListRows({
+        window: zeroed,
+        rendered: [],
+        splitLongTurns: true,
+      }),
+    ).toEqual([]);
 
     const refilled = reindexed(zeroed, 3, 2);
     expect(
-      keys(transcriptListRows({ window: refilled, rendered: [] })),
+      keys(
+        transcriptListRows({
+          window: refilled,
+          rendered: [],
+          splitLongTurns: true,
+        }),
+      ),
     ).toEqual([unplacedRowKey(0), unplacedRowKey(1)]);
   });
 
   it("keeps a hole in the carry an unplaced key", () => {
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         spans: [],
@@ -2388,6 +2502,7 @@ describe("the carried skeleton through a void", () => {
     const steerId = queueSteerRowId(queueItemId);
 
     const rows = transcriptListRows({
+      splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
         spans: [],
@@ -2442,7 +2557,11 @@ describe("the carried skeleton through a void", () => {
 
     const voided = reindexed(before, 2, 3);
     expect(voided.liveMessages).toEqual([transient]);
-    const voidRows = transcriptListRows({ window: voided, rendered });
+    const voidRows = transcriptListRows({
+      window: voided,
+      rendered,
+      splitLongTurns: true,
+    });
     expect(keys(voidRows)).toEqual([
       "prior-user",
       unplacedRowKey(1),
@@ -2453,6 +2572,7 @@ describe("the carried skeleton through a void", () => {
 
     // The same through the normal merge once the snapshot clears the void.
     const snapshotRows = transcriptListRows({
+      splitLongTurns: true,
       window: snapshot(voided, 2, 3),
       rendered,
     });
@@ -2478,6 +2598,7 @@ describe("the carried skeleton through a void", () => {
     ]);
     // Before the void, the authoritative tier holds the same two copies.
     const restreamRows = transcriptListRows({
+      splitLongTurns: true,
       window: restreaming,
       rendered: [],
     });
@@ -2490,7 +2611,11 @@ describe("the carried skeleton through a void", () => {
     const voided = reindexed(restreaming, 2, 4);
     expect(voided.carriedSkeleton).toBe(restreaming.skeleton);
 
-    const rows = transcriptListRows({ window: voided, rendered: [] });
+    const rows = transcriptListRows({
+      window: voided,
+      rendered: [],
+      splitLongTurns: true,
+    });
     expectUniqueKeys(rows);
     expect(keys(rows)).toEqual(["x", unplacedRowKey(1), "c", "d"]);
     expect(rows.filter((row) => row.key === "c")).toEqual([
@@ -2500,15 +2625,24 @@ describe("the carried skeleton through a void", () => {
 
   it("reuses carried row objects across chunks that do not name them", () => {
     const voided = reindexed(opened(["a", "b", "c"]), 2, 3);
-    const voidRows = transcriptListRows({ window: voided, rendered: [] });
+    const voidRows = transcriptListRows({
+      window: voided,
+      rendered: [],
+      splitLongTurns: true,
+    });
     const partial = chunk(voided, 0, heterogeneous(["a"]), false);
-    const partialRows = transcriptListRows({ window: partial, rendered: [] });
+    const partialRows = transcriptListRows({
+      window: partial,
+      rendered: [],
+      splitLongTurns: true,
+    });
 
     expect(partialRows[1]).toBe(voidRows[1]);
     expect(partialRows[2]).toBe(voidRows[2]);
     // And across streaming renders of one window.
     expect(
       transcriptListRows({
+        splitLongTurns: true,
         window: partial,
         rendered: [pendingModel("pending-user")],
       })[2],
@@ -2518,6 +2652,7 @@ describe("the carried skeleton through a void", () => {
 
 describe("visibleOrdinalRange", () => {
   const rows = transcriptListRows({
+    splitLongTurns: true,
     window: windowOf({
       rowCount: 4,
       spans: [span(1, ["r-1"])],
@@ -2557,5 +2692,80 @@ describe("visibleOrdinalRange", () => {
       fromOrdinal: 0,
       toOrdinal: 4,
     });
+  });
+
+  it("keeps split assistant parts on one ordinal and appends new part keys", () => {
+    const turnId = "assistant-turn-parts";
+    const firstSegments = [
+      textSegment("text-0", "first block"),
+      textSegment("text-1", "second block"),
+    ];
+    const firstMessage = { ...model(turnId), segments: firstSegments };
+    const window = windowOf({
+      rowCount: 3,
+      spans: [span(1, [turnId])],
+      skeleton: [
+        skeletonEntry("before"),
+        skeletonEntry(turnId),
+        skeletonEntry("after"),
+      ],
+      skeletonComplete: true,
+      invalidated: false,
+    });
+    const expand = (message: ChatMessageModel): readonly TranscriptListRow[] =>
+      transcriptListRows({ window, rendered: [message], splitLongTurns: true });
+    const firstRows = expand(firstMessage);
+    const firstParts = firstRows.filter(
+      (row): row is Extract<TranscriptListRow, { kind: "hydrated" }> =>
+        row.kind === "hydrated",
+    );
+    expect(firstParts.map((row) => row.key)).toEqual([
+      turnId,
+      `${turnId}#text-1`,
+    ]);
+    expect(firstParts.map((row) => row.ordinal)).toEqual([1, 1]);
+    expect(firstParts[0]?.model).toBe(firstMessage);
+    expect(firstParts[0]?.part).toEqual({ index: 0, count: 2 });
+
+    const laterPartIndex = firstRows.findIndex(
+      (row) => row.kind === "hydrated" && row.key === `${turnId}#text-1`,
+    );
+    expect(
+      visibleOrdinalRange(firstRows, laterPartIndex, laterPartIndex + 1),
+    ).toEqual({ fromOrdinal: 1, toOrdinal: 2 });
+
+    // Editing the current text block preserves every existing key; a later
+    // text block adds one key after them without rekeying either part.
+    const grownText = expand({
+      ...firstMessage,
+      segments: [
+        firstSegments[0],
+        textSegment("text-1", "second block with more streamed text"),
+      ],
+    });
+    const grownKeys = grownText
+      .filter((row) => row.kind === "hydrated")
+      .map((row) => row.key);
+    expect(grownKeys).toEqual(firstParts.map((row) => row.key));
+
+    const appended = expand({
+      ...firstMessage,
+      segments: [...firstSegments, textSegment("text-2", "third block")],
+    });
+    expect(
+      appended.filter((row) => row.kind === "hydrated").map((row) => row.key),
+    ).toEqual([...grownKeys, `${turnId}#text-2`]);
+
+    const unsplit = transcriptListRows({
+      window,
+      rendered: [firstMessage],
+      splitLongTurns: false,
+    }).filter(
+      (row): row is Extract<TranscriptListRow, { kind: "hydrated" }> =>
+        row.kind === "hydrated",
+    );
+    expect(unsplit.map((row) => ({ key: row.key, part: row.part }))).toEqual([
+      { key: turnId, part: null },
+    ]);
   });
 });

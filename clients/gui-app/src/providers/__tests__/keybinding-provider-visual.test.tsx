@@ -33,6 +33,11 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  useTileFindStore,
+  type TileFindAdapter,
+  type TileFindStateSnapshot,
+} from "@/stores/tile-find";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { ReactNode } from "react";
 import type { ProviderId } from "@/components/home/data/landing-options";
@@ -287,6 +292,48 @@ function terminalKeyDown(init: KeyboardEventInit): KeyboardEvent {
   return event;
 }
 
+function registerTileFindTarget(): void {
+  const snapshot: TileFindStateSnapshot = {
+    requestId: 0,
+    status: "idle",
+    capabilities: new Set(["find"]),
+    query: "",
+    matchCase: false,
+    replaceText: "",
+    current: 0,
+    total: 0,
+    coverageMessage: null,
+    errorMessage: null,
+    activeUnitId: null,
+    exactHighlight: "none",
+  };
+  const adapter: TileFindAdapter = {
+    tileInstanceId: "find-tile",
+    tileKind: "spec",
+    getSnapshot: () => snapshot,
+    subscribe: () => () => undefined,
+    search: vi.fn(),
+    next: vi.fn(),
+    previous: vi.fn(),
+    clear: vi.fn(),
+    replace: { replaceCurrent: vi.fn(), replaceAll: vi.fn() },
+  };
+  useTileFindStore.getState().registerTarget({
+    tileInstanceId: "find-tile",
+    contentId: "find-tile-content",
+    viewTabId: "view-1",
+    tileId: "find-tile-pane",
+    epicId: "epic-1",
+    tileKind: "spec",
+    isEligible: true,
+    adapter,
+  });
+}
+
+function findBarOpen(): boolean | undefined {
+  return useTileFindStore.getState().uiByTileInstanceId["find-tile"]?.isOpen;
+}
+
 function keyUp(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keyup", init);
 }
@@ -346,6 +393,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   afterEach(() => {
     cleanup();
     resetStores();
+    useTileFindStore.getState().resetForTests();
     vi.clearAllTimers();
     vi.useRealTimers();
   });
@@ -862,6 +910,41 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(toggleTerminal.defaultPrevented).toBe(false);
     expect(maximizeTerminal.defaultPrevented).toBe(false);
     expect(stash.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Ctrl+F and Ctrl+G to a focused non-mac terminal", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+    registerTileFindTarget();
+
+    const find = terminalKeyDown({ code: "KeyF", key: "f", ctrlKey: true });
+    const next = terminalKeyDown({ code: "KeyG", key: "g", ctrlKey: true });
+
+    expect(find.defaultPrevented).toBe(false);
+    expect(next.defaultPrevented).toBe(false);
+    expect(findBarOpen()).toBe(false);
+  });
+
+  it("opens the find bar on non-mac Ctrl+F outside a terminal", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+    registerTileFindTarget();
+
+    const event = keyDown({ code: "KeyF", key: "f", ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(findBarOpen()).toBe(true);
+  });
+
+  it("opens the find bar on macOS Cmd+F even from a terminal", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+    registerTileFindTarget();
+
+    const event = terminalKeyDown({ code: "KeyF", key: "f", metaKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(findBarOpen()).toBe(true);
   });
 
   it("reserves non-mac app-policy Ctrl digit chords when a terminal is focused", () => {

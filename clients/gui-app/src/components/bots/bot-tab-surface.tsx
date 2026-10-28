@@ -53,6 +53,7 @@ import {
 } from "@/components/bots/bot-identity-context";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
+import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
@@ -391,7 +392,6 @@ function BotTabContent(props: {
     if (environment.ownerKind === "organization") {
       return {
         kind: "team",
-        environmentId: environment.environmentId,
         name: environment.label,
         members: directory.members,
       };
@@ -439,6 +439,7 @@ function BotTabContent(props: {
           >
             <BotChannelHeader
               title={snapshot.bot.title}
+              isMain={isMain === true}
               settingsOpen={settingsOpen}
               onToggleSettings={toggleSettings}
             />
@@ -472,6 +473,7 @@ function BotTabContent(props: {
               <BotChannelView
                 botId={botId}
                 hostId={hostId}
+                boundHostId={snapshot.boundHost.hostId}
                 botTitle={snapshot.bot.title}
                 directive={snapshot.bot.directive}
                 appConversationChatId={snapshot.bot.appConversationChatId}
@@ -492,6 +494,7 @@ function BotTabContent(props: {
                 trunkChatId={snapshot.bot.trunkChatId}
                 tasks={snapshot.tasks}
                 openRequestCount={snapshot.openRequestCount}
+                notificationSubscriptions={snapshot.notificationSubscriptions}
                 boundHost={snapshot.boundHost}
                 environmentLabel={environmentLabel}
                 environmentBots={environmentBots}
@@ -667,12 +670,13 @@ function ErrorNotice(props: {
 
 /**
  * Slack's channel header: the bot's picture (its card on hover and click),
- * its name, the ⋮ that opens the channel's settings, and the channel's views
+ * its name with the main bot's star, the ⋮ that opens the channel's settings, and the channel's views
  * under it. What the bot is for is the top of its channel; nothing else
  * sits here.
  */
 function BotChannelHeader(props: {
   readonly title: string;
+  readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
 }): ReactNode {
@@ -703,6 +707,9 @@ function BotChannelHeader(props: {
         >
           {props.title}
         </h1>
+        {props.isMain ? (
+          <MainBotBadge testId="bot-tab-main" tone="muted" />
+        ) : null}
         <Button
           ref={settingsButtonRef}
           type="button"

@@ -245,7 +245,7 @@ describe("<HomeBotsGroupCard /> main bot", () => {
     mountCard("organization", "bot-teammate");
 
     expect(mainBadgeOwners()).toEqual(["bot-teammate"]);
-    expect(screen.getAllByText("Main")).toHaveLength(1);
+    expect(screen.getAllByRole("img", { name: "Main bot" })).toHaveLength(1);
   });
 
   it("marks no row when the group names no main bot", () => {

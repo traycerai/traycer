@@ -66,6 +66,7 @@ export function TeamVariablesAndShells(): ReactNode {
         <>
           <h2 className="text-ui-sm font-medium">Variables</h2>
           <TeamTextItems
+            key={os}
             items={query.data}
             kind="variable"
             os={os}

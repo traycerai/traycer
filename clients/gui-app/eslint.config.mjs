@@ -74,6 +74,14 @@ import {
 // To EXEMPT one file, add a block whose `files` is that single file and whose
 // dimensions are its partition's minus the one being lifted.
 const importRestrictionDimensions = {
+  mutationWatchers: [
+    {
+      regex: "^@tanstack/react-query$",
+      importNames: ["useMutationState", "useIsMutating"],
+      message:
+        "Use useMutationStateOf / useIsMutatingOf from @/hooks/use-mutation-state-of so changed filters are reflected immediately without observer-option cache fan-out.",
+    },
+  ],
   posthog: [
     {
       group: ["posthog-js", "posthog-js/*"],
@@ -162,7 +170,7 @@ const importRestrictionDimensions = {
   ],
 };
 
-/** The `boundary` dimension plus whichever others this file set carries. */
+/** The app-wide boundary and mutation watchers, plus this file set's dimensions. */
 function importRestrictions(...dimensions) {
   return [
     "error",
@@ -170,6 +178,7 @@ function importRestrictions(...dimensions) {
       ...traycerClientsImportBoundaryRestrictions,
       patterns: [
         ...(traycerClientsImportBoundaryRestrictions.patterns ?? []),
+        ...importRestrictionDimensions.mutationWatchers,
         ...dimensions.flatMap((name) => importRestrictionDimensions[name]),
       ],
     },

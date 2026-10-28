@@ -1,66 +1,187 @@
-import type { UseMutationResult } from "@tanstack/react-query";
+import { useCallback } from "react";
+import {
+  useQueryClient,
+  hashKey,
+  type Mutation,
+  type MutationStatus,
+  type UseMutationResult,
+} from "@tanstack/react-query";
+import { v4 as uuidv4 } from "uuid";
 import type {
   HostRpcError,
-  RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcRegistry } from "@/lib/host";
-import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { toastFromHostError } from "@/lib/host-error-toast";
-import { sandboxMutationKeys } from "@/lib/query-keys";
+import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
+import {
+  sandboxMutationKeys,
+  hostQueryKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
-const NO_INVALIDATIONS: readonly [] = [];
-
-/**
- * `host.sandbox.repairGuestConfiguration` on the surface's host: re-applies a
- * sandbox's guest configuration (trust files, hosts aliases, the env layer,
- * git setup) and refetches it. The card's repair action, so it runs on the
- * host the card describes - the Settings scope.
- *
- * Nothing is invalidated here: the outcome reaches the card on the sandbox
- * row's next read (`guestConfigured` rides the host's heartbeat), which the
- * caller asks for once this settles.
- */
-export function useSandboxRepairGuestConfiguration(): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "host.sandbox.repairGuestConfiguration">,
+const REPAIR_METHOD = "host.sandbox.repairGuestConfiguration";
+type RepairVariables = Record<string, never>;
+type RepairMutation = UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, typeof REPAIR_METHOD>,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "host.sandbox.repairGuestConfiguration">,
-  { readonly hostId: string | null }
-> {
-  return useHostScopedMutation({
-    method: "host.sandbox.repairGuestConfiguration",
-    mutationKey: sandboxMutationKeys.repairGuestConfiguration(),
-    errorMessage: "Couldn't repair this sandbox's setup.",
-    invalidateMethods: NO_INVALIDATIONS,
+  RepairVariables
+>;
+const applyingOperationIds = new Map<string, string>();
+
+function selectSettingsOperation(mutation: Mutation): {
+  order: number;
+  status: MutationStatus;
+  data: unknown;
+} {
+  return {
+    order: mutation.mutationId,
+    status: mutation.state.status,
+    data: mutation.state.data,
+  };
+}
+
+/** Settings retry was introduced in 1.1; a method name alone proves no version. */
+export function useSandboxRetryApplyingSupported(hostId: string): boolean {
+  const version = useHostMethodSchemaVersion(hostId, REPAIR_METHOD);
+  return version !== null && version.major === 1 && version.minor >= 1;
+}
+
+/** The guest-only fallback is offered only on the known 1.0 contract. */
+export function useSandboxGuestSetupRepairSupported(hostId: string): boolean {
+  const version = useHostMethodSchemaVersion(hostId, REPAIR_METHOD);
+  return version !== null && version.major === 1 && version.minor === 0;
+}
+
+export function useSandboxSettingsOperation(
+  hostId: string,
+): "pending" | "failed" | null {
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const key = hashKey(sandboxMutationKeys.repairGuestConfigurationOn(hostId));
+  const predicate = useCallback(
+    (mutation: Mutation) =>
+      hashKey(mutation.options.mutationKey ?? []) === key &&
+      typeof mutation.state.context === "object" &&
+      mutation.state.context !== null &&
+      "userId" in mutation.state.context &&
+      mutation.state.context.userId === userId,
+    [key, userId],
+  );
+  const operations = useMutationStateOf({ predicate }, selectSettingsOperation);
+  const latest = operations.reduce<(typeof operations)[number] | null>(
+    (best, operation) =>
+      best === null || operation.order > best.order ? operation : best,
+    null,
+  );
+  if (latest?.status === "pending") return "pending";
+  if (
+    latest?.status === "error" ||
+    (latest?.status === "success" &&
+      typeof latest.data === "object" &&
+      latest.data !== null &&
+      "settingsApplied" in latest.data &&
+      latest.data.settingsApplied !== true)
+  )
+    return "failed";
+  return null;
+}
+
+/** Guest setup repair on the surface's scoped host; it never acknowledges settings. */
+export function useSandboxRepairGuestConfiguration(): RepairMutation {
+  const client = useHostClient();
+  return useGuestSetupRepair(
+    client,
+    sandboxMutationKeys.repairGuestConfiguration(),
+  );
+}
+
+/** The legacy repair on a named host, isolated from combined settings operations. */
+export function useSandboxRepairGuestSetupOnHost(
+  hostId: string,
+): RepairMutation {
+  const client = useHostClientForHostId(hostId);
+  return useGuestSetupRepair(
+    client,
+    sandboxMutationKeys.repairGuestSetupOn(hostId),
+  );
+}
+
+function useGuestSetupRepair(
+  client: HostRequester<HostRpcRegistry> | null,
+  mutationKey: readonly unknown[],
+): RepairMutation {
+  return useHostMutation<
+    HostRpcRegistry,
+    typeof REPAIR_METHOD,
+    unknown,
+    RepairVariables
+  >({
+    client,
+    method: REPAIR_METHOD,
+    mapVariables: () => ({ operationId: null }),
+    // A peer upgraded since render may serve 1.1; this action still proves only guest setup.
+    resolveResponse: (response) =>
+      Promise.resolve({ ...response, settingsApplied: false }),
+    requiredHostMethodVersion: () => ({
+      method: REPAIR_METHOD,
+      version: { major: 1, minor: 0 },
+    }),
+    options: {
+      mutationKey,
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't repair this sandbox's setup."),
+    },
   });
 }
 
 /**
- * The same repair on a named sandbox host, for a surface that lists many
- * (Settings › Sandboxes' `Retry applying`): addressed to that host's own
- * client, never the window's.
+ * Combined settings retry on the named sandbox host. The dispatch itself
+ * requires 1.1, even if a render read a newer manifest before a host rollback.
  */
 export function useSandboxRepairGuestConfigurationOnHost(
   hostId: string,
-): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "host.sandbox.repairGuestConfiguration">,
-  HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "host.sandbox.repairGuestConfiguration">
-> {
+): RepairMutation {
   const client = useHostClientForHostId(hostId);
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const operationKey = `${userId}:${hostId}`;
   return useHostMutation<
     HostRpcRegistry,
-    "host.sandbox.repairGuestConfiguration"
+    typeof REPAIR_METHOD,
+    unknown,
+    RepairVariables
   >({
     client,
-    method: "host.sandbox.repairGuestConfiguration",
+    method: REPAIR_METHOD,
+    requiredHostMethodVersion: () => ({
+      method: REPAIR_METHOD,
+      version: { major: 1, minor: 1 },
+    }),
     options: {
       mutationKey: sandboxMutationKeys.repairGuestConfigurationOn(hostId),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't repair this sandbox's setup."),
+      onMutate: () => ({ userId }),
+      onSettled: () => {
+        applyingOperationIds.delete(operationKey);
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(hostId, "environment.status"),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      },
     },
-    mapVariables: (variables) => variables,
+    mapVariables: () => {
+      let operationId = applyingOperationIds.get(operationKey);
+      if (operationId === undefined) {
+        operationId = uuidv4();
+        applyingOperationIds.set(operationKey, operationId);
+      }
+      return { operationId };
+    },
   });
 }

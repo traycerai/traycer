@@ -7,7 +7,7 @@
  * phase AND deltas in one ordered sequence, so a recognizer never has to
  * reconcile it against the DOM `wheel` stream. macOS only.
  */
-export const TRACKPAD_SCROLL_KINDS = [
+const TRACKPAD_SCROLL_KINDS = [
   "began",
   "changed",
   "ended",

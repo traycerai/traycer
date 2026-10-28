@@ -62,6 +62,7 @@ function snapshot(
     tasks: [],
     openRequestCount,
     conversationsRevision,
+    notificationSubscriptions: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity: null,
     hasBinaryPayload: false,

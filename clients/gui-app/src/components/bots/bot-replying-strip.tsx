@@ -5,9 +5,9 @@ import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
 
 /**
  * Slack's typing line, in a bot channel's or thread's message box dock and
- * never a row of the list: the bot's picture and "Tracy is replying…", or
- * "Tracy: <step>" while the turn has a call or command in flight. Drawn only
- * while the session is replying; `null` is a session with nothing to show.
+ * never a row of the list: the bot's picture and "Tracy is replying…", and
+ * never what the turn is doing. Drawn only while the session is replying;
+ * `null` is a session with nothing to show.
  */
 export function BotReplyingStrip(props: {
   readonly botTitle: string;
@@ -16,10 +16,6 @@ export function BotReplyingStrip(props: {
 }): ReactNode {
   const { botTitle, activity, testId } = props;
   if (activity === null || activity.state !== "replying") return null;
-  const label =
-    activity.step === null
-      ? `${botTitle} is replying…`
-      : `${botTitle}: ${activity.step}`;
   return (
     <div
       role="status"
@@ -28,7 +24,7 @@ export function BotReplyingStrip(props: {
     >
       <BotAvatar size="sm" />
       <WorkingShimmerText className="min-w-0 truncate">
-        {label}
+        {`${botTitle} is replying…`}
       </WorkingShimmerText>
     </div>
   );

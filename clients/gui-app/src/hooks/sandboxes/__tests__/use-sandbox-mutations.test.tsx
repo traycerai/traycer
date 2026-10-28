@@ -58,6 +58,7 @@ import {
 import { useSandboxDestroyBatch } from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import {
   useSandboxVerb,
@@ -170,24 +171,19 @@ describe("useSandboxVerb", () => {
     ]);
   });
 
-  it("toasts the typed copy under the verb's own title when the control plane refuses", async () => {
+  it("keeps a refused resume on the row without a toast", async () => {
     state.binding?.auth.runSandboxVerb.mockResolvedValue(
       refusal(402, "sandbox_frozen"),
     );
     const { wrapper } = setup();
     const { result } = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
-
     await act(async () => {
-      await result.current.mutateAsync("resume").catch(() => undefined);
+      await expect(result.current.mutateAsync("resume")).rejects.toThrow(
+        "credits ran out",
+      );
     });
-
-    await waitFor(() => {
-      expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
-    });
-    const [error, title] = state.toastFromAuthError.mock.calls[0];
-    expect(title).toBe("Couldn't resume the sandbox.");
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain("credits ran out");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
   });
 
   it("fails with a sign-in message, calling nothing, when no one is signed in", async () => {
@@ -223,7 +219,7 @@ describe("useSandboxAutomationOpen", () => {
       settled: true,
     });
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -248,7 +244,7 @@ describe("useSandboxAutomationOpen", () => {
       settled: false,
     });
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -264,7 +260,7 @@ describe("useSandboxAutomationOpen", () => {
       refusal(503, "provider_unavailable"),
     );
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -287,7 +283,7 @@ describe("useSandboxAutomationOpen", () => {
       settled: true,
     });
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
 
@@ -329,7 +325,7 @@ describe("useSandboxAutomationOpen", () => {
         settled: true,
       });
       const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -350,7 +346,7 @@ describe("useSandboxAutomationOpen", () => {
         settled: false,
       });
       const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -370,7 +366,7 @@ describe("useSandboxAutomationOpen", () => {
         settled: true,
       });
       const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -392,7 +388,7 @@ describe("useSandboxAutomationOpen", () => {
       );
       signInAs("user-a");
       const { wrapper, queryClient } = setup();
-      const { result } = renderHook(() => useSandboxAutomationOpen(), {
+      const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
         wrapper,
       });
 
@@ -419,7 +415,7 @@ describe("useSandboxAutomationOpen", () => {
   it("fails with a sign-in message, calling nothing, when no one is signed in", async () => {
     state.binding = null;
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxAutomationOpen(), {
+    const { result } = renderHook(() => useSandboxAutomationOpen("toast"), {
       wrapper,
     });
     await act(async () => {
@@ -559,8 +555,13 @@ const DESTROYED_SANDBOX = {
 describe("useSandboxDestroyBatch", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
+    state.requestFleetRefresh.mockClear();
+    state.toastFromAuthError.mockClear();
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    signInAs(null);
+  });
 
   it("skips a row another member resumed while the batch destroyed the one before it", async () => {
     const idle = (id: string) =>
@@ -578,15 +579,15 @@ describe("useSandboxDestroyBatch", () => {
           ],
         },
       });
-    const { wrapper } = setup();
+    const { wrapper, invalidate } = setup();
     const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
 
     let outcomes: readonly string[] = [];
     await act(async () => {
       const results = await result.current.mutateAsync({
         targets: [
-          { sandboxId: "sbx_1", name: "one" },
-          { sandboxId: "sbx_2", name: "two" },
+          { sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" },
+          { sandboxId: "sbx_2", hostId: "host-sbx_2", name: "two" },
         ],
         startedBy: null,
       });
@@ -594,11 +595,22 @@ describe("useSandboxDestroyBatch", () => {
     });
 
     expect(state.binding?.auth.destroySandbox).toHaveBeenCalledTimes(1);
-    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
+    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+      "sbx_1",
+      true,
+    );
     expect(outcomes).toEqual(["destroyed", "skipped"]);
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
+    expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
+    expect(invalidatedKeys(invalidate)).toEqual([
+      REGISTERED_HOSTS_KEY,
+      COSTS_KEY,
+    ]);
   });
 
-  it("refreshes the lists and the cost view once the batch settles", async () => {
+  it("reports mixed results once and refreshes once while retaining each row's outcome", async () => {
+    signInAs("user-a");
     state.binding?.auth.listSandboxes.mockResolvedValue({
       kind: "ok",
       response: {
@@ -608,23 +620,65 @@ describe("useSandboxDestroyBatch", () => {
             burst: true,
             state: "suspended",
           }),
+          sandboxSummaryFixture({
+            id: "sbx_2",
+            burst: true,
+            state: "stopped",
+          }),
         ],
       },
     });
+    state.binding?.auth.destroySandbox
+      .mockResolvedValueOnce({ kind: "ok", settled: true })
+      .mockResolvedValueOnce(refusal(503, "provider_unavailable"));
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
+    const { result } = renderHook(
+      () => ({
+        batch: useSandboxDestroyBatch(),
+        failedRow: useSandboxOperation("sbx_2"),
+      }),
+      { wrapper },
+    );
 
     await act(async () => {
-      await result.current.mutateAsync({
-        targets: [{ sandboxId: "sbx_1", name: "one" }],
-        startedBy: null,
+      await result.current.batch.mutateAsync({
+        targets: [
+          { sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" },
+          { sandboxId: "sbx_2", hostId: "host-sbx_2", name: "two" },
+        ],
+        startedBy: "user-a",
       });
     });
 
-    expect(invalidatedKeys(invalidate)).toEqual([
-      REGISTERED_HOSTS_KEY,
-      COSTS_KEY,
-    ]);
+    await waitFor(() => {
+      expect(
+        result.current.batch.data?.map(({ sandboxId, outcome }) => ({
+          sandboxId,
+          outcome,
+        })),
+      ).toEqual([
+        { sandboxId: "sbx_1", outcome: { kind: "destroyed" } },
+        {
+          sandboxId: "sbx_2",
+          outcome: {
+            kind: "failed",
+            message: "Sandboxes aren't available right now. Try again later.",
+          },
+        },
+      ]);
+      expect(result.current.failedRow).toMatchObject({
+        kind: "failed",
+        verb: "destroy",
+        code: "provider_unavailable",
+        destroyRequest: { idleOnly: true, startedBy: "user-a" },
+      });
+    });
+    expect.soft(state.toastFromAuthError).not.toHaveBeenCalled();
+    expect.soft(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect.soft(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
+    expect
+      .soft(invalidatedKeys(invalidate))
+      .toEqual([REGISTERED_HOSTS_KEY, COSTS_KEY]);
   });
 });
 
@@ -647,7 +701,10 @@ describe("useSandboxDestroy", () => {
       gone = await result.current.mutateAsync();
     });
 
-    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
+    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+      "sbx_1",
+      false,
+    );
     expect(gone).toBe(true);
     expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
@@ -941,7 +998,7 @@ describe("settling under another account", () => {
       expect(onSuccess).not.toHaveBeenCalled();
     });
 
-    it("control: with the same account throughout, a failed suspend toasts under the verb's title and still runs the settled invalidations", async () => {
+    it("control: with the same account throughout, a failed suspend remains inline and still runs the settled invalidations", async () => {
       const { queryClient, invalidate, pending } = startVerb();
       await waitFor(() => {
         expect(state.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
@@ -950,10 +1007,7 @@ describe("settling under another account", () => {
       pending.reject(new Error("the transport threw"));
       await mutationEnded(queryClient);
 
-      expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
-      expect(state.toastFromAuthError.mock.lastCall?.[1]).toBe(
-        "Couldn't suspend the sandbox.",
-      );
+      expect(state.toastFromAuthError).not.toHaveBeenCalled();
       expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
       expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
       expect(invalidatedKeys(invalidate)).toEqual([
@@ -967,6 +1021,8 @@ describe("settling under another account", () => {
 describe("useSandboxDestroyBatch under another account", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
+    state.requestFleetRefresh.mockClear();
+    state.toastFromAuthError.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -996,19 +1052,23 @@ describe("useSandboxDestroyBatch under another account", () => {
         },
       });
     });
-    const { wrapper } = setup();
+    const { wrapper, invalidate } = setup();
     const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
 
     await act(async () => {
       await result.current
         .mutateAsync({
-          targets: [{ sandboxId: "sbx_1", name: "one" }],
+          targets: [{ sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" }],
           startedBy: "user-a",
         })
         .catch(() => undefined);
     });
 
     expect(state.binding?.auth.destroySandbox).not.toHaveBeenCalled();
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
+    expect(state.binding?.directory.refresh).not.toHaveBeenCalled();
+    expect(state.requestFleetRefresh).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("reads and destroys nothing when the account changes between the confirm and the batch's start", async () => {
@@ -1020,7 +1080,7 @@ describe("useSandboxDestroyBatch under another account", () => {
     await act(async () => {
       await result.current
         .mutateAsync({
-          targets: [{ sandboxId: "sbx_1", name: "one" }],
+          targets: [{ sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" }],
           startedBy: "user-a",
         })
         .catch(() => undefined);
@@ -1147,9 +1207,9 @@ describe("a destroy records its host as ended", () => {
       await act(async () => {
         await result.current.mutateAsync({
           targets: [
-            { sandboxId: "sbx_1", name: "one" },
-            { sandboxId: "sbx_2", name: "two" },
-            { sandboxId: "sbx_3", name: "three" },
+            { sandboxId: "sbx_1", hostId: "host-sbx_1", name: "one" },
+            { sandboxId: "sbx_2", hostId: "host-sbx_2", name: "two" },
+            { sandboxId: "sbx_3", hostId: "host-sbx_3", name: "three" },
           ],
           startedBy: "user-a",
         });

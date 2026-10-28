@@ -145,11 +145,12 @@ function fakeBridge() {
     appRequests: null,
   });
   liveBridges.push(bridge);
+  const navigationDone = Promise.resolve(true);
   const navigateCanvas = vi
     .spyOn(bridge, "navigateCanvas")
-    .mockResolvedValue(true);
-  const setMode = vi.spyOn(bridge, "setMode").mockResolvedValue(true);
-  return { bridge, navigateCanvas, setMode };
+    .mockReturnValue(navigationDone);
+  vi.spyOn(bridge, "setMode").mockResolvedValue(true);
+  return { bridge, navigateCanvas, navigationDone };
 }
 
 function stubFrameGeometry(
@@ -330,15 +331,14 @@ describe("CanvasBoardFrame navigation", () => {
     });
     const props = frameProps.current;
     if (props === null) throw new Error("the board never rendered a frame");
-    const { bridge, navigateCanvas } = fakeBridge();
+    const { bridge, navigateCanvas, navigationDone } = fakeBridge();
 
     act(() => {
       props.onBridge?.(bridge);
     });
     await act(async () => {
       props.onStatus("ready");
-      await Promise.resolve();
-      await Promise.resolve();
+      await navigationDone;
     });
 
     expect(navigateCanvas).toHaveBeenCalledExactlyOnceWith({
@@ -356,14 +356,13 @@ describe("CanvasBoardFrame navigation", () => {
     });
     const props = frameProps.current;
     if (props === null) throw new Error("the board never rendered a frame");
-    const { bridge, navigateCanvas } = fakeBridge();
+    const { bridge, navigateCanvas, navigationDone } = fakeBridge();
     act(() => {
       props.onBridge?.(bridge);
     });
     await act(async () => {
       props.onStatus("ready");
-      await Promise.resolve();
-      await Promise.resolve();
+      await navigationDone;
     });
     expect(navigateCanvas).toHaveBeenCalledTimes(1);
 
@@ -371,8 +370,7 @@ describe("CanvasBoardFrame navigation", () => {
     // navigation object; it has already landed, so it is not repeated.
     await act(async () => {
       props.onStatus("ready");
-      await Promise.resolve();
-      await Promise.resolve();
+      await navigationDone;
     });
 
     expect(navigateCanvas).toHaveBeenCalledTimes(1);

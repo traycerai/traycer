@@ -179,6 +179,7 @@ function SwitcherSimulatorRow(props: {
   }, [busy, onOpen, simulator]);
   return (
     <SwitcherListRow
+      disabled={false}
       icon={<Smartphone className="size-4" aria-hidden />}
       label={simulator.name}
       secondaryLabel={simulatorVersionLabel(simulator)}

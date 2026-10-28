@@ -9,6 +9,18 @@ import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-s
 const EPIC_TASK_CONTEXTS_METHOD = "epic.getTaskContexts" as const;
 
 export const hostQueryKeys = {
+  notificationHookRemovalBorrowedStatus: (hostId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "notificationHookRemovalBorrowedStatus",
+    ] as const,
+  notificationHookRemovalReadIds: (hostId: string) =>
+    [...hostQueryKeys.scope(hostId), "notificationHookRemovalReadIds"] as const,
+  notificationHookRemovalReadCutoff: (hostId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "notificationHookRemovalReadCutoff",
+    ] as const,
   base: () => ["host"] as const,
   scope: (hostId: string | null) =>
     hostId === null
@@ -33,6 +45,19 @@ export const hostQueryKeys = {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ) => [...hostQueryKeys.scope(hostId), method, params] as const,
+  browserCatalog: (
+    hostId: string | null,
+    epicId: string,
+    userId: string | null,
+  ) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "browser.catalog.read">(
+        hostId,
+        "browser.catalog.read",
+        { epicId },
+      ),
+      userId,
+    ] as const,
   plainTerminals: (hostId: string, scope: PlainTerminalScope) =>
     hostQueryKeys.method<HostRpcRegistry, "terminal.plain.list">(
       hostId,
@@ -211,7 +236,46 @@ export const hostQueryKeys = {
       >(hostId, EPIC_TASK_CONTEXTS_METHOD, { taskIds: [...taskIds] }),
       userId,
     ] as const,
+  /**
+   * One task's title lookup for a task chip in a message: the
+   * `epic.getTaskContexts` family (so rename, pin and deletion patches reach
+   * it) under a tag of its own, because it lives for the session where the
+   * shared batches go stale and are collected. Matches `useHostQuery` with
+   * `cacheKeyIdentity: [userId, TASK_REFERENCE_LOOKUP_TAG]`.
+   */
+  taskReferenceLookup: (
+    hostId: string | null,
+    userId: string,
+    taskId: string,
+  ) =>
+    [
+      ...hostQueryKeys.epicTaskContexts(hostId, userId, [taskId]),
+      TASK_REFERENCE_LOOKUP_TAG,
+    ] as const,
 };
+
+/** Marks a task chip's own lookup apart from the shared title batches. */
+export const TASK_REFERENCE_LOOKUP_TAG = "task-reference";
+
+/** The task a chip's own lookup key reads; `null` for any other key. */
+export function taskReferenceLookupTaskId(
+  queryKey: readonly unknown[],
+): string | null {
+  if (
+    !isEpicTaskContextsQueryKey(queryKey) ||
+    queryKey[5] !== TASK_REFERENCE_LOOKUP_TAG
+  ) {
+    return null;
+  }
+  const params = queryKey[3];
+  if (params === null || typeof params !== "object" || !("taskIds" in params)) {
+    return null;
+  }
+  const taskIds: unknown = params.taskIds;
+  return Array.isArray(taskIds) && typeof taskIds[0] === "string"
+    ? taskIds[0]
+    : null;
+}
 
 /**
  * True for any `epic.getTaskContexts` host query key (any host / user / id set).
@@ -221,4 +285,23 @@ export function isEpicTaskContextsQueryKey(
   queryKey: readonly unknown[],
 ): boolean {
   return queryKey[0] === "host" && queryKey[2] === EPIC_TASK_CONTEXTS_METHOD;
+}
+
+/** The same viewer/task inventory may have been read through several hosts. */
+export function isBrowserCatalogQueryKey(
+  queryKey: readonly unknown[],
+  userId: string,
+  epicId: string,
+): boolean {
+  const methodIndex = queryKey[1] === "browser.catalog.read" ? 1 : 2;
+  const params = queryKey[methodIndex + 1];
+  return (
+    queryKey[0] === "host" &&
+    queryKey[methodIndex] === "browser.catalog.read" &&
+    typeof params === "object" &&
+    params !== null &&
+    "epicId" in params &&
+    params.epicId === epicId &&
+    queryKey[methodIndex + 2] === userId
+  );
 }

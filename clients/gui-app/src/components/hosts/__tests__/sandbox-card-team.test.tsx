@@ -159,6 +159,7 @@ const COST: SandboxCost = {
   pendingMillicredits: 500,
   segments: [],
   todayMillicredits: 0,
+  todayAwakeMs: null,
   history: [],
 };
 
@@ -540,7 +541,10 @@ describe("<SandboxCard /> team destroy", () => {
     );
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
+      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+        "sbx_1",
+        false,
+      );
     });
   });
 

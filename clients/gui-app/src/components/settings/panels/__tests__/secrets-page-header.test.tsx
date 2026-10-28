@@ -118,7 +118,17 @@ describe("the Secrets page header", () => {
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
-  it("keeps the subtitle when the list cannot be read, since the failure line does not say it", async () => {
+  it("keeps the subtitle once, and shows no empty claim, when the first read of the list fails", async () => {
+    renderPanel([], { current: new Error("down") });
+
+    await screen.findByTestId("secrets-page-error");
+    // No authoritative answer yet: not "no secrets", and the failure line
+    // does not say the subtitle, so the header does.
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+  });
+
+  it("keeps an empty answer it already had, and the subtitle once, when a later read of the list fails", async () => {
     const listError: { current: Error | null } = { current: null };
     const harness = renderPanel([], listError);
     await screen.findByTestId("secrets-empty");
@@ -127,7 +137,7 @@ describe("the Secrets page header", () => {
     await harness.queryClient.invalidateQueries();
 
     await screen.findByTestId("secrets-page-error");
-    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.getByTestId("secrets-empty").textContent).toBe(TEAM_SUBTITLE);
     expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
   });
 

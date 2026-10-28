@@ -226,6 +226,7 @@ const COST: SandboxCost = {
   pendingMillicredits: 500,
   segments: [],
   todayMillicredits: 0,
+  todayAwakeMs: null,
   history: [],
 };
 
@@ -940,7 +941,10 @@ describe("<SandboxCard /> destroy", () => {
     typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
+      expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith(
+        "sbx_1",
+        false,
+      );
     });
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(`Destroyed ${NAME}`);
@@ -1044,6 +1048,7 @@ describe("<SandboxCard /> destroy", () => {
       await waitFor(() => {
         expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith(
           "sbx_1",
+          false,
         );
       });
       await waitFor(() => {
@@ -1094,6 +1099,7 @@ describe("<SandboxCard /> destroy", () => {
       await waitFor(() => {
         expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith(
           "sbx_1",
+          false,
         );
       });
     });
@@ -1251,7 +1257,29 @@ describe("<SandboxCard /> secrets section", () => {
     it("is hidden when the host does not serve the verb", () => {
       mocks.supportsMethod = false;
 
-      renderCard(sandboxOf("awake", false, { phase: "ready" }));
+      renderCard(
+        sandboxOf("awake", false, { phase: "ready", guestConfigured: false }),
+      );
+
+      expect(screen.queryByTestId("sandbox-card-repair")).toBeNull();
+    });
+
+    it("is hidden for a healthy guest, even on an awake sandbox whose host serves the verb", () => {
+      mocks.supportsMethod = true;
+
+      renderCard(
+        sandboxOf("awake", false, { phase: "ready", guestConfigured: true }),
+      );
+
+      expect(screen.queryByTestId("sandbox-card-repair")).toBeNull();
+    });
+
+    it("is hidden while the guest's state is unknown", () => {
+      mocks.supportsMethod = true;
+
+      renderCard(
+        sandboxOf("awake", false, { phase: "ready", guestConfigured: null }),
+      );
 
       expect(screen.queryByTestId("sandbox-card-repair")).toBeNull();
     });
@@ -1259,7 +1287,12 @@ describe("<SandboxCard /> secrets section", () => {
     it("is hidden while the sandbox is not awake, even when the host serves the verb", () => {
       mocks.supportsMethod = true;
 
-      renderCard(sandboxOf("suspended", false, { phase: "ready" }));
+      renderCard(
+        sandboxOf("suspended", false, {
+          phase: "ready",
+          guestConfigured: false,
+        }),
+      );
 
       expect(screen.queryByTestId("sandbox-card-repair")).toBeNull();
     });
@@ -1267,7 +1300,9 @@ describe("<SandboxCard /> secrets section", () => {
     it("asks the summary's host about the verb", () => {
       mocks.supportsMethod = true;
 
-      renderCard(sandboxOf("awake", false, { phase: "ready" }));
+      renderCard(
+        sandboxOf("awake", false, { phase: "ready", guestConfigured: false }),
+      );
 
       expect(mocks.useSupportsMethod).toHaveBeenLastCalledWith(
         "host-sbx-1",
@@ -1275,9 +1310,11 @@ describe("<SandboxCard /> secrets section", () => {
       );
     });
 
-    it("is shown for an awake sandbox on a host that serves the verb, and runs the mutation with an empty request", () => {
+    it("is shown for an awake sandbox whose guest failed, on a host that serves the verb, and runs the mutation with an empty request", () => {
       mocks.supportsMethod = true;
-      renderCard(sandboxOf("awake", false, { phase: "ready" }));
+      renderCard(
+        sandboxOf("awake", false, { phase: "ready", guestConfigured: false }),
+      );
 
       const button = screen.getByTestId("sandbox-card-repair");
       expect(button.hasAttribute("disabled")).toBe(false);
@@ -1292,7 +1329,9 @@ describe("<SandboxCard /> secrets section", () => {
       mocks.supportsMethod = true;
       mocks.repairPending = true;
 
-      renderCard(sandboxOf("awake", false, { phase: "ready" }));
+      renderCard(
+        sandboxOf("awake", false, { phase: "ready", guestConfigured: false }),
+      );
 
       expect(
         screen.getByTestId("sandbox-card-repair").hasAttribute("disabled"),

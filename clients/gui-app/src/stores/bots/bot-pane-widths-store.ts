@@ -10,7 +10,7 @@ import {
 /** A pane of a bot tab whose width the person sets by dragging its inner edge. */
 export type BotPane = "sidebar" | "thread";
 
-export interface BotPaneBounds {
+interface BotPaneBounds {
   readonly defaultPx: number;
   readonly minPx: number;
   readonly maxPx: number;

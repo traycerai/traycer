@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
 
 /**
  * The thread open beside a bot's channel, by the message it hangs off: a
@@ -12,6 +13,25 @@ export interface BotOpenThread {
    * in the channel (reply mode `direct`). `false` for a post's own thread.
    */
   readonly announcement: boolean;
+  /**
+   * The person's post that opened the thread as its send was accepted, which
+   * the channel knows before the thread list or the channel's own row does.
+   * `null` for a thread opened from a row.
+   */
+  readonly sent: BotSentPost | null;
+}
+
+/** A post as its send was accepted: what the panel draws until the channel's row and the thread list catch up. */
+export interface BotSentPost {
+  readonly threadId: string;
+  readonly requestId: string;
+  readonly text: string;
+  /** The person who sent it; `null` when nobody was signed in. */
+  readonly senderUserId: string | null;
+  /** When the send was accepted. */
+  readonly sentAt: number;
+  /** `queued`: it waits for the bot's host, and the panel says so under it. */
+  readonly delivery: BotConversationSendDelivery;
 }
 
 interface BotOpenThreadState {
@@ -22,8 +42,7 @@ interface BotOpenThreadState {
 /**
  * Which thread each bot tab has open, held above the tab's views so the
  * thread survives a switch between the channel's tabs (an announcement's
- * thread nobody has started yet still opens as the box that starts it), and
- * read by `useBotActivity`, which follows the open thread's own session.
+ * thread nobody has started yet still opens as the box that starts it).
  * Closing the tab drops its entry (`closeBotTab`). Not persisted: a restart
  * opens the channel with no thread.
  */

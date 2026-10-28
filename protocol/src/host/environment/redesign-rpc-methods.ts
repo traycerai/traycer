@@ -1,5 +1,6 @@
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
+  environmentConfigurationRevisionV10,
   environmentConfigurationGuideGetUpgradeV10ToV11,
   environmentConfigurationGuideGetV10,
   environmentConfigurationGuideGetV11,
@@ -87,6 +88,19 @@ export const environmentReviewRecordV10 = defineRpcContract({
  * TS7056's declaration-emission ceiling.
  */
 export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
+  "environment.configuration.revision": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationRevisionV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.move.plan": {
     degrade: { kind: "unsupported" },
     1: {

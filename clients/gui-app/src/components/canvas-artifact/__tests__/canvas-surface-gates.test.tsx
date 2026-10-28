@@ -219,10 +219,11 @@ function canvasBridge() {
   });
   bridges.push(bridge);
   const setMode = vi.spyOn(bridge, "setMode").mockResolvedValue(true);
+  const navigationDone = Promise.resolve(true);
   const navigateCanvas = vi
     .spyOn(bridge, "navigateCanvas")
-    .mockResolvedValue(true);
-  return { bridge, setMode, navigateCanvas };
+    .mockReturnValue(navigationDone);
+  return { bridge, setMode, navigateCanvas, navigationDone };
 }
 
 const HTML_SOURCE: SandboxSource = { kind: "html", html: "<p>page</p>" };
@@ -660,7 +661,7 @@ describe("the frame's mode", () => {
 
   it("remounts a board that navigated during play once play stops", async () => {
     mount({ live: true });
-    const { bridge, navigateCanvas } = canvasBridge();
+    const { bridge, navigateCanvas, navigationDone } = canvasBridge();
     fromPage("Home", (props) => props.onBridge?.(bridge));
     fromPage("Home", (props) => props.onStatus("ready"));
     fireEvent.click(
@@ -669,10 +670,11 @@ describe("the frame's mode", () => {
     const before = frameOf("Home").remountKey;
 
     // A same-board link navigates inside the frame.
-    await act(async () => {
+    act(() => {
       frameOf("Home").onRelativeLink?.("home.html#next");
-      await Promise.resolve();
-      await Promise.resolve();
+    });
+    await act(async () => {
+      await navigationDone;
     });
     expect(navigateCanvas).toHaveBeenCalledWith({
       search: "",
@@ -851,12 +853,11 @@ describe("the fullscreen board", () => {
 
     // The hash survives to the board it lands on, so once Checkout's own
     // page is ready, the bridge is asked to apply it.
-    const { bridge, navigateCanvas } = canvasBridge();
+    const { bridge, navigateCanvas, navigationDone } = canvasBridge();
     await act(async () => {
       fromPage("Checkout", (props) => props.onBridge?.(bridge));
       fromPage("Checkout", (props) => props.onStatus("ready"));
-      await Promise.resolve();
-      await Promise.resolve();
+      await navigationDone;
     });
     expect(navigateCanvas).toHaveBeenCalledExactlyOnceWith({
       search: "",

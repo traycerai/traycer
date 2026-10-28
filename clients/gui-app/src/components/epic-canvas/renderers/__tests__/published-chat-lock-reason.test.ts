@@ -19,7 +19,7 @@ import { formatAbsoluteDateTime } from "@/lib/relative-time";
  * 2026-08-11, so each state is pinned separately here.
  */
 describe("publishedChatLockReason", () => {
-  it("names the owning machine and this device when the owner is someone else", () => {
+  it("names the owning machine, and nothing about this device, when the owner is someone else", () => {
     const reason = publishedChatLockReason({
       ownerIsReachable: true,
       ownerRefusesStore: false,
@@ -34,7 +34,9 @@ describe("publishedChatLockReason", () => {
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
-    expect(reason).toContain("not available live from this device");
+    // A copy whose reachable owner holds the chat converts into the live
+    // tile, so the footer no longer says the chat is unavailable live here.
+    expect(reason).not.toContain("not available live from this device");
   });
 
   it("names neither a host nor a second device when the owner IS this host", () => {
@@ -501,7 +503,9 @@ describe("replicaChatLockReason", () => {
     });
 
     expect(reason).toContain("which lives on Ada's Mac");
-    expect(reason).toContain("not available live from this device");
+    // A copy whose reachable owner holds the chat converts into the live
+    // tile, so the footer no longer says the chat is unavailable live here.
+    expect(reason).not.toContain("not available live from this device");
   });
 
   it("drops the other-machine phrasing when the owner IS this host", () => {
@@ -625,5 +629,75 @@ describe("replicaChatLockReason", () => {
         expect(reason).not.toContain("which is offline");
       }
     });
+  });
+});
+
+describe("sandbox end footer", () => {
+  const BASE = {
+    ownerIsReachable: false,
+    ownerRefusesStore: false,
+    ownerIsThisHost: false,
+    ownedByViewer: false,
+    environmentOwned: true,
+    ownerLabel: "e2e-sbx-stop3",
+    unreadableCount: 0,
+  } as const;
+  const PUBLISHED = {
+    ...BASE,
+    fidelityNotice: null,
+    publishedAt: null,
+    refresh: { kind: "idle" },
+  } as const;
+  const AT = Date.UTC(2026, 9, 27, 6, 21);
+  const END = {
+    state: "destroyed",
+    destroyedAt: AT,
+    cause: "resting",
+    actor: null,
+  } as const;
+  const FILES = "Its files are gone; this chat stays readable.";
+
+  it.each([
+    ["resting", null, "after its resting period"],
+    ["burst-idle", null, "after its idle period"],
+    ["idle", null, "after its idle period"],
+    ["verb", "you", "by you"],
+    ["verb", "Ada", "by Ada"],
+    ["verb", "Release agent", "by Release agent"],
+  ] as const)(
+    "names the %s destroy (actor %s) before reach and ownership, on both copies",
+    (cause, actor, phrase) => {
+      const sandboxEnd = { ...END, cause, actor };
+      for (const reason of [
+        publishedChatLockReason({ ...PUBLISHED, sandboxEnd }),
+        replicaChatLockReason({ ...BASE, sandboxEnd }),
+      ]) {
+        expect(reason).toContain(
+          `e2e-sbx-stop3 was destroyed ${phrase.startsWith("by") ? `${phrase} on` : "on"}`,
+        );
+        expect(reason).toContain("Oct 27 at 06:21 UTC");
+        expect(reason).toContain(phrase);
+        expect(reason).toContain(FILES);
+        expect(reason).not.toContain("isn't available");
+        expect(reason).not.toContain("offline");
+      }
+    },
+  );
+
+  it("reads exactly as the resting sample, in UTC, for any machine timezone", () => {
+    expect(
+      publishedChatLockReason({ ...PUBLISHED, sandboxEnd: END }),
+    ).toContain(
+      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period. Its files are gone; this chat stays readable.",
+    );
+  });
+
+  it("is unchanged when the end is null or absent", () => {
+    expect(publishedChatLockReason({ ...PUBLISHED, sandboxEnd: null })).toBe(
+      publishedChatLockReason(PUBLISHED),
+    );
+    expect(replicaChatLockReason({ ...BASE, sandboxEnd: null })).toBe(
+      replicaChatLockReason(BASE),
+    );
   });
 });

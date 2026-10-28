@@ -478,7 +478,7 @@ describe("<SandboxShapeSheet />", () => {
 
       const box = screen.getByTestId("sandbox-shape-sheet-price");
       expect(box.textContent).toContain(
-        "Add credits to start a sandbox · from $0.21 an hour while awake",
+        "Not enough credits. $0.21 more starts this sandbox for an hour.",
       );
       const link = within(box).getByTestId("sandbox-shape-sheet-add-credits");
       expect(link.textContent).toBe("Add credits ↗");
@@ -518,7 +518,7 @@ describe("<SandboxShapeSheet />", () => {
       expect(
         screen.getByTestId("sandbox-shape-sheet-price").textContent,
       ).toContain(
-        "Add acme credits to start a sandbox · from $0.21 an hour while awake",
+        "Your acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
       );
     });
 

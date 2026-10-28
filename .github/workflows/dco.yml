@@ -14,13 +14,13 @@ permissions:
 jobs:
   dco:
     name: Signed-off-by
-    # A team PR into `main` skips this job, and this workflow has no merge-time
-    # run (it reads a pull request's own commits), so a team commit's sign-off
-    # rests on the local commit hook. A fork PR, a bot PR and a PR into any other
-    # branch are checked here in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job, and
+    # this workflow has no merge-time run (it reads a pull request's own
+    # commits), so a team commit's sign-off rests on the local commit hook. A
+    # fork PR, a bot PR and a PR into any other branch are checked here in full.
     if: >-
       github.event_name != 'pull_request'
-      || github.base_ref != 'main'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-24.04

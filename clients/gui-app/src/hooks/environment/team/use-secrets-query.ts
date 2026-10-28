@@ -39,6 +39,7 @@ export function useEnvironmentSecretsQuery(
             version: { major: 1, minor: 1 },
           },
     options: {
+      poll: true,
       enabled:
         environments === "on" &&
         resolved &&

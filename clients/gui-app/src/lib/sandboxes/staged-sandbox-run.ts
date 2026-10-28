@@ -1,9 +1,11 @@
+import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import {
   MutationObserver as QueryMutationObserver,
   type QueryClient,
 } from "@tanstack/react-query";
 import type {
   SandboxControlFailure,
+  SandboxWakeOutcome,
   SandboxCreateFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -41,6 +43,12 @@ import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsReady,
+  sandboxSettingsSteps,
+} from "@traycer/protocol/host/sandbox-settings";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -65,6 +73,9 @@ export const STAGED_TAKING_LONGER_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
 
 export interface StagedSandboxRunDeps {
+  readonly readSettings: (
+    hostId: string,
+  ) => Promise<EnvironmentStatusResponseV11 | "unsupported" | null>;
   readonly auth: AuthService;
   readonly directory: HostDirectoryService;
   /**
@@ -82,7 +93,7 @@ export interface StagedSandboxRunDeps {
   readonly wake: (
     hostId: string,
     gesture: SandboxVerbGesture,
-  ) => Promise<boolean>;
+  ) => Promise<boolean | SandboxWakeOutcome | null>;
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
 }
@@ -266,9 +277,12 @@ async function wakeCurrentStage(
   if (boundary === null) return false;
   const answered = await deps.wake(hostId, stagedWakeGesture(stage));
   if (!stillCurrent(surfaceKey, clientRequestId)) return false;
+  const awake =
+    answered === true ||
+    (typeof answered === "object" && answered?.kind === "awake");
   const observed = pendingSandboxStageObservation(
     surfaceKey,
-    answered ? "awake" : "waking",
+    awake ? "awake" : "waking",
     {
       kind: "wake-result",
       requestedAt: boundary,
@@ -276,9 +290,20 @@ async function wakeCurrentStage(
   );
   // A newer request owns settlement. Supersession is not a failed wake.
   if (observed === "unknown") return false;
-  if (!answered)
-    fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
-  return answered;
+  if (!awake) fail(surfaceKey, stagedWakeFailure(answered));
+  return awake;
+}
+
+function stagedWakeFailure(
+  answered: boolean | SandboxWakeOutcome | null,
+): StagedSandboxFailure {
+  if (typeof answered === "object" && answered !== null) {
+    if (answered.kind === "credit-gate")
+      return { kind: "credits", shortfallMc: answered.shortfallMc };
+    if (answered.kind === "refused")
+      return { kind: "credits", shortfallMc: null };
+  }
+  return { kind: "failed", code: "wake", step: "booting" };
 }
 
 /** Whether the run is still the one the stage holds (not cancelled or retried). */
@@ -308,8 +333,6 @@ function fail(surfaceKey: string, failure: StagedSandboxFailure): void {
 
 /** What the surface's send adds to the create. */
 export interface StagedRunRequest {
-  /** The name a create falls back to when the sheet set none. */
-  readonly fallbackName: string;
   /** The task the action belongs to; `null` before one exists. */
   readonly taskId: string | null;
   /**
@@ -359,7 +382,7 @@ async function startTarget(
   target: StagedSandboxTarget,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, fallbackName, taskId } = run;
+  const { surfaceKey, clientRequestId, taskId } = run;
   if (target.kind === "existing") {
     useStagedSandboxStore.getState().report(surfaceKey, {
       createdSandboxId: target.sandboxId,
@@ -385,13 +408,18 @@ async function startTarget(
     fail(surfaceKey, { kind: "unavailable" });
     return null;
   }
+  // Give an older persisted blank stage one name, retained across retries.
+  const name = stagedSandboxName(target.name);
+  if (name !== target.name) {
+    useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
+  }
   const request: SandboxCreateRequest = {
     os: target.shape.os,
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
     diskMb: target.shape.diskMb,
     region: target.shape.region,
-    displayName: target.name.length > 0 ? target.name : fallbackName,
+    displayName: name,
     idleMinutes: target.shape.idleMinutes,
     burst: false,
     createdByHostId: null,
@@ -513,7 +541,11 @@ export function createFailure(
     if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
       return failure.reason === "unverified"
         ? { kind: "unverified" }
-        : { kind: "credits", shortfallMc: failure.shortfallMc };
+        : {
+            kind: "credits",
+            shortfallMc: failure.shortfallMc,
+            creditSource: failure.creditSource ?? null,
+          };
     }
     if (failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) {
       return { kind: "shape" };
@@ -601,6 +633,33 @@ async function settleRow(
   if (dialableHostEndpoint(deps.directory.findById(started.hostId)) === null) {
     return "waiting";
   }
+  return settleSettings(input);
+}
+
+/** A connected host must prove configuration delivery before its message is handed off. */
+async function settleSettings(
+  input: SandboxSettlement,
+): Promise<"waiting" | "finished"> {
+  const { surfaceKey, clientRequestId, started, deps } = input;
+  const settings = await deps.readSettings(started.hostId);
+  if (!stillCurrent(surfaceKey, clientRequestId)) return "finished";
+  if (settings === null) return "waiting";
+  if (settings !== "unsupported" && sandboxSettingsFailed(settings.items)) {
+    fail(surfaceKey, {
+      kind: "settings",
+      code: "SBX-0520",
+      steps: sandboxSettingsSteps(settings.items),
+    });
+    return "finished";
+  }
+  if (
+    settings !== "unsupported" &&
+    (settings.principal === null ||
+      settings.receivedRevision === null ||
+      settings.sandboxSettingsOperationId === null ||
+      !sandboxSettingsReady(settings.items))
+  )
+    return "waiting";
   report(surfaceKey, "delivering", deps.now());
   handOff(surfaceKey, started.hostId);
   return "finished";
@@ -690,7 +749,11 @@ export function settleVerdict(
       return row.guestConfigured === false
         ? {
             kind: "failure",
-            failure: { kind: "settings", code: row.failureCode ?? "settings" },
+            failure: {
+              kind: "settings",
+              code: row.failureCode ?? "settings",
+              steps: { applied: [], notApplied: ["Sandbox setup"] },
+            },
           }
         : { kind: "awake" };
     default:

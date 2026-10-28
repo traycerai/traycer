@@ -1,4 +1,5 @@
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
@@ -384,11 +385,12 @@ function MobileNavTracyButton(props: {
       className={cn(ROW_CLASS, "mb-1 shrink-0")}
       data-testid="mobile-nav-tracy"
       data-unread={signals.unread ? "" : undefined}
+      aria-label={labelWithUnreadCount(TRACY_ENTRY_LABEL, signals.unreadCount)}
       onClick={() => {
         props.onOpen(props.botId);
       }}
     >
-      <TracyEntryIcon className={undefined} />
+      <TracyEntryIcon className={undefined} unreadCount={signals.unreadCount} />
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left",

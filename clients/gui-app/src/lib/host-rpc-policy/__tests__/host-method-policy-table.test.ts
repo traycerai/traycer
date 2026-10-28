@@ -337,16 +337,35 @@ describe("host method poll policy table", () => {
     ).toBe(16 * 60 * 1_000);
   });
 
-  it("re-reads a secret's rotation every three seconds while the page asks to, and reads the rest once", () => {
+  it("re-reads a secret's rotation every three seconds and the mounted configuration reads every five, while Verify and every write are never polled", () => {
     expect(HOST_METHOD_POLL_TABLE["environment.secrets.rotation"]).toEqual({
       mode: "latest",
       joinResponseTimeoutMs: null,
       poll: { kind: "fixed", intervalMs: 3_000 },
     });
-    expect(HOST_METHOD_POLL_TABLE["environment.secrets.list"].poll).toBeNull();
-    expect(
-      HOST_METHOD_POLL_TABLE["environment.secrets.versions"].poll,
-    ).toBeNull();
+    for (const method of [
+      "environment.secrets.list",
+      "environment.secrets.versions",
+      "environment.configuration.revision",
+      "environment.configuration.items",
+      "environment.configuration.skills.list",
+    ] as const) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "latest",
+        joinResponseTimeoutMs: null,
+        poll: { kind: "fixed", intervalMs: 5_000 },
+      });
+    }
+    for (const method of [
+      "environment.secrets.verify",
+      "environment.secrets.destroy",
+      "environment.secrets.replaceValue",
+      "environment.configuration.items.put",
+      "environment.configuration.items.delete",
+    ] as const) {
+      const neverPolled: null = HOST_METHOD_POLL_TABLE[method].poll;
+      expect(neverPolled).toBeNull();
+    }
   });
 
   it("narrows null and fixed policies", () => {

@@ -25,7 +25,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { serviceLabelFor, windowsTaskName } from "../../label";
-import { cliInstallHomeDir } from "../../../store/paths";
+import { cliInstallHomeDir, cliManifestPath } from "../../../store/paths";
 
 const DESKTOP_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -75,7 +75,7 @@ function readUninstallMacro(): string {
   // place the generator reads would turn a lockstep check into `X === X`.
   const defaults: Record<string, string> = {};
   for (const [, name, value] of source.matchAll(
-    /^!define\s+(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER)\s+"([^"]*)"$/gm,
+    /^!define\s+(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER|TRAYCER_CLI_MANIFEST_TAIL)\s+"([^"]*)"$/gm,
   )) {
     defaults[name] = value;
   }
@@ -83,6 +83,7 @@ function readUninstallMacro(): string {
     "TRAYCER_WINDOWS_TASK_NAME",
     "TRAYCER_WINDOWS_TASK_FOLDER",
     "TRAYCER_HOST_LAUNCHER",
+    "TRAYCER_CLI_MANIFEST_TAIL",
   ].filter((name) => defaults[name] === undefined);
   if (missing.length > 0) {
     throw new Error(
@@ -90,7 +91,7 @@ function readUninstallMacro(): string {
     );
   }
   return source.replace(
-    /\$\{(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER)\}/g,
+    /\$\{(TRAYCER_WINDOWS_TASK_NAME|TRAYCER_WINDOWS_TASK_FOLDER|TRAYCER_HOST_LAUNCHER|TRAYCER_CLI_MANIFEST_TAIL)\}/g,
     (_macro: string, name: string) => defaults[name] ?? "",
   );
 }
@@ -254,7 +255,10 @@ describe("windows OS-native uninstall macro: the task is ended and deleted only 
 
   it('the folder DeleteFolder is only under $R1 == "0" ${orIf} $R1 == "2" (the task is gone or was this account\'s)', () => {
     const macro = readUninstallMacro();
-    const guard = macro.indexOf('${if} $R1 == "0"\n    ${orIf} $R1 == "2"');
+    const guard =
+      /\$\{if\} \$R1 == "0"\n\s*\$\{orIf\} \$R1 == "2"\n(?!\s*\$\{orIf\})/.exec(
+        macro,
+      )?.index ?? -1;
     expect(guard).toBeGreaterThan(-1);
     const offsets = commandOffsets(macro, "DeleteFolder(");
     expect(offsets).toHaveLength(1);
@@ -264,20 +268,30 @@ describe("windows OS-native uninstall macro: the task is ended and deleted only 
     expect(macro.slice(guard, deleteFolder)).not.toContain("${endIf}");
   });
 
-  it("the launcher Delete is unconditional within the removal arm: this account's own file goes whoever owns the task", () => {
+  it("the launcher Delete runs only for the answers 0, 2, 3 or 4 - those the probe gives after the manifest said desktop - never for 5, a timeout or an error", () => {
     const macro = readUninstallMacro();
     const removalArmStart = macro.indexOf(
       "${else}",
       macro.indexOf("${ifNot} ${Errors}"),
     );
     const launcher = macro.indexOf('Delete "$PROFILE');
+    const guard =
+      /\$\{if\} \$R1 == "0"\n\s*\$\{orIf\} \$R1 == "2"\n\s*\$\{orIf\} \$R1 == "3"\n\s*\$\{orIf\} \$R1 == "4"\n\s*Delete "\$PROFILE/.exec(
+        macro,
+      );
     expect(launcher).toBeGreaterThan(removalArmStart);
-    // Every ${if} opened after the removal arm began has closed by the time
-    // the launcher is deleted: it is not nested in an ownership branch.
-    const before = macro.slice(removalArmStart, launcher);
-    const opened = (before.match(/\$\{if\}/g) ?? []).length;
-    const closed = (before.match(/\$\{endIf\}/g) ?? []).length;
-    expect(opened).toBe(closed);
+    expect(guard).not.toBeNull();
+    const guardIndex = guard?.index ?? -1;
+    expect(guardIndex).toBeGreaterThan(removalArmStart);
+    expect(guardIndex).toBeLessThan(launcher);
+    // An allow-list of answers, not "anything but 5": nothing else is added.
+    expect(macro.slice(guardIndex, launcher)).not.toMatch(/\$R1 (!=|== "5")/);
+    // Every ownership branch before the guard has closed, so the Delete is
+    // not nested in the task-ownership answer.
+    const before = macro.slice(removalArmStart, guardIndex);
+    expect((before.match(/\$\{if\}/g) ?? []).length).toBe(
+      (before.match(/\$\{endIf\}/g) ?? []).length,
+    );
   });
 
   it("the probe tells 'no such task' (0x80070002 = -2147024894, or the folder's own 0x80070003 = -2147024893) from every other failure, and only those are absent", () => {
@@ -315,5 +329,88 @@ describe("windows OS-native uninstall macro: the task is ended and deleted only 
       expect(line).not.toContain("$$");
       expect(line).not.toMatch(/S-1-\d/);
     }
+  });
+});
+
+// A Traycer CLI that a package manager or the user installed registers the
+// same `\Traycer\Host` task and launcher, and outlives the Desktop. The
+// uninstaller asks that CLI's install manifest who owns the host before it
+// touches either. Pinned structurally like the blocks above.
+describe("windows OS-native uninstall macro: the autostart is cleaned up only for a Desktop-owned host", () => {
+  function readProbeLine(macro: string): string {
+    const probe = macro.indexOf("Definition.Principal.UserId");
+    return macro.slice(
+      macro.lastIndexOf("nsExec::", probe),
+      macro.indexOf("\n", probe),
+    );
+  }
+
+  it("reads the manifest where the CLI writes it for production", () => {
+    const belowProfile = relative(homedir(), cliManifestPath("production"));
+    const windowsTail = belowProfile.split(/[\\/]/).join("\\");
+    expect(windowsTail).toBe(".traycer\\cli\\manifest.json");
+    expect(readProbeLine(readUninstallMacro())).toContain(
+      `(Join-Path $$env:USERPROFILE '${windowsTail}')`,
+    );
+  });
+
+  it("proves Desktop ownership before it reads the task's principal: only a root object whose source is exactly the string 'desktop' goes on", () => {
+    const line = readProbeLine(readUninstallMacro());
+    const read = line.indexOf("Get-Content");
+    const gate = line.indexOf("if(-not ((");
+    const lastExit = line.lastIndexOf("exit 5");
+    const principal = line.indexOf("Definition.Principal.UserId");
+    expect(read).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(read);
+    expect(lastExit).toBeGreaterThan(gate);
+    expect(principal).toBeGreaterThan(lastExit);
+    // `-ceq` on an array filters instead of comparing, so the source must be
+    // proven a [string] first; and a root array must not reach the gate as
+    // its single (unwrapped or enumerated) element, so the root must be a
+    // PSCustomObject. All three conditions, in this order, then the exact
+    // case-sensitive comparison. A named-other-source test would let an
+    // unknown owner through.
+    const condition = line.slice(gate, lastExit);
+    const root = condition.indexOf(
+      "$$m -is [System.Management.Automation.PSCustomObject]",
+    );
+    const type = condition.indexOf("$$m.source -is [string]");
+    const exact = condition.indexOf("$$m.source -ceq 'desktop'");
+    expect(root).toBeGreaterThan(-1);
+    expect(type).toBeGreaterThan(root);
+    expect(exact).toBeGreaterThan(type);
+    expect(condition).not.toMatch(/-ne 'desktop'|-eq 'desktop'/);
+  });
+
+  it("treats a missing, unreadable, malformed, root-array or source-less manifest as unknown ownership, and unknown keeps the autostart", () => {
+    const line = readProbeLine(readUninstallMacro());
+    const read = line.indexOf("Get-Content");
+    const rootCheck = line.indexOf(".TrimStart().StartsWith('{')");
+    const parse = line.indexOf("ConvertFrom-Json");
+    const gate = line.indexOf("if(-not ((");
+    // The raw text must start with an object brace BEFORE it is parsed, so a
+    // root array never reaches ConvertFrom-Json (whose result PowerShell 7
+    // unwraps to its one element).
+    expect(line.slice(read, rootCheck)).toContain("-ErrorAction Stop");
+    expect(rootCheck).toBeGreaterThan(read);
+    expect(parse).toBeGreaterThan(rootCheck);
+    expect(line.slice(rootCheck, parse)).toContain("exit 5");
+    // A failed read or parse exits 5 itself - there is no fallthrough with a
+    // null manifest.
+    expect(line.slice(parse, gate)).toMatch(/catch\{exit 5\};$/);
+    expect(line.split("exit 5")).toHaveLength(4);
+  });
+
+  it("does nothing when Desktop ownership is not proven: the arm for 5 runs no command and deletes nothing", () => {
+    const macro = readUninstallMacro();
+    const start = macro.indexOf('${elseIf} $R1 == "5"');
+    expect(start).toBeGreaterThan(-1);
+    const end = macro.indexOf("${", start + 1);
+    const arm = macro.slice(start, end);
+    expect(arm).toContain("DetailPrint");
+    expect(arm).not.toMatch(/nsExec::|\bDelete\b|schtasks|RMDir/);
+    // 5 is not an answer the writing arms accept.
+    expect(macro).not.toMatch(/\$R1 == "5"\n\s*\$\{orIf\}/);
+    expect(macro).not.toMatch(/\$\{orIf\} \$R1 == "5"/);
   });
 });

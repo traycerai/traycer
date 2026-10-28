@@ -64,6 +64,7 @@ export function useHostsRunningConfiguration(
     options: {
       enabled:
         environments && environmentId !== null && viewerUserId.length > 0,
+      poll: true,
     },
   });
   const scope = useHostScope();

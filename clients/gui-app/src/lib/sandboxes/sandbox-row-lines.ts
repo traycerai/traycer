@@ -1,4 +1,5 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { sandboxSettingsFailureLine } from "@traycer/protocol/host/sandbox-settings";
 import type {
   HostStatusAgentSession,
   HostStatusSessions,
@@ -23,6 +24,7 @@ import {
   keptByLine,
   paidByLine,
   startedByLine,
+  sandboxVerbPendingLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -100,12 +102,13 @@ export function sandboxRowKind(summary: SandboxSummary): SandboxRowKind {
   return summary.burst ? "agent" : "sandbox";
 }
 
-/** The seven public states, without Destroyed: a destroyed row is not listed. */
+/** The public states, without Destroyed: a destroyed row is not listed. */
 export type SandboxPublicState =
   | "creating"
   | "awake"
   | "suspended"
   | "stopped"
+  | "destroying"
   | "frozen"
   | "failed";
 
@@ -117,6 +120,7 @@ export type SandboxPublicState =
 export function sandboxPublicState(
   summary: SandboxSummary,
 ): SandboxPublicState {
+  if (summary.state === "destroying") return "destroying";
   if (summary.frozen) return "frozen";
   return PUBLIC_STATE[summary.state];
 }
@@ -131,7 +135,7 @@ const PUBLIC_STATE: Record<HostSandboxState, SandboxPublicState> = {
   released: "suspended",
   stopping: "stopped",
   stopped: "stopped",
-  destroying: "stopped",
+  destroying: "destroying",
   destroyed: "stopped",
   failed: "failed",
 };
@@ -141,6 +145,7 @@ export const SANDBOX_PUBLIC_STATE_LABEL: Record<SandboxPublicState, string> = {
   awake: "Awake",
   suspended: "Suspended",
   stopped: "Stopped",
+  destroying: "Destroying",
   frozen: "Frozen",
   failed: "Failed",
 };
@@ -259,7 +264,7 @@ export function sandboxRowMatches(
   );
 }
 
-/** Awake first, then by last activity, newest first. */
+/** Awake first, then by last activity, newest first, with id breaking ties. */
 export function sortSandboxRows(
   rows: readonly SandboxSummary[],
 ): readonly SandboxSummary[] {
@@ -269,15 +274,15 @@ export function sortSandboxRows(
     const awakeA = sandboxPublicState(a) === "awake" ? 0 : 1;
     const awakeB = sandboxPublicState(b) === "awake" ? 0 : 1;
     if (awakeA !== awakeB) return awakeA - awakeB;
-    return activity(b) - activity(a);
+    return activity(b) - activity(a) || a.id.localeCompare(b.id);
   });
 }
 
-/** `Destroy all idle` shows only while the filter is exactly this pair. */
+/** The header action is offered with either idle State filter, for any Kind. */
 export function sandboxDestroyAllIdleOffered(
   filter: SandboxRowFilter,
 ): boolean {
-  return filter.kind === "agent" && filter.state === "suspended";
+  return filter.state === "suspended" || filter.state === "stopped";
 }
 
 // ── Who ─────────────────────────────────────────────────────────────────────
@@ -320,7 +325,9 @@ export function sandboxPaidByLabel(
   if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
     return null;
   }
-  return paidByLine(sandboxMemberName(summary.wakePayer, viewerUserId));
+  const payer = summary.wakePayer;
+  if (payer.displayName !== null) return paidByLine(payer.displayName);
+  return payer.userId === viewerUserId ? paidByLine("you") : null;
 }
 
 export function sandboxKeptByLabel(
@@ -349,15 +356,27 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
   const shape = sandboxShapeLine(summary);
-  if (summary.priceMcPerHour === null) return shape;
   const creator = agentCreatorClause(summary);
-  if (creator !== null) {
-    return `${shape} · ${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake · ${creator}`;
+  const teamNonPayer =
+    configuration.kind === "team" && summary.wakePayer?.userId !== viewerUserId;
+  const resting = summary.state === "suspended" || summary.state === "stopped";
+  const wakeWarning =
+    teamNonPayer && resting ? "waking it makes you the payer" : null;
+  if (summary.priceMcPerHour === null) {
+    return joinParts(shape, wakeWarning, wakeWarning === null ? null : creator);
   }
-  return `${shape} · ${costLine(summary.priceMcPerHour.awakeMc, configurationCopy(configuration))}`;
+  const cost =
+    creator !== null || teamNonPayer
+      ? `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          configurationCopy(configuration),
+        );
+  return joinParts(shape, cost, wakeWarning, creator);
 }
 
 /** `created by Planner for Sandbox setup`, on an agent sandbox. */
@@ -599,8 +618,8 @@ function restingDestroyClause(
 const RESUMES_ON_YOUR_NEXT_ACTION = "resumes on your next action";
 
 /**
- * How long the row has been awake today: since it last woke, clipped to the
- * UTC day the cost header names.
+ * The current wake's age within the UTC day, for a local cost estimate
+ * before the ledger answers. The day's total duration comes from the cost view.
  */
 export function sandboxAwakeTodayMs(
   summary: SandboxSummary,
@@ -619,14 +638,15 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 
 /**
  * The row's clock line, per state (Flow 6 › The page). A destroy in flight
- * reads `Destroying…` alone: the row's clock and its keep promise no longer
+ * reads `Destroying · pending`: the row's clock and its keep promise no longer
  * hold.
  */
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
-  if (summary.state === "destroying") return "Destroying…";
   const state = sandboxPublicState(summary);
   switch (state) {
+    case "destroying":
+      return sandboxVerbPendingLine("destroy");
     case "frozen":
       return [
         sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
@@ -652,29 +672,38 @@ export function sandboxClockLine(input: SandboxClockInput): string {
 
 function awakeClockLine(input: SandboxClockInput): string {
   const { summary, now } = input;
-  if (input.reachability.unreachable) {
+  if (summary.state === "awake" && input.reachability.unreachable) {
     const contact = sandboxReportedAt(input.reachability.lastContactAt);
     return contact === null
       ? "Running, but Traycer can't connect"
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
   if (summary.guestConfigured === false) {
-    return joinParts(
-      `Awake · ${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
-      sandboxSupportReference(summary.failureCode),
+    return sandboxSettingsFailureLine(
+      summary.displayName,
+      configurationLabel(configurationCopy(input.configuration)),
+      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
     );
   }
-  const awakeMs = sandboxAwakeTodayMs(summary, now);
-  const today = sandboxTodayCost(summary, input.cost, awakeMs);
+  const awakeMs = input.cost?.todayAwakeMs ?? null;
+  const today = sandboxTodayCost(
+    summary,
+    input.cost,
+    sandboxAwakeTodayMs(summary, now),
+  );
+  const awake =
+    awakeMs === null
+      ? "Awake"
+      : `Awake ${formatSandboxDuration(awakeMs)} today`;
   if (summary.burst) {
     return joinParts(
-      `Awake ${formatSandboxDuration(awakeMs)}`,
+      awake,
       today,
       `destroys itself after ${idleMinutesOf(summary)} idle min · files on it are lost then`,
     );
   }
   return joinParts(
-    `Awake ${formatSandboxDuration(awakeMs)} today`,
+    awake,
     today,
     `suspends after ${idleMinutesOf(summary)} idle min`,
     input.wakeString,
@@ -899,6 +928,7 @@ export type SandboxRowAction =
   | "keep"
   | "retry"
   | "retry-applying"
+  | "repair-setup"
   | "resume-paying"
   | "add-credits"
   | "open-tab"
@@ -926,6 +956,7 @@ export function sandboxRowActions(input: {
   readonly unreachable: boolean;
   /** A frozen row's remedy is the viewer's own top-up. */
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const actions = matrixRowActions(input);
   if (!input.summary.burst || actions.primary !== "retry") return actions;
@@ -936,6 +967,7 @@ function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const { summary } = input;
   // Open terminal starts a released Automations host first, in every state
@@ -979,7 +1011,7 @@ function matrixRowActions(input: {
       if (input.unreachable) {
         return { primary: "stop", menu: ["rename", "destroy"] };
       }
-      if (summary.guestConfigured === false) {
+      if (summary.guestConfigured === false || input.settingsFailed) {
         return {
           primary: "retry-applying",
           menu: ["open-terminal", "rename", "stop", "destroy"],
@@ -996,47 +1028,37 @@ function matrixRowActions(input: {
           "destroy",
         ],
       };
-    case "creating":
-      return NO_ROW_ACTIONS;
   }
+  return NO_ROW_ACTIONS;
 }
+
+const SANDBOX_ROW_ACTION_LABEL = {
+  suspend: "Suspend",
+  resume: "Resume",
+  start: "Start",
+  stop: "Stop",
+  keep: "Keep this sandbox",
+  retry: "Retry",
+  "retry-applying": "Retry applying",
+  "repair-setup": "Repair setup",
+  "add-credits": "Add credits ↗",
+  "open-tab": "Open a tab",
+  "open-terminal": "Open terminal",
+  rename: "Rename",
+  "idle-settings": "Idle settings…",
+  destroy: "Destroy",
+} satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
 
 export function sandboxRowActionLabel(
   action: SandboxRowAction,
   configuration: SandboxPageConfiguration,
 ): string {
-  switch (action) {
-    case "suspend":
-      return "Suspend";
-    case "resume":
-      return "Resume";
-    case "start":
-      return "Start";
-    case "stop":
-      return "Stop";
-    case "keep":
-      return "Keep this sandbox";
-    case "retry":
-      return "Retry";
-    case "retry-applying":
-      return "Retry applying";
-    case "resume-paying":
-      return configuration.kind === "team"
-        ? `Resume using my ${configuration.teamName} credits`
-        : "Resume using my credits";
-    case "add-credits":
-      return "Add credits ↗";
-    case "open-tab":
-      return "Open a tab";
-    case "open-terminal":
-      return "Open terminal";
-    case "rename":
-      return "Rename";
-    case "idle-settings":
-      return "Idle settings…";
-    case "destroy":
-      return "Destroy";
+  if (action === "resume-paying") {
+    return configuration.kind === "team"
+      ? `Resume using my ${configuration.teamName} credits`
+      : "Resume using my credits";
   }
+  return SANDBOX_ROW_ACTION_LABEL[action];
 }
 
 // ── Give it another <period> ────────────────────────────────────────────────

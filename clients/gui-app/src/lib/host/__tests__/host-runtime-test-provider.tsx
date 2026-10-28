@@ -1,3 +1,4 @@
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
@@ -11,6 +12,10 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
+interface TestBinding extends HostRuntimeBinding<HostRpcRegistry> {
+  readonly runnerHost: MockRunnerHost;
+}
+
 /**
  * The app's host runtime, composed the way the app composes it (real auth,
  * directory and runtime) over a signed-out runner host and a messenger with no
@@ -18,7 +23,7 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
  * rejects with the preflight error and every surface below renders its
  * no-host state - what a window shows before its host comes up.
  */
-function buildBinding(): HostRuntimeBinding<HostRpcRegistry> {
+function buildBinding(): TestBinding {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "https://authn.traycer.invalid",
@@ -57,6 +62,7 @@ function buildBinding(): HostRuntimeBinding<HostRpcRegistry> {
     connectionRegistry: null,
   });
   return {
+    runnerHost,
     runtime,
     hostClient: runtime.hostClient,
     directory,
@@ -78,8 +84,10 @@ export function HostRuntimeTestProvider(props: {
     [binding],
   );
   return (
-    <HostRuntimeContext.Provider value={binding}>
-      {props.children}
-    </HostRuntimeContext.Provider>
+    <RunnerHostProvider runnerHost={binding.runnerHost}>
+      <HostRuntimeContext.Provider value={binding}>
+        {props.children}
+      </HostRuntimeContext.Provider>
+    </RunnerHostProvider>
   );
 }

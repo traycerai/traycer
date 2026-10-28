@@ -23,8 +23,6 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { hostEntryFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotAnnouncement,
@@ -40,13 +38,13 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
   ChatBotPresentationContext,
+  type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
 } from "@/components/chat/chat-bot-presentation-context";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -59,23 +57,11 @@ const mocks = vi.hoisted(
     openLink: Mock<
       (url: string, kind: string, event: unknown) => Promise<void>
     >;
-    hostLabel: { current: string | null };
   } => ({
     openLink:
       vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
-    hostLabel: { current: null },
   }),
 );
-
-// The host directory is the boundary: which label a host id carries.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostDirectoryEntryForHostId: (
-    hostId: string | null,
-  ): HostDirectoryEntry | null =>
-    hostId === null || mocks.hostLabel.current === null
-      ? null
-      : { ...hostEntryFixture(hostId), label: mocks.hostLabel.current },
-}));
 
 vi.mock("@/lib/links/open-link", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/links/open-link")>()),
@@ -87,13 +73,11 @@ const POST_ID = "post-1";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.hostLabel.current = null;
   mocks.openLink.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   cleanup();
-  useRetrospectiveSheetStore.setState({ target: null, open: false });
 });
 
 function channelPresentation(
@@ -104,11 +88,11 @@ function channelPresentation(
     botTitle: "Release Bot",
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine,
     openThread,
     openAnnouncementThread: null,
     chooseOption: null,
+    failedRequest: null,
   };
 }
 
@@ -227,6 +211,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 3,
           lastReplyAt: Date.now() - 5 * 60_000,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         openThread,
@@ -255,6 +240,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 0,
           lastReplyAt: null,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         openThread,
@@ -292,6 +278,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 0,
           lastReplyAt: null,
           unread: false,
+          unreadCount: 0,
           replying: true,
         }),
         vi.fn(),
@@ -318,6 +305,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         vi.fn(),
@@ -354,6 +342,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 1,
           lastReplyAt: 1_000,
           unread: false,
+          unreadCount: 0,
           replying: false,
         }),
         vi.fn(),
@@ -375,7 +364,7 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(swatchIn(rowAvatar)).toBe(swatchIn(stack));
   });
 
-  it("marks a thread line unread with a dot, and a read one with none", () => {
+  it("marks a thread line unread with a dot where the host does not count, and a read one with none", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
@@ -384,6 +373,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: true,
+          unreadCount: null,
           replying: false,
         }),
         vi.fn(),
@@ -403,6 +393,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: false,
+          unreadCount: null,
           replying: false,
         }),
         vi.fn(),
@@ -411,6 +402,50 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(
       screen.getByTestId("bot-thread-line").getAttribute("data-unread"),
     ).toBe("false");
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+  });
+
+  it("counts a thread line's unread replies in a badge in place of the dot, and draws nothing at zero", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 5,
+          lastReplyAt: 1_000,
+          unread: true,
+          unreadCount: 2,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+    const line = screen.getByTestId("bot-thread-line");
+    expect(line.getAttribute("data-unread")).toBe("true");
+    expect(
+      within(within(line).getByTestId("bot-thread-unread-count")).getByText(
+        "2",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+    cleanup();
+
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 5,
+          lastReplyAt: 1_000,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+    expect(screen.getByTestId("bot-thread-line")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-unread-count")).toBeNull();
     expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
   });
 });
@@ -432,8 +467,8 @@ describe("<ChatMessage /> in a bot thread", () => {
         openThread: null,
         openAnnouncementThread: null,
         chooseOption: null,
+        failedRequest: null,
         replyFollowsPost: null,
-        repliedPost: null,
       },
     );
 
@@ -450,24 +485,250 @@ describe("<ChatMessage /> in a bot thread", () => {
   });
 });
 
+describe("<ChatMessage /> a message the bot failed to answer", () => {
+  const OPEN_REQUEST: ConversationRequest = {
+    requestId: "req-failed",
+    resolvedAt: null,
+    resolvedByMessageId: null,
+  };
+
+  function failing(
+    retry: (text: string) => void,
+    retrying: boolean,
+    edit: ((text: string) => void) | null,
+  ): ChatBotPresentation {
+    return failingWith({
+      state: "failed",
+      summary: "Your Grok CLI version (1.0.5) is outdated.",
+      signIn: null,
+      retry,
+      retrying,
+      edit,
+    });
+  }
+
+  function failingWith(failed: ChatBotFailedRequest): ChatBotPresentation {
+    return {
+      ...channelPresentation(NO_THREAD_LINE, vi.fn()),
+      failedRequest: (requestId) =>
+        requestId === OPEN_REQUEST.requestId ? failed : null,
+    };
+  }
+
+  it("says under the message's text that it was not answered and why, with Retry and Edit as text", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, edit));
+
+    const row = screen.getByTestId("bot-member-row");
+    const line = within(row).getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Your Grok CLI version (1.0.5) is outdated. · Retry · Edit",
+    );
+    expect(line.getAttribute("data-state")).toBe("failed");
+    expect(line.className).toContain("text-destructive");
+    expect(line.getAttribute("role")).toBeNull();
+    // The line follows the message's own text.
+    const text = within(row).getByText("Please review the release");
+    expect(
+      text.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    await user.click(within(line).getByRole("button", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("Please review the release");
+    expect(within(line).queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("adds Sign in to the line when signing in is the fix", async () => {
+    const user = userEvent.setup();
+    const signIn = vi.fn<() => void>();
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: "Claude is signed out.",
+        signIn,
+        retry: vi.fn(),
+        retrying: false,
+        edit: null,
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Claude is signed out. · Retry · Sign in",
+    );
+    await user.click(within(line).getByRole("button", { name: "Sign in" }));
+    expect(signIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why with no Retry or Edit, on the line or on hover, where the message cannot be sent again", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: "Claude is signed out.",
+        signIn: vi.fn(),
+        retry: null,
+        retrying: false,
+        edit: null,
+      }),
+    );
+
+    expect(screen.getByTestId("bot-message-unanswered").textContent).toBe(
+      "Not answered: Claude is signed out. · Sign in",
+    );
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Reply in thread"]);
+  });
+
+  it("says a held answer in the warning colour, with Retry alone on the line and on hover", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "parked",
+        summary: "The queue is paused.",
+        signIn: vi.fn(),
+        retry: vi.fn(),
+        retrying: false,
+        edit: vi.fn(),
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe("Not answered: The queue is paused. · Retry");
+    expect(line.getAttribute("data-state")).toBe("parked");
+    expect(line.className).toContain("text-warning-foreground");
+    expect(line.className).not.toContain("text-destructive");
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Reply in thread"]);
+  });
+
+  it("says only that it was not answered when the host gave no reason, and holds the line's Retry while one is sent", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: null,
+        signIn: null,
+        retry: vi.fn(),
+        retrying: true,
+        edit: null,
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe("Not answered · Retry");
+    expect(
+      within(line)
+        .getByRole("button", { name: "Retry" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("offers Retry and Edit beside Reply in thread, each handing the message's own text back", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, edit));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Edit", "Reply in thread"]);
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    expect(edit).not.toHaveBeenCalled();
+
+    await user.click(actions.getByRole("button", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("Please review the release");
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry alone on a message whose Edit the presentation withholds", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, null));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Reply in thread"]);
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+  });
+
+  it("offers neither on a message the session did not fail on, and none on the bot's own row", () => {
+    renderRow(
+      memberPost({ ...OPEN_REQUEST, requestId: "req-answered" }),
+      failing(vi.fn(), false, vi.fn()),
+    );
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
+    expect(screen.getByTestId("bot-message-reply-in-thread")).toBeTruthy();
+    cleanup();
+
+    renderRow(botRow(undefined), failing(vi.fn(), false, vi.fn()));
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
+  });
+
+  it("shows no See reply on a request a later message of the member's took over", () => {
+    renderRow(
+      memberPost({
+        requestId: "req-replaced",
+        resolvedAt: 5_000,
+        resolvedByMessageId: "conversation-request:req-new",
+      }),
+      {
+        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
+        scrollToMessage: vi.fn(),
+      },
+    );
+
+    expect(screen.getByText("Please review the release")).toBeTruthy();
+    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+  });
+});
+
 describe("<ChatMessage /> bot rows", () => {
   const presentation: ChatBotPresentation = {
     botTitle: "Release Bot",
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
     chooseOption: null,
+    failedRequest: null,
   };
 
-  it("labels a bot's reply with the bot's current title and the APP tag", () => {
+  it("labels a bot's reply with the bot's current title and no tag", () => {
     renderRow(botRow(undefined), presentation);
 
     const row = screen.getByTestId("bot-reply-row");
     expect(within(row).getByText("Release Bot")).toBeTruthy();
-    expect(within(row).getByText("APP")).toBeTruthy();
+    expect(within(row).queryByText("APP")).toBeNull();
     expect(within(row).getByText("The bot says hello")).toBeTruthy();
     expect(screen.queryByTestId("bot-announcement")).toBeNull();
     expect(screen.queryByTestId("bot-reply-options")).toBeNull();
@@ -488,7 +749,6 @@ describe("<ChatMessage /> bot rows", () => {
 
       const row = screen.getByTestId("bot-announcement");
       expect(screen.queryByTestId("bot-reply-row")).toBeNull();
-      expect(within(row).getByText("APP")).toBeTruthy();
       expect(within(row).getByText(label)).toBeTruthy();
       expect(within(row).getByText("The bot says hello")).toBeTruthy();
       expect(
@@ -522,39 +782,24 @@ describe("<ChatMessage /> bot rows", () => {
     );
   });
 
-  it.each<readonly [string | null, string]>([
-    [null, "this computer"],
-    ["Office Mac", "Office Mac"],
-  ])(
-    "draws a retrospective sheet link as a Review action that opens that host's sheet (directory label %s)",
-    async (label, hostName) => {
-      const user = userEvent.setup();
-      const hostId = "host/a b";
-      mocks.hostLabel.current = label;
-      renderRow(
-        botRow({
-          kind: "proposal",
-          link: `environment/retrospective?host=${encodeURIComponent(hostId)}`,
-        }),
-        presentation,
-      );
+  it("draws a retrospective sheet link's record as its label and text, with no Review and no link row", () => {
+    renderRow(
+      botRow({
+        kind: "proposal",
+        link: `environment/retrospective?host=${encodeURIComponent("host/a b")}`,
+      }),
+      presentation,
+    );
 
-      expect(screen.queryByText(/environment\/retrospective/)).toBeNull();
-      const row = screen.getByTestId("bot-announcement");
-      expect(
-        within(row).getByText("Shared by an earlier version"),
-      ).toBeTruthy();
-      expect(within(row).queryByText("New proposal")).toBeNull();
-      expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
-      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
-
-      await user.click(screen.getByTestId("bot-announcement-review"));
-
-      const state = useRetrospectiveSheetStore.getState();
-      expect(state.open).toBe(true);
-      expect(state.target).toEqual({ hostId, hostName });
-    },
-  );
+    const row = screen.getByTestId("bot-announcement");
+    expect(within(row).getByText("Shared by an earlier version")).toBeTruthy();
+    expect(within(row).getByText("The bot says hello")).toBeTruthy();
+    expect(within(row).queryByText("New proposal")).toBeNull();
+    expect(within(row).queryByText(/environment\/retrospective/)).toBeNull();
+    expect(within(row).queryByText("Review")).toBeNull();
+    expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
 
   it("shows an epic-relative path as the path it is, not as a link", () => {
     renderRow(
@@ -590,11 +835,11 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       botTitle: "Release Bot",
       scrollToMessage: null,
       replyFollowsPost: null,
-      repliedPost: null,
       threadLine: input.threadLine,
       openThread: null,
       openAnnouncementThread: input.openAnnouncementThread,
       chooseOption: input.chooseOption,
+      failedRequest: null,
     };
   }
 
@@ -667,6 +912,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         replyCount: 2,
         lastReplyAt: 1_000,
         unread: false,
+        unreadCount: 0,
         replying: false,
       }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
@@ -759,11 +1005,11 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     botTitle: "Release Bot",
     scrollToMessage: null,
     replyFollowsPost: null,
-    repliedPost: null,
     threadLine: NO_THREAD_LINE,
     openThread: null,
     openAnnouncementThread: null,
     chooseOption: null,
+    failedRequest: null,
   };
 
   function resolvedPost(direct: boolean): ChatMessageModel {
@@ -855,62 +1101,6 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     });
 
     expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
-  });
-
-  it("names the post a reply answers above the reply, and lands the list on it when clicked", async () => {
-    const user = userEvent.setup();
-    const scrollToMessage = vi.fn<(messageId: string) => void>();
-    const repliedPost = vi.fn<
-      (messageId: string) => { senderLabel: string; excerpt: string } | null
-    >(() => ({ senderLabel: "Tess Teammate", excerpt: "Please review" }));
-    renderRow(
-      { ...botRow(undefined), repliesTo: POST_ID },
-      { ...CHANNEL, scrollToMessage, repliedPost },
-    );
-
-    const line = screen.getByTestId("bot-replied-post");
-    expect(within(line).getByText("Tess Teammate")).toBeTruthy();
-    expect(within(line).getByText("Please review")).toBeTruthy();
-    expect(repliedPost).toHaveBeenCalledWith(POST_ID);
-    expect(scrollToMessage).not.toHaveBeenCalled();
-
-    await user.click(line);
-
-    expect(scrollToMessage).toHaveBeenCalledTimes(1);
-    expect(scrollToMessage).toHaveBeenCalledWith(POST_ID);
-  });
-
-  it("names the replied post without a jump where the list cannot scroll", () => {
-    renderRow(
-      { ...botRow(undefined), repliesTo: POST_ID },
-      {
-        ...CHANNEL,
-        repliedPost: () => ({ senderLabel: "Tess Teammate", excerpt: "Hi" }),
-      },
-    );
-
-    const line = screen.getByTestId("bot-replied-post");
-    expect(line.tagName).toBe("DIV");
-    expect(within(line).getByText("Tess Teammate")).toBeTruthy();
-  });
-
-  it("draws no replied-post line while the post it answers is not in the list", () => {
-    renderRow(
-      { ...botRow(undefined), repliesTo: POST_ID },
-      { ...CHANNEL, repliedPost: () => null },
-    );
-
-    expect(screen.getByTestId("bot-reply-row")).toBeTruthy();
-    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
-  });
-
-  it("draws no replied-post line on a bot row that answers no post", () => {
-    renderRow(botRow(undefined), {
-      ...CHANNEL,
-      repliedPost: () => ({ senderLabel: "Tess Teammate", excerpt: "Hi" }),
-    });
-
-    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
   });
 
   it("opens the thread under the post a direct reply answers from the reply's hover action, with no thread line of its own", async () => {
@@ -1257,19 +1447,20 @@ describe("<ChatEmptyState /> in a bot channel", () => {
     expect(screen.queryByText("Start the conversation")).toBeNull();
   });
 
-  it("says an empty thread has no reply yet", () => {
+  it("draws nothing for an empty thread, so its box follows the post it opens on", () => {
     renderEmpty({
       botTitle: "Release Bot",
       scrollToMessage: vi.fn(),
       replyFollowsPost: null,
-      repliedPost: null,
       threadLine: null,
       openThread: null,
       openAnnouncementThread: null,
       chooseOption: null,
+      failedRequest: null,
     });
 
-    expect(screen.getByText("No replies yet.")).toBeTruthy();
+    expect(document.body.textContent).toBe("");
     expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
+    expect(screen.queryByText("Start the conversation")).toBeNull();
   });
 });

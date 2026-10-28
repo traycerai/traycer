@@ -299,11 +299,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 // The own-login row reads whether a refresh is in flight through
-// `useIsMutating`; the refresh itself is `useRefreshProviders`, stubbed below.
-vi.mock("@tanstack/react-query", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useIsMutating: () => 0 };
-});
+// `useIsMutatingOf`; the refresh itself is `useRefreshProviders`, stubbed below.
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
+}));
 
 // The provider's Limits pick reads the watched host's usage through the layout
 // editor's own scope, which this suite does not stand up, so it is a marker
