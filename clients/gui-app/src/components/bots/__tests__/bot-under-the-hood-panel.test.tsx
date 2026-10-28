@@ -57,6 +57,11 @@ const mocks = vi.hoisted(() => {
       botRows,
       /** Every row the panel asked the host to locate, by message id. */
       located: new Set<string>(),
+      /** Each located row's ordinal, by message id, as the host answers it. */
+      ordinals: new Map<string, number>(),
+      /** Each hold the channel's session took on a located row, and each release, by message id. */
+      holds: [] as string[],
+      releases: [] as string[],
       channelHandle: null as ChatSessionStoreHandle | null,
       connectable: { hostIds: [] as string[], resolved: true },
       usageSupported: true,
@@ -143,8 +148,13 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: (args: {
     target: { kind: string; messageId: string } | null;
   }) => {
-    if (args.target !== null) mocks.state.located.add(args.target.messageId);
-    return null;
+    if (args.target === null) return null;
+    const { messageId } = args.target;
+    mocks.state.located.add(messageId);
+    const ordinal =
+      mocks.state.ordinals.get(messageId) ?? mocks.state.ordinals.size + 1;
+    mocks.state.ordinals.set(messageId, ordinal);
+    return ordinal;
   },
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
@@ -240,7 +250,15 @@ function channelHandle(): ChatSessionStoreHandle {
       >
     >(() => ({
       transcriptWindow: emptyTranscriptWindow(),
-      holdTranscriptOrdinal: () => () => undefined,
+      holdTranscriptOrdinal: (ordinal: number) => {
+        const messageId =
+          [...mocks.state.ordinals].find(([, held]) => held === ordinal)?.[0] ??
+          String(ordinal);
+        mocks.state.holds.push(messageId);
+        return () => {
+          mocks.state.releases.push(messageId);
+        };
+      },
       messages: Object.entries(mocks.state.channelPosts).map(([id, text]) =>
         channelRow(id, text),
       ),
@@ -359,6 +377,9 @@ beforeEach(() => {
   mocks.state.channelPosts = {};
   mocks.state.botRows = {};
   mocks.state.located.clear();
+  mocks.state.ordinals.clear();
+  mocks.state.holds = [];
+  mocks.state.releases = [];
   mocks.state.channelHandle = null;
   mocks.state.connectable = { hostIds: [], resolved: true };
   boundHost = { hostId: HOST_ID, isThisHost: true };
@@ -942,6 +963,48 @@ describe("<BotUnderTheHoodPanel /> tasks", () => {
     expect(
       mocks.state.located.has(conversationRequestMessageId("req-thread-a")),
     ).toBe(true);
+  });
+
+  it("holds a cold post that is both the task's request and its thread's post with one reader, as its line turns from the thread to the post and back", () => {
+    const postId = conversationRequestMessageId("req-thread-a");
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    mocks.state.channelPosts = {};
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+    ];
+    renderPanel();
+    const row = (): HTMLElement => taskRow("task-watch");
+    expect(within(row()).getByTestId("bot-task-thread").textContent).toBe(
+      "from a thread",
+    );
+    const held = mocks.state.holds.filter((id) => id === postId).length;
+    expect(held).toBeGreaterThan(0);
+
+    // The post lands: its line names it, and the thread's line goes.
+    act(() => {
+      mocks.state.channelHandle?.store.setState({
+        messages: [channelRow(postId, "Please review the release")],
+      });
+    });
+    expect(within(row()).getByTestId("bot-task-request").textContent).toBe(
+      "for Please review the release",
+    );
+    expect(within(row()).queryByTestId("bot-task-thread")).toBeNull();
+
+    // The row leaves the loaded window; the line goes back to the thread's.
+    act(() => {
+      mocks.state.channelHandle?.store.setState({ messages: [] });
+    });
+    expect(within(row()).getByTestId("bot-task-thread").textContent).toBe(
+      "from a thread",
+    );
+
+    // Neither change let the post go or took it again.
+    expect(mocks.state.releases).not.toContain(postId);
+    expect(mocks.state.holds.filter((id) => id === postId)).toHaveLength(held);
   });
 
   // Accepted residual: an automation a thread of another bot set up on this

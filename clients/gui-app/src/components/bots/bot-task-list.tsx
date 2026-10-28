@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { Badge } from "@/components/ui/badge";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
@@ -204,9 +205,11 @@ function BotTaskRow(props: {
  * for a channel post the channel has loaded, opening its thread (or the box
  * that starts one), and "from <the thread's post>" for the thread that set
  * the task up, opening that thread. The thread is left out only while the
- * post's line is on screen and already opens it. A message inside a thread
- * is named by its thread alone, and a thread of another bot as such, with
- * nothing to open.
+ * post's line is on screen and already opens it; then one reader fetches
+ * and holds that post for both lines, so the line changing from one to the
+ * other neither lets the post go nor reads it again. A message inside a
+ * thread is named by its thread alone, and a thread of another bot as such,
+ * with nothing to open.
  */
 function BotViewOriginLines(props: {
   readonly botId: string;
@@ -228,21 +231,30 @@ function BotViewOriginLines(props: {
     />
   );
   if (post === null || post.kind === "thread-message") return creatorLine;
+  const opensCreator =
+    creator.kind === "thread" &&
+    creator.thread !== null &&
+    post.thread?.threadId === creator.thread.threadId;
   return (
     <ChannelPost
       botId={botId}
       hostId={hostId}
       conversationId={post.chatId}
       messageId={post.messageId}
-      fetchCold={false}
+      fetchCold={opensCreator}
     >
       {(row) => {
         const line = firstLineOf(postTextOf(row));
         const open = row === null ? null : threadOpenOf(row);
-        const opensCreator =
-          creator.kind === "thread" &&
-          creator.thread !== null &&
-          post.thread?.threadId === creator.thread.threadId;
+        const fromLine = opensCreator ? (
+          <CreatorLink
+            anchorMessageId={post.messageId}
+            row={row}
+            place={place}
+          />
+        ) : (
+          creatorLine
+        );
         return (
           <>
             {line === null ? null : (
@@ -261,7 +273,7 @@ function BotViewOriginLines(props: {
                 for {line}
               </RowLink>
             )}
-            {line !== null && opensCreator ? null : creatorLine}
+            {line !== null && opensCreator ? null : fromLine}
           </>
         );
       }}
@@ -333,28 +345,42 @@ function TaskCreatorLine(props: {
       messageId={anchor.messageId}
       fetchCold
     >
-      {(row) => {
-        const open = row === null ? null : threadOpenOf(row);
-        if (open === null) {
-          return <span data-testid="bot-task-thread">from a thread</span>;
-        }
-        return (
-          <RowLink
-            testId="bot-task-thread"
-            onOpen={() =>
-              place.onOpenPost({
-                anchorMessageId: anchor.messageId,
-                announcement: open.announcement,
-                answer: open.answer,
-                sent: null,
-              })
-            }
-          >
-            from {firstLineOf(postTextOf(row)) ?? "a thread"}
-          </RowLink>
-        );
-      }}
+      {(row) => (
+        <CreatorLink
+          anchorMessageId={anchor.messageId}
+          row={row}
+          place={place}
+        />
+      )}
     </ChannelPost>
+  );
+}
+
+/** The "from" line over its thread's post as read: plain until the row is there. */
+function CreatorLink(props: {
+  readonly anchorMessageId: string;
+  readonly row: OpenMessage | null;
+  readonly place: Extract<BotTaskListPlace, { readonly kind: "bot" }>;
+}): ReactNode {
+  const { anchorMessageId, row, place } = props;
+  const open = row === null ? null : threadOpenOf(row);
+  if (open === null) {
+    return <span data-testid="bot-task-thread">from a thread</span>;
+  }
+  return (
+    <RowLink
+      testId="bot-task-thread"
+      onOpen={() =>
+        place.onOpenPost({
+          anchorMessageId,
+          announcement: open.announcement,
+          answer: open.answer,
+          sent: null,
+        })
+      }
+    >
+      from {firstLineOf(postTextOf(row)) ?? "a thread"}
+    </RowLink>
   );
 }
 
