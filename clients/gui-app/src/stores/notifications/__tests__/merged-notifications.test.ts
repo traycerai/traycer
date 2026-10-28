@@ -3,7 +3,7 @@ import type {
   HostNotificationEntry,
   HostNotificationEntryV23,
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
@@ -985,7 +985,7 @@ describe("merged notifications feed", () => {
 
     function cloudRowOf(
       entry: HostNotificationFeedEntry,
-    ): HostNotificationsCloudFeedRowV15 {
+    ): HostNotificationsCloudFeedRowV16 {
       return {
         entryId: entry.id,
         originHostId: "host-a",

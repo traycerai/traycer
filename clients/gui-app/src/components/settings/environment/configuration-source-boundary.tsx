@@ -8,6 +8,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostClient } from "@/lib/host";
 import { TeamReadFailed } from "./team-read-failed";
+import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
 /** The configuration a cloud-read page shows: a team's, or Personal. */
 export type CloudConfigurationTarget =
@@ -24,7 +26,9 @@ export function ConfigurationSourceBoundary(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const { target } = props;
-  const list = useEnvironmentListQuery(useHostClient(), true);
+  const viewerId = useCloudChatViewerId();
+  const client = useHostClient();
+  const list = useEnvironmentListQuery(client, true);
   const descriptor = list.data?.environments.find((entry) =>
     target.kind === "team"
       ? entry.environmentId === target.environmentId &&
@@ -42,6 +46,7 @@ export function ConfigurationSourceBoundary(props: {
       effectiveRole: configurationRoleOf(descriptor),
     };
   }, [descriptor]);
+  useConfigurationRevision(client, descriptor?.environmentId ?? null);
 
   if (descriptor === undefined) {
     if (list.isPending) {
@@ -70,7 +75,10 @@ export function ConfigurationSourceBoundary(props: {
     );
   }
   return (
-    <ConfigurationSourceContext.Provider value={source}>
+    <ConfigurationSourceContext.Provider
+      key={JSON.stringify([viewerId, descriptor.environmentId])}
+      value={source}
+    >
       {props.children}
     </ConfigurationSourceContext.Provider>
   );

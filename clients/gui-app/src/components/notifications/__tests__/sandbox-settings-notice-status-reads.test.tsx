@@ -19,7 +19,7 @@ import {
   environmentStatusResponseSchemaV11,
   type EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
-import type { HostNotificationsCloudFeedRowV15 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { SandboxSettingsNoticeObservers } from "@/components/notifications/sandbox-settings-notice-observers";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -142,7 +142,7 @@ function status(
 function notice(
   entryId: string,
   operationId: string,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "cloud-settings",
@@ -178,7 +178,7 @@ function notice(
     },
   };
 }
-function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+function seed(rows: HostNotificationsCloudFeedRowV16[]): void {
   useCloudNotificationsStore.setState({ accountId: "settings-user" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,

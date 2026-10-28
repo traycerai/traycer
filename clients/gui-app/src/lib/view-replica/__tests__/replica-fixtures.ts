@@ -4,7 +4,7 @@ import type {
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import { createIndexedDbViewReplicaBackend } from "@traycer-clients/shared/view-replica/indexeddb-backend";
@@ -97,7 +97,7 @@ export const FEED_SUMMARY: HostNotificationsCloudFeedSummary = {
   attentionCount: 0,
 };
 
-export function feedRow(entryId: string): HostNotificationsCloudFeedRowV15 {
+export function feedRow(entryId: string): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: HOST,

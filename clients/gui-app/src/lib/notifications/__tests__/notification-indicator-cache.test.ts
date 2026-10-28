@@ -7,7 +7,7 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -16,6 +16,8 @@ import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import {
   clearNotificationIndicatorCaches,
+  COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+  createCompleteNotificationIndicatorsReask,
   invalidateCompleteNotificationIndicators,
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
@@ -407,5 +409,110 @@ describe("notification indicator cache invalidation", () => {
         complete: true,
       });
     });
+  });
+});
+
+const wholeOrigin: HostNotificationsIndicatorStateResponse = {
+  epics: {},
+  chats: {},
+  complete: true,
+};
+
+describe("complete notification indicators re-ask", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A mounted indicator read whose cached answer is a host's whole origin;
+   * `requests` counts the reads the host was asked for. */
+  const wholeOriginKey = indicatorKey({
+    hostId: "host-b",
+    userId: "alice",
+    epicIds: [],
+    chatIds: ["chat-a"],
+  });
+
+  async function mountWholeOriginRead(
+    queryClient: QueryClient,
+  ): Promise<{ readonly requests: Array<string> }> {
+    const requests: Array<string> = [];
+    const key = wholeOriginKey;
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useQuery(
+          queryOptions({
+            queryKey: key,
+            queryFn: () => {
+              requests.push("read");
+              return Promise.resolve(wholeOrigin);
+            },
+            staleTime: Infinity,
+          }),
+        ),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(queryClient.getQueryData(key)).toEqual(wholeOrigin);
+    });
+    expect(requests).toHaveLength(1);
+    return { requests };
+  }
+
+  it("re-asks once after a burst of snapshots inside the quiet window", async () => {
+    const queryClient = new QueryClient();
+    const { requests } = await mountWholeOriginRead(queryClient);
+    const reask = createCompleteNotificationIndicatorsReask(
+      queryClient,
+      COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+    );
+
+    vi.useFakeTimers();
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    // Each snapshot restarted the window, so nothing has been asked yet.
+    expect(requests).toHaveLength(1);
+
+    vi.advanceTimersByTime(1);
+    // Run on past any later timer a stray re-ask would have needed.
+    vi.advanceTimersByTime(
+      COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS * 10,
+    );
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(requests).toHaveLength(2);
+    });
+    reask.dispose();
+  });
+
+  it("asks nothing when disposed before the quiet window elapses", async () => {
+    const queryClient = new QueryClient();
+    const { requests } = await mountWholeOriginRead(queryClient);
+    const reask = createCompleteNotificationIndicatorsReask(
+      queryClient,
+      COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+    );
+
+    vi.useFakeTimers();
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    reask.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS);
+
+    expect(requests).toHaveLength(1);
+    expect(queryClient.getQueryState(wholeOriginKey)?.isInvalidated).toBe(
+      false,
+    );
   });
 });

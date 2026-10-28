@@ -23,7 +23,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { HostNotificationsCloudFeedRowV15 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
@@ -123,7 +123,7 @@ function warning(
   entryId: string,
   updatedAt: number,
   resolvedAt: null | undefined,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "cloud-resting",
@@ -154,7 +154,7 @@ function warning(
     },
   };
 }
-function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+function seed(rows: HostNotificationsCloudFeedRowV16[]): void {
   useCloudNotificationsStore.setState({ accountId: "resting-user" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,

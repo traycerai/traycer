@@ -9,6 +9,18 @@ import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-s
 const EPIC_TASK_CONTEXTS_METHOD = "epic.getTaskContexts" as const;
 
 export const hostQueryKeys = {
+  notificationHookRemovalBorrowedStatus: (hostId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "notificationHookRemovalBorrowedStatus",
+    ] as const,
+  notificationHookRemovalReadIds: (hostId: string) =>
+    [...hostQueryKeys.scope(hostId), "notificationHookRemovalReadIds"] as const,
+  notificationHookRemovalReadCutoff: (hostId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "notificationHookRemovalReadCutoff",
+    ] as const,
   base: () => ["host"] as const,
   scope: (hostId: string | null) =>
     hostId === null

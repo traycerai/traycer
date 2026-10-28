@@ -1111,9 +1111,16 @@ import {
 import {
   hostNotificationHooksSave,
   hostNotificationHooksSaveV20,
+  hostNotificationHooksSaveV30,
+  hostNotificationHooksSaveUpgradeV2ToV3,
+  hostNotificationHooksSaveDowngradeV30ToV20,
+  hostNotificationHooksSaveDowngradeV30ToV10,
   hostNotificationHooksSaveUpgradeV1ToV2,
   hostNotificationHooksSaveDowngradeV20ToV10,
   hostNotificationHooksStatus,
+  hostNotificationHooksStatusV20,
+  hostNotificationHooksStatusUpgradeV1ToV2,
+  hostNotificationHooksStatusDowngradeV20ToV10,
   hostNotificationHooksTest,
   hostNotificationsClearAll,
   hostNotificationsClearAllUpgradeV10ToV11,
@@ -1124,7 +1131,6 @@ import {
   hostNotificationsIndicatorStateV10,
   hostNotificationsIndicatorStateV11,
   hostNotificationsIndicatorStateV12,
-  hostNotificationsListDowngradeV24ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
   hostNotificationsListUpgradeV21ToV22,
@@ -1136,6 +1142,9 @@ import {
   hostNotificationsListUpgradeV23ToV24,
   hostNotificationsListV23,
   hostNotificationsListV24,
+  hostNotificationsListV25,
+  hostNotificationsListUpgradeV24ToV25,
+  hostNotificationsListDowngradeV25ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkAllReadUpgradeV10ToV11,
   hostNotificationsMarkAllReadV11,
@@ -1149,12 +1158,14 @@ import {
   hostNotificationsFeedSubscribeV14,
   hostNotificationsFeedSubscribeV15,
   hostNotificationsFeedSubscribeV16,
+  hostNotificationsFeedSubscribeV17,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV14,
   hostNotificationsCloudFeedSubscribeV15,
+  hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -7273,6 +7284,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksStatusV20,
+          upgradeFromPreviousVersion: hostNotificationHooksStatusUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksStatusDowngradeV20ToV10,
+      },
+    },
   },
   "host.notificationHooks.test": {
     degrade: { kind: "unsupported" },
@@ -7309,6 +7332,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {
         1: hostNotificationHooksSaveDowngradeV20ToV10,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksSaveV30,
+          upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksSaveDowngradeV30ToV10,
+        2: hostNotificationHooksSaveDowngradeV30ToV20,
       },
     },
   },
@@ -11973,7 +12009,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -12017,9 +12053,14 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV23ToV24,
           responseGrowthProjectionGated: true,
         },
+        5: {
+          contract: hostNotificationsListV25,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV24ToV25,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV24ToV10,
+        1: hostNotificationsListDowngradeV25ToV10,
       },
     },
   },
@@ -14156,7 +14197,7 @@ type HostRpcNotificationMethodMap = {
       readonly downgradePathsFromLatest: Record<never, never>;
     };
     readonly 2: {
-      readonly latestMinor: 4;
+      readonly latestMinor: 5;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsListV20;
@@ -14180,9 +14221,14 @@ type HostRpcNotificationMethodMap = {
           readonly contract: typeof hostNotificationsListV24;
           readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV23ToV24;
         };
+        readonly 5: {
+          readonly contract: typeof hostNotificationsListV25;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV24ToV25;
+          readonly responseGrowthProjectionGated: true;
+        };
       };
       readonly downgradePathsFromLatest: {
-        readonly 1: typeof hostNotificationsListDowngradeV24ToV10;
+        readonly 1: typeof hostNotificationsListDowngradeV25ToV10;
       };
     };
   };
@@ -14503,7 +14549,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -14533,12 +14579,13 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         6: {
           contract: hostNotificationsFeedSubscribeV16,
         },
+        7: { contract: hostNotificationsFeedSubscribeV17 },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -14561,6 +14608,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         5: {
           contract: hostNotificationsCloudFeedSubscribeV15,
         },
+        6: { contract: hostNotificationsCloudFeedSubscribeV16 },
       },
     },
   },

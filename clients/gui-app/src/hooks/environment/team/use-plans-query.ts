@@ -33,6 +33,7 @@ export function useConfigurationPlansQuery(): UseQueryResult<
     },
     preflight: cloudVerdictPreflight("environment.plans.list"),
     options: {
+      poll: true,
       enabled: source.kind === "pool" && authorized && viewerId.length > 0,
     },
   });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
   HostNotificationsIndicatorState,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -202,7 +202,7 @@ describe("cloud notification indicator derivation", () => {
     entryId: string,
     threadId: string,
     readAt: number | null,
-  ): HostNotificationsCloudFeedRowV15 {
+  ): HostNotificationsCloudFeedRowV16 {
     return {
       entryId,
       originHostId: "host-b",
@@ -266,13 +266,13 @@ describe("cloud notification indicator derivation", () => {
   }
 
   function rowsById(
-    rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>,
-  ): Record<string, HostNotificationsCloudFeedRowV15> {
+    rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
+  ): Record<string, HostNotificationsCloudFeedRowV16> {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
   it("does not light the chat's approval glyph for an unresolved browser prompt, though its unread row is counted", () => {
-    const browserRow: HostNotificationsCloudFeedRowV15 = {
+    const browserRow: HostNotificationsCloudFeedRowV16 = {
       entryId: "browser-1",
       originHostId: "host-b",
       coalesceKey: "browser.human.needed:chat-1",

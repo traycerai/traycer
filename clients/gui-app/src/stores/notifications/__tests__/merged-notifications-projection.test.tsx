@@ -686,6 +686,27 @@ describe("merged notification projection (Attention / Recent)", () => {
     ]);
     expect(result.current.recent).toEqual([hostFeedId("read-answer")]);
   });
+
+  it("lists an unread bot answer that only the attention page carries, with an empty recent page", () => {
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: {
+        entries: [hostBotAnswer("attention-only-answer", 3_000, null)],
+        nextCursor: null,
+      },
+      recent: { entries: [], nextCursor: null },
+      summary: { unreadCount: 1, attentionCount: 1 },
+    });
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      recent: useRecentNotificationIds(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("attention-only-answer"),
+    ]);
+    expect(result.current.recent).toEqual([]);
+  });
 });
 
 describe("cloud feed projection authority", () => {

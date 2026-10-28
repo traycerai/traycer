@@ -22,6 +22,12 @@ import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-s
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
 
+// Mounted configuration reads reuse the apply-status cadence.
+const CONFIGURATION_READ_POLL = {
+  kind: "fixed",
+  intervalMs: 5 * SECOND_MS,
+} as const;
+
 export type ConditionPollLane = {
   readonly id: string;
   readonly initialDelayMs: number;
@@ -2403,8 +2409,14 @@ export const HOST_METHOD_POLL_TABLE = {
   // The environment methods: reads take the latest answer; writes, Verify and
   // the link steps are ordered and never joined.
   "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
-  "environment.secrets.list": { ...LATEST_SCHEDULING, poll: null },
-  "environment.secrets.versions": { ...LATEST_SCHEDULING, poll: null },
+  "environment.secrets.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.secrets.versions": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   // A replaced value's status moves within seconds of the replacement; the
   // Secrets page re-reads it only while it is still moving.
   "environment.secrets.rotation": {
@@ -2515,24 +2527,43 @@ export const HOST_METHOD_POLL_TABLE = {
   // every write is ordered and never joined.
   "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
   "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
-  "environment.configuration.items": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.revision": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.items": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
-  "environment.members.seats": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.seats": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.invitations.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.invitations.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.plans.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
-  "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.guide.get": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.configuration.mcpServers.list": {
     ...LATEST_SCHEDULING,
-    poll: null,
+    poll: CONFIGURATION_READ_POLL,
   },
-  "environment.configuration.skills.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.skills.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2783,8 +2814,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "environment.host.list": { ...LATEST_SCHEDULING, poll: null },
-  "environment.members": { ...LATEST_SCHEDULING, poll: null },
+  "environment.host.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.members": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.setMainBot": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

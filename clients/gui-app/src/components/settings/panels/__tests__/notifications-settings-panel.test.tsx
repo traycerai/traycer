@@ -842,6 +842,7 @@ function renderNotificationsSettings(
             hooks: params.hooks.map((hook) => ({
               ...hook,
               lastResult: null,
+              localOnly: null,
             })),
           };
           return hooksStatus;
@@ -1071,6 +1072,8 @@ function makeHooksStatus(
     configPath: HOOKS_CONFIG_PATH,
     configError: null,
     hooks: [],
+    configurationRevision: "rev-1",
+    pendingRemovalNotices: [],
     ...(overrides === undefined ? {} : overrides),
   };
 }
@@ -1090,6 +1093,7 @@ function makeHook(
     },
     lastResult:
       overrides.lastResult === undefined ? null : overrides.lastResult,
+    localOnly: overrides.localOnly === undefined ? null : overrides.localOnly,
   };
 }
 

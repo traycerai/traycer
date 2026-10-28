@@ -3,6 +3,7 @@ import {
   isNotificationPayloadRoutable,
   parseNotificationPayload,
   routeNotification,
+  routeNotificationForHost,
 } from "@/lib/notifications/payload";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
@@ -61,6 +62,90 @@ describe("host surface notification routing", () => {
     expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
       "/settings/worktrees",
     );
+  });
+
+  it("opens Settings → Notifications on the computer the notice names, whether or not it is reachable", () => {
+    // No host directory is installed, so the named computer is unreachable
+    // from here; the route still scopes Settings to it rather than to the
+    // computer this window is viewing.
+    const navigate = vi.fn();
+    routeNotificationForHost(
+      navigate,
+      {
+        kind: "hostSurface",
+        surface: "notificationSettings",
+        hostId: "host-work-laptop",
+        focus: undefined,
+      },
+      1_000,
+      { originHostId: "host-work-laptop", effectiveHostId: "host-this-window" },
+    );
+
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "/settings/notifications" }),
+    );
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+      "host-work-laptop",
+    );
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/notifications",
+    );
+  });
+
+  it.each([
+    ["no host", { kind: "hostSurface", surface: "notificationSettings" }],
+    [
+      "an empty host",
+      { kind: "hostSurface", surface: "notificationSettings", hostId: "" },
+    ],
+    [
+      "a non-string host",
+      { kind: "hostSurface", surface: "notificationSettings", hostId: 7 },
+    ],
+  ])(
+    "degrades a native Notifications settings envelope with %s instead of routing it",
+    (_label, envelope) => {
+      expect(parseNotificationPayload(envelope)).toBeNull();
+    },
+  );
+
+  it("leaves the worktree cleanup view alone when it opens Notifications settings", () => {
+    useWorktreeCleanupViewStore.setState({
+      view: "cleanupHistory",
+      focusedRunId: "run-1",
+    });
+
+    routeNotification(
+      vi.fn(),
+      {
+        kind: "hostSurface",
+        surface: "notificationSettings",
+        hostId: "host-work-laptop",
+        focus: undefined,
+      },
+      1_000,
+    );
+
+    expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
+      view: "cleanupHistory",
+      focusedRunId: "run-1",
+    });
+  });
+
+  it("round-trips the Notifications settings route through a native activation envelope", () => {
+    expect(
+      parseNotificationPayload({
+        kind: "hostSurface",
+        surface: "notificationSettings",
+        hostId: "host-work-laptop",
+      }),
+    ).toEqual({
+      kind: "hostSurface",
+      surface: "notificationSettings",
+      view: undefined,
+      hostId: "host-work-laptop",
+      focus: undefined,
+    });
   });
 
   it("leaves the panel's saved search, sort, and tier filters untouched", () => {

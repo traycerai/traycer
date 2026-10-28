@@ -114,6 +114,45 @@ export function invalidateCompleteNotificationIndicators(
   );
 }
 
+/** How long the cloud feed stays quiet before a snapshot burst re-asks the
+ * hosts (`createCompleteNotificationIndicatorsReask`). */
+export const COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS = 300;
+
+export interface CompleteNotificationIndicatorsReask {
+  /** A cloud snapshot was accepted; re-ask once the feed goes quiet. */
+  schedule(): void;
+  dispose(): void;
+}
+
+/**
+ * `invalidateCompleteNotificationIndicators` once per burst of cloud
+ * snapshots, after the last of them. Re-asking on every snapshot cancels each
+ * read the one before restarted, so under a burst a first read could never
+ * settle. Whatever is still in flight, or holds a whole-origin answer, when
+ * the burst ends is re-asked then, so no answer older than the last snapshot
+ * survives it.
+ */
+export function createCompleteNotificationIndicatorsReask(
+  queryClient: QueryClient,
+  quietMs: number,
+): CompleteNotificationIndicatorsReask {
+  let cancelPending: (() => void) | null = null;
+  return {
+    schedule: () => {
+      cancelPending?.();
+      const handle = globalThis.setTimeout(() => {
+        cancelPending = null;
+        invalidateCompleteNotificationIndicators(queryClient);
+      }, quietMs);
+      cancelPending = () => globalThis.clearTimeout(handle);
+    },
+    dispose: () => {
+      cancelPending?.();
+      cancelPending = null;
+    },
+  };
+}
+
 export function clearNotificationIndicatorCaches(
   queryClient: QueryClient,
 ): void {

@@ -32,11 +32,11 @@ import {
   type EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import {
-  hostNotificationsCloudFeedRowSchemaV15,
+  hostNotificationsCloudFeedRowSchemaV16,
   type HostNotificationEnvironmentApplyFailedPayload,
   type HostNotificationSandboxNotice,
   type HostNotificationSeverity,
-  type HostNotificationsCloudFeedRowV15,
+  type HostNotificationsCloudFeedRowV16,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
@@ -124,9 +124,9 @@ let statusReads: number;
 let resolvedIds: string[];
 let repairSucceeds: boolean;
 
-type EnvironmentApplyFailedRow = HostNotificationsCloudFeedRowV15 & {
+type EnvironmentApplyFailedRow = HostNotificationsCloudFeedRowV16 & {
   readonly entry: Extract<
-    HostNotificationsCloudFeedRowV15["entry"],
+    HostNotificationsCloudFeedRowV16["entry"],
     { kind: "environment.apply.failed" }
   > & {
     readonly payload: HostNotificationEnvironmentApplyFailedPayload;
@@ -209,7 +209,7 @@ function sandboxNotice(
   detail: HostNotificationSandboxNotice,
   severity: HostNotificationSeverity,
   updatedAt: number,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "cloud-settings",
@@ -240,11 +240,11 @@ function readNotice(row: EnvironmentApplyFailedRow): EnvironmentApplyFailedRow {
     entry: { ...row.entry, readAt: Date.now() },
   };
 }
-function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+function seed(rows: HostNotificationsCloudFeedRowV16[]): void {
   // The opened session's owner: the signed-in `settings-user` below.
   useCloudNotificationsStore.setState({ accountId: "settings-user" });
   useCloudNotificationsStore.getState().applySnapshot({
-    rows: rows.map((row) => hostNotificationsCloudFeedRowSchemaV15.parse(row)),
+    rows: rows.map((row) => hostNotificationsCloudFeedRowSchemaV16.parse(row)),
     summary: { totalCount: rows.length, unreadCount: 0, attentionCount: 0 },
     version: (useCloudNotificationsStore.getState().version ?? 0) + 1,
   });
@@ -477,7 +477,7 @@ describe("sandbox settings warnings in the notification center", () => {
     "keeps a settings warning actionable beside a newer %s",
     async (kind) => {
       const warning = notice("warning", OPERATION_ID);
-      const newer: HostNotificationsCloudFeedRowV15 =
+      const newer: HostNotificationsCloudFeedRowV16 =
         kind === "failed Stop"
           ? {
               entryId: "failed-stop",

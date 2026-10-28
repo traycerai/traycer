@@ -1063,6 +1063,21 @@ export type HostNotificationSandboxNoticePayload = z.infer<
   typeof hostNotificationSandboxNoticePayloadSchema
 >;
 
+/** No hook identity, configuration, URL or header may ride a removal notice. */
+export const hostNotificationHooksRemovedPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("notification_hooks_removed"),
+      hostId: idSchema,
+      hostName: z.string(),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+);
+export type HostNotificationHooksRemovedPayload = z.infer<
+  typeof hostNotificationHooksRemovedPayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationChatStoppedPayloadSchema,
@@ -1091,6 +1106,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationTeamHostReturnedPayloadSchema,
     hostNotificationSecretRemovedPayloadSchema,
     hostNotificationSandboxNoticePayloadSchema,
+    hostNotificationHooksRemovedPayloadSchema,
   ]),
 );
 export type HostNotificationKnownPayload = z.infer<
@@ -1191,5 +1207,7 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "secret_removed";
     case "sandbox.notice":
       return payloadKind === "sandbox_notice";
+    case "notification.hooks.removed":
+      return payloadKind === "notification_hooks_removed";
   }
 }

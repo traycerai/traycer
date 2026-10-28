@@ -1,3 +1,4 @@
+import { consumePendingHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -97,7 +98,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV15,
+  type HostNotificationsCloudFeedRowV16,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
   HOST_NOTIFICATIONS_HOME_ORDER,
@@ -254,6 +255,11 @@ interface HostNotificationMutationContext {
 }
 
 interface CloudFeedMutationContext {
+  readonly hookRemovalEntries: readonly {
+    readonly entryId: string;
+    readonly id: string;
+    readonly hostId: string;
+  }[];
   readonly hostId: string | null;
   readonly sessionEpoch: number;
   /**
@@ -396,7 +402,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV15 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV16 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -657,7 +663,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV15 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV16 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1086,6 +1092,19 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   };
   const captureCloudMutationContext = useCallback(
     (): CloudFeedMutationContext => ({
+      hookRemovalEntries: Object.values(
+        useCloudNotificationsStore.getState().rows,
+      ).flatMap((row) =>
+        row?.entry.kind === "notification.hooks.removed"
+          ? [
+              {
+                entryId: row.entryId,
+                id: row.entry.id,
+                hostId: row.originHostId,
+              },
+            ]
+          : [],
+      ),
       hostId: client?.getActiveHostId() ?? null,
       sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
       accountId: useAuthStore.getState().contextMetadata?.userId ?? null,
@@ -1135,9 +1154,21 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     options: {
       mutationKey: notificationsMutationKeys.cloudMarkRead(),
       onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, _variables, context) => {
-        if (isCurrentCloudMutation(context.current)) {
+      onSuccess: (data, variables, context) => {
+        if (
+          context.current !== null &&
+          isCurrentCloudMutation(context.current)
+        ) {
           handleCloudMutationResult(data);
+          if (data.status === "applied") {
+            const row = context.current.hookRemovalEntries.find(
+              (entry) => entry.entryId === variables.entryId,
+            );
+            if (row !== undefined)
+              void consumePendingHookRemovalNotices(queryClient, row.hostId, {
+                ids: [row.id],
+              });
+          }
         }
       },
       onError: (error, _variables, context) => {
@@ -1216,8 +1247,17 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       mutationKey: notificationsMutationKeys.cloudMarkAllRead(),
       onMutate: (variables) => variables.mutationContext,
       onSuccess: (data, _variables, context) => {
-        if (!isCurrentCloudMutation(context.current)) return;
+        if (
+          context.current === null ||
+          !isCurrentCloudMutation(context.current)
+        )
+          return;
         if (data.status === "applied") {
+          for (const row of context.current.hookRemovalEntries) {
+            void consumePendingHookRemovalNotices(queryClient, row.hostId, {
+              ids: [row.id],
+            });
+          }
           handleCloudMutationResult({
             status: "applied",
             version: data.version,
@@ -1262,9 +1302,21 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     options: {
       mutationKey: notificationsMutationKeys.cloudClear(),
       onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, _variables, context) => {
-        if (isCurrentCloudMutation(context.current)) {
+      onSuccess: (data, variables, context) => {
+        if (
+          context.current !== null &&
+          isCurrentCloudMutation(context.current)
+        ) {
           handleCloudMutationResult(data);
+          if (data.status === "applied") {
+            const row = context.current.hookRemovalEntries.find(
+              (entry) => entry.entryId === variables.entryId,
+            );
+            if (row !== undefined)
+              void consumePendingHookRemovalNotices(queryClient, row.hostId, {
+                ids: [row.id],
+              });
+          }
         }
       },
       onError: (error, _variables, context) => {
@@ -1301,8 +1353,18 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       mutationKey: notificationsMutationKeys.cloudClearAll(),
       onMutate: (variables) => variables.mutationContext,
       onSuccess: (data, _variables, context) => {
-        if (isCurrentCloudMutation(context.current)) {
+        if (
+          context.current !== null &&
+          isCurrentCloudMutation(context.current)
+        ) {
           handleCloudMutationResult(data);
+          if (data.status === "applied") {
+            for (const row of context.current.hookRemovalEntries) {
+              void consumePendingHookRemovalNotices(queryClient, row.hostId, {
+                ids: [row.id],
+              });
+            }
+          }
         }
       },
       onError: (error, _variables, context) => {
@@ -1347,6 +1409,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             Date.now(),
             context.snapshotEpoch,
           );
+        void consumePendingHookRemovalNotices(queryClient, context.hostId, {
+          ids: [variables.sourceId],
+        });
         // Tab/sidebar indicators are otherwise refreshed only by this row's
         // `readStateChanged` echo on the feed stream; invalidate here too so
         // a successful mark-read clears them over the unary channel even
@@ -1421,6 +1486,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             Date.now(),
             context.snapshotEpoch,
           );
+        void consumePendingHookRemovalNotices(queryClient, context.hostId, {
+          beforeUpdatedAt: variables.beforeUpdatedAt,
+        });
         // Same stream-independence rationale as the row-level mark-read; a
         // mark-all has no entity list, so the whole host scope refetches.
         if (context.hostId !== null) {
@@ -1489,6 +1557,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         useHostNotificationsStore
           .getState()
           .clearAllLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
+        void consumePendingHookRemovalNotices(queryClient, context.hostId, {
+          beforeUpdatedAt: variables.beforeUpdatedAt,
+        });
         if (context.hostId !== null) {
           invalidateNotificationIndicators(queryClient, context.hostId, client);
         }
@@ -1817,7 +1888,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV15 =>
+              (row): row is HostNotificationsCloudFeedRowV16 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -2262,7 +2333,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV15,
+  row: HostNotificationsCloudFeedRowV16,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -2492,6 +2563,13 @@ function navigationPayloadFromKnown(
 ): NotificationPayload | null {
   if (isRowCompletePayload(known)) return null;
   switch (known.kind) {
+    case "notification_hooks_removed":
+      return {
+        kind: "hostSurface",
+        surface: "notificationSettings",
+        hostId: known.hostId,
+        focus: undefined,
+      };
     case "chat":
       return navigationPayloadForChatStopped(known);
     case "agent_stalled":

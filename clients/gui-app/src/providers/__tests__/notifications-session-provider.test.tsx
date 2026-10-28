@@ -42,7 +42,7 @@ import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
   type HostNotificationsCloudFeedRow,
-  type HostNotificationsCloudFeedRowV15,
+  type HostNotificationsCloudFeedRowV16,
   type HostNotificationsIndicatorStateResponse,
   type HostNotificationsMarkReadRequest,
   type HostNotificationsSubscribeClientFrame,
@@ -1003,7 +1003,7 @@ function createBotHostClient(
 function botVerdictRow(
   entryId: string,
   createdAt: number,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: BOT_HOST_ID,
@@ -3804,7 +3804,10 @@ describe("<NotificationsSessionProvider />", () => {
         });
     });
 
-    expect(queryClient.getQueryState(wholeOrigin)?.isInvalidated).toBe(true);
+    // The re-ask waits for the snapshot burst to go quiet.
+    await waitFor(() => {
+      expect(queryClient.getQueryState(wholeOrigin)?.isInvalidated).toBe(true);
+    });
     expect(queryClient.getQueryState(partition)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(unsaid)?.isInvalidated).toBe(false);
   });
@@ -3841,7 +3844,7 @@ describe("<NotificationsSessionProvider />", () => {
     );
     const emitCloudSnapshot = (
       version: number,
-      rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>,
+      rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
     ): void => {
       act(() => {
         cloudSession.emitServerFrame({
@@ -3947,6 +3950,72 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
     });
+  });
+
+  it("re-asks a host once for a burst of cloud snapshots that lands inside the quiet window", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    const botHost: BotHostAnswers = {
+      response: wholeOriginAnswer(0),
+      held: null,
+      requests: [],
+    };
+    hostState.clientsById.set(BOT_HOST_ID, createBotHostClient(botHost));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <BotThreadCountProbe />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
+    });
+    expect(botHost.requests).toHaveLength(1);
+
+    const cloudSession = streamClient.sessionFor(
+      "host.notifications.cloudFeed.subscribe",
+    );
+    const verdicts = [
+      botVerdictRow("verdict-1", 2),
+      botVerdictRow("verdict-2", 3),
+      botVerdictRow("verdict-3", 4),
+    ];
+    // The host's own answer already counts all three verdicts; the cloud
+    // snapshots reach this client one after another, back to back.
+    botHost.response = wholeOriginAnswer(3);
+    act(() => {
+      for (let count = 1; count <= verdicts.length; count += 1) {
+        const rows = verdicts.slice(0, count);
+        cloudSession.emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: count,
+          rows,
+          summary: {
+            totalCount: rows.length,
+            unreadCount: rows.length,
+            attentionCount: 0,
+          },
+        });
+      }
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("3");
+    });
+    expect(botHost.requests).toHaveLength(2);
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {
