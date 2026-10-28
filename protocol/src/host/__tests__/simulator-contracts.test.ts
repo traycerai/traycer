@@ -112,7 +112,10 @@ describe("simulator contracts", () => {
       expect(entry.degrade, method).toEqual({ kind: "unsupported" });
       expect(entry[1].latestMinor, method).toBe(1);
       expect(entry[1].versions[0].contract, method).toBe(v10);
-      expect(entry[1].versions[0].upgradeFromPreviousVersion, method).toBeNull();
+      expect(
+        entry[1].versions[0].upgradeFromPreviousVersion,
+        method,
+      ).toBeNull();
       expect(entry[1].versions[1].contract, method).toBe(v11);
       expect(entry[1].versions[1].upgradeFromPreviousVersion, method).toBe(
         upgrade,

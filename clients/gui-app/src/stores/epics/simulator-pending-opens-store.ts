@@ -34,9 +34,7 @@ export interface SimulatorPendingOpen {
 }
 
 interface SimulatorPendingOpensState {
-  readonly byRequestId: Readonly<
-    Partial<Record<string, SimulatorPendingOpen>>
-  >;
+  readonly byRequestId: Readonly<Partial<Record<string, SimulatorPendingOpen>>>;
 }
 
 export const useSimulatorPendingOpensStore = create<SimulatorPendingOpensState>(
@@ -72,7 +70,10 @@ export function updateSimulatorPendingOpen(
     const current = state.byRequestId[requestId];
     if (current === undefined) return state;
     return {
-      byRequestId: { ...state.byRequestId, [requestId]: { ...current, ...patch } },
+      byRequestId: {
+        ...state.byRequestId,
+        [requestId]: { ...current, ...patch },
+      },
     };
   });
 }

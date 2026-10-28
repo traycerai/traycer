@@ -251,7 +251,10 @@ export function useSimulatorListModel(epicId: string): SimulatorListModel {
     [byRequestId, epicId, hosts, localHostId, records],
   );
   const status = catalog?.status ?? "ready";
-  const rowCount = groups.reduce((count, group) => count + group.rows.length, 0);
+  const rowCount = groups.reduce(
+    (count, group) => count + group.rows.length,
+    0,
+  );
   return {
     status,
     notReady: catalog?.scope === "not-ready",

@@ -275,7 +275,8 @@ function isStream(value: unknown): value is SimulatorSessionsState {
 /** The host's side: the catalog it lists and how each open answers. */
 const host_ = {
   catalog: { kind: "available", snapshot: { version: 1, records: [] } } as
-    SimulatorCatalogReadResponse | { kind: "not-ready" },
+    | SimulatorCatalogReadResponse
+    | { kind: "not-ready" },
   catalogReads: 0,
   openAnswer: (): Promise<SimulatorOpenResponse> => new Promise(() => {}),
   closes: [] as unknown[],

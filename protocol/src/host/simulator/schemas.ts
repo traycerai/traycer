@@ -431,9 +431,7 @@ export const simulatorHostInstanceSchema = lazySchema(() =>
     otherTaskCount: z.number().int().nonnegative(),
   }),
 );
-export type SimulatorHostInstance = z.infer<
-  typeof simulatorHostInstanceSchema
->;
+export type SimulatorHostInstance = z.infer<typeof simulatorHostInstanceSchema>;
 export const simulatorInstancesResponseSchema = lazySchema(() =>
   z.object({
     instances: z.array(simulatorHostInstanceSchema),
@@ -460,7 +458,10 @@ export type SimulatorPowerOffRequest = z.infer<
 >;
 export const simulatorPowerOffResponseSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("powered-off"), instanceKey: instanceKeySchema }),
+    z.object({
+      kind: z.literal("powered-off"),
+      instanceKey: instanceKeySchema,
+    }),
     z.object({
       kind: z.literal("confirm-required"),
       instanceKey: instanceKeySchema,

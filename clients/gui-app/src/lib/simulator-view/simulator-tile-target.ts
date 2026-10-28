@@ -73,7 +73,8 @@ export function findSessionFor(
       (item) =>
         item.simulatorId === simulatorId &&
         (!v11 ||
-          (item.ownerUserId === viewerUserId && (item.agentId ?? null) === null)),
+          (item.ownerUserId === viewerUserId &&
+            (item.agentId ?? null) === null)),
     ) ?? null
   );
 }

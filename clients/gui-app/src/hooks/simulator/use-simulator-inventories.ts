@@ -93,7 +93,9 @@ export function simulatorInventoryEntries(args: {
  * entry never pins a client.
  */
 function simulatorInventoryQuery(args: {
-  readonly resolveClient: (hostId: string) => HostClient<HostRpcRegistry> | null;
+  readonly resolveClient: (
+    hostId: string,
+  ) => HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
   readonly epicId: string;
   readonly enabled: boolean;

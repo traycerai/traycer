@@ -382,7 +382,10 @@ export function useSimulatorSetKeepRunningMutation(
   const supported = useHostSupportsMethod(hostId, "simulator.setKeepRunning");
   const mutation = useHostScopedMutationForClient(client, {
     method: "simulator.setKeepRunning",
-    mutationKey: simulatorMutationKeys.setKeepRunning(hostId ?? "", instanceKey),
+    mutationKey: simulatorMutationKeys.setKeepRunning(
+      hostId ?? "",
+      instanceKey,
+    ),
     errorMessage: "Couldn't change whether the simulator keeps running.",
     invalidateMethods: INSTANCE_INVALIDATIONS,
   });

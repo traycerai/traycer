@@ -24,7 +24,8 @@ export const simulatorMutationKeys = {
   action: (hostId: string, simulatorId: string) =>
     ["simulator.action", hostId, simulatorId] as const,
   /** A task row's Close or Dismiss: one or more `close@1.1` by session id. */
-  catalogClose: (epicId: string) => ["simulator.close", "catalog", epicId] as const,
+  catalogClose: (epicId: string) =>
+    ["simulator.close", "catalog", epicId] as const,
   powerOff: (hostId: string, instanceKey: string) =>
     ["simulator.powerOff", hostId, instanceKey] as const,
   setKeepRunning: (hostId: string, instanceKey: string) =>

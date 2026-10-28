@@ -328,7 +328,10 @@ function PickerContent(props: {
   readonly state: SimulatorListResponse | null;
   readonly instances: readonly SimulatorHostInstance[] | null;
   readonly query: string;
-  readonly onPick: (target: SimulatorOpenTarget, instance: PickInstance) => void;
+  readonly onPick: (
+    target: SimulatorOpenTarget,
+    instance: PickInstance,
+  ) => void;
 }) {
   const { note, state, instances, query, onPick } = props;
   if (note !== null)
@@ -359,7 +362,9 @@ function PickerContent(props: {
   );
   const coldMatches = state.simulators.filter(
     (simulator) =>
-      !simulator.booted && !simulator.physical && matchesQuery(simulator, query),
+      !simulator.booted &&
+      !simulator.physical &&
+      matchesQuery(simulator, query),
   );
   return (
     <>
@@ -422,9 +427,7 @@ function PickerSection(props: {
 
 function PickerEmpty(props: { readonly text: string }) {
   return (
-    <li className="px-2 py-1 text-ui-xs text-muted-foreground">
-      {props.text}
-    </li>
+    <li className="px-2 py-1 text-ui-xs text-muted-foreground">{props.text}</li>
   );
 }
 

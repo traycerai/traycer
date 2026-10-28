@@ -27,9 +27,9 @@ describe("simulator catalog contracts", () => {
     const schema = simulatorCatalogRecordSchema;
     expect(schema.parse(RECORD)).toEqual(RECORD);
     expect(schema.safeParse({ ...RECORD, extra: true }).success).toBe(false);
-    expect(schema.safeParse({ ...RECORD, endedReason: "crashed" }).success).toBe(
-      false,
-    );
+    expect(
+      schema.safeParse({ ...RECORD, endedReason: "crashed" }).success,
+    ).toBe(false);
     expect(schema.parse({ ...RECORD, endedReason: "idle" }).endedReason).toBe(
       "idle",
     );
@@ -63,11 +63,11 @@ describe("simulator catalog contracts", () => {
       kind: "powered-off",
       instanceKey: "k",
     });
-    expect(schema.parse({ kind: "confirm-required", instanceKey: "k" })).toEqual(
-      { kind: "confirm-required", instanceKey: "k" },
-    );
-    expect(schema.safeParse({ kind: "refused", instanceKey: "k" }).success).toBe(
-      false,
-    );
+    expect(
+      schema.parse({ kind: "confirm-required", instanceKey: "k" }),
+    ).toEqual({ kind: "confirm-required", instanceKey: "k" });
+    expect(
+      schema.safeParse({ kind: "refused", instanceKey: "k" }).success,
+    ).toBe(false);
   });
 });

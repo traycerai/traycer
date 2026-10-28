@@ -112,7 +112,9 @@ export function useSimulatorsOpenerItems(
     }),
   );
   if (rows.length > 0) return rows;
-  const loading = inventories.some((inventory) => inventory.status === "loading");
+  const loading = inventories.some(
+    (inventory) => inventory.status === "loading",
+  );
   return [
     {
       ...openerActionLeaf({

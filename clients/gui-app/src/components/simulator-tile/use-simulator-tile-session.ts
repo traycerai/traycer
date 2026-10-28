@@ -138,13 +138,16 @@ export function useSimulatorTilePowerOff(args: {
   const powerOffMutateAsync = powerOff.mutation.mutateAsync;
   const sendPowerOff = useCallback(
     (confirm: boolean) => {
-      void powerOffMutateAsync({ instanceKey, confirm }).then((answer) => {
-        if (answer.kind === "confirm-required") {
-          setConfirmingAgent(true);
-          return;
-        }
-        onCloseTile();
-      }, () => undefined);
+      void powerOffMutateAsync({ instanceKey, confirm }).then(
+        (answer) => {
+          if (answer.kind === "confirm-required") {
+            setConfirmingAgent(true);
+            return;
+          }
+          onCloseTile();
+        },
+        () => undefined,
+      );
     },
     [instanceKey, onCloseTile, powerOffMutateAsync],
   );

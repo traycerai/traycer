@@ -71,10 +71,7 @@ export function SimulatorRunningNowRow(props: {
   const { client, hostId } = props;
   const instances = useSimulatorInstancesQuery(client, hostId, true);
   const nowMs = useNowMs(30_000);
-  const list = useMemo(
-    () => instances.data?.instances ?? [],
-    [instances.data],
-  );
+  const list = useMemo(() => instances.data?.instances ?? [], [instances.data]);
   const epicIds = useMemo(
     () => [
       ...new Set(
