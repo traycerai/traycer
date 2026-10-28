@@ -4399,7 +4399,7 @@ describe("a pending chat create", () => {
     expect(readStagedSandbox(SURFACE)).toBeNull();
   });
 
-  it("shows only the setup line and the message until the remote sandbox accepts the create, and opens the agent only then", async () => {
+  it("shows only the setup line and the message until the remote sandbox accepts the create, and registers the agent's handoff, with no pending chat title, only once it does", async () => {
     seed(SEEDED);
     const create = deferred<CreateChatResponseV12>();
     mocks.createChatDeferred = create.promise;
@@ -4421,7 +4421,7 @@ describe("a pending chat create", () => {
       );
       expect(screen.queryByTestId("pending-sandbox-dispatch")).toBeNull();
       expect(screen.queryByText("Waiting for the sandbox…")).toBeNull();
-      // No handoff yet, so no "Untitled agent" tile loading from the sandbox.
+      // The agent's tile opens from the handoff; none is registered yet.
       expect(useInitialChatHandoffStore.getState().handoffs).toEqual({});
       expect(
         useEpicCanvasStore.getState().pendingChatTitles[chatId],

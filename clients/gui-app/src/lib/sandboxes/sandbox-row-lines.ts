@@ -496,16 +496,17 @@ export function sandboxDestroyedLine(
   return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
 }
 
-/** `23:40` within the last 24 hours, `Mon 23:40` this week, `Oct 20` before. */
+/**
+ * `23:40` within the last 24 hours, `Mon 23:40` within six days, and
+ * `Oct 20 23:40` from then on, where a day name would be ambiguous.
+ */
 export function formatSandboxSince(at: number, now: number): string {
   if (now - at < MS_PER_DAY) return formatSandboxTime(at);
-  if (now - at < 6 * MS_PER_DAY) {
-    const day = new Date(at).toLocaleDateString(undefined, {
-      weekday: "short",
-    });
-    return `${day} ${formatSandboxTime(at)}`;
-  }
-  return formatSandboxDate(at, false);
+  const day =
+    now - at < 6 * MS_PER_DAY
+      ? new Date(at).toLocaleDateString(undefined, { weekday: "short" })
+      : formatSandboxDate(at, false);
+  return `${day} ${formatSandboxTime(at)}`;
 }
 
 /**

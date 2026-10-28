@@ -590,6 +590,12 @@ describe("sandboxClockLine, a resting row", () => {
         "Suspended since Tue 23:53",
       );
     });
+
+    it("dates it with the time from six days on", () => {
+      expect(sinceAt(new Date(2026, 10, 3, 0, 10).getTime())).toBe(
+        "Suspended since Oct 27 23:53",
+      );
+    });
   });
 });
 
