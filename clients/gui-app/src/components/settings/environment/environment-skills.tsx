@@ -425,8 +425,21 @@ type PendingSkillChoice =
       readonly kind: "policy";
       readonly skill: EnvironmentSkillV11;
       readonly policy: EnvironmentSkillPolicy;
+      /** The policies' revision the choice was read against. */
+      readonly revision: string | null;
     }
   | { readonly kind: "update"; readonly skill: EnvironmentSkillV11 };
+
+/** Stopping a skill's updates, and replacing a person's changes, are each confirmed first. */
+function policyNeedsConfirm(
+  skill: EnvironmentSkillV11,
+  policy: EnvironmentSkillPolicy,
+): boolean {
+  return (
+    (policy === "evolve" && skill.policy === "auto-update") ||
+    (policy === "auto-update" && skill.edited)
+  );
+}
 
 function SkillsPageList(props: {
   readonly listed: ListedSkills;
@@ -455,12 +468,17 @@ function SkillsPageList(props: {
   const { remove, setPolicy } = useEnvironmentSkillMutations(readClient);
   const { update, restoreBundled, checkUpdates } =
     useEnvironmentSkillHostMutations(props.hostClient);
-  const [open, setOpen] = useState<EnvironmentSkillV11 | null>(null);
+  // The open detail follows its row in the list as it is read again: its
+  // version and Update now, after an update or anyone else's change.
+  const [openName, setOpenName] = useState<string | null>(null);
+  // Moves when a write replaced skill files, so an open detail reads them again.
+  const [contentEpoch, setContentEpoch] = useState(0);
+  const [deletedOpen, setDeletedOpen] = useState(false);
   const [removing, setRemoving] = useState<EnvironmentSkillV11 | null>(null);
   const [pending, setPending] = useState<PendingSkillChoice | null>(null);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
-  const [deletedOpen, setDeletedOpen] = useState(false);
   const { skills, deletedBundled } = props.listed;
+  const open = rowNamed(skills, openName);
   const removeIssue =
     remove.data === undefined
       ? null
@@ -471,6 +489,7 @@ function SkillsPageList(props: {
   const savePolicy = async (
     skill: EnvironmentSkillV11,
     policy: EnvironmentSkillPolicy,
+    revision: string | null,
   ): Promise<void> => {
     if (source.kind !== "pool") return;
     const failed = "Couldn't save this skill's updates setting.";
@@ -480,12 +499,11 @@ function SkillsPageList(props: {
       policy,
     };
     try {
-      let result = await setPolicy.mutateAsync({
-        ...request,
-        revision: props.listed.policyRevision,
-      });
-      // Another write moved the policies: list again and send once more,
-      // unless the skill already holds the choice.
+      let result = await setPolicy.mutateAsync({ ...request, revision });
+      // Another write moved the policies: list again, and send once more
+      // only as the skill stands now. Already holding the choice needs
+      // nothing; a change that now replaces edits or stops updates asks
+      // first, as a choice from the row does.
       if (result.outcome === "stale") {
         const fresh = await props.reread();
         const row = fresh?.skills.find((entry) => entry.name === skill.name);
@@ -495,6 +513,15 @@ function SkillsPageList(props: {
         }
         if (row.policy === policy) {
           setIssue(null);
+          return;
+        }
+        if (policyNeedsConfirm(row, policy)) {
+          setPending({
+            kind: "policy",
+            skill: row,
+            policy,
+            revision: fresh.policyRevision,
+          });
           return;
         }
         result = await setPolicy.mutateAsync({
@@ -512,15 +539,19 @@ function SkillsPageList(props: {
     skill: EnvironmentSkillV11,
     policy: EnvironmentSkillPolicy,
   ): void => {
-    // Stopping updates and replacing edits are each confirmed first.
-    if (
-      (policy === "evolve" && skill.policy === "auto-update") ||
-      (policy === "auto-update" && skill.edited)
-    ) {
-      setPending({ kind: "policy", skill, policy });
+    const revision = props.listed.policyRevision;
+    if (policyNeedsConfirm(skill, policy)) {
+      setPending({ kind: "policy", skill, policy, revision });
       return;
     }
-    void savePolicy(skill, policy);
+    void savePolicy(skill, policy, revision);
+  };
+
+  // The skill's files were replaced: list again, so a detail shows the
+  // version it holds now, then read its files again from where the list is.
+  const rereadContent = async (): Promise<void> => {
+    await props.reread();
+    setContentEpoch((value) => value + 1);
   };
 
   const runUpdate = (skill: EnvironmentSkillV11, confirm: boolean): void => {
@@ -540,6 +571,7 @@ function SkillsPageList(props: {
           }
           setPending(null);
           setIssue(skillWriteIssue(result, "Couldn't update this skill."));
+          if (result.outcome === "applied") void rereadContent();
         },
       },
     );
@@ -556,8 +588,10 @@ function SkillsPageList(props: {
     restoreBundled.mutate(
       { environmentId: source.environmentId, name: skillName },
       {
-        onSuccess: (result) =>
-          setIssue(skillWriteIssue(result, "Couldn't restore this skill.")),
+        onSuccess: (result) => {
+          setIssue(skillWriteIssue(result, "Couldn't restore this skill."));
+          if (result.outcome === "restored") void rereadContent();
+        },
       },
     );
   };
@@ -673,7 +707,7 @@ function SkillsPageList(props: {
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => setOpen(skill)}
+                        onClick={() => setOpenName(skill.name)}
                       >
                         {editable(props.canEdit, skill) ? "Edit" : "Preview"}
                       </Button>
@@ -763,7 +797,7 @@ function SkillsPageList(props: {
               return;
             }
             setPending(null);
-            void savePolicy(pending.skill, pending.policy);
+            void savePolicy(pending.skill, pending.policy, pending.revision);
           }}
         />
       )}
@@ -775,12 +809,22 @@ function SkillsPageList(props: {
           canEdit={editable(props.canEdit, open)}
           canUpdate={canUpdate(open)}
           updatePending={update.isPending}
+          contentEpoch={contentEpoch}
           onRequestUpdate={() => requestUpdate(open)}
-          onClose={() => setOpen(null)}
+          onClose={() => setOpenName(null)}
         />
       )}
     </>
   );
+}
+
+/** The row of the skill named `name`; `null` when none is named or the list no longer holds it. */
+function rowNamed(
+  skills: readonly EnvironmentSkillV11[],
+  name: string | null,
+): EnvironmentSkillV11 | null {
+  if (name === null) return null;
+  return skills.find((skill) => skill.name === name) ?? null;
 }
 
 /**
@@ -902,6 +946,8 @@ function EnvironmentSkillDetail(props: {
   readonly canEdit: boolean;
   readonly canUpdate: boolean;
   readonly updatePending: boolean;
+  /** Moves when an update or a restore replaced the skill's files. */
+  readonly contentEpoch: number;
   readonly onRequestUpdate: () => void;
   readonly onClose: () => void;
 }): ReactNode {
@@ -992,7 +1038,9 @@ function EnvironmentSkillDetail(props: {
       onRequestUpdate={props.onRequestUpdate}
       onRequestRemove={() => undefined}
       onClose={props.onClose}
-      fileEpoch={epoch}
+      // Either move reads the files again: this dialog's edit, or a write
+      // that replaced them.
+      fileEpoch={epoch + props.contentEpoch}
     />
   );
 }

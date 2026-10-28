@@ -68,19 +68,33 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
-// The detail dialog reads SKILL.md off disk.
-vi.mock("@/hooks/workspace/use-read-file-query", () => ({
-  useWorkspaceReadFile: () => ({
-    data: {
-      content: "---\nname: review\n---\n\n# Use\n",
-      truncated: false,
-      error: null,
-    },
-    isPending: false,
-    isError: false,
-    error: null,
-  }),
+// The detail dialog reads SKILL.md off disk: the bytes are read again only
+// when the dialog's dependencies move, as a query keyed on them is.
+const skillFile = vi.hoisted(() => ({
+  text: "---\nname: review\n---\n\n# Use\n",
 }));
+vi.mock("@/hooks/workspace/use-read-file-query", async () => {
+  const react = await import("react");
+  return {
+    useWorkspaceReadFile: (
+      _client: unknown,
+      _directory: string,
+      _file: string,
+      dependencies: readonly unknown[],
+    ) => {
+      const key = JSON.stringify(dependencies);
+      const read = react.useRef<{ key: string; content: string } | null>(null);
+      if (read.current === null || read.current.key !== key)
+        read.current = { key, content: skillFile.text };
+      return {
+        data: { content: read.current.content, truncated: false, error: null },
+        isPending: false,
+        isError: false,
+        error: null,
+      };
+    },
+  };
+});
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
   const support = await import("./mcp-skills-test-support");
   return { useProviderNativeScope: support.nativeScopeFor };
@@ -93,6 +107,7 @@ vi.mock("@/lib/settings-navigation", () => ({
 }));
 
 afterEach(() => {
+  skillFile.text = "---\nname: review\n---\n\n# Use\n";
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
@@ -1282,6 +1297,48 @@ describe("The Skills page's update policies", () => {
       });
     });
 
+    it("shows the new version and the new bytes in an open skill's dialog once its update is applied", async () => {
+      negotiateHosted();
+      let updated = false;
+      const row = (): EnvironmentSkillV11 => ({
+        ...REVIEW,
+        origin: "bundled",
+        policy: "frozen",
+        version: updated ? "2.0.0" : "1.0.0",
+        updateAvailable: !updated,
+      });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([row()], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+        "environment.configuration.skills.list": () => listed([row()], "pol-1"),
+        [UPDATE]: () => {
+          updated = true;
+          skillFile.text =
+            "---\nname: review\n---\n\n# Use the second edition\n";
+          return applied;
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await screen.findByText("review");
+      await userEvent.click(
+        within(rowOf("review")).getByRole("button", { name: "Preview" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      expect(await within(dialog).findByText("Built-in · 1.0.0")).toBeTruthy();
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Update from source" }),
+      );
+
+      expect(await within(dialog).findByText("Built-in · 2.0.0")).toBeTruthy();
+      expect(
+        await within(dialog).findByText(/Use the second edition/),
+      ).toBeTruthy();
+      expect(screen.getByRole("dialog")).toBe(dialog);
+    });
+
     it("restores a deleted built-in from the fold", async () => {
       negotiateHosted();
       const harness = mountTeamPage(poolSource("editor"), {
@@ -1345,6 +1402,50 @@ describe("The Skills page's update policies", () => {
       expect(
         harness.paramsOf("environment.configuration.skills.setPolicy"),
       ).toMatchObject([{ name: "find-skills", policy: "auto-update" }]);
+    });
+  });
+
+  it("opens the Auto-update confirm instead of retrying when the reread shows the skill edited, and confirms against the reread's revision", async () => {
+    negotiateMethods(POLICIES);
+    let reread = false;
+    const clean: EnvironmentSkillV11 = {
+      ...BUILT_IN,
+      policy: "evolve",
+      edited: false,
+    };
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([clean], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.list": () =>
+        reread
+          ? listed([{ ...clean, edited: true }], "pol-2")
+          : listed([clean], "pol-1"),
+      "environment.configuration.skills.setPolicy": () => {
+        const first = !reread;
+        reread = true;
+        return first ? stale : saved;
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("find-skills");
+    await userEvent.click(
+      within(rowOf("find-skills")).getByRole("button", {
+        name: "Auto-update",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      harness.paramsOf("environment.configuration.skills.setPolicy"),
+    ).toHaveLength(1);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Replace changes" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.skills.setPolicy"),
+      ).toMatchObject([{ revision: "pol-1" }, { revision: "pol-2" }]);
     });
   });
 
