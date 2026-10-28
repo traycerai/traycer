@@ -1215,6 +1215,7 @@ beforeEach(() => {
   usePendingSandboxSendStore.setState({ sends: {} });
   useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
   useInitialChatHandoffStore.getState().resetForTests();
+  useEpicCanvasStore.setState({ pendingChatTitles: {} });
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalOpenStore.getState().close();
   useSurfaceHostSelectionStore.getState().resetForTests();
@@ -4398,6 +4399,43 @@ describe("a pending chat create", () => {
     expect(readStagedSandbox(SURFACE)).toBeNull();
   });
 
+  it("shows only the setup line and the message until the remote sandbox accepts the create, and registers the agent's handoff, with no pending chat title, only once it does", async () => {
+    seed(SEEDED);
+    const create = deferred<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    let chatId = "";
+    try {
+      await waitForCreateChats(1);
+      chatId = createChatCalls()[0]?.input.chatId ?? "";
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+        ).toMatchObject({ status: "sending" });
+      });
+      expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+      expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+        "fix the login bug",
+      );
+      expect(screen.queryByTestId("pending-sandbox-dispatch")).toBeNull();
+      expect(screen.queryByText("Waiting for the sandbox…")).toBeNull();
+      // The agent's tile opens from the handoff; none is registered yet.
+      expect(useInitialChatHandoffStore.getState().handoffs).toEqual({});
+      expect(
+        useEpicCanvasStore.getState().pendingChatTitles[chatId],
+      ).toBeUndefined();
+    } finally {
+      await resolvePendingCreate(create);
+    }
+    await waitFor(() => {
+      expect(
+        Object.values(useInitialChatHandoffStore.getState().handoffs),
+      ).toMatchObject([{ epicId: "epic-1", hostId: SANDBOX_HOST, chatId }]);
+    });
+  });
+
   it("does not return a chat while its create is unresolved", async () => {
     seed(SEEDED);
     const create = deferred<CreateChatResponseV12>();
@@ -4480,9 +4518,10 @@ describe("a pending chat create", () => {
           await waitForCreateChats(1);
           await waitFor(() => {
             expect(
-              screen.getByTestId("pending-sandbox-dispatch").textContent,
-            ).toContain("Creating agent…");
+              usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+            ).toMatchObject({ status: "sending" });
           });
+          expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
           expect(screen.queryByTestId("sandbox-setup-cancel")).toBeNull();
           expect(
             screen.queryByTestId("sandbox-setup-choose-another-host"),
