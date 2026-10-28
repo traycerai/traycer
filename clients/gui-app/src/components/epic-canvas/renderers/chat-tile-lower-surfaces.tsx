@@ -9,7 +9,10 @@ import {
   type ReactNode,
 } from "react";
 import { Lock } from "lucide-react";
-import { ChatStateLineContext } from "./chat-state-line";
+import {
+  ChatSandboxLineContext,
+  ChatStateLineContext,
+} from "./chat-state-line";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -904,6 +907,7 @@ function ViewerComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
+  const sandboxSays = useContext(ChatSandboxLineContext);
   if (model.subagentView !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -916,10 +920,12 @@ function ViewerComposerSurface(props: {
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
-        <ReadOnlyComposerNotice
-          notice={model.access.readOnlyNotice}
-          actions={null}
-        />
+        {sandboxSays ? null : (
+          <ReadOnlyComposerNotice
+            notice={model.access.readOnlyNotice}
+            actions={null}
+          />
+        )}
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
@@ -937,6 +943,7 @@ function LiveChatComposer(props: {
 }) {
   const { model } = props;
   const tabHostId = useTabHostId();
+  const sandboxSays = useContext(ChatSandboxLineContext);
   const restingMessage =
     model.access.restingSandbox !== undefined &&
     model.queue.editingItem === null;
@@ -991,7 +998,7 @@ function LiveChatComposer(props: {
             tabHostId={tabHostId}
             onContinue={model.composer.onContinueOnTeamHosts}
           />
-          <ChatComposerDeliveryStatus />
+          {sandboxSays ? null : <ChatComposerDeliveryStatus />}
           <ChatComposerOpencodeLineHeld />
         </>
       }

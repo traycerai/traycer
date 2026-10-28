@@ -2382,6 +2382,120 @@ describe("<ChatTile />", () => {
     useStagedSandboxStore.getState().clearAll();
   });
 
+  it.each(["owner", "viewer"] as const)(
+    "keeps a suspended live tile's footer as its only availability line for the %s before copy substitution",
+    async (role) => {
+      chatHarness.teardown();
+      chatHarness.install(role, []);
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+      ];
+      sandboxCatalogueTestState.catalogue = {
+        providers: [],
+        offeredAgents: ["codex"],
+      };
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          hostId: HOST_ID,
+          displayName: "resting-box",
+          state: "suspended",
+        }),
+      ];
+      act(() => {
+        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getAllByText(
+            /resting-box is suspended · your next message resumes it/,
+          ),
+        ).toHaveLength(1);
+      });
+      expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "No sandbox is running this agent",
+      );
+      expect(document.body.textContent).not.toContain("Read-only viewer");
+      expect(document.body.textContent).not.toContain("is offline");
+      if (role === "owner") {
+        const send = screen.getByRole("button", { name: "Send" });
+        if (!(send instanceof HTMLButtonElement)) {
+          throw new Error("expected send button");
+        }
+        expect(send.disabled).toBe(false);
+      }
+    },
+  );
+
+  it("lets a sandbox state explain a dead lease before the first snapshot, even while the directory says reachable", async () => {
+    directoryListTestState.entries = [
+      {
+        hostId: HOST_ID,
+        label: "stopping-box",
+        kind: "remote",
+        websocketUrl: "wss://sbx.example.com/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
+      },
+    ];
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "stopping-box" }),
+    ];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+    chatHarness.teardown();
+    chatHarness.installDeferred();
+    renderChatTile();
+    await advanceLegendListTime(0);
+
+    expect(
+      screen.getAllByText(
+        "stopping-box isn't available — this chat stays readable.",
+      ),
+    ).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("is offline");
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "stopping-box",
+        state: "stopped",
+      }),
+    ];
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+    });
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /stopping-box is stopped · your next message starts it/,
+        ),
+      ).toHaveLength(1);
+    });
+    expect(document.body.textContent).not.toContain("is offline");
+    expect(screen.queryByText(/isn't available/)).toBeNull();
+  });
+
+  it("keeps an ordinary host's reconnect status when the sandbox carrier is absent", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+    });
+    expect(
+      screen.getByTestId("chat-composer-reconnecting").textContent,
+    ).toContain("Reconnecting to the host — sending is paused");
+  });
+
   it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {
     renderRestingCopy(
       createPublishedChatSessionHandle({
