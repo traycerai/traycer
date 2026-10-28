@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -16,6 +17,98 @@ import { describe, expect, it } from "vitest";
  * the list silently drops the patch. This reads the installed web build, not
  * the patch file, so what it certifies is the code the renderer loads.
  */
+
+interface SizedItem {
+  type: string;
+}
+
+interface AverageEntry {
+  avg: number;
+  num: number;
+}
+
+/**
+ * `updateOneItemSize` of the installed build, evaluated on its own: it is not
+ * exported, and the two helpers it calls (`getItemSize`, `setSize`) are
+ * stubbed, so what runs is the build's own averaging. The list state is a
+ * proxy that answers a field the build adds to it (the patch records which
+ * type each key's measurement is averaged under) with an empty map, as the
+ * list's state creation does.
+ */
+function loadUpdateOneItemSize(
+  source: string,
+): (
+  ctx: unknown,
+  itemKey: string,
+  sizeObj: { height: number; width: number },
+  resolvedMeasurementItem: undefined,
+) => unknown {
+  const start = source.indexOf("function updateOneItemSize(");
+  const end = source.indexOf("\n}\n", start);
+  if (start === -1 || end === -1) {
+    throw new Error("updateOneItemSize is not in the installed build");
+  }
+  const body = source.slice(start, end + 2);
+  const factory: unknown = runInNewContext(
+    `(function (getItemSize, setSize) { ${body}\n return updateOneItemSize; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  const updateOneItemSize: unknown = Reflect.apply(factory, undefined, [
+    () => 0,
+    () => undefined,
+  ]);
+  if (typeof updateOneItemSize !== "function") {
+    throw new Error("no updateOneItemSize");
+  }
+  return (ctx, itemKey, sizeObj, resolvedMeasurementItem) => {
+    const result: unknown = Reflect.apply(updateOneItemSize, undefined, [
+      ctx,
+      itemKey,
+      sizeObj,
+      resolvedMeasurementItem,
+    ]);
+    return result;
+  };
+}
+
+/** A list of two rows, `a` and `k`, whose `k` changes item type as the chat's
+ *  transcript does when a placeholder hydrates. */
+function twoRowList() {
+  const data: SizedItem[] = [{ type: "assistant" }, { type: "assistant" }];
+  const averageSizes: Partial<Record<string, AverageEntry>> = {};
+  const state = {
+    indexByKey: new Map([
+      ["a", 0],
+      ["k", 1],
+    ]),
+    sizesKnown: new Map<string, number>(),
+    averageSizes,
+    props: {
+      data,
+      horizontal: false,
+      getItemType: (item: SizedItem) => item.type,
+      getFixedItemSize: undefined,
+    },
+  };
+  const extra = new Map<PropertyKey, unknown>();
+  const proxy = new Proxy(state, {
+    get(target, property) {
+      if (property in target) {
+        const present: unknown = Reflect.get(target, property);
+        return present;
+      }
+      let value = extra.get(property);
+      if (value === undefined) {
+        value = new Map();
+        extra.set(property, value);
+      }
+      return value;
+    },
+  });
+  return { ctx: { state: proxy }, data, averageSizes };
+}
+
 describe("@legendapp/list web patch", () => {
   const require = createRequire(import.meta.url);
   // The package's `exports` map hides `package.json` and has no main entry;
@@ -167,6 +260,33 @@ describe("@legendapp/list web patch", () => {
     it(`${file} exposes the row key at an index in its state`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain("keyAtIndex: (index) => getId(state, index),");
+    });
+
+    // A placeholder row and the hydrated row that replaces it share a key and
+    // differ in item type. The list averaged the hydrated measurement against
+    // the placeholder's, in a type that never counted the key: measuring `k`
+    // as a 700px placeholder and then as a 100px row, with one 100px row in
+    // the type, left an average of -500, and every evict-and-rehydrate cycle
+    // took another turn's height off. Unmeasured rows of that type were then
+    // placed at negative sizes, over the rows on screen.
+    it(`${file} counts a key's size once, under the item type it was measured as`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const updateOneItemSize = loadUpdateOneItemSize(source);
+      const { ctx, data, averageSizes } = twoRowList();
+      const measure = (key: string, height: number) =>
+        updateOneItemSize(ctx, key, { height, width: 0 }, undefined);
+
+      measure("a", 100);
+      expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 1 });
+
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        data[1].type = "placeholder:assistant";
+        measure("k", 700);
+        data[1].type = "assistant";
+        measure("k", 100);
+        expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 2 });
+        expect(averageSizes["placeholder:assistant"]?.num ?? 0).toBe(0);
+      }
     });
   }
 });

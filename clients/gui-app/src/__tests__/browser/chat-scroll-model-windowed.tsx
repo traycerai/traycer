@@ -94,11 +94,18 @@ import {
 
 const OWNER_ID = "owner-scroll";
 const HOST_ID = "host-scroll";
-const TURNS = 160;
 /** One skeleton chunk per this many rows, as the host streams the index. */
 const SKELETON_CHUNK_ROWS = 64;
 
 const params = new URLSearchParams(window.location.search);
+/**
+ * `?shape=longTail`: a long chat whose replies are several parts each, mostly
+ * one-liners with a tail of tall ones, so a row's height says little about its
+ * byte size and the list's running averages see hydrated and cold rows of
+ * very different heights. `?turns=` sets the length (300 for this shape).
+ */
+const LONG_TAIL = params.get("shape") === "longTail";
+const TURNS = Number(params.get("turns") ?? (LONG_TAIL ? 300 : 160));
 /**
  * The bounded snapshot's tail budget. Production's is 256 KiB, which over
  * these text-only records would hydrate most of the chat; 16 KiB leaves the
@@ -318,6 +325,78 @@ function replyFor(turn: number, timestamp: number): AssistantRecord {
   );
 }
 
+function seeded(seed: number): () => number {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 4294967296;
+  };
+}
+
+function longTailSegment(
+  rand: () => number,
+  turn: number,
+  segment: number,
+): string {
+  const r = rand();
+  if (r < 0.6) return `Step ${String(turn)}.${String(segment)}: checked it.`;
+  if (r < 0.85) {
+    return Array.from(
+      { length: 2 + Math.floor(rand() * 3) },
+      (_unused, paragraph) =>
+        `Turn ${String(turn)} part ${String(segment)} paragraph ${String(paragraph + 1)}. ` +
+        "The quick brown fox jumps over the lazy dog. ".repeat(
+          3 + Math.floor(rand() * 5),
+        ),
+    ).join("\n\n");
+  }
+  if (r < 0.95) {
+    return Array.from(
+      { length: 8 + Math.floor(rand() * 7) },
+      (_unused, paragraph) =>
+        `Long ${String(turn)}.${String(segment)} paragraph ${String(paragraph + 1)}. ` +
+        "The quick brown fox jumps over the lazy dog. ".repeat(6),
+    ).join("\n\n");
+  }
+  return Array.from(
+    { length: 30 },
+    (_unused, item) => `- item ${String(item)}`,
+  ).join("\n");
+}
+
+/** A `?shape=longTail` reply: up to eight text parts, each after a short
+ *  reasoning block, drawn from a fixed per-turn seed. */
+function longTailReply(turn: number, timestamp: number): AssistantRecord {
+  const messageId = `message-${String(turn * 2 + 1)}`;
+  const turnId = `turn-${String(turn)}`;
+  const rand = seeded(turn * 7919 + 17);
+  const segments = 1 + Math.floor(Math.pow(rand(), 2) * 8);
+  let blocks: AssistantRecord["blocks"] = [];
+  for (let segment = 0; segment < segments; segment += 1) {
+    const reasoningId = `${messageId}:reasoning-${String(segment)}`;
+    blocks = accumulateEvent(
+      accumulateEvent(
+        blocks,
+        reasoningDelta(
+          reasoningId,
+          `Thinking about step ${String(segment)}.`,
+          timestamp,
+        ),
+      ),
+      { type: "reasoning.completed" as const, blockId: reasoningId, timestamp },
+    );
+    const textId = `${messageId}:text-${String(segment)}`;
+    blocks = accumulateEvent(
+      accumulateEvent(
+        blocks,
+        textDelta(textId, longTailSegment(rand, turn, segment), timestamp),
+      ),
+      textCompleted(textId, timestamp),
+    );
+  }
+  return { ...assistantRecord(messageId, turnId, timestamp), blocks };
+}
+
 /** Varied heights: one to six paragraphs, and every ninth reply a long one. */
 function initialRecords(): Message[] {
   return Array.from({ length: TURNS }, (_unused, turn) => {
@@ -328,11 +407,13 @@ function initialRecords(): Message[] {
         promptContent(
           isShortTurn(turn)
             ? `Question ${String(turn)}`
-            : `Question ${String(turn)}: ${"what about this? ".repeat(1 + (turn % 5))}`,
+            : `Question ${String(turn)}: ${"what about this? ".repeat(1 + (turn % (LONG_TAIL ? 3 : 5)))}`,
         ),
         timestamp,
       ),
-      replyFor(turn, timestamp + 1),
+      LONG_TAIL
+        ? longTailReply(turn, timestamp + 1)
+        : replyFor(turn, timestamp + 1),
     ];
   }).flat();
 }
