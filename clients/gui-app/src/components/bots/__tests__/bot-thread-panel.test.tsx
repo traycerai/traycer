@@ -359,8 +359,12 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(mockRemoteHostEntry);
 }
 
+/** The row a case opens its thread on instead of `originOf`'s; `null` for that. */
+let panelOrigin: string | null;
+
 /** The post a thread opens on: the question nobody has replied under, or the listed thread's anchor. */
 function originOf(thread: BotThreadPanelThread): string {
+  if (panelOrigin !== null) return panelOrigin;
   return thread.kind === "unopened" ? "question-1" : "anchor-1";
 }
 
@@ -420,6 +424,7 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 beforeEach(() => {
   sent = [];
   panelSent = null;
+  panelOrigin = null;
   mocks.threadHandle.held = false;
   onEditPost.mockClear();
   activityStore.setState({ activity: null });
@@ -480,6 +485,106 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
         supersedes: null,
       },
     ]);
+  });
+});
+
+describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
+  /** The member's post, then the bot's direct reply to it, on the channel. */
+  function answeredPost(): void {
+    const answer = announcement("answer-1", "It failed on the retry job.");
+    if (answer.role !== "assistant") throw new Error("expected the bot's row");
+    channelMessages = [
+      {
+        role: "user",
+        messageId: "post-1",
+        sender: { type: "user", userId: "user-teammate" },
+        message: {
+          kind: "user",
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "Why did the build fail?" }],
+              },
+            ],
+          },
+          browserAnnotations: [],
+        },
+        timestamp: 900,
+        sessionAnchor: null,
+        conversationRequest: {
+          requestId: "req-post",
+          resolvedAt: 1_000,
+          resolvedByMessageId: "answer-1",
+          direct: true,
+        },
+      },
+      { ...answer, repliesTo: "post-1" },
+    ];
+    panelOrigin = "answer-1";
+  }
+
+  it("opens on the reply, not the post it answered, and sends the first reply with the reply's id", async () => {
+    const user = userEvent.setup();
+    answeredPost();
+    mountPanel({ kind: "unopened" }, []);
+
+    const origin = screen.getByTestId("bot-thread-anchor");
+    expect(within(origin).getByText("Release Bot")).toBeTruthy();
+    expect(
+      within(origin).getByText("It failed on the retry job."),
+    ).toBeTruthy();
+    expect(within(origin).queryByText("Why did the build fail?")).toBeNull();
+    expect(within(origin).queryByTestId("bot-message-actions")).toBeNull();
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Reply in a new thread" }),
+      "Which job?",
+    );
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Which job?",
+        threadId: null,
+        announcementId: "answer-1",
+        redeliver: null,
+        supersedes: null,
+      },
+    ]);
+  });
+
+  it("says the reply could not be sent, and keeps the reply on screen, when the host refuses a thread under it", async () => {
+    const user = userEvent.setup();
+    answeredPost();
+    sendAnswer = () =>
+      Promise.reject(
+        new Error(
+          "Message 'answer-1' is not a question, proposal or direct post of conversation 'conversation-channel': only those take a reply in a thread.",
+        ),
+      );
+    mountPanel({ kind: "unopened" }, []);
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Reply in a new thread" }),
+      "Which job?",
+    );
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(
+      (await screen.findByTestId("bot-thread-composer-send-failed"))
+        .textContent,
+    ).toBe("Couldn't send. Try again.");
+    expect(sent.map((request) => request.announcementId)).toEqual(["answer-1"]);
+    expect(
+      within(screen.getByTestId("bot-thread-anchor")).getByText(
+        "It failed on the retry job.",
+      ),
+    ).toBeTruthy();
+    expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 });
 

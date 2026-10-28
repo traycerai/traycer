@@ -77,11 +77,14 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      */
     threadId: z.string().min(1).max(36).nullable().default(null),
     /**
-     * A reply under a `question` or `proposal` announcement of `conversationId`
-     * (decision 55), or under a member's post its bot answered at the top
-     * level (a `direct` post): the message opens, or joins, the thread hung
-     * off that row, as its first request when it opens it. `null` (or absent)
-     * otherwise; never set with `threadId`.
+     * A reply under a row of `conversationId` that roots a thread: a
+     * `question` or `proposal` announcement (decision 55), a member's post
+     * its bot answered at the top level (a `direct` post), or the bot's
+     * direct answer to such a post (decision 114), whose thread is its own
+     * and not the post's. The message opens, or joins, the thread hung off
+     * that row, as its first request when it opens it. A host that predates
+     * threads under a direct answer refuses one with `THREAD_NOT_FOUND`.
+     * `null` (or absent) otherwise; never set with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
     /**

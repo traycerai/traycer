@@ -328,7 +328,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
 }
 
-/** A question, proposal or direct post nobody has replied under yet. */
+/** A question, proposal, direct post or direct reply nobody has replied under yet. */
 function UnopenedThread(props: {
   readonly botId: string;
   readonly conversationId: string;

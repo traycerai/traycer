@@ -619,6 +619,51 @@ describe("<BotChannelView /> channel", () => {
     );
   });
 
+  it("keeps a direct post's thread and its reply's thread apart: each row its own line, each opening its own thread", async () => {
+    const user = userEvent.setup();
+    mocks.postIds = ["post-1", "answer-1"];
+    mocks.state.threads = [
+      thread("thread-post", "post-1", { replyCount: 1, lastReplyAt: 7_000 }),
+      {
+        ...thread("thread-answer", "answer-1", {
+          replyCount: 3,
+          lastReplyAt: 8_000,
+        }),
+        anchor: {
+          messageId: "answer-1",
+          requestId: "req-under-answer",
+          senderUserId: null,
+          sentAt: 1_500,
+          resolvedAt: null,
+        },
+      },
+    ];
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+
+    expect(
+      screen.getByTestId("stub-line-post-1").getAttribute("data-reply-count"),
+    ).toBe("1");
+    expect(
+      screen.getByTestId("stub-line-answer-1").getAttribute("data-reply-count"),
+    ).toBe("3");
+
+    await user.click(screen.getByTestId("stub-open-announcement-answer-1"));
+    await user.click(screen.getByTestId("stub-open-announcement-post-1"));
+
+    expect(onOpenThread.mock.calls).toEqual([
+      [{ anchorMessageId: "answer-1", announcement: true, sent: null }],
+      [{ anchorMessageId: "post-1", announcement: true, sent: null }],
+    ]);
+    reopen({ anchorMessageId: "answer-1", announcement: true, sent: null });
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-answer");
+    reopen({ anchorMessageId: "post-1", announcement: true, sent: null });
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-post");
+  });
+
   it("shows the question's thread, not the box that starts one, once the thread is listed", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];

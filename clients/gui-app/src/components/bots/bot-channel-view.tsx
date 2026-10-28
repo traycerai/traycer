@@ -241,9 +241,9 @@ export function BotChannelView(props: {
     [onOpenThread],
   );
 
-  // A question, a proposal or a direct post with no thread yet shows a box
-  // whose first reply opens it, rather than waiting for a thread nobody has
-  // started.
+  // A question, a proposal, a direct post or a direct reply with no thread
+  // yet shows a box whose first reply opens it, rather than waiting for a
+  // thread nobody has started.
   const openAnnouncementThread = useCallback(
     (announcementId: string) =>
       onOpenThread({

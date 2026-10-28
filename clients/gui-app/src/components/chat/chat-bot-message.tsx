@@ -45,10 +45,11 @@ import { TextSegment } from "./segments/text-segment";
  * itself (reply mode `direct`) replies in the channel, as a plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
- * Slack offers it on every message: a member's post and a question or
- * proposal open their own thread, and a direct reply opens the thread under
- * the post it answers, since a thread hangs off a post or a question, not
- * off a reply. Any other announcement takes no thread. A member's message
+ * Slack offers it on every message, and a thread roots on the row it is
+ * opened from (decision 114): a member's post, a question or proposal, and
+ * a direct reply each open their own thread, the reply's apart from the
+ * post's, and each carries its own thread line. Any other announcement
+ * takes no thread. A member's message
  * the bot failed to answer adds Retry and Edit to them, and says under its
  * text that it was not answered and why, with the same actions inline.
  *
@@ -211,9 +212,8 @@ function BotRow(props: {
 
 /**
  * The thread a bot's row opens from its hover actions, and the line of it
- * the row carries: a question or proposal's own thread, and for a direct
- * reply the thread under the post it answers, whose line is under that
- * post. Any other row of the bot takes none.
+ * the row carries: a question's, a proposal's or a direct reply's own
+ * thread. Any other row of the bot takes none.
  */
 function botRowThread(
   message: ChatMessageModel,
@@ -223,19 +223,20 @@ function botRowThread(
   readonly threadLine: ChatBotThreadLine | null;
 } {
   const kind = message.announcement?.kind ?? null;
-  const answerableId =
-    kind === "question" || kind === "proposal"
+  const anchorId =
+    kind === "question" ||
+    kind === "proposal" ||
+    (kind === null && message.repliesTo !== undefined)
       ? message.persistentMessageId
       : null;
-  const anchorId = answerableId ?? message.repliesTo ?? null;
   const open = presentation.openAnnouncementThread;
   return {
     replyInThread:
       anchorId === null || open === null ? null : () => open(anchorId),
     threadLine:
-      answerableId === null || presentation.threadLine === null
+      anchorId === null || presentation.threadLine === null
         ? null
-        : presentation.threadLine(answerableId),
+        : presentation.threadLine(anchorId),
   };
 }
 
