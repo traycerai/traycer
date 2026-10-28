@@ -1644,6 +1644,82 @@ describe("The Skills page's update policies", () => {
     });
   });
 
+  describe("when the skill is removed under an open editor", () => {
+    /** Opens `review`'s detail and presses Edit; `remove` then drops it from both lists. */
+    async function editingThenRemoved() {
+      negotiateMethods(POLICIES);
+      let present = true;
+      const managed = [hostSkill("review", "managed")];
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: managed }),
+        "environment.configuration.skills.list": () =>
+          listed(present ? [REVIEW] : [], "pol-1"),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+      await screen.findByText("review");
+      await userEvent.click(
+        within(rowOf("review")).getByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.click(
+        await within(dialog).findByRole("button", { name: "Edit" }),
+      );
+      const remove = async (): Promise<void> => {
+        present = false;
+        managed.splice(0);
+        await act(async () => {
+          await harness.queryClient.invalidateQueries();
+        });
+      };
+      return { dialog, remove };
+    }
+
+    it("keeps a dirty draft open, locked, with the removed line, and still asks before it is discarded", async () => {
+      const { dialog, remove } = await editingThenRemoved();
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "When to use" }),
+        { target: { value: "Review every change." } },
+      );
+
+      await remove();
+
+      await waitFor(() => {
+        expect(
+          within(dialog).getByText("This skill was removed from Acme."),
+        ).toBeTruthy();
+      });
+      expect(
+        within(dialog).getByRole("textbox", { name: "When to use" }),
+      ).toHaveProperty("value", "Review every change.");
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Save changes" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+
+      await userEvent.keyboard("{Escape}");
+
+      const confirm = await screen.findByTestId("skill-unsaved-changes-dialog");
+      await userEvent.click(
+        within(confirm).getByRole("button", { name: "Discard changes" }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+    });
+
+    it("closes a clean editor at once, with no confirm", async () => {
+      const { remove } = await editingThenRemoved();
+
+      await remove();
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(screen.queryByTestId("skill-unsaved-changes-dialog")).toBeNull();
+    });
+  });
+
   describe("when the skill turns frozen under an open editor", () => {
     const READ_ONLY_LINE =
       "This skill can't be edited while it's set to Auto-update or Frozen. Switch it to Evolve to edit it.";

@@ -96,6 +96,11 @@ export const RESTORE_SKILL_LABEL = "Restore";
 export const READ_ONLY_EDIT_REFUSAL =
   "This skill can't be edited while it's set to Auto-update or Frozen. Switch it to Evolve to edit it.";
 
+/** An open draft whose skill another editor removed meanwhile. */
+export function skillRemovedLine(configuration: string): string {
+  return `This skill was removed from ${configuration}.`;
+}
+
 /** An upload over a skill whose policy takes no edit. */
 export function readOnlyUploadRefusal(skill: string): string {
   return `${skill} is set to Auto-update or Frozen, so it can't be replaced. Switch it to Evolve first.`;

@@ -461,6 +461,7 @@ function ProviderSkillsTabBody({
             lockedNote={openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null}
             canEdit={openSkillEditable}
             editRevokedNote={null}
+            onDraftHeldChange={null}
             canUpdate={openSkillUpdatable}
             origin={skillOriginDisplay(openSkill)}
             updatePending={updatePending}

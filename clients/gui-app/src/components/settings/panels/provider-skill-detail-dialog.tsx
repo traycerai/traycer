@@ -72,6 +72,11 @@ export function ProviderSkillDetailDialog(props: {
    * became read-only while it was being edited), or `null` for no line.
    */
   readonly editRevokedNote: string | null;
+  /**
+   * Told whether the dialog holds unsaved changes, as that changes, so a
+   * caller can keep it open through what would close it; `null` to not ask.
+   */
+  readonly onDraftHeldChange: ((held: boolean) => void) | null;
   readonly canUpdate: boolean;
   readonly origin: string | null;
   readonly updatePending: boolean;
@@ -88,6 +93,7 @@ export function ProviderSkillDetailDialog(props: {
   // mounted on it whatever the skill turns into meanwhile, so the draft is
   // never dropped without its discard confirm.
   const [heldRaw, setHeldRaw] = useState<string | null>(null);
+  useDraftHeldReport(heldRaw !== null, props.onDraftHeldChange);
   const guardedClose = useRef<(() => void) | null>(null);
   function registerGuardedClose(request: (() => void) | null): void {
     guardedClose.current = request;
@@ -178,6 +184,17 @@ export function ProviderSkillDetailDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Tells `report` whether a draft is held, as that changes, and not held once unmounted. */
+function useDraftHeldReport(
+  held: boolean,
+  report: ((held: boolean) => void) | null,
+): void {
+  useEffect(() => {
+    report?.(held);
+    return () => report?.(false);
+  }, [held, report]);
 }
 
 function EditableSkillDetail(props: {

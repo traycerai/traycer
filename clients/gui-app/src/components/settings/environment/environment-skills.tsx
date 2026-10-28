@@ -3,7 +3,6 @@ import { useConfigurationKey } from "@/components/settings/environment/use-confi
 import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
 import {
   ENVIRONMENT_SKILL_READ_ONLY_REASON,
   type EnvironmentConfigurationSkillsListResponseV11,
@@ -62,6 +61,7 @@ import {
   EVOLVE_LABEL,
   IMPORT_SKILL_LABEL,
   READ_ONLY_EDIT_REFUSAL,
+  skillRemovedLine,
   REMOVE_SKILL_LABEL,
   RESTORE_SKILL_LABEL,
   SKILL_POLICIES_LINE,
@@ -495,6 +495,11 @@ function SkillsPageList(props: {
   const [rereading, setRereading] = useState(false);
   const { skills, deletedBundled } = props.listed;
   const open = rowNamed(skills, openName);
+  // A detail holding unsaved changes stays open on the last row it showed
+  // when its skill leaves the list (another editor removed it); a clean one
+  // closes with it.
+  const [draftHeld, setDraftHeld] = useState(false);
+  const detailSkill = useLastRow(open, draftHeld);
   const removeIssue =
     remove.data === undefined
       ? null
@@ -826,22 +831,35 @@ function SkillsPageList(props: {
           }}
         />
       )}
-      {open === null ? null : (
+      {detailSkill === null ? null : (
         <EnvironmentSkillDetail
-          skill={open}
+          skill={detailSkill}
+          removed={open === null}
           configuration={name}
           providerId={providers.at(0) ?? "claude-code"}
-          canEdit={editable(props.canEdit, open)}
-          canUpdate={canUpdate(open)}
+          canEdit={editable(props.canEdit, detailSkill)}
+          canUpdate={canUpdate(detailSkill)}
           updatePending={update.isPending}
           actionsDisabled={writing}
           contentEpoch={contentEpoch}
-          onRequestUpdate={() => requestUpdate(open)}
+          draftHeld={draftHeld}
+          onDraftHeldChange={setDraftHeld}
+          onRequestUpdate={() => requestUpdate(detailSkill)}
           onClose={() => setOpenName(null)}
         />
       )}
     </>
   );
+}
+
+/**
+ * `row` while there is one; once it is gone, the last one seen while `keep`
+ * holds, so a detail with unsaved changes outlives its row.
+ */
+function useLastRow<Row>(row: Row | null, keep: boolean): Row | null {
+  const [last, setLast] = useState<Row | null>(row);
+  if (row !== null && row !== last) setLast(row);
+  return row ?? (keep ? last : null);
 }
 
 /** The row of the skill named `name`; `null` when none is named or the list no longer holds it. */
@@ -967,6 +985,8 @@ function skillOriginLine(skill: EnvironmentSkillV11): string | null {
  */
 function EnvironmentSkillDetail(props: {
   readonly skill: EnvironmentSkillV11;
+  /** Another editor removed it while this detail held unsaved changes. */
+  readonly removed: boolean;
   readonly configuration: string;
   readonly providerId: ProviderId;
   readonly canEdit: boolean;
@@ -980,6 +1000,9 @@ function EnvironmentSkillDetail(props: {
   readonly actionsDisabled: boolean;
   /** Moves when an update or a restore replaced the skill's files. */
   readonly contentEpoch: number;
+  /** The dialog holds unsaved changes: it stays through its files leaving. */
+  readonly draftHeld: boolean;
+  readonly onDraftHeldChange: (held: boolean) => void;
   readonly onRequestUpdate: () => void;
   readonly onClose: () => void;
 }): ReactNode {
@@ -994,20 +1017,23 @@ function EnvironmentSkillDetail(props: {
   const mutate = useProvidersSkillsMutate();
   const [error, setError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
-  const row: ProviderSkill | undefined = list.data?.skills.find(
-    (skill) => skill.source === "managed" && skill.name === props.skill.name,
+  const row = useLastRow(
+    list.data?.skills.find(
+      (skill) => skill.source === "managed" && skill.name === props.skill.name,
+    ) ?? null,
+    props.draftHeld,
   );
   // Edit or Preview opens on this second read, so it says where that read
   // is rather than opening nothing.
-  if (list.isError && !list.isFetching)
+  if (list.isError && !list.isFetching && row === null)
     return (
       <TeamReadFailed
         message="Couldn't read this skill's files."
         onRetry={() => void list.refetch()}
       />
     );
-  if (list.data === undefined) return <MutedAgentSpinner />;
-  if (row === undefined)
+  if (list.data === undefined && row === null) return <MutedAgentSpinner />;
+  if (row === null)
     return (
       <TeamReadFailed
         message="Couldn't find this skill's files."
@@ -1026,10 +1052,14 @@ function EnvironmentSkillDetail(props: {
       removeDisabled={props.actionsDisabled}
       actionError={error}
       lockedNote={null}
-      canEdit={props.canEdit}
-      // A draft open when the skill turns read-only stays, Save off.
-      editRevokedNote={READ_ONLY_EDIT_REFUSAL}
-      canUpdate={props.canUpdate}
+      // A removed skill takes no edit or update: its draft can be discarded.
+      canEdit={props.canEdit ? !props.removed : false}
+      // A draft open when the skill turns read-only, or leaves, stays, Save off.
+      editRevokedNote={
+        props.removed ? skillRemovedLine(name) : READ_ONLY_EDIT_REFUSAL
+      }
+      onDraftHeldChange={props.onDraftHeldChange}
+      canUpdate={props.canUpdate ? !props.removed : false}
       origin={skillOriginLine(props.skill)}
       updatePending={props.updatePending}
       editPending={mutate.isPending}
