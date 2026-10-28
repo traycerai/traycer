@@ -25,6 +25,7 @@ import {
   botSubscribeServerFrameSchema,
   botSubscribeServerFrameSchemaV10,
   botSubscribeServerFrameSchemaV11,
+  botSubscribeServerFrameSchemaV12,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -320,6 +321,19 @@ export const botSubscribeV11 = defineStreamRpcContract({
 export const botSubscribeV12 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV12,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.3` (T82): each task entry says where the task came from:
+ * whether the bot spun it, its label, the request it was set up for and the
+ * thread that set it up. A 1.2 subscriber's entries carry none.
+ */
+export const botSubscribeV13 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,

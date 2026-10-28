@@ -1,6 +1,13 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
@@ -20,6 +27,7 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { BotTaskList } from "@/components/bots/bot-task-list";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
@@ -31,6 +39,7 @@ import {
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentation-context";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
+import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
@@ -105,6 +114,8 @@ export function BotThreadPanel(props: {
   /** That post as the person sent it, when its send opened the thread; `null` otherwise. */
   readonly sent: BotSentPost | null;
   readonly thread: BotThreadPanelThread;
+  /** The bot's tasks: the panel lists the ones this thread set up. */
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The viewer's own name for their posts, as the channel shows them. */
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
@@ -171,6 +182,15 @@ export function BotThreadPanel(props: {
         </Button>
       </header>
       <ThreadOrigin {...props} sendFailure={sendFailure} />
+      {threadId === null ? null : (
+        <ThreadTasks
+          botId={props.botId}
+          hostId={props.hostId}
+          threadId={threadId}
+          thread={thread}
+          tasks={props.tasks}
+        />
+      )}
       <ThreadPanelBody {...props} sendFailure={sendFailure} />
     </section>
   );
@@ -292,6 +312,81 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
       }}
     </ChannelPost>
   );
+}
+
+/**
+ * The tasks the thread's session set up (Tracy Bots T82), each with where it
+ * came from; nothing when it set up none. The list scrolls in a bounded band
+ * and, in a short pane, gives way first, down to nothing, before the replies
+ * give up their share, so the conversation stays readable and the box stays
+ * in the pane. Collapsed, it is inert: its rows leave the tab order and the
+ * accessibility tree until the band has room again.
+ * An automation this thread set up on another bot is that bot's, and is
+ * listed there, not here.
+ */
+function ThreadTasks(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadId: string;
+  /** The thread as listed; `null` while the list has not returned it. */
+  readonly thread: BotThreadSummary | null;
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
+}): ReactNode {
+  const { botId, hostId, threadId, thread, tasks } = props;
+  const own = useMemo(() => tasksOfThread(tasks, threadId), [tasks, threadId]);
+  const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
+  const place = useMemo(
+    () => ({ kind: "thread" as const, threadId }),
+    [threadId],
+  );
+  const [band, setBand] = useState<HTMLDivElement | null>(null);
+  const collapsed = useCollapsed(band);
+  if (own.length === 0) return null;
+  return (
+    <section
+      aria-label="Tasks"
+      className="flex max-h-[min(30dvh,16rem)] min-h-0 shrink-100 flex-col gap-1 overflow-hidden px-4"
+      data-testid="bot-thread-tasks"
+      data-collapsed={collapsed ? "true" : "false"}
+      inert={collapsed}
+    >
+      <h3 className="shrink-0 pt-2 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+        Tasks
+      </h3>
+      <div
+        ref={setBand}
+        className="min-h-0 overflow-y-auto"
+        data-testid="bot-thread-tasks-scroll"
+      >
+        <BotTaskList
+          botId={botId}
+          hostId={hostId}
+          tasks={own}
+          threads={threads}
+          place={place}
+        />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Whether a band the layout gave way has no height left, as its resize
+ * observations report it; `false` until the first one, and where nothing
+ * observes.
+ */
+function useCollapsed(element: HTMLElement | null): boolean {
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    if (element === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry !== undefined) setCollapsed(entry.contentRect.height <= 0);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return collapsed;
 }
 
 /** The origin's row: no thread to open, no jump, no options to pick. */
@@ -550,7 +645,10 @@ function KnownThread(
       <ThreadListReadFailure retry={retry} />
       {listed === null ? null : (
         <div
-          className={cn("flex min-h-0 flex-col", hasReplies && "flex-1")}
+          className={cn(
+            "flex min-h-0 flex-col",
+            hasReplies && "grow basis-[min(10rem,25dvh)]",
+          )}
           data-testid="bot-thread-replies"
           data-has-replies={hasReplies ? "true" : "false"}
         >

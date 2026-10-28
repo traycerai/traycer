@@ -221,6 +221,7 @@ function mount(openThread: BotOpenThread | null): void {
             directive={null}
             appConversationChatId={CHANNEL_ID}
             resolveMember={resolveMember}
+            tasks={[]}
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenUnderTheHood={onOpenUnderTheHood}

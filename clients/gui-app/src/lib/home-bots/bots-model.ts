@@ -34,12 +34,8 @@ export interface HomeBotRowModel {
    * own rows are authoritative for what is open.
    */
   readonly openRequestCount: number | null;
-  /** Tasks the bot is still tracking, `null` until a snapshot arrives. */
-  readonly tasksTracking: number | null;
-  /** The soonest periodic check-in due across the tracked tasks. */
-  readonly nextCheckinAt: number | null;
-  /** The most recent consumed check-in across the tracked tasks. */
-  readonly lastCheckinAt: number | null;
+  /** Tasks the bot spun and still runs, `null` until a snapshot arrives. */
+  readonly tasksSpun: number | null;
   /** Whether the serving host is the bound one, `null` before a snapshot. */
   readonly boundHere: boolean | null;
 }
@@ -74,29 +70,17 @@ export const EMPTY_HOME_BOTS_MODEL: HomeBotsModel = Object.freeze({
   botCount: 0,
 });
 
-/** The tracked tasks' check-in facts, folded to what one row can show. */
-export function foldTaskCheckins(tasks: ReadonlyArray<BotTaskEntry>): {
-  readonly tracking: number;
-  readonly nextAt: number | null;
-  readonly lastAt: number | null;
-} {
-  let tracking = 0;
-  let nextAt: number | null = null;
-  let lastAt: number | null = null;
+/**
+ * The tasks the bot spun and still runs (Tracy Bots T82): an entry from a host
+ * that does not say whether the bot spun it counts, as every entry did
+ * before.
+ */
+export function countSpunTasks(tasks: ReadonlyArray<BotTaskEntry>): number {
+  let count = 0;
   for (const task of tasks) {
-    if (task.state !== "tracking") continue;
-    tracking += 1;
-    if (task.nextAt !== null && (nextAt === null || task.nextAt < nextAt)) {
-      nextAt = task.nextAt;
-    }
-    if (
-      task.lastCheckinAt !== null &&
-      (lastAt === null || task.lastCheckinAt > lastAt)
-    ) {
-      lastAt = task.lastCheckinAt;
-    }
+    if (task.state === "tracking" && task.spun !== false) count += 1;
   }
-  return { tracking, nextAt, lastAt };
+  return count;
 }
 
 export function buildHomeBotRow(
@@ -112,7 +96,6 @@ export function buildHomeBotRow(
   const snapshotWins =
     snapshot !== null && snapshot.bot.hostEpoch >= bot.hostEpoch;
   const live = snapshotWins ? snapshot.bot : bot;
-  const checkins = snapshot === null ? null : foldTaskCheckins(snapshot.tasks);
   return {
     botId: bot.botId,
     title: live.title,
@@ -121,9 +104,7 @@ export function buildHomeBotRow(
     harness: live.harness,
     model: live.model,
     openRequestCount: snapshot?.openRequestCount ?? null,
-    tasksTracking: checkins?.tracking ?? null,
-    nextCheckinAt: checkins?.nextAt ?? null,
-    lastCheckinAt: checkins?.lastAt ?? null,
+    tasksSpun: snapshot === null ? null : countSpunTasks(snapshot.tasks),
     boundHere: snapshot?.boundHost.isThisHost ?? null,
   };
 }

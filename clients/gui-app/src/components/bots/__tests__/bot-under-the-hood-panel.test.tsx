@@ -7,18 +7,26 @@
  * environment's); the transcript is a stub that exposes the chat it was handed.
  */
 import { useState, type ReactNode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotNotificationSubscription } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotNotificationSubscription,
+  BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
+import {
+  conversationRequestMessageId,
+  isConversationRequestMessageId,
+} from "@traycer/protocol/persistence/epic/messages";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 
 interface ThreadListAnswer {
@@ -29,14 +37,31 @@ interface ThreadListAnswer {
 const mocks = vi.hoisted(() => {
   const answers: Record<string, ThreadListAnswer> = {};
   const channelPosts: Record<string, string> = {};
+  const botRows: Record<
+    string,
+    {
+      readonly announcement?: { kind: "question"; link: null };
+      readonly repliesTo?: string;
+    }
+  > = {};
   return {
     client: { stub: "tab-host-client" },
     refetchThreads: vi.fn<() => void>(),
+    openPost: vi.fn<(open: BotOpenThread) => void>(),
     /** Every chat id the panel asked the session registry for. */
     sessionRequests: [] as string[],
     state: {
       /** Post text by message id: the channel's rows. */
       channelPosts,
+      /** What a bot row of the channel is, by message id: its announcement, or the post it answers. */
+      botRows,
+      /** Every row the panel asked the host to locate, by message id. */
+      located: new Set<string>(),
+      /** Each located row's ordinal, by message id, as the host answers it. */
+      ordinals: new Map<string, number>(),
+      /** Each hold the channel's session took on a located row, and each release, by message id. */
+      holds: [] as string[],
+      releases: [] as string[],
       channelHandle: null as ChatSessionStoreHandle | null,
       connectable: { hostIds: [] as string[], resolved: true },
       usageSupported: true,
@@ -47,6 +72,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      /** Task titles by task id, as the task-context read answers them. */
+      taskTitles: {},
     },
   };
 });
@@ -79,7 +106,14 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
-  useEpicGetTaskContexts: () => ({ tasksById: new Map() }),
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(
+      Object.entries(mocks.state.taskTitles).map(([taskId, title]) => [
+        taskId,
+        { epic: { light: { title } } },
+      ]),
+    ),
+  }),
 }));
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
@@ -111,7 +145,17 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: () => null,
+  useChatLocateRow: (args: {
+    target: { kind: string; messageId: string } | null;
+  }) => {
+    if (args.target === null) return null;
+    const { messageId } = args.target;
+    mocks.state.located.add(messageId);
+    const ordinal =
+      mocks.state.ordinals.get(messageId) ?? mocks.state.ordinals.size + 1;
+    mocks.state.ordinals.set(messageId, ordinal);
+    return ordinal;
+  },
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => mocks.state.connectable,
@@ -136,8 +180,35 @@ const ENVIRONMENT_BOTS = [
   { botId: SIBLING_ID, boundHostId: HOST_ID },
 ];
 
+/**
+ * The channel's row of `messageId`: a member's post for a request's row id,
+ * the bot's row, as `botRows` says it is, otherwise.
+ */
 function channelRow(messageId: string, text: string): Message {
+  if (isConversationRequestMessageId(messageId)) {
+    return {
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: "user-1" },
+      message: {
+        kind: "user",
+        content: {
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        },
+        browserAnnotations: [],
+      },
+      timestamp: 1_000,
+      sessionAnchor: null,
+      conversationRequest: {
+        requestId: messageId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    };
+  }
   return {
+    ...mocks.state.botRows[messageId],
     role: "assistant",
     messageId,
     sender: {
@@ -179,7 +250,15 @@ function channelHandle(): ChatSessionStoreHandle {
       >
     >(() => ({
       transcriptWindow: emptyTranscriptWindow(),
-      holdTranscriptOrdinal: () => () => undefined,
+      holdTranscriptOrdinal: (ordinal: number) => {
+        const messageId =
+          [...mocks.state.ordinals].find(([, held]) => held === ordinal)?.[0] ??
+          String(ordinal);
+        mocks.state.holds.push(messageId);
+        return () => {
+          mocks.state.releases.push(messageId);
+        };
+      },
       messages: Object.entries(mocks.state.channelPosts).map(([id, text]) =>
         channelRow(id, text),
       ),
@@ -189,19 +268,23 @@ function channelHandle(): ChatSessionStoreHandle {
   return mocks.state.channelHandle;
 }
 
-/** A thread answering a channel post whose text the channel's row carries. */
+/**
+ * A thread answering a member's channel post, whose row id its request id
+ * names and whose text the channel's row carries.
+ */
 function thread(
   threadId: string,
   text: string,
   overrides: Partial<BotThreadSummary>,
 ): BotThreadSummary {
-  mocks.state.channelPosts[`post-${threadId}`] = text;
+  const postId = conversationRequestMessageId(`req-${threadId}`);
+  mocks.state.channelPosts[postId] = text;
   return {
     threadId,
     conversationId: CHANNEL_ID,
     sessionChatId: `session-${threadId}`,
     anchor: {
-      messageId: `post-${threadId}`,
+      messageId: postId,
       requestId: `req-${threadId}`,
       senderUserId: "user-1",
       sentAt: 1_000,
@@ -215,11 +298,34 @@ function thread(
   };
 }
 
+/** A thread rooted on the bot's direct reply `answer-1` (decision 114). */
+function answerThread(): BotThreadSummary {
+  return {
+    threadId: "thread-answer",
+    conversationId: CHANNEL_ID,
+    sessionChatId: "session-thread-answer",
+    anchor: {
+      messageId: "answer-1",
+      requestId: "req-opener",
+      senderUserId: null,
+      sentAt: 1_000,
+      resolvedAt: null,
+    },
+    replyCount: 2,
+    lastReplyAt: 2_000,
+    openRequestCount: 0,
+    costUsd: null,
+  };
+}
+
 /** The bound host the next panel renders with. */
 let boundHost: { hostId: string; isThisHost: boolean };
 
 /** The notification watches the next panel renders with. */
 let notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+
+/** The bot's task list the next panel renders with. */
+let tasks: ReadonlyArray<BotTaskEntry>;
 
 function Panel(props: {
   readonly onSelectSession: (sessionChatId: string | null) => void;
@@ -235,7 +341,7 @@ function Panel(props: {
       hostId={HOST_ID}
       botTitle="Release Bot"
       trunkChatId={TRUNK_ID}
-      tasks={[]}
+      tasks={tasks}
       openRequestCount={null}
       notificationSubscriptions={notificationSubscriptions}
       boundHost={boundHost}
@@ -243,6 +349,8 @@ function Panel(props: {
       environmentBots={props.environmentBots}
       sessionChatId={props.sessionChatId}
       onSelectSession={props.onSelectSession}
+      channelId={CHANNEL_ID}
+      onOpenPost={mocks.openPost}
     />
   );
 }
@@ -267,10 +375,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.sessionRequests.length = 0;
   mocks.state.channelPosts = {};
+  mocks.state.botRows = {};
+  mocks.state.located.clear();
+  mocks.state.ordinals.clear();
+  mocks.state.holds = [];
+  mocks.state.releases = [];
   mocks.state.channelHandle = null;
   mocks.state.connectable = { hostIds: [], resolved: true };
   boundHost = { hostId: HOST_ID, isThisHost: true };
   notificationSubscriptions = null;
+  tasks = [];
+  mocks.state.taskTitles = {};
   useBotTabsStore.setState({ tabs: {} });
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
@@ -594,6 +709,361 @@ describe("<BotUnderTheHoodPanel /> the post a thread answers", () => {
     const [row] = screen.getAllByTestId("bot-thread-row");
     expect(within(row).queryByText("Please review the release")).toBeNull();
     expect(within(row).getByText("Thread")).toBeTruthy();
+  });
+});
+
+/** A task the bot runs every six hours, set up by nobody the list names. */
+function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "every", seconds: 21_600 },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+    ...overrides,
+  };
+}
+
+function taskRow(taskId: string): HTMLElement {
+  const row = screen
+    .getAllByTestId("bot-task-row")
+    .find((element) => element.getAttribute("data-task-id") === taskId);
+  if (row === undefined) throw new Error(`no row for ${taskId}`);
+  return row;
+}
+
+describe("<BotUnderTheHoodPanel /> tasks", () => {
+  function renderPanel(): void {
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
+  }
+
+  it("lists every task the trunk and each thread set up, each with its title, name, post, thread and an automation's interval", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [
+      thread("thread-a", "Please review the release\nIt ships Friday.", {}),
+    ];
+    const directPost = conversationRequestMessageId("req-direct");
+    mocks.state.channelPosts[directPost] = "Check the nightly run";
+    mocks.state.taskTitles = {
+      "task-watch": "Release watch",
+      "task-fix": "Fix the flaky shard",
+      "task-nightly": "Nightly run",
+    };
+    tasks = [
+      task("task-watch", {
+        label: "Watching the release",
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+      task("task-fix", {
+        cadence: { kind: "on-completion" },
+        originRequestId: "req-followup",
+        createdByChatId: "thread-a",
+      }),
+      task("task-nightly", {
+        cadence: { kind: "on-completion" },
+        originRequestId: "req-direct",
+      }),
+    ];
+    renderPanel();
+
+    const watch = taskRow("task-watch");
+    expect(within(watch).getByTestId("bot-task-open").textContent).toBe(
+      "Release watch",
+    );
+    expect(within(watch).getByTestId("bot-task-label").textContent).toBe(
+      "Watching the release",
+    );
+    expect(within(watch).getByTestId("bot-task-interval").textContent).toBe(
+      "every 6 hours",
+    );
+    // The post the task came from opens its thread, which the row then does
+    // not name a second time.
+    expect(within(watch).getByTestId("bot-task-request").textContent).toBe(
+      "for Please review the release",
+    );
+    expect(within(watch).queryByTestId("bot-task-thread")).toBeNull();
+    await user.click(within(watch).getByTestId("bot-task-request"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: conversationRequestMessageId("req-thread-a"),
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
+
+    // A one-off task set up for a message inside a thread: no interval, and
+    // the thread it came from, opening that thread.
+    const fix = taskRow("task-fix");
+    expect(within(fix).queryByTestId("bot-task-interval")).toBeNull();
+    expect(within(fix).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(fix).getByTestId("bot-task-thread").textContent).toBe(
+      "from Please review the release",
+    );
+    await user.click(within(fix).getByTestId("bot-task-thread"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: conversationRequestMessageId("req-thread-a"),
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
+
+    // The trunk's task, set up for a post the bot answered on the channel.
+    const nightly = taskRow("task-nightly");
+    expect(within(nightly).queryByTestId("bot-task-thread")).toBeNull();
+    expect(within(nightly).getByTestId("bot-task-request").textContent).toBe(
+      "for Check the nightly run",
+    );
+    await user.click(within(nightly).getByTestId("bot-task-request"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: directPost,
+      announcement: true,
+      answer: false,
+      sent: null,
+    });
+
+    const section = screen.getByTestId("bot-tasks");
+    expect(section.textContent).not.toMatch(/check-in|next|last|ago/i);
+  });
+
+  it("names and opens the thread that a reply under the bot's question opened, for the task that reply set up", async () => {
+    const user = userEvent.setup();
+    // The thread hangs off the bot's question; the reply that opened it,
+    // and set the task up, is the thread's own first message.
+    mocks.state.channelPosts["question-1"] = "Which release should I watch?";
+    mocks.state.botRows["question-1"] = {
+      announcement: { kind: "question", link: null },
+    };
+    mocks.state.threads = [
+      {
+        ...thread("thread-q", "unused", {}),
+        anchor: {
+          messageId: "question-1",
+          requestId: "req-opener",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+      },
+    ];
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-opener",
+        createdByChatId: "thread-q",
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-watch");
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(row).getByTestId("bot-task-thread").textContent).toBe(
+      "from Which release should I watch?",
+    );
+    await user.click(within(row).getByTestId("bot-task-thread"));
+    // As the question's own row opens it: through the box, which stays
+    // through a read of the list that drops the thread.
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "question-1",
+      announcement: true,
+      answer: false,
+      sent: null,
+    });
+  });
+
+  it("opens a thread rooted on the bot's direct reply as an answer's thread, which takes a send only while the bot's binding opens one", async () => {
+    const user = userEvent.setup();
+    mocks.state.channelPosts["answer-1"] = "The nightly run passed.";
+    mocks.state.botRows["answer-1"] = {
+      repliesTo: conversationRequestMessageId("req-direct"),
+    };
+    mocks.state.threads = [answerThread()];
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-opener",
+        createdByChatId: "thread-answer",
+      }),
+    ];
+    renderPanel();
+
+    const from = within(taskRow("task-watch")).getByTestId("bot-task-thread");
+    expect(from.textContent).toBe("from The nightly run passed.");
+    await user.click(from);
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+  });
+
+  it("fetches a thread's post the channel has not loaded, and opens nothing until it is there to say how its thread opens", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [answerThread()];
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-opener",
+        createdByChatId: "thread-answer",
+      }),
+    ];
+    renderPanel();
+
+    const cold = within(taskRow("task-watch")).getByTestId("bot-task-thread");
+    expect(cold.textContent).toBe("from a thread");
+    expect(cold.tagName).toBe("SPAN");
+    expect(mocks.state.located.has("answer-1")).toBe(true);
+
+    // The located row lands in the channel's session.
+    mocks.state.botRows["answer-1"] = {
+      repliesTo: conversationRequestMessageId("req-direct"),
+    };
+    act(() => {
+      mocks.state.channelHandle?.store.setState({
+        messages: [channelRow("answer-1", "The nightly run passed.")],
+      });
+    });
+    await user.click(
+      within(taskRow("task-watch")).getByTestId("bot-task-thread"),
+    );
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "answer-1",
+      announcement: true,
+      answer: true,
+      sent: null,
+    });
+  });
+
+  it("keeps the thread's line while the post the task came from is not loaded, and fetches that post", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    mocks.state.channelPosts = {};
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-watch");
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(row).getByTestId("bot-task-thread").textContent).toBe(
+      "from a thread",
+    );
+    expect(
+      mocks.state.located.has(conversationRequestMessageId("req-thread-a")),
+    ).toBe(true);
+  });
+
+  it("holds a cold post that is both the task's request and its thread's post with one reader, as its line turns from the thread to the post and back", () => {
+    const postId = conversationRequestMessageId("req-thread-a");
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    mocks.state.channelPosts = {};
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+    ];
+    renderPanel();
+    const row = (): HTMLElement => taskRow("task-watch");
+    expect(within(row()).getByTestId("bot-task-thread").textContent).toBe(
+      "from a thread",
+    );
+    const held = mocks.state.holds.filter((id) => id === postId).length;
+    expect(held).toBeGreaterThan(0);
+
+    // The post lands: its line names it, and the thread's line goes.
+    act(() => {
+      mocks.state.channelHandle?.store.setState({
+        messages: [channelRow(postId, "Please review the release")],
+      });
+    });
+    expect(within(row()).getByTestId("bot-task-request").textContent).toBe(
+      "for Please review the release",
+    );
+    expect(within(row()).queryByTestId("bot-task-thread")).toBeNull();
+
+    // The row leaves the loaded window; the line goes back to the thread's.
+    act(() => {
+      mocks.state.channelHandle?.store.setState({ messages: [] });
+    });
+    expect(within(row()).getByTestId("bot-task-thread").textContent).toBe(
+      "from a thread",
+    );
+
+    // Neither change let the post go or took it again.
+    expect(mocks.state.releases).not.toContain(postId);
+    expect(mocks.state.holds.filter((id) => id === postId)).toHaveLength(held);
+  });
+
+  // Accepted residual: an automation a thread of another bot set up on this
+  // bot is listed here, on the bot that runs it, and not in that thread's
+  // panel. This bot's lists cannot name or open the other bot's thread.
+  it("says a task came from another bot's thread, with nothing to open, when no thread of this bot set it up", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    tasks = [
+      task("task-handoff", {
+        originRequestId: "req-elsewhere",
+        createdByChatId: "thread-of-another-bot",
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-handoff");
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    const from = within(row).getByTestId("bot-task-thread");
+    expect(from.textContent).toBe("from another bot's thread");
+    expect(from.tagName).toBe("SPAN");
+  });
+
+  it("says a thread set a task up, without naming which, while the thread list is not read", () => {
+    mocks.state.threadListAnswered = false;
+    tasks = [
+      task("task-watch", {
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+    ];
+    renderPanel();
+
+    const from = within(taskRow("task-watch")).getByTestId("bot-task-thread");
+    expect(from.textContent).toBe("from a thread");
+    expect(from.tagName).toBe("SPAN");
+  });
+
+  it("draws a task from a host that does not say where it came from with its title and interval alone", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    tasks = [
+      task("task-watch", {
+        spun: null,
+        label: null,
+        originRequestId: null,
+        createdByChatId: null,
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-watch");
+    expect(within(row).getByTestId("bot-task-open").textContent).toBe(
+      "task-watch",
+    );
+    expect(within(row).getByTestId("bot-task-interval").textContent).toBe(
+      "every 6 hours",
+    );
+    expect(within(row).queryByTestId("bot-task-label")).toBeNull();
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(row).queryByTestId("bot-task-thread")).toBeNull();
   });
 });
 

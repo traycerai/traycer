@@ -19,7 +19,6 @@ import {
 } from "@/lib/home-bots/bots-model";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
 
 /**
  * The reader's own hosts, and which of them this client can dial now.
@@ -50,7 +49,7 @@ const STATE_BADGE_VARIANTS = {
 /**
  * One bot on Home. The row subscribes to its own `bot.subscribe` through the
  * app-wide host and renders whatever the snapshot says as it arrives: the
- * title, its state, the tracked tasks, the next check-in, and the
+ * title, its state, the tasks it spun and still runs, and the
  * open-request HINT. The hint is shown only when it is above zero, because
  * the conversation's rows, not this number, decide what is open.
  *
@@ -96,7 +95,6 @@ export function HomeBotRow(props: {
     () => buildHomeBotRow(bot, subscription.snapshot),
     [bot, subscription.snapshot],
   );
-  const now = useSampledNow();
   const working = botWorkingOf(liveActivityOf(subscription));
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
@@ -154,16 +152,9 @@ export function HomeBotRow(props: {
               {STATE_LABELS[state]}
             </Badge>
           )}
-          {row.tasksTracking === null ? null : (
+          {row.tasksSpun === null ? null : (
             <span data-testid="home-bot-tasks">
-              {row.tasksTracking === 1
-                ? "1 task"
-                : `${row.tasksTracking} tasks`}
-            </span>
-          )}
-          {row.nextCheckinAt === null ? null : (
-            <span data-testid="home-bot-next-checkin">
-              next check-in {formatWaitTime(row.nextCheckinAt, now)}
+              {row.tasksSpun === 1 ? "1 task" : `${row.tasksSpun} tasks`}
             </span>
           )}
           {createdBy === null ? null : (
