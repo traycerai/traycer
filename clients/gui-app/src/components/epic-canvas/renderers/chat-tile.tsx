@@ -2124,6 +2124,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 open={view.steerRestart.open}
                 onOpenChange={view.steerRestart.onOpenChange}
                 onRestart={view.steerRestart.onRestart}
+                reasons={view.steerRestart.reasons}
                 changed={view.steerRestart.changed}
               />
               <TeardownCommitDialog
@@ -2685,6 +2686,8 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().draftBlobBridgeSupported,
     [handle.store],
   );
+  const getQueuedSteerRestartConfirmationSupported =
+    handle.store.getState().queuedSteerRestartConfirmationSupported;
   // Declared HERE rather than beside its other readers further down: the
   // initial-chat handoff driver below consumes it too, and a `const` used above
   // its declaration is a TDZ error rather than a hoist. Nothing about the
@@ -3412,6 +3415,14 @@ function useChatTileSessionViewModel(
           settings: input.settings,
           intent:
             input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
+          // Confirmed only when the composer's settings dialog asked. Every
+          // other cause to end the turn, a settings change on a harness the
+          // composer does not ask for included, is asked by the queue's
+          // dialog when the host refuses the steer.
+          steerRestartConfirmed:
+            input.deliveryPolicy === "after_safe_point" &&
+            input.restartConfirmed,
+          steerInitiatorId: node.instanceId,
         });
         if (actionId === null) return false;
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
@@ -3434,6 +3445,7 @@ function useChatTileSessionViewModel(
       chatActions,
       dispatchUi,
       dispatchUserSend,
+      node.instanceId,
       profile,
       submitThroughRebindGate,
     ],
@@ -3579,6 +3591,7 @@ function useChatTileSessionViewModel(
           settings: nextStepSettings,
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
+          restartConfirmed: false,
         },
         dispatch: dispatchUserSend,
         refusal: nextStepSendRefusal,
@@ -3692,6 +3705,7 @@ function useChatTileSessionViewModel(
           // from live turn/queue state at actual dispatch.
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
+          restartConfirmed: false,
         },
         dispatch: dispatchCompactSend,
         refusal: nextStepSendRefusal,
@@ -3737,6 +3751,7 @@ function useChatTileSessionViewModel(
         settings: nextStepSettings,
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
+        restartConfirmed: false,
       },
       dispatch: dispatchUserSend,
       refusal: nextStepSendRefusal,
@@ -3977,6 +3992,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,
       getStopConfirmationTarget,
       stopDisabled,
@@ -3988,6 +4004,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,
       getStopConfirmationTarget,
       stopDisabled,
