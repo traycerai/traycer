@@ -82,6 +82,29 @@ function invalidateMatchingNotificationIndicators(
     });
 }
 
+/**
+ * Re-asks every host whose cached answer is its whole origin (`complete`).
+ * Such an answer replaces the cloud's count for that origin, so it holds only
+ * while it is current: once the cloud snapshot changes, a host the GUI keeps
+ * no feed of (and so never invalidates on its own frames) would otherwise
+ * mask the cloud rows that reached it since. A partition answer counts
+ * nothing over the cloud, so it is left alone.
+ */
+export function invalidateCompleteNotificationIndicators(
+  queryClient: QueryClient,
+): void {
+  invalidateMatchingNotificationIndicators(
+    queryClient,
+    {
+      predicate: (query) =>
+        notificationsQueryKeys.isIndicatorQuery(query.queryKey) &&
+        isRecord(query.state.data) &&
+        query.state.data.complete === true,
+    },
+    null,
+  );
+}
+
 export function clearNotificationIndicatorCaches(
   queryClient: QueryClient,
 ): void {

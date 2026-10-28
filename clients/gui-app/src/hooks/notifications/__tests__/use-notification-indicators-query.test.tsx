@@ -7,6 +7,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsEntityRef,
@@ -170,6 +171,19 @@ interface Harness {
 function createHarness(
   hostResponse: HostNotificationsIndicatorStateResponse,
 ): Harness {
+  return createHarnessAnswering(hostResponse, () => hostResponse);
+}
+
+/** A harness whose host answers each request through `answer`, for a case
+ * where the requests of one surface are not answered alike. */
+function createHarnessAnswering(
+  hostResponse: HostNotificationsIndicatorStateResponse,
+  answer: (
+    params: HostNotificationsIndicatorStateRequestV11,
+  ) =>
+    | HostNotificationsIndicatorStateResponse
+    | Promise<HostNotificationsIndicatorStateResponse>,
+): Harness {
   const queryClient = createAppQueryClient();
   queryClient.setDefaultOptions({
     queries: { ...queryClient.getDefaultOptions().queries, retry: false },
@@ -194,7 +208,7 @@ function createHarness(
         "host.notifications.indicatorState": (params) => {
           requestCount.value += 1;
           requests.push(params);
-          return hostResponse;
+          return answer(params);
         },
         "host.notifications.cloudFeed.markRead": (params) => {
           cloudMarkRead.calls.push(params.entryId);
@@ -899,6 +913,63 @@ describe("mixed-plane notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("count")).toBe("1,pendingFork");
     });
+  });
+
+  it("keeps the cloud's count for an id whose chunk has not answered, though another chunk said it was the whole origin", async () => {
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${String(index).padStart(4, "0")}`,
+    );
+    const answeredChatId = chatIds[0];
+    const silentChatId = chatIds[chatIds.length - 1];
+    const harness = createHarnessAnswering(EMPTY_HOST_RESPONSE, (params) =>
+      params.chatIds.includes(silentChatId)
+        ? new Promise<HostNotificationsIndicatorStateResponse>(() => undefined)
+        : {
+            epics: {},
+            chats: {
+              [answeredChatId]: {
+                pendingApproval: false,
+                pendingInterview: false,
+                pendingFork: true,
+                unreadFailure: false,
+                unreadDone: false,
+                unreadCount: 0,
+              },
+            },
+            complete: true,
+          },
+    );
+    applyCloudSnapshot(
+      [answeredChatId, silentChatId].map((chatId) => {
+        const row = cloudRow({
+          entryId: `entry-${chatId}`,
+          originHostId: CONNECTED_HOST_ID,
+          readAt: null,
+        });
+        return { ...row, entry: { ...row.entry, chatId } };
+      }),
+      1,
+    );
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds,
+      children: (
+        <>
+          <CountProbe chatId={answeredChatId} testId="answered" />
+          <CountProbe chatId={silentChatId} testId="silent" />
+        </>
+      ),
+    });
+
+    // The answered chunk has landed once its host-only fork bit is drawn.
+    await waitFor(() => {
+      expect(indicatorText("answered")).toBe("1,pendingFork");
+    });
+    // Both would read "0" if the answered chunk's `complete` were taken to
+    // cover every id: it holds no unread record for either chat.
+    expect(indicatorText("silent")).toBe("1");
   });
 
   it("folds unread app-local failures in alongside the cloud rows", async () => {

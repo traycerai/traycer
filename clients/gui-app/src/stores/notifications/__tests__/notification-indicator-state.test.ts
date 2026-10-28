@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsCloudFeedRowV15,
@@ -945,9 +946,10 @@ describe("an entity's unread count", () => {
       { epicIds: ["epic-1", "epic-2"], chatIds: [] },
     );
 
+    // `epic-2` has no cloud record, so the host's own count stands for it.
     expect(merged.epics).toEqual({
       "epic-1": counted(2),
-      "epic-2": { ...counted(0), pendingFork: true },
+      "epic-2": { ...counted(4), pendingFork: true },
     });
     expect(merged.byOriginHostId?.["host-a"].epics["epic-1"]).toEqual(
       counted(2),
@@ -1008,6 +1010,41 @@ describe("an entity's unread count", () => {
     expect(merged.byOriginHostId?.["host-a"].epics["epic-9"]).toEqual(
       counted(null),
     );
+  });
+
+  it("lights an unread thread from a v1.1 host as unknown, never as a counted zero, where the cloud holds no record", () => {
+    // The answer a v1.1 host actually yields after the protocol bridge: no
+    // counts and no word on completeness. Hand-building `complete: true` with
+    // null counts describes no host that exists.
+    const bridged = hostRpcRegistry[
+      "host.notifications.indicatorState"
+    ][1].versions[2].upgradeFromPreviousVersion.upgradeResponse({
+      epics: {},
+      chats: {
+        "thread-1": {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone: true,
+        },
+      },
+    });
+    expect(bridged.complete).toBeNull();
+
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { epics: {}, chats: {}, byOriginHostId: {} },
+      bridged,
+      "host-b",
+      { epicIds: [], chatIds: ["thread-1"] },
+    );
+
+    const unknown = { ...counted(null), unreadDone: true };
+    expect(merged.chats).toEqual({ "thread-1": unknown });
+    expect(merged.byOriginHostId?.["host-b"].chats).toEqual({
+      "thread-1": unknown,
+    });
+    expect(indicatorHasUnread(merged.chats["thread-1"])).toBe(true);
   });
 
   it("leaves an entity unknown when a host that does not count overlaps the cloud rows it would replace", () => {

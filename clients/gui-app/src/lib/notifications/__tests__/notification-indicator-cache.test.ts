@@ -15,6 +15,7 @@ import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import {
   clearNotificationIndicatorCaches,
+  invalidateCompleteNotificationIndicators,
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -114,6 +115,60 @@ describe("notification indicator cache invalidation", () => {
     expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(epicOnly)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false);
+  });
+
+  it("invalidates only the cached answers that are a host's whole origin, on any host", () => {
+    const queryClient = new QueryClient();
+    const wholeOriginA = indicatorKey({
+      hostId: "host-a",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-a"],
+    });
+    const wholeOriginB = indicatorKey({
+      hostId: "host-b",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-b"],
+    });
+    const partition = indicatorKey({
+      hostId: "host-b",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-c"],
+    });
+    const unsaid = indicatorKey({
+      hostId: "host-b",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-d"],
+    });
+    const unrelated: readonly unknown[] = ["host", "host-b", "host.chat.list"];
+    queryClient.setQueryData(wholeOriginA, {
+      epics: {},
+      chats: {},
+      complete: true,
+    });
+    queryClient.setQueryData(wholeOriginB, {
+      epics: {},
+      chats: {},
+      complete: true,
+    });
+    queryClient.setQueryData(partition, {
+      epics: {},
+      chats: {},
+      complete: false,
+    });
+    queryClient.setQueryData(unsaid, { epics: {}, chats: {}, complete: null });
+    queryClient.setQueryData(unrelated, { complete: true });
+
+    invalidateCompleteNotificationIndicators(queryClient);
+
+    expect(queryClient.getQueryState(wholeOriginA)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(wholeOriginB)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(partition)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(unsaid)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
   });
 
   it("clears all account-scoped indicator caches on identity reset", () => {

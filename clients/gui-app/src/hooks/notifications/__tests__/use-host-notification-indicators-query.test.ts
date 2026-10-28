@@ -461,4 +461,71 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not call the answered chunks the whole origin while another chunk has not answered", async () => {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${String(index).padStart(4, "0")}`,
+    );
+    const lastChatId = chatIds[chatIds.length - 1];
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `request-${chatIds.length}`,
+        handlers: {
+          "host.notifications.indicatorState": (params) =>
+            // The chunk holding the last id never answers.
+            params.chatIds.includes(lastChatId)
+              ? new Promise<HostNotificationsIndicatorStateResponse>(
+                  () => undefined,
+                )
+              : {
+                  epics: {},
+                  chats: {},
+                  complete: true,
+                },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+
+    const { result } = renderHook(
+      () =>
+        useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: [],
+          chatIds,
+          enabled: true,
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await flushQueryNotifications();
+    });
+
+    // One chunk said "my origin, whole" and the other has said nothing: the
+    // ids in the silent chunk must not read as known zeros of a whole origin.
+    expect(result.current.isPending).toBe(true);
+    expect(result.current.data.complete).toBeNull();
+  });
 });

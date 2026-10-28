@@ -729,7 +729,11 @@ function entityUnreadCount(
   const hostCount = fromHost === undefined ? 0 : fromHost.unreadCount;
   switch (counts.kind) {
     case "cloud":
-      return fromCloud?.unreadCount ?? 0;
+      // Only the host answered for the entity: its count, or unknown when it
+      // cannot count, never a zero no plane counted.
+      return fromCloud === undefined
+        ? (fromHost?.unreadCount ?? null)
+        : fromCloud.unreadCount;
     case "host":
       return hostCount;
     case "host-and-other-origins": {

@@ -252,17 +252,21 @@ function mergeIndicatorResponses(
         mergeEntityIndicatorStates(combined, response.chats),
       EMPTY_INDICATOR_STATE.chats,
     ),
-    complete: combinedCompleteness(responses),
+    complete: combinedCompleteness(results),
   };
 }
 
-/** The chunks together are the whole origin only when every one says so; a
- * partition among them makes them a partition, and otherwise it is unknown. */
+/** The chunks together are the whole origin only when every chunk has
+ * answered and says so: a chunk with no answer yet would make its ids read as
+ * known zeros. A partition among them makes them a partition, and otherwise
+ * it is unknown. */
 function combinedCompleteness(
-  responses: ReadonlyArray<HostNotificationsIndicatorStateResponse>,
+  results: ReadonlyArray<
+    UseQueryResult<HostNotificationsIndicatorStateResponse, HostRpcError>
+  >,
 ): boolean | null {
-  if (responses.every((response) => response.complete === true)) return true;
-  if (responses.some((response) => response.complete === false)) return false;
+  if (results.some((result) => result.data?.complete === false)) return false;
+  if (results.every((result) => result.data?.complete === true)) return true;
   return null;
 }
 

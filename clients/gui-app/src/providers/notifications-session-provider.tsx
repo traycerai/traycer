@@ -86,6 +86,7 @@ import {
 } from "@/hooks/auth/use-auth-identity-transition";
 import {
   clearNotificationIndicatorCaches,
+  invalidateCompleteNotificationIndicators,
   invalidateNotificationIndicators,
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
@@ -1285,6 +1286,7 @@ function NotificationsSessionBody(
                 semanticId: row.entryId,
               })),
             );
+            invalidateCompleteNotificationIndicators(queryClient);
             void displayCloudSnapshotArrivals(arrivals, {
               showNotification,
               playChime: playNotificationChime,
@@ -1365,6 +1367,8 @@ function NotificationsSessionBody(
       servingStreamClient,
       cloudFeedStreamClient,
       recordCompletions,
+      // The cloud snapshot re-asks every host holding a whole-origin answer.
+      queryClient,
       servingHostId,
       windowId,
       showNotification,
