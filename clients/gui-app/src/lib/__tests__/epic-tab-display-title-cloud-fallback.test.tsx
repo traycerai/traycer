@@ -35,10 +35,22 @@ vi.mock("@/stores/managed-commands/managed-commands-for-chat", () => ({
   useManagedCommandOnHost: () => null,
 }));
 
+// The environment arm is a team environment's own stream, the one external
+// source a team host's chat reaches this client through.
+const armRows = vi.hoisted((): { value: readonly CloudChatSummary[] } => ({
+  value: [],
+}));
+vi.mock("@/hooks/environment/use-environment-arms", () => ({
+  useEnvironmentArmChats: (taskId: string) =>
+    taskId.length === 0 ? [] : armRows.value,
+}));
+
 const EPIC_ID = "epic-cloud-title";
 const CHAT_ID = "chat-cloud-only";
 const VIEWER_ID = "viewer-1";
 const CLOUD_TITLE = "Skill Versioning System Design";
+const ENVIRONMENT_ID = "env-pool";
+const ARM_TITLE = "E2E Sandbox Test";
 
 const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -73,6 +85,15 @@ function cloudRow(
     publishedAt: null,
     throughRecordSeq: null,
     isOwnedByViewer,
+  };
+}
+
+// The team environment's row for the chat: filed under the environment, on
+// the host the creator sent it to.
+function armRow(title: string): CloudChatSummary {
+  return {
+    ...cloudRow(false, mockLocalHostEntry.hostId, title),
+    identity: { taskId: EPIC_ID, chatId: CHAT_ID, ownerUserId: ENVIRONMENT_ID },
   };
 }
 
@@ -177,6 +198,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     }
     fixtures.length = 0;
     useAuthStore.setState(useAuthStore.getInitialState(), true);
+    armRows.value = [];
   });
 
   it("reads the cloud title for a chat the projection holds no record of", async () => {
@@ -250,5 +272,27 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     });
     expect(fixture.requests.value).toBe(0);
     expect(rendered.result.current).toBe("Untitled agent");
+  });
+  it("a team host's chat, held as the creator's untitled stand-in, takes the arm row's title", () => {
+    const fixture = createFixture([]);
+    fixtures.push(fixture);
+    armRows.value = [armRow(ARM_TITLE)];
+    // The creator's stand-in: filed under the viewer, untitled, on the host
+    // the create went to - the only record a team host's chat ever gets here.
+    fixture.handle.store.setState({
+      chats: { allIds: [CHAT_ID], byId: { [CHAT_ID]: projectedChat("") } },
+    });
+    const rendered = renderTitle(fixture);
+
+    expect(rendered.result.current).toBe(ARM_TITLE);
+  });
+
+  it("after the stand-in retires, the tab keeps the arm row's title", () => {
+    const fixture = createFixture([]);
+    fixtures.push(fixture);
+    armRows.value = [armRow(ARM_TITLE)];
+    const rendered = renderTitle(fixture);
+
+    expect(rendered.result.current).toBe(ARM_TITLE);
   });
 });

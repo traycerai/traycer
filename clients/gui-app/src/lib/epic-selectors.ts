@@ -79,6 +79,9 @@ import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-t
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
+import { armRowNamesHeldChat } from "@/lib/chats/compose-task-chat-list";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
 import {
   useMaybeOpenEpicHandle,
@@ -1295,6 +1298,30 @@ export function useMaybeEpicArchivedNodeIds(): readonly string[] {
 }
 
 /**
+ * The held chats an environment arm row already stands for (see
+ * {@link armRowNamesHeldChat}): a team host's chat, held as its creator's
+ * untitled stand-in until it first publishes. The sidebar draws the arm row
+ * in the stand-in's place, so one chat reads as one row with its title.
+ * Sorted, for the reason {@link useEpicChatIds} gives.
+ */
+export function useEpicChatIdsNamedByArmRows(
+  armRows: readonly CloudChatSummary[],
+): ReadonlyArray<string> {
+  return useEpicStore(
+    useShallow((s): ReadonlyArray<string> => {
+      if (armRows.length === 0) return EMPTY_TREE_ID_ARRAY;
+      const ids: string[] = [];
+      for (const row of armRows) {
+        const { chatId } = row.identity;
+        if (!Object.hasOwn(s.chats.byId, chatId)) continue;
+        if (armRowNamesHeldChat(row, s.chats.byId[chatId])) ids.push(chatId);
+      }
+      return ids.length === 0 ? EMPTY_TREE_ID_ARRAY : ids.sort();
+    }),
+  );
+}
+
+/**
  * Every chat id this epic's projection holds, nested ones included.
  *
  * The dedup set for the cloud-chat section: a chat the LOCAL tree already
@@ -1969,6 +1996,69 @@ function useCloudChatTitleForAbsentRecord(
   return title !== null && title.length > 0 ? title : null;
 }
 
+/** What the projection holds of a chat, as far as {@link useArmChatTitle} asks. */
+type ArmTitleHeld =
+  | { readonly kind: "titled" }
+  | { readonly kind: "absent" }
+  | {
+      readonly kind: "untitled";
+      readonly hostId: string | null;
+      readonly userId: string | null;
+    };
+
+const ARM_TITLE_HELD_TITLED: ArmTitleHeld = { kind: "titled" };
+const ARM_TITLE_HELD_ABSENT: ArmTitleHeld = { kind: "absent" };
+
+/**
+ * The environment arm's title for a team host's chat the projection has no
+ * title for, else `null`. A team host keys the chat it creates by its
+ * environment, so the creator's projection never receives its record: it holds
+ * an untitled stand-in until the chat first publishes, and nothing after that.
+ * The arm row is the one copy that carries the generated title throughout.
+ *
+ * Only an ARM row is read, never a viewer-list row: a record's own untitled
+ * answer is not overridden by its own cloud row, and a collaborator's row is
+ * not taken (see {@link useCloudChatTitleForAbsentRecord}). An absent record
+ * matches the row by `(chatId, bound host)`, the pair a host mints; a held
+ * stand-in matches through {@link armRowNamesHeldChat}.
+ */
+function useArmChatTitle(
+  epicId: string,
+  chatId: string | null,
+  boundHostId: string | null,
+): string | null {
+  const held = useEpicStore(
+    useShallow((s): ArmTitleHeld => {
+      if (chatId === null) return ARM_TITLE_HELD_TITLED;
+      if (!Object.hasOwn(s.chats.byId, chatId)) return ARM_TITLE_HELD_ABSENT;
+      const chat = s.chats.byId[chatId];
+      if (chat.title.length > 0) return ARM_TITLE_HELD_TITLED;
+      return { kind: "untitled", hostId: chat.hostId, userId: chat.userId };
+    }),
+  );
+  const armChats = useEnvironmentArmChats(
+    chatId === null || held.kind === "titled" ? "" : epicId,
+  );
+  if (chatId === null || held.kind === "titled") return null;
+  const hostId = boundHostId === UNKNOWN_HOST_PLACEHOLDER ? null : boundHostId;
+  const row = armChats.find((candidate) => {
+    if (held.kind === "untitled") {
+      return armRowNamesHeldChat(candidate, {
+        id: chatId,
+        hostId: held.hostId,
+        userId: held.userId,
+      });
+    }
+    return (
+      hostId !== null &&
+      candidate.identity.chatId === chatId &&
+      candidate.ownerHostId === hostId
+    );
+  });
+  const title = row?.title ?? null;
+  return title !== null && title.length > 0 ? title : null;
+}
+
 export function useEpicTabDisplayTitle(
   node: EpicTabDisplayTitleNode,
   epicId: string,
@@ -1980,6 +2070,11 @@ export function useEpicTabDisplayTitle(
     matchesProjection ? node.id : null,
   );
   const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
+  const armChatTitle = useArmChatTitle(
+    epicId,
+    node.type === "chat" ? node.id : null,
+    node.hostId,
+  );
   const isTerminal = node.type === "terminal";
   const liveTerminalTitle = useTerminalDisplayTitle(
     {
@@ -1993,6 +2088,7 @@ export function useEpicTabDisplayTitle(
   return (
     liveArtifactTitle ??
     cloudChatTitle ??
+    armChatTitle ??
     liveTerminalTitle ??
     liveManagedCommandTitle ??
     node.name
@@ -2021,10 +2117,18 @@ function useManagedCommandOutputTitle(
   return managedCommand === null ? null : managedCommandTitle(managedCommand);
 }
 
+/**
+ * Whether a chat tab's title is still being generated. `epicId` and
+ * `boundHostId` name the tab's task and host, so a team host's chat, whose
+ * title reaches this client only on the environment arm's row, stops spinning
+ * when that title arrives rather than at the backstop.
+ */
 export function useEpicLiveArtifactTitleGenerating(
   artifactId: string | null,
+  epicId: string,
+  boundHostId: string | null,
 ): boolean {
-  const currentTitle = useEpicStore((s) => {
+  const projectedTitle = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {
       const chat = s.chats.byId[artifactId];
@@ -2032,6 +2136,8 @@ export function useEpicLiveArtifactTitleGenerating(
     }
     return null;
   });
+  const armTitle = useArmChatTitle(epicId, artifactId, boundHostId);
+  const currentTitle = projectedTitle ?? armTitle;
   const currentUpdatedAt = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {

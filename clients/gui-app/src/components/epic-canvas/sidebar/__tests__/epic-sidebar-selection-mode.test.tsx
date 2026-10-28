@@ -1135,6 +1135,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // LOCAL tree, and the section hides itself when the cloud list has nothing
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
+  useEpicChatIdsNamedByArmRows: () => [],
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicChatHarnessId: (nodeId: string) =>

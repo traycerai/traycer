@@ -142,6 +142,8 @@ function MobileCurrentTileBarBody(
   );
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tile.type === "chat" ? tile.id : null,
+    epicId,
+    tile.hostId,
   );
   const displayTitle =
     browserPresentation?.title ??
