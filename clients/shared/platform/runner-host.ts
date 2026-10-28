@@ -32,6 +32,7 @@ import type {
   SandboxAutomationFetchResult,
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
+  TraycerModelsFetchResult,
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
@@ -399,6 +400,8 @@ export interface IRunnerHost {
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
+  /** `GET /api/traycer/models`: the Traycer models every sandbox runs. */
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,

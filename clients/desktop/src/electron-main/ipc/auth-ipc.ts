@@ -20,6 +20,7 @@ import {
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
@@ -279,6 +280,18 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCatalogue.bearerToken");
       return fetchSandboxCatalogueViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getTraycerModels,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getTraycerModels.bearerToken");
+      return fetchTraycerModelsViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),

@@ -10,21 +10,40 @@
  *
  * The real `ChatComposer`, toolbar store and run gates; only the host and
  * cloud reads are answered, and the submit hook records what the composer
- * hands it.
+ * hands it. The last case is the same chat while its sandbox is awake and
+ * serves it: the refusal offers the same remedies.
  */
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { GuiHarnessOption } from "@traycer/protocol/host/index";
+import type {
+  GuiHarnessOption,
+  HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
   harnessRow,
@@ -39,6 +58,9 @@ const answers = vi.hoisted(() => ({
   catalogue: undefined as SandboxCatalogue | undefined,
   catalogueFetching: false,
   refetchCatalogue: vi.fn(),
+  sandboxes: [] as ReadonlyArray<SandboxSummary>,
+  openedTiles: [] as TileOpenIntent[],
+  tabHostId: "serving-host",
   submit: null as {
     readonly sendDisabled: boolean;
     readonly sendDisabledHint: string | null;
@@ -93,6 +115,21 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
     data: answers.catalogue,
     isFetching: answers.catalogueFetching,
     refetch: answers.refetchCatalogue,
+  }),
+}));
+// The cloud's sandbox list, which names an awake sandbox host's sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({
+    data: { sandboxes: answers.sandboxes },
+  }),
+}));
+// The tile-open seam: the terminal the refusal opens is recorded, not drawn.
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTile: (intent: TileOpenIntent) => {
+      answers.openedTiles.push(intent);
+      return null;
+    },
   }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
@@ -169,7 +206,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({}),
 }));
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "serving-host",
+  useTabHostId: () => answers.tabHostId,
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useWorkspaceMentionRoots: () => [],
@@ -271,6 +308,23 @@ vi.mock("@/components/chat/segments/steer-settings-conflict-dialog", () => ({
 }));
 
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
+import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
+import { queryKeys } from "@/lib/query-keys";
+import {
+  bindComposerDraftHost,
+  resetDraftMirrorCoordinatorForTests,
+} from "@/lib/drafts/draft-mirror-coordinator";
+import { contentIsSubmittable } from "@/lib/composer/composer-content";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 import { ChatComposer } from "../chat-composer";
 
 const RESTING: RestingChatSandbox = {
@@ -323,7 +377,10 @@ function signedOut(
   };
 }
 
+let queryClient = new QueryClient();
+
 beforeEach(() => {
+  queryClient = new QueryClient();
   answers.harnesses = [
     harnessRow("traycer", {}),
     harnessRow("claude", {}),
@@ -333,50 +390,118 @@ beforeEach(() => {
   answers.catalogue = OFFERS_TRAYCER;
   answers.catalogueFetching = false;
   answers.refetchCatalogue.mockClear();
+  answers.sandboxes = [];
+  answers.openedTiles = [];
+  answers.tabHostId = "serving-host";
   answers.submit = null;
 });
 
 afterEach(() => {
   cleanup();
+  useSandboxDetailsStore.setState({ sandboxId: null });
+  useComposerDraftStore.getState().clearDraft("chat-p3");
+  resetHostDirectoryRows();
 });
 
-function mountComposer(settings: ChatRunSettings) {
-  return render(
-    <ChatComposer
-      taskId="chat-p3"
-      isActive
-      sendDisabled={false}
-      sendDisabledHint={null}
-      mentionRoots={[]}
-      fallbackToGlobalMentionRoots={false}
-      currentEpicId="epic-1"
-      viewTabId="tab-1"
-      settingsSeed={settings}
-      fallbackSettingsSeed={null}
-      providerFallback={NO_PROVIDER_FALLBACK}
-      onSubmitMessage={() => true}
-      onSideChat={null}
-      onSettingsChange={null}
-      activeTurnStatus={null}
-      steerCapable={false}
-      steerProtocolSupported
-      autoPermissionModeProtocolSupported={null}
-      getDraftBlobBridgeSupported={() => false}
-      getActiveTurnForSteer={() => null}
-      editingQueueItemId={null}
-      onCancelQueueEdit={null}
-      hasPendingApprovals={false}
-      stopDisabled
-      onStopTurn={null}
-      workspaceControls={null}
-      workspaceAvailability={{ status: "ready", disabledHint: null }}
-      topSpacing="normal"
-      topSlot={null}
-      suggestedPrompt={undefined}
-      restingSandbox={RESTING}
-    />,
+const REFUSAL_LIST = [
+  "Choose a model",
+  "Open terminal instead",
+  "Choose another host",
+  "Cancel the message",
+  "Details",
+];
+
+function noticeButtons(): ReadonlyArray<string | null> {
+  return within(screen.getByTestId("composer-host-notice"))
+    .getAllByRole("button")
+    .filter((button) => button.getAttribute("aria-label") !== "Dismiss")
+    .map((button) => button.textContent);
+}
+
+function clickNoticeButton(name: string): void {
+  fireEvent.click(
+    within(screen.getByTestId("composer-host-notice")).getByRole("button", {
+      name,
+    }),
   );
 }
+
+/** The chat's tile, which can open the chat's clone flow while it is mounted. */
+function mountChatTileCloneFlow(): Mock<() => void> {
+  const openClone = vi.fn<() => void>();
+  const unregister = registerChatCloneOpener("chat-p3", openClone);
+  onTestFinished(unregister);
+  return openClone;
+}
+
+function mountComposer(settings: ChatRunSettings) {
+  return mountComposerOn(settings, RESTING, () => true);
+}
+
+function mountComposerWith(
+  settings: ChatRunSettings,
+  onSubmitMessage: () => boolean,
+) {
+  return mountComposerOn(settings, RESTING, onSubmitMessage);
+}
+
+function mountComposerOn(
+  settings: ChatRunSettings,
+  restingSandbox: RestingChatSandbox | null,
+  onSubmitMessage: () => boolean,
+) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ChatComposer
+        taskId="chat-p3"
+        isActive
+        sendDisabled={false}
+        sendDisabledHint={null}
+        mentionRoots={[]}
+        fallbackToGlobalMentionRoots={false}
+        currentEpicId="epic-1"
+        viewTabId="tab-1"
+        settingsSeed={settings}
+        fallbackSettingsSeed={null}
+        providerFallback={NO_PROVIDER_FALLBACK}
+        onSubmitMessage={onSubmitMessage}
+        onSideChat={null}
+        onSettingsChange={null}
+        activeTurnStatus={null}
+        steerCapable={false}
+        steerProtocolSupported
+        autoPermissionModeProtocolSupported={null}
+        getDraftBlobBridgeSupported={() => false}
+        getActiveTurnForSteer={() => null}
+        editingQueueItemId={null}
+        onCancelQueueEdit={null}
+        hasPendingApprovals={false}
+        stopDisabled
+        onStopTurn={null}
+        workspaceControls={null}
+        workspaceAvailability={{ status: "ready", disabledHint: null }}
+        topSpacing="normal"
+        topSlot={null}
+        suggestedPrompt={undefined}
+        restingSandbox={restingSandbox}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+const TRAYCER_OFF_LINE =
+  "Traycer Inference is off on this sandbox, so agents can't run on it.";
+
+/** A providers list with Traycer Inference switched off on that host. */
+const TRAYCER_OFF_PROVIDERS: ReadonlyArray<ProviderCliState> = [
+  { ...providerRow("traycer", null), enabled: false },
+];
+
+/** The resting sandbox's own `providers.list`, as this client last read it. */
+const RESTING_PROVIDERS_KEY = queryKeys.hostMethod<
+  HostRpcRegistry,
+  "providers.list"
+>("p3-host", "providers.list", { native: null });
 
 function submitted() {
   if (answers.submit === null) throw new Error("the composer never rendered");
@@ -412,6 +537,69 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
       sendDisabledHint:
         "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
     });
+  });
+
+  it("refuses with the full list at Send, in order, and Details opens the chat's own sandbox", () => {
+    const openClone = mountChatTileCloneFlow();
+    mountComposer(seed("codex"));
+
+    expect(noticeButtons()).toEqual(REFUSAL_LIST);
+    clickNoticeButton("Details");
+    expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx-p3");
+    clickNoticeButton("Choose another host");
+    expect(openClone).toHaveBeenCalledOnce();
+  });
+
+  it("offers no other host where no tile of the chat can open its clone flow", () => {
+    mountComposer(seed("codex"));
+
+    expect(noticeButtons()).not.toContain("Choose another host");
+  });
+
+  it("opens a folderless terminal on the chat's own sandbox, in this task's view", () => {
+    mountComposer(seed("codex"));
+
+    clickNoticeButton("Open terminal instead");
+
+    expect(answers.openedTiles).toHaveLength(1);
+    expect(answers.openedTiles[0]).toMatchObject({
+      node: {
+        type: "terminal",
+        hostId: "p3-host",
+        legacyFallback: { cwd: "" },
+      },
+      target: { tabId: "tab-1" },
+      gesture: "explicit",
+    });
+  });
+
+  it("cancels the message: the draft is retired, nothing is sent, and the refusal closes", () => {
+    const sent = vi.fn(() => true);
+    // What the composer's draft hook does on mount: the chat's draft row is
+    // the tab host's, so retiring it deletes it there rather than leaving it
+    // for Drafts.
+    bindComposerDraftHost("chat-p3", "serving-host");
+    onTestFinished(resetDraftMirrorCoordinatorForTests);
+    useComposerDraftStore.getState().replaceDraft(
+      "chat-p3",
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "go" }] },
+        ],
+      },
+      null,
+    );
+    mountComposerWith(seed("codex"), sent);
+
+    clickNoticeButton("Cancel the message");
+
+    const draft = readComposerDraftSnapshot("chat-p3");
+    expect(contentIsSubmittable(draft.content)).toBe(false);
+    expect(draft.draftId).toBeNull();
+    expect(sent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    expect(submitted().sendDisabled).toBe(true);
   });
 
   it("never blocks on a provider signed out on the serving host: the sandbox's own refusal stands", () => {
@@ -465,6 +653,39 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
     expect(submitted().sendDisabled).toBe(false);
   });
 
+  // Off is refused before anything wakes, and with nothing to choose: no
+  // model runs while the switch is off, whatever the pick.
+  it.each(["traycer", "codex"] as const)(
+    "refuses a %s pick before any wake when the sandbox's Traycer Inference was last read off",
+    (harnessId) => {
+      queryClient.setQueryData(RESTING_PROVIDERS_KEY, {
+        providers: TRAYCER_OFF_PROVIDERS,
+      });
+      mountChatTileCloneFlow();
+      const sent = vi.fn(() => true);
+
+      mountComposerWith(seed(harnessId), sent);
+
+      expect(screen.getByText(TRAYCER_OFF_LINE)).toBeTruthy();
+      expect(noticeButtons()).toEqual(REFUSAL_LIST.slice(1));
+      expect(submitted()).toMatchObject({
+        sendDisabled: true,
+        sendDisabledHint: TRAYCER_OFF_LINE,
+      });
+      expect(sent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets Traycer send when nothing is known of the sandbox's switch, and asks the sandbox nothing", () => {
+    mountComposer(seed("traycer"));
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    expect(submitted().sendDisabled).toBe(false);
+    const read = queryClient.getQueryState(RESTING_PROVIDERS_KEY);
+    expect(read?.fetchStatus ?? "idle").toBe("idle");
+    expect(read?.dataUpdatedAt ?? 0).toBe(0);
+  });
+
   it("clears the refusal as soon as the pick moves to an offered agent", () => {
     mountComposer(seed("codex"));
     expect(screen.getByTestId("composer-host-notice")).toBeTruthy();
@@ -479,5 +700,46 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
 
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
     expect(submitted().sendDisabled).toBe(false);
+  });
+});
+
+describe("the composer of an awake sandbox's chat, served by the sandbox", () => {
+  it("refuses with the same list, on the tab host's own sandbox", () => {
+    answers.tabHostId = "sbx-awake-host";
+    answers.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-awake", hostId: "sbx-awake-host" }),
+    ];
+    installHostDirectoryRows([sandboxHostEntry("sbx-awake-host", null)]);
+    mountChatTileCloneFlow();
+
+    mountComposerOn(seed("codex"), null, () => true);
+
+    expect(noticeButtons()).toEqual(REFUSAL_LIST);
+    clickNoticeButton("Details");
+    expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx-awake");
+    clickNoticeButton("Open terminal instead");
+    expect(answers.openedTiles[0]).toMatchObject({
+      node: { type: "terminal", hostId: "sbx-awake-host" },
+    });
+  });
+
+  it("refuses at Send when the sandbox's own providers list shows Traycer off, with no model to choose", () => {
+    answers.tabHostId = "sbx-awake-host";
+    answers.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-awake", hostId: "sbx-awake-host" }),
+    ];
+    answers.harnesses = [harnessRow("traycer", { enabled: false })];
+    answers.providers = TRAYCER_OFF_PROVIDERS;
+    installHostDirectoryRows([sandboxHostEntry("sbx-awake-host", null)]);
+    mountChatTileCloneFlow();
+
+    mountComposerOn(seed("traycer"), null, () => true);
+
+    expect(screen.getByText(TRAYCER_OFF_LINE)).toBeTruthy();
+    expect(noticeButtons()).toEqual(REFUSAL_LIST.slice(1));
+    expect(submitted()).toMatchObject({
+      sendDisabled: true,
+      sendDisabledHint: TRAYCER_OFF_LINE,
+    });
   });
 });

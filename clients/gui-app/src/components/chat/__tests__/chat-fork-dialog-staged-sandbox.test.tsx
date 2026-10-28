@@ -473,6 +473,7 @@ function forkTarget(): ChatForkDialogTarget {
     initialHostId: null,
     onlyHostIds: null,
     stagedSandbox: null,
+    carriesComposerDraft: false,
   };
 }
 
@@ -1134,8 +1135,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
   });
 
   describe("on a sandbox host with nothing staged", () => {
-    const SENTENCE =
-      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+    const SENTENCE = "Agents can't run on this sandbox.";
 
     beforeEach(() => {
       installHostDirectoryRows([
@@ -1152,7 +1152,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       );
     });
 
-    it("refuses Fork for an agent the sandbox cannot run, with the Providers link, creating, attaching and handing nothing, and keeping the dialog, title and chip", () => {
+    it("refuses Fork for an agent the sandbox cannot run, with no Providers link, creating, attaching and handing nothing, and keeping the dialog, title and chip", () => {
       dialogMocks.harnessAvailable = false;
       renderDialog();
       fillTitle();
@@ -1175,8 +1175,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
         screen.getByRole("button", { name: "Harness picker" }),
       ).toBeTruthy();
 
-      fireEvent.click(screen.getByTestId("composer-host-notice-action"));
-      expect(dialogMocks.openProviders).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("composer-host-notice-action")).toBeNull();
     });
 
     it("retires the notice when another host is picked", () => {

@@ -164,6 +164,8 @@ function mockHostClientKey(client: MockHostClient): string {
 }
 
 const queryMock = vi.hoisted(() => ({
+  /** The cloud catalog's Traycer models, read for a sandbox refusal only. */
+  cloudTraycerModels: undefined as ReadonlyArray<ModelOption> | undefined,
   harnesses: [] as HarnessOption[],
   catalogHarnesses: [] as CatalogHarness[],
   selectedModelsByHarness: new Map<string, ReadonlyArray<ModelOption>>(),
@@ -518,6 +520,15 @@ function catalogHarnessesForRender(): CatalogHarness[] {
   }));
 }
 
+// The picker's cloud read of Traycer's models, made only when a sandbox
+// refusal opens it.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({
+    data: queryMock.cloudTraycerModels,
+    error: null,
+    isPending: false,
+  }),
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // The real hook resolves the app-wide default host's client via
   // `useHostBinding()`; this suite renders the picker without a
@@ -1191,6 +1202,7 @@ async function openPickerByTriggerName(
 describe("<HarnessModelPicker />", () => {
   beforeEach(() => {
     installCatalog();
+    queryMock.cloudTraycerModels = undefined;
     queryMock.harnessesLoading = false;
     queryMock.harnessesError = null;
     queryMock.catalogHarnessesLoading = false;
@@ -1278,7 +1290,7 @@ describe("<HarnessModelPicker />", () => {
     expect(harness.store.getState().values.selection).toEqual(selection);
   });
 
-  it("opens a sandbox refusal's Choose a model on what sandboxes offer: Traycer's models, never this host's Claude or Codex", async () => {
+  it("opens a sandbox refusal's Choose a model on what sandboxes offer: Traycer's cloud models, never this host's Claude or Codex", async () => {
     const traycer: HarnessOption = {
       ...CLAUDE_HARNESS,
       id: "traycer",
@@ -1293,8 +1305,9 @@ describe("<HarnessModelPicker />", () => {
       }),
     ];
     queryMock.harnesses.push(traycer);
-    queryMock.catalogHarnesses.push(catalogHarness(traycer, models));
-    queryMock.selectedModelsByHarness.set("traycer", models);
+    // This host lists Traycer with nothing to run; the rows are the cloud's.
+    queryMock.catalogHarnesses.push(catalogHarness(traycer, []));
+    queryMock.cloudTraycerModels = models;
     const selection: HarnessModelSelection = {
       harnessId: "codex",
       modelSlug: "gpt-5.5",

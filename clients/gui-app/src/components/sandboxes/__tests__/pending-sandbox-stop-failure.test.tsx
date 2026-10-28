@@ -61,9 +61,6 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/sandboxes/use-on-team-sandbox", () => ({
   useSandboxHostConfiguration: () => null,
 }));
-vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
-  useConfigurationProvidersOpener: () => () => undefined,
-}));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: vi.fn() }),
 }));

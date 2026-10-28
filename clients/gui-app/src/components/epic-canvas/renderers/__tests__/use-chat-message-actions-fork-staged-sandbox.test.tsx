@@ -1,5 +1,5 @@
-import { renderHook, act } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   FORK_ON_SOURCE_HOST,
@@ -9,6 +9,7 @@ import type { ChatMessageActionsInput } from "@/components/epic-canvas/renderers
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import type { NewStagedSandboxTarget } from "@/components/composer/use-sandbox-staging";
+import { openChatClone } from "@/lib/chats/chat-clone-registry";
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
@@ -16,6 +17,9 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
+
+// A mounted hook keeps its chat's clone flow registered: unmount every one.
+afterEach(cleanup);
 
 const SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -131,6 +135,7 @@ describe("forkAtAssistantMessage's staged sandbox", () => {
         initialHostId: null,
         onlyHostIds: null,
         stagedSandbox: NEW_SANDBOX,
+        carriesComposerDraft: false,
       });
     });
 
@@ -163,5 +168,32 @@ describe("forkAtAssistantMessage's staged sandbox", () => {
     expect(setForkTarget).toHaveBeenCalledWith(
       expect.objectContaining({ stagedSandbox: null }),
     );
+  });
+});
+
+describe("the chat's clone flow, opened from beside its tile", () => {
+  it("opens the fork dialog on the whole chat, carrying the draft, while the tile is mounted", () => {
+    const setForkTarget =
+      vi.fn<(target: ChatForkDialogTarget | null) => void>();
+    const { unmount } = renderHook(() =>
+      useChatMessageActions(inputFor(setForkTarget)),
+    );
+
+    act(() => {
+      expect(openChatClone("chat-1")).toBe(true);
+    });
+
+    expect(setForkTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceChatId: "chat-1",
+        assistantMessageId: null,
+        initialHostId: null,
+        onlyHostIds: null,
+        stagedSandbox: null,
+        carriesComposerDraft: true,
+      }),
+    );
+    unmount();
+    expect(openChatClone("chat-1")).toBe(false);
   });
 });

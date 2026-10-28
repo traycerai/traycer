@@ -3217,6 +3217,7 @@ function useChatTileSessionViewModel(
         initialHostId: targetHostId,
         onlyHostIds: null,
         stagedSandbox: null,
+        carriesComposerDraft: false,
       });
     },
     [forkAtAssistantMessage],
@@ -3229,6 +3230,7 @@ function useChatTileSessionViewModel(
         initialHostId: null,
         onlyHostIds: null,
         stagedSandbox: target,
+        carriesComposerDraft: false,
       });
     },
     [forkAtAssistantMessage],
@@ -3243,6 +3245,7 @@ function useChatTileSessionViewModel(
         initialHostId: first.value,
         onlyHostIds: teamHostIds,
         stagedSandbox: null,
+        carriesComposerDraft: false,
       });
     },
     [forkAtAssistantMessage],

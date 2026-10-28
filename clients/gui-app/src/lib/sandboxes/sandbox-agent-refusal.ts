@@ -10,8 +10,10 @@ import {
 } from "@/lib/provider-ordering";
 import {
   agentNotOfferedOnSandboxesLine,
+  CANCEL_THE_MESSAGE,
   CHOOSE_ANOTHER_HOST,
   COULDNT_CHECK_SANDBOX_AGENTS,
+  DETAILS,
   OPEN_TERMINAL_INSTEAD,
   RETRY,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -50,6 +52,10 @@ export interface SandboxAgentRemedies {
   ) => void;
   readonly onOpenTerminalInstead?: () => void;
   readonly onChooseAnotherHost?: () => void;
+  /** Withdraws the refused message: nothing is sent, kept or saved. */
+  readonly onCancelMessage?: () => void;
+  /** The sandbox's details, for a chat bound to one. */
+  readonly onDetails?: () => void;
 }
 
 export function sandboxAgentSecondaryActions(
@@ -67,6 +73,15 @@ export function sandboxAgentSecondaryActions(
       label: CHOOSE_ANOTHER_HOST,
       onAction: remedies.onChooseAnotherHost,
     });
+  }
+  if (remedies.onCancelMessage !== undefined) {
+    actions.push({
+      label: CANCEL_THE_MESSAGE,
+      onAction: remedies.onCancelMessage,
+    });
+  }
+  if (remedies.onDetails !== undefined) {
+    actions.push({ label: DETAILS, onAction: remedies.onDetails });
   }
   return actions;
 }

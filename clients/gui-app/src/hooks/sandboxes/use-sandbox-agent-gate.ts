@@ -1,8 +1,14 @@
+import { useCallback, useSyncExternalStore } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
+import type {
+  ComposerHostNoticeAction,
+  ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
@@ -13,7 +19,12 @@ import {
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
-import { requestedAgentReadiness } from "@/lib/sandboxes/pending-sandbox-send";
+import { queryKeys } from "@/lib/query-keys";
+import {
+  requestedAgentReadiness,
+  traycerInferenceOff,
+  type RequestedAgentReadiness,
+} from "@/lib/sandboxes/pending-sandbox-send";
 import { useChatOpencodeLine } from "@/hooks/harnesses/chat-opencode-line-context";
 import {
   guiHarnessIdToProviderId,
@@ -21,10 +32,11 @@ import {
 } from "@/lib/provider-ordering";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  agentsCantRunOnSandboxLine,
   CHECKING_SANDBOX_AGENTS,
   configurationLabel,
   openProvidersLabel,
-  enableSandboxInferenceLine,
+  traycerOffOnSandboxLine,
 } from "@/lib/sandboxes/sandbox-strings";
 
 export interface SandboxAgentGate {
@@ -33,8 +45,8 @@ export interface SandboxAgentGate {
   /** Why, for a disabled send's hint; `null` when nothing is held. */
   readonly hint: string | null;
   /**
-   * The same refusal as the composer's notice, with the configuration's own
-   * Providers, for a surface that refuses at Send; `null` when nothing is held.
+   * The same refusal as the composer's notice, with its remedies, for a
+   * surface that refuses at Send; `null` when nothing is held.
    */
   readonly notice: ComposerHostNoticeState | null;
 }
@@ -100,36 +112,78 @@ export function useSandboxAgentGate(
     input.active && configuration !== null && configuration.kind === "team",
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
-  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId))
-    return notOfferedGate(input.harnessId, offeredAgents, input);
-  const readiness = requestedAgentReadiness(
-    input.harnessId,
-    harnesses.data?.harnesses,
-    providers.data?.providers,
-    opencodeLine,
-  );
-  if (readiness.kind === "not-offered")
-    return notOfferedGate(input.harnessId, offeredAgents, input);
-  if (readiness.kind === "ready") return NOT_BLOCKED;
-  if (readiness.kind === "waiting")
-    return sandboxAgentPreparingGate(input.harnessId);
   const label = configurationLabel(stageConfigurationCopy(configuration));
-  const hint =
-    readiness.kind === "setup-failed"
-      ? readiness.detail
-      : enableSandboxInferenceLine(label);
   const openProviders = providersOpener(configuration);
+  return sandboxAgentGateFor({
+    harnessId: input.harnessId,
+    readiness: requestedAgentReadiness(
+      input.harnessId,
+      harnesses.data?.harnesses,
+      providers.data?.providers,
+      opencodeLine,
+    ),
+    offeredAgents,
+    setupFailedAction:
+      openProviders === null
+        ? null
+        : { label: openProvidersLabel(label), onAction: openProviders },
+    remedies: input,
+  });
+}
+
+/** The sandbox host's own answer for the pick, in the order it is refused. */
+function sandboxAgentGateFor(args: {
+  readonly harnessId: GuiHarnessId;
+  readonly readiness: RequestedAgentReadiness;
+  readonly offeredAgents: ReadonlyArray<string> | undefined;
+  /** The configuration's Providers, for an install that failed there. */
+  readonly setupFailedAction: ComposerHostNoticeAction | null;
+  readonly remedies: SandboxAgentRemedies;
+}): SandboxAgentGate {
+  const { harnessId, readiness, offeredAgents, remedies } = args;
+  // Before the catalogue: with the sandbox's own switch off no model runs
+  // there, so "Choose a model" would only lead to another refusal.
+  if (readiness.kind === "traycer-off")
+    return refusedOnSandboxGate(traycerOffOnSandboxLine(null), null, remedies);
+  if (
+    readiness.kind === "not-offered" ||
+    (offeredAgents !== undefined && !offeredAgents.includes(harnessId))
+  )
+    return notOfferedGate(harnessId, offeredAgents, remedies);
+  switch (readiness.kind) {
+    case "ready":
+      return NOT_BLOCKED;
+    case "waiting":
+      return sandboxAgentPreparingGate(harnessId);
+    case "unusable":
+      return refusedOnSandboxGate(
+        agentsCantRunOnSandboxLine(null),
+        null,
+        remedies,
+      );
+    case "setup-failed":
+      return refusedOnSandboxGate(
+        readiness.detail,
+        args.setupFailedAction,
+        remedies,
+      );
+  }
+}
+
+/** A pick the sandbox cannot run, refused with the remedies beside it. */
+function refusedOnSandboxGate(
+  message: string,
+  action: ComposerHostNoticeAction | null,
+  remedies: SandboxAgentRemedies,
+): SandboxAgentGate {
   return {
     blocked: true,
-    hint,
+    hint: message,
     notice: {
       kind: "refused",
-      message: hint,
-      action:
-        openProviders === null
-          ? null
-          : { label: openProvidersLabel(label), onAction: openProviders },
-      secondaryActions: sandboxAgentSecondaryActions(input),
+      message,
+      action,
+      secondaryActions: sandboxAgentSecondaryActions(remedies),
     },
   };
 }
@@ -146,24 +200,67 @@ const CHECKING_OFFERED_AGENTS: SandboxAgentGate = {
 };
 
 /**
+ * What this client last read of a host's own Traycer Inference switch: its
+ * providers list as the cache still holds it, never a read of its own, since
+ * a resting sandbox answers nothing and asking would wake it. `false` when
+ * nothing is held, as a sandbox seeds the switch on.
+ *
+ * Read off the cache rather than through an observer: an observer's options
+ * become the shared query's, and a refetch of that host's list that ran on
+ * them would find no way to read it.
+ */
+function useLastKnownTraycerInferenceOff(hostId: string | null): boolean {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient],
+  );
+  const read = useCallback((): boolean => {
+    if (hostId === null) return false;
+    const cached = queryClient.getQueryData<
+      ResponseOfMethod<HostRpcRegistry, "providers.list">
+    >(
+      queryKeys.hostMethod<HostRpcRegistry, "providers.list">(
+        hostId,
+        "providers.list",
+        { native: null },
+      ),
+    );
+    return traycerInferenceOff(cached?.providers);
+  }, [hostId, queryClient]);
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+/**
  * `useSandboxAgentGate` for a chat whose sandbox rests. Its chat is drawn by
  * the published copy, bound to the host SERVING that copy, so no host this
  * composer can read is the one the send runs on, and the sandbox itself
- * answers nothing until it is awake. The cloud catalogue decides here, before
- * any wake: an agent sandboxes don't offer is refused, and an offered one
- * passes, leaving its readiness to the woken sandbox. So does every agent when
- * an older server's catalogue names none. A read that ended with no catalogue
- * holds Send with Retry, since a pass would wake the sandbox unchecked.
+ * answers nothing until it is awake. Two things decide here, before any wake.
+ * The sandbox's own Traycer Inference switch, as last read while it was awake:
+ * off is refused, and unknown passes. Then the cloud catalogue: an agent
+ * sandboxes don't offer is refused, and an offered one passes, leaving its
+ * readiness to the woken sandbox. So does every agent when an older server's
+ * catalogue names none. A read that ended with no catalogue holds Send with
+ * Retry, since a pass would wake the sandbox unchecked.
  *
  * Read whenever the chat rests, focused or not, so a pane that never asked is
  * not mistaken for one whose read failed. Inert while `resting` is false.
  */
-export function useRestingSandboxAgentGate(input: {
-  readonly resting: boolean;
-  readonly harnessId: GuiHarnessId | null;
-}): SandboxAgentGate {
+export function useRestingSandboxAgentGate(
+  input: {
+    readonly resting: boolean;
+    /** The resting sandbox's own host. */
+    readonly hostId: string | null;
+    readonly harnessId: GuiHarnessId | null;
+  } & SandboxAgentRemedies,
+): SandboxAgentGate {
   const catalogue = useSandboxCatalogue(input.resting);
+  const traycerOff = useLastKnownTraycerInferenceOff(
+    input.resting ? input.hostId : null,
+  );
   if (!input.resting || input.harnessId === null) return NOT_BLOCKED;
+  if (traycerOff)
+    return refusedOnSandboxGate(traycerOffOnSandboxLine(null), null, input);
   if (catalogue.data === undefined) {
     if (catalogue.isFetching) return CHECKING_OFFERED_AGENTS;
     const notice = sandboxAgentsUncheckedNotice(() => {
@@ -174,5 +271,5 @@ export function useRestingSandboxAgentGate(input: {
   const offeredAgents = catalogue.data.offeredAgents;
   if (offeredAgents === undefined || offeredAgents.includes(input.harnessId))
     return NOT_BLOCKED;
-  return notOfferedGate(input.harnessId, offeredAgents, {});
+  return notOfferedGate(input.harnessId, offeredAgents, input);
 }

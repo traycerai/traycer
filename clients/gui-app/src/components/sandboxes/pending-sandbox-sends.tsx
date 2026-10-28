@@ -80,7 +80,6 @@ import {
 } from "@/hooks/harnesses/chat-opencode-line-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import {
   useSandboxList,
   sandboxListReadSentAt,
@@ -117,6 +116,8 @@ import {
   isOpencodeFamilyHarness,
 } from "@/lib/chat/opencode-line";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { openChatClone } from "@/lib/chats/chat-clone-registry";
+import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   confirmAttachmentsByHash,
@@ -1067,6 +1068,7 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
         ? "stop"
         : "settings";
     case "no-provider":
+    case "traycer-off":
     case "agent-not-offered":
     case "agent-setup-failed":
       return "provider";
@@ -1195,6 +1197,9 @@ function agentNotReady(
     case "not-offered":
       next = { kind: "agent-not-offered", harnessId };
       break;
+    case "traycer-off":
+      next = { kind: "traycer-off" };
+      break;
     case "unusable":
       next = { kind: "no-provider" };
       break;
@@ -1214,6 +1219,7 @@ function agentNotReady(
 function isAgentReadinessFailure(failure: StagedSandbox["failure"]): boolean {
   return (
     failure?.kind === "no-provider" ||
+    failure?.kind === "traycer-off" ||
     failure?.kind === "agent-not-offered" ||
     failure?.kind === "agent-setup-failed"
   );
@@ -2801,6 +2807,41 @@ function PendingStopFallback(props: {
   );
 }
 
+type PendingLineRemedies = Pick<
+  SandboxSetupLineActions,
+  "onChooseModel" | "onChooseAnotherHost"
+>;
+
+/**
+ * A message to an existing chat is handed back to that chat's composer first:
+ * "Choose a model" then opens its picker on what sandboxes run, and "Choose
+ * another host" the chat's clone flow, which carries the message to the clone
+ * unsent. A message the composer could not take went to Drafts instead, and
+ * nothing is carried. Every other request takes `otherwise`.
+ */
+function pendingMessageRemedies(
+  send: PendingSandboxSend,
+  offeredAgents: ReadonlyArray<string> | null,
+  otherwise: PendingLineRemedies,
+): PendingLineRemedies {
+  const request = send.request;
+  if (request.kind !== "message") return otherwise;
+  return {
+    onChooseModel: () => {
+      void returnPendingSandboxMessage(send.id, false).catch(() => undefined);
+      openActiveModelPickerForHarness("traycer", null, offeredAgents);
+    },
+    onChooseAnotherHost: () => {
+      void returnPendingSandboxMessage(send.id, false).then(
+        (returned) => {
+          if (returned.kind === "chat") openChatClone(request.chatId);
+        },
+        () => undefined,
+      );
+    },
+  };
+}
+
 /** Model recovery needs an undispatched message and an empty destination draft. */
 function pendingSandboxModelRecovery(input: {
   readonly send: PendingSandboxSend;
@@ -2862,9 +2903,6 @@ function PendingStagedSendItem(props: {
   });
   const sandboxList = useSandboxList();
   const { openTile } = useEpicTileNavigation();
-  const providersOpener = useConfigurationProvidersOpener(
-    stage?.target.configuration.kind === "team",
-  );
   const epicId = send.epicId;
   const run = useCallback(
     (fresh: boolean): void => {
@@ -2964,6 +3002,10 @@ function PendingStagedSendItem(props: {
     canWithdraw,
     draftOccupied: taskDraftOccupied,
   });
+  const lineRemedies = pendingMessageRemedies(send, facts.offeredAgents, {
+    onChooseModel: chooseModel,
+    onChooseAnotherHost: () => backToComposer(false, false),
+  });
   return (
     <div
       className="flex w-full flex-col gap-2"
@@ -3005,7 +3047,7 @@ function PendingStagedSendItem(props: {
               )
                 recordCancelledSandboxSend(send, returned);
             },
-            onChooseAnotherHost: () => backToComposer(false, false),
+            onChooseAnotherHost: lineRemedies.onChooseAnotherHost,
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),
@@ -3017,9 +3059,7 @@ function PendingStagedSendItem(props: {
             applyingError: newHost.applyingError,
             onStop: stop,
             onOpenTerminal: newHost.onOpenTerminal,
-            // The configuration's own Providers, a team's included.
-            onOpenProviders: providersOpener(stage.target.configuration),
-            onChooseModel: chooseModel,
+            onChooseModel: lineRemedies.onChooseModel,
           }}
         />
       )}
@@ -3039,7 +3079,7 @@ function PendingSendMessage(props: {
   return <PendingSandboxMessage text={props.send.text} />;
 }
 
-/** Existing chats keep their binding, so their setup offers only bound remedies. */
+/** An existing chat keeps its binding, so its message changes no shape. */
 function PendingSendSetupLine(props: {
   readonly requestKind: PendingSandboxSendRequest["kind"];
   readonly stage: StagedSandbox;
@@ -3052,16 +3092,7 @@ function PendingSendSetupLine(props: {
   if (requestKind !== "message")
     return <SandboxSetupLine {...line} actions={actions} />;
   return (
-    <SandboxSetupLine
-      {...line}
-      actions={{
-        ...actions,
-        onChooseAnotherHost: null,
-        onOpenTerminal: null,
-        onChangeShape: null,
-        onChooseModel: null,
-      }}
-    />
+    <SandboxSetupLine {...line} actions={{ ...actions, onChangeShape: null }} />
   );
 }
 

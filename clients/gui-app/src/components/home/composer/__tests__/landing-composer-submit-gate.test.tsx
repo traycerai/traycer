@@ -1462,7 +1462,7 @@ describe("LandingComposer direct submit gate", () => {
 
   describe("refusals at Send", () => {
     const SENTENCE =
-      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+      "Traycer Inference setup failed - not enough disk space. Free some space, then retry.";
 
     function refusal(onAction: () => void) {
       return {

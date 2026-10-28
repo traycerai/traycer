@@ -263,6 +263,11 @@ describe("useSandboxAgentGate", () => {
       action: { label: "Open Personal's Providers" },
     });
     expect(result.current.notice?.message).toContain("disk space");
+    result.current.notice?.action?.onAction();
+    expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
+      configurationId: "personal",
+      pageId: "providers",
+    });
 
     answers.providers = [
       providerRow("traycer", { status: "installed" }),
@@ -330,60 +335,85 @@ describe("useSandboxAgentGate", () => {
     expect(answers.onChooseAnotherHost).toHaveBeenCalledOnce();
   });
 
-  it("offers Personal's Providers when Traycer Inference is offered but unavailable", () => {
-    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
-    answers.harnesses = [harnessRow("traycer", { available: false })];
-    answers.providers = [providerRow("traycer", { status: "installed" })];
+  // Traycer Inference is each computer's own switch, and no Settings page
+  // reaches a sandbox's, so the refusal names it and links nowhere.
+  it.each([
+    ["Traycer", SANDBOX_HOST, "traycer"],
+    ["an agent sandboxes don't offer", SANDBOX_HOST, "claude"],
+    ["Traycer on a team's sandbox", TEAM_SANDBOX_HOST, "traycer"],
+  ] as const)(
+    "refuses %s when the sandbox's own Traycer Inference is off, with no model to choose",
+    (_label, hostId, harnessId) => {
+      answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
+      answers.harnesses = [harnessRow("traycer", { enabled: false })];
+      answers.providers = [
+        { ...providerRow("traycer", { status: "installed" }), enabled: false },
+      ];
 
-    const gate = gateOn(SANDBOX_HOST, "traycer");
+      const gate = gateOn(hostId, harnessId);
 
-    expect(gate.blocked).toBe(true);
-    expect(gate.hint).toBe(
-      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
-    );
-    expect(gate.notice).toMatchObject({
-      message:
-        "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
-      action: { label: "Open Personal's Providers" },
-      secondaryActions: [
-        { label: "Open terminal instead" },
-        { label: "Choose another host" },
-      ],
-    });
-    gate.notice?.action?.onAction();
-    expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
-      configurationId: "personal",
-      pageId: "providers",
-    });
-  });
+      expect(gate).toMatchObject({
+        blocked: true,
+        hint: "Traycer Inference is off on this sandbox, so agents can't run on it.",
+        notice: {
+          kind: "refused",
+          message:
+            "Traycer Inference is off on this sandbox, so agents can't run on it.",
+          action: null,
+          secondaryActions: [
+            { label: "Open terminal instead" },
+            { label: "Choose another host" },
+          ],
+        },
+      });
+    },
+  );
 
-  it("names the team and opens that team's own Providers on a team's sandbox", () => {
-    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
-    answers.harnesses = [harnessRow("traycer", { available: false })];
-    answers.providers = [providerRow("traycer", { status: "installed" })];
-    const gate = gateOn(TEAM_SANDBOX_HOST, "traycer");
+  it.each([
+    ["Personal's", SANDBOX_HOST],
+    ["a team's", TEAM_SANDBOX_HOST],
+  ] as const)(
+    "says no agent runs on %s sandbox whose Traycer Inference is on but unavailable",
+    (_label, hostId) => {
+      answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
+      answers.harnesses = [harnessRow("traycer", { available: false })];
+      answers.providers = [providerRow("traycer", { status: "installed" })];
 
-    expect(gate.notice).toMatchObject({
-      message:
-        "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
-      action: { label: "Open Acme's Providers" },
-    });
-    gate.notice?.action?.onAction();
-    expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
-      configurationId: "env-acme",
-      pageId: "providers",
-    });
-  });
+      const gate = gateOn(hostId, "traycer");
 
-  it("offers no link when the team's environment has not been read", () => {
+      expect(gate.notice).toMatchObject({
+        kind: "refused",
+        message: "Agents can't run on this sandbox.",
+        action: null,
+        secondaryActions: [
+          { label: "Open terminal instead" },
+          { label: "Choose another host" },
+        ],
+      });
+    },
+  );
+
+  it("offers no Providers link for a failed install while the team's environment is unread", () => {
     answers.environments = [];
     answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
-    answers.harnesses = [harnessRow("traycer", { available: false })];
-    answers.providers = [providerRow("traycer", { status: "installed" })];
+    answers.harnesses = [harnessRow("traycer", {})];
+    answers.providers = [
+      providerRow("traycer", { status: "installed" }),
+      opencodeProviderRow(
+        {
+          status: "error",
+          reason: "disk-full",
+          message: "ENOSPC",
+          retryAtMs: null,
+        },
+        {},
+      ),
+    ];
 
     const gate = gateOn(TEAM_SANDBOX_HOST, "traycer");
 
     expect(gate.blocked).toBe(true);
+    expect(gate.notice?.message).toContain("disk space");
     expect(gate.notice?.action).toBeNull();
   });
 

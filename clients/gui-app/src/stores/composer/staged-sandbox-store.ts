@@ -93,10 +93,10 @@ export type StagedSandboxFailure =
     }
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
-  /**
-   * The sandbox is up; its configuration cannot run the offered agent.
-   */
+  /** The sandbox is up, and runs no agent the send can take. */
   | { readonly kind: "no-provider" }
+  /** The sandbox is up; its own Traycer Inference switch is off. */
+  | { readonly kind: "traycer-off" }
   /** The sandbox is up, but its catalogue does not offer the requested agent. */
   | { readonly kind: "agent-not-offered"; readonly harnessId: GuiHarnessId }
   /**
@@ -179,6 +179,7 @@ export function refusedBeforeCreate(
     case "settings":
     case "timed-out":
     case "no-provider":
+    case "traycer-off":
     case "agent-not-offered":
     case "agent-setup-failed":
     case "not-sent":
