@@ -316,19 +316,22 @@ interface DispatchCase {
   readonly rpcMethod: string;
   readonly rpcParams: unknown;
   readonly localWrite: LocalWriteName | null;
+  /** Cloud mutations one gesture registers: a retirement resolves and clears. */
+  readonly cloudMutations: number;
 }
 
 const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
   {
-    name: "resolveNotice",
+    name: "retireNotice",
     kind: "per-entry",
     feedId: cloudNotificationFeedId(NOTICE_ID),
     invoke: (actions, row) => {
-      actions.resolveNotice(row);
+      actions.retireNotice(row);
     },
     rpcMethod: "host.notifications.cloudFeed.resolve",
     rpcParams: { entryId: NOTICE_ID },
     localWrite: "resolveNoticeLocally",
+    cloudMutations: 2,
   },
   {
     name: "markAsRead",
@@ -340,6 +343,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.markRead",
     rpcParams: { entryId: NOTICE_ID },
     localWrite: "markReadLocally",
+    cloudMutations: 1,
   },
   {
     name: "clear",
@@ -351,6 +355,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.clear",
     rpcParams: { entryId: NOTICE_ID },
     localWrite: null,
+    cloudMutations: 1,
   },
   {
     name: "markEntityAsRead",
@@ -362,6 +367,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.markRead",
     rpcParams: { entryId: CHAT_ID },
     localWrite: "beginEntityRead",
+    cloudMutations: 1,
   },
   {
     name: "markAllAsRead",
@@ -373,6 +379,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.markAllRead",
     rpcParams: { observedVersion: FEED_VERSION },
     localWrite: "markAllReadLocally",
+    cloudMutations: 1,
   },
   {
     name: "clearAll",
@@ -384,6 +391,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.clearAll",
     rpcParams: { observedVersion: FEED_VERSION },
     localWrite: null,
+    cloudMutations: 1,
   },
 ];
 
@@ -930,7 +938,7 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
       const { actions, row } = subject.current();
 
       act(() => {
-        actions.resolveNotice(row);
+        actions.retireNotice(row);
       });
       await waitFor(() => {
         expect(replaced).toBe(true);
@@ -1142,7 +1150,9 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
             dispatchCase.invoke(actions, row);
             transition.apply(subject);
           });
-          expect(cloudMutationCount(subject.queryClient)).toBe(1);
+          expect(cloudMutationCount(subject.queryClient)).toBe(
+            dispatchCase.cloudMutations,
+          );
 
           // An entity read fixes its feed when the gesture starts, so one
           // queued across a replacement is refused like a bulk gesture.

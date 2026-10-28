@@ -309,6 +309,16 @@ function stageCreated(
   });
 }
 
+/**
+ * A settings failure is reported only after the run's own read saw the new
+ * row awake, and that read fills the list every surface reads.
+ */
+function listCreatedAwake(): void {
+  mocks.sandboxes = [
+    sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state: "awake" }),
+  ];
+}
+
 function Harness(props: {
   readonly openTerminal: (target: TerminalLaunchTarget) => void;
 }) {
@@ -408,6 +418,7 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("repairs the settings on the new host, then resumes the wait", () => {
+    listCreatedAwake();
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     mount(vi.fn());
 
@@ -425,6 +436,7 @@ describe("useStagedSandboxSend's setup line", () => {
 
   describe("the run's settings read", () => {
     function runDeps(): StagedSandboxRunDeps {
+      listCreatedAwake();
       stageCreated("applying", { kind: "settings", code: "SBX-0520" });
       mount(vi.fn());
       fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
@@ -476,6 +488,7 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("does not resume the wait when the guest is configured but the settings did not apply", () => {
+    listCreatedAwake();
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     mocks.repairMutate.mockImplementationOnce((_variables, options) => {
       options.onSuccess({ guestConfigured: true, settingsApplied: false });
@@ -564,6 +577,7 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("starts nothing when another sandbox was picked while the repair ran", () => {
+    listCreatedAwake();
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     let finishRepair: () => void = () => undefined;
     mocks.repairMutate.mockImplementationOnce((_variables, options) => {
