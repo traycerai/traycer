@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   SimulatorSession,
   SimulatorState,
@@ -117,11 +123,17 @@ export function SimulatorTile(props: SimulatorTileProps) {
   const state = sessions.state;
   const hostClient = useTabHostClient();
   const viewerUserId = useRequestContextUserId(hostClient);
-  const v11 =
-    simulatorVerbsAreV11(
-      useHostNegotiatedMethodVersion(hostClient, "simulator.open"),
-    ) === true;
-  const session = findSessionFor(state, node.simulatorId, v11, viewerUserId);
+  const v11 = simulatorVerbsAreV11(
+    useHostNegotiatedMethodVersion(hostClient, "simulator.open"),
+  );
+  // Nothing about the host's verbs is decided while no handshake has
+  // completed. Reading that `null` as `@1.0` would match an agent's session
+  // as this viewer's, and a snapshot landing in that window latches
+  // `wasLive`, which turns the recovery open off for the tile's whole life.
+  const session =
+    v11 === null
+      ? null
+      : findSessionFor(state, node.simulatorId, v11, viewerUserId);
   const { openedHere, onOpened, wasLive } = useSessionMemory(session);
   const connectRequest = usePendingSimulatorConnectRequest(node.id);
   useEffect(() => {
@@ -171,49 +183,16 @@ export function SimulatorTile(props: SimulatorTileProps) {
     }
     return <SimulatorLoadingView hostLabel={hostLabel} />;
   }
-  const noPlatform = state.platforms.every((platform) => !platform.available);
-  if (state.packState.kind === "unsupported" || noPlatform) {
-    return (
-      <SimulatorUnavailableView
-        hostLabel={hostLabel}
-        platforms={state.platforms}
-        reason={
-          state.packState.kind === "unsupported" ? state.packState.reason : null
-        }
-      />
-    );
-  }
-  if (state.packState.kind === "off") {
-    return (
-      <SimulatorSetupGate hostId={hostId} hostLabel={hostLabel} state={state} />
-    );
-  }
-  if (state.packState.kind === "installing") {
-    return (
-      <SimulatorInstallingView
-        hostLabel={hostLabel}
-        progress={state.packState.progress}
-      />
-    );
-  }
-  if (state.packState.kind === "failed") {
-    return (
-      <SimulatorFailedView
-        title={`Couldn't set up mobile simulators on ${hostLabel}`}
-        reason={state.packState.reason}
-        onRetry={sessions.refresh}
-      />
-    );
-  }
-  if (state.hubState.kind === "failed") {
-    return (
-      <SimulatorFailedView
-        title={`Mobile simulators stopped on ${hostLabel}`}
-        reason={state.hubState.lastError}
-        onRetry={sessions.refresh}
-      />
-    );
-  }
+  const notReady = simulatorNotReadyView({
+    state,
+    hostId,
+    hostLabel,
+    onRetry: sessions.refresh,
+  });
+  if (notReady !== null) return notReady;
+  // Everything below turns on which verbs the host speaks, so the tile waits
+  // for the answer rather than acting on the older of the two readings.
+  if (v11 === null) return <SimulatorLoadingView hostLabel={hostLabel} />;
   if (session === null) {
     return (
       <SimulatorInventoryGate
@@ -241,6 +220,68 @@ export function SimulatorTile(props: SimulatorTileProps) {
       onCloseTile={closeTile}
     />
   );
+}
+
+/**
+ * What the host's simulator subsystem says before any session can exist: no
+ * platform or no pack, the pack still arriving or failed, the hub stopped.
+ * Null once the machine is ready and the tile's own state decides.
+ */
+function simulatorNotReadyView(args: {
+  readonly state: SimulatorState;
+  readonly hostId: string;
+  readonly hostLabel: string;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const { state, hostLabel } = args;
+  const noPlatform = state.platforms.every((platform) => !platform.available);
+  if (state.packState.kind === "unsupported" || noPlatform) {
+    return (
+      <SimulatorUnavailableView
+        hostLabel={hostLabel}
+        platforms={state.platforms}
+        reason={
+          state.packState.kind === "unsupported" ? state.packState.reason : null
+        }
+      />
+    );
+  }
+  if (state.packState.kind === "off") {
+    return (
+      <SimulatorSetupGate
+        hostId={args.hostId}
+        hostLabel={hostLabel}
+        state={state}
+      />
+    );
+  }
+  if (state.packState.kind === "installing") {
+    return (
+      <SimulatorInstallingView
+        hostLabel={hostLabel}
+        progress={state.packState.progress}
+      />
+    );
+  }
+  if (state.packState.kind === "failed") {
+    return (
+      <SimulatorFailedView
+        title={`Couldn't set up mobile simulators on ${hostLabel}`}
+        reason={state.packState.reason}
+        onRetry={args.onRetry}
+      />
+    );
+  }
+  if (state.hubState.kind === "failed") {
+    return (
+      <SimulatorFailedView
+        title={`Mobile simulators stopped on ${hostLabel}`}
+        reason={state.hubState.lastError}
+        onRetry={args.onRetry}
+      />
+    );
+  }
+  return null;
 }
 
 /**
@@ -600,7 +641,7 @@ function LiveSimulatorTile(props: {
         onToggleSettings={action.supported ? onToggleSettings : null}
         settingsOpen={settingsOpen}
         onPowerOff={powerOff.onPowerOff}
-        confirmsPowerOff={!v11}
+        powerOffEndsEveryTask={v11}
         powerOffPending={powerOff.pending}
         onClose={onClose}
       />

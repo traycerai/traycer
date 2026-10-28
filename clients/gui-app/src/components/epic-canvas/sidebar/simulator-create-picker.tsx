@@ -1,5 +1,14 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Smartphone } from "lucide-react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   SimulatorHostInstance,
   SimulatorListResponse,
@@ -29,7 +38,7 @@ import { useServingLocalHostId } from "@/hooks/browser/use-browser-open-host";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
@@ -38,12 +47,15 @@ import {
   useSimulatorConfigSetMutation,
   useSimulatorInstancesQuery,
   useSimulatorListQuery,
+  useSimulatorStatusQuery,
 } from "@/hooks/simulator/use-simulator-mutations";
 import {
   useSimulatorInstanceOpen,
   type SimulatorOpenTarget,
 } from "@/hooks/simulator/use-simulator-instance-open";
+import type { HostRpcRegistry } from "@/lib/host";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { suggestedSimulatorHostId } from "@/lib/simulator-view/suggested-simulator-host";
@@ -165,6 +177,41 @@ function useSuggestedSimulatorHostId(tabId: string): string | null {
   });
 }
 
+/**
+ * Keeps the picker's devices with the host's pack. `simulator.list` carries
+ * both the pack state the footer reads and the devices the tools enumerate,
+ * but it neither polls nor moves on its own, so a Turn on - which installs
+ * the tools before anything can be listed - would otherwise leave the picker
+ * on its off state until it was closed and reopened. `simulator.status` is
+ * what the rest of the app watches through that install (its row polls while
+ * the pack is installing), so the list is asked again whenever that pack
+ * state moves.
+ */
+function useSimulatorListFollowsPack(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+): void {
+  const status = useSimulatorStatusQuery(client, hostId);
+  const packKind = status.data?.packState.kind ?? null;
+  const queryClient = useQueryClient();
+  const seen = useRef<{ hostId: string; packKind: string } | null>(null);
+  useEffect(() => {
+    if (hostId === null || packKind === null) return;
+    const previous = seen.current;
+    seen.current = { hostId, packKind };
+    // The first read of a host says nothing: the list was fetched with it.
+    if (
+      previous === null ||
+      previous.hostId !== hostId ||
+      previous.packKind === packKind
+    )
+      return;
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, "simulator.list"),
+    });
+  }, [hostId, packKind, queryClient]);
+}
+
 export function SimulatorCreatePickerBody(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -189,8 +236,9 @@ export function SimulatorCreatePickerBody(props: {
   const v11 = simulatorVerbsAreV11(
     useHostNegotiatedMethodVersion(client, "simulator.open"),
   );
-  const listSupported = useHostSupportsMethod(hostId, "simulator.list");
+  const listSupport = useHostMethodSupport(hostId, "simulator.list");
   const list = useSimulatorListQuery(client, hostId, epicId);
+  useSimulatorListFollowsPack(client, hostId);
   const instances = useSimulatorInstancesQuery(client, hostId, true);
   const { open } = useSimulatorInstanceOpen(epicId);
   const { openTile } = useEpicTileNavigation();
@@ -220,7 +268,8 @@ export function SimulatorCreatePickerBody(props: {
     hostId,
     hostName,
     offline,
-    listSupported,
+    listSupport,
+    unreachable: list.isError,
     noPlatform:
       state !== null &&
       state.platforms.every((platform) => !platform.available),
@@ -244,15 +293,32 @@ export function SimulatorCreatePickerBody(props: {
           onPick={pick}
         />
       </div>
-      {v11 === false && state !== null ? (
-        <p className="border-t border-border px-3 py-2 text-ui-xs text-muted-foreground">
-          {hostName} needs an update before it can boot another copy.
-        </p>
-      ) : null}
+      {state === null ? null : (
+        <BootAnotherNote v11={v11} hostName={hostName} />
+      )}
       {state?.packState.kind === "off" && hostId !== null ? (
         <SimulatorsOffFooter hostId={hostId} hostName={hostName} />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Why Boot another is unavailable. It is refused whenever the version is not
+ * known to be `@1.1`, so both of those states say so: an old machine cannot
+ * boot a copy at all, and one still being asked may yet be able to.
+ */
+function BootAnotherNote(props: {
+  readonly v11: boolean | null;
+  readonly hostName: string;
+}) {
+  if (props.v11 === true) return null;
+  return (
+    <p className="border-t border-border px-3 py-2 text-ui-xs text-muted-foreground">
+      {props.v11 === false
+        ? `${props.hostName} needs an update before it can boot another copy.`
+        : `Asking ${props.hostName} about mobile simulators.`}
+    </p>
   );
 }
 
@@ -302,17 +368,27 @@ function PickerTopRow(props: {
   );
 }
 
+/**
+ * The sentence that replaces the two sections, or null to draw them.
+ *
+ * `listSupport` is the manifest's three states, and only the middle one is a
+ * fact about the machine's age: `null` is "not addressed yet", which the read
+ * itself resolves, so it draws the loading state and never the update line.
+ * A machine that cannot be reached says so instead of spinning.
+ */
 function pickerNote(args: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly offline: boolean;
-  readonly listSupported: boolean;
+  readonly listSupport: boolean | null;
+  readonly unreachable: boolean;
   readonly noPlatform: boolean;
 }): string | null {
   if (args.hostId === null) return "No machine to run simulators on.";
   if (args.offline) return `${args.hostName} is offline.`;
-  if (!args.listSupported)
+  if (args.listSupport === false)
     return `${args.hostName} needs an update before it can run simulators.`;
+  if (args.unreachable) return `Couldn't reach ${args.hostName}.`;
   if (args.noPlatform) return `${args.hostName} can't run simulators.`;
   return null;
 }

@@ -52,7 +52,12 @@ export interface SimulatorToolbarProps {
    * Whether Power off asks here first. A `@1.1` host asks through its own
    * `confirm-required` answer, only while an agent is mid-turn on it.
    */
-  readonly confirmsPowerOff: boolean;
+  /**
+   * Whether powering off reaches past this task: on a `@1.1` host it ends
+   * every task's session on the instance and deletes a copy, where a `@1.0`
+   * host's shutdown is this task's own. The confirm says which.
+   */
+  readonly powerOffEndsEveryTask: boolean;
   readonly powerOffPending: boolean;
   /** The Agent badge, while an agent's session drives this instance. */
   readonly drivenByAgent: boolean;
@@ -62,8 +67,8 @@ export interface SimulatorToolbarProps {
 /**
  * The tile's chrome: the device's name, its hardware buttons for the
  * platform it is, rotate, a screenshot, the settings drawer, power off
- * (confirmed, because it shuts the simulator down for every viewer) and close
- * (this tile only).
+ * (always confirmed, because it shuts the simulator down for every viewer,
+ * on whichever host) and close (this tile only).
  */
 export function SimulatorToolbar(props: SimulatorToolbarProps) {
   const [confirmPowerOff, setConfirmPowerOff] = useState(false);
@@ -197,10 +202,7 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
             aria-label="Power off"
             disabled={props.onPowerOff === null || props.powerOffPending}
             data-testid="simulator-power-off"
-            onClick={() => {
-              if (props.confirmsPowerOff) setConfirmPowerOff(true);
-              else props.onPowerOff?.();
-            }}
+            onClick={() => setConfirmPowerOff(true)}
           >
             {props.powerOffPending ? (
               <AgentSpinningDots
@@ -236,7 +238,11 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
         open={confirmPowerOff}
         onOpenChange={setConfirmPowerOff}
         title={`Power off ${props.simulatorName}?`}
-        description="The simulator shuts down for everyone viewing it in this task. Apps installed on it stay installed."
+        description={
+          props.powerOffEndsEveryTask
+            ? "Power off ends every task's session on it. A copy is deleted when it powers off."
+            : "The simulator shuts down for everyone viewing it in this task. Apps installed on it stay installed."
+        }
         cascadeSummary={null}
         actionLabel="Power off"
         isPending={false}

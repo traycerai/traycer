@@ -772,6 +772,60 @@ describe("Mobile simulators panel", () => {
       expect(place).not.toHaveBeenCalled();
     });
 
+    it("says Opening for a watch of a running instance and Booting for a cold device", async () => {
+      renderPanel(vi.fn());
+
+      fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+
+      // Nothing boots: the instance is already running and the open only adds
+      // the person's session to it.
+      expect(await screen.findByText("Opening")).toBeTruthy();
+      expect(screen.queryByText("Booting")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+
+      expect(await screen.findByText("Booting")).toBeTruthy();
+    });
+
+    it("watches the row's instance from the panel: an open naming it, and the tile placed on its answer", async () => {
+      // The person's own session ended elsewhere; only the agent's holds the
+      // instance, so the row has to ask for a session of its own rather than
+      // focus a tile that would attach to nothing.
+      setCatalog([record("session-agent", { drivenByAgent: true })]);
+      let answer: (response: SimulatorOpenResponse) => void = () => undefined;
+      host_.openAnswer = () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        });
+      renderPanel(vi.fn());
+
+      fireEvent.click(await screen.findByTestId("epic-simulator-row-udid-1"));
+
+      await waitFor(() => {
+        expect(host_.opens).toHaveLength(1);
+      });
+      expect(host_.opens[0]).toMatchObject({
+        epicId: EPIC,
+        simulatorId: "udid-1",
+        platform: "ios",
+        boot: true,
+        instance: "udid-1",
+      });
+      expect(world.openTile).not.toHaveBeenCalled();
+
+      act(() => {
+        answer(openResponse("session-mine"));
+      });
+
+      await waitFor(() => {
+        expect(world.openTile).toHaveBeenCalledTimes(1);
+      });
+      expect(world.openTile.mock.calls[0][0]).toMatchObject({
+        node: { type: "simulator", hostId: HOST, simulatorId: "udid-1" },
+        gesture: "explicit",
+      });
+    });
+
     it("drops the row at once when a Watch's answer names a session the catalog already holds", async () => {
       const place = vi.fn();
       setCatalog([record("session-held", {})]);

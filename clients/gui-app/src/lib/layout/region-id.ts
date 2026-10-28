@@ -31,7 +31,7 @@ export type DockRegionId =
   | "todo";
 
 /**
- * The sidebar rail's eleven panels. Named for what they are rather than for the
+ * The sidebar rail's ten panels. Named for what they are rather than for the
  * panel ids they map onto (`chats` is titled "Agents"), which is what the rail
  * shows and what a person searching for one would type.
  */

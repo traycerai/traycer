@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -18,7 +19,9 @@ import {
 import type {
   SimulatorHostInstance,
   SimulatorOpenResponse,
+  SimulatorPackState,
   SimulatorState,
+  SimulatorStatusResponse,
 } from "@traycer/protocol/host/simulator/schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -26,6 +29,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { resetSimulatorPendingOpensForTests } from "@/stores/epics/simulator-pending-opens-store";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
@@ -35,6 +39,8 @@ const EPIC = "epic-1";
 const world = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
   negotiated: null as SchemaVersion | false | null,
+  /** The manifest registry's three states for every simulator method. */
+  support: true as boolean | null,
   openTile: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -77,8 +83,8 @@ vi.mock("@/lib/host/read-negotiated-method-version", () => ({
   readNegotiatedMethodVersion: () => world.negotiated,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostSupportsMethod: () => true,
-  useHostMethodSupport: () => true,
+  useHostSupportsMethod: () => world.support === true,
+  useHostMethodSupport: () => world.support,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: world.openTile }),
@@ -103,33 +109,64 @@ vi.mock("sonner", () => ({ toast: { error: world.toastError } }));
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { SimulatorCreatePicker } from "../simulator-create-picker";
 
+const DEVICES: SimulatorState["simulators"] = [
+  {
+    simulatorId: "udid-1",
+    platform: "ios",
+    name: "iPhone 16",
+    version: "18.0",
+    booted: true,
+    physical: false,
+  },
+  {
+    simulatorId: "udid-cold",
+    platform: "ios",
+    name: "iPad Air",
+    version: "18.0",
+    booted: false,
+    physical: false,
+  },
+];
+
 const LIST: SimulatorState = {
   revision: 1,
   hostId: HOST,
   platforms: [{ platform: "ios", available: true, reason: null }],
   packState: { kind: "ready", reason: null, progress: null },
   hubState: { kind: "running", lastError: null },
-  simulators: [
-    {
-      simulatorId: "udid-1",
-      platform: "ios",
-      name: "iPhone 16",
-      version: "18.0",
-      booted: true,
-      physical: false,
-    },
-    {
-      simulatorId: "udid-cold",
-      platform: "ios",
-      name: "iPad Air",
-      version: "18.0",
-      booted: false,
-      physical: false,
-    },
-  ],
+  simulators: DEVICES,
   sessions: [],
   booting: [],
 };
+
+const READY_PACK: SimulatorPackState = {
+  kind: "ready",
+  reason: null,
+  progress: null,
+};
+
+/**
+ * The host's pack, which both reads carry. Without the tools there is nothing
+ * to enumerate, so the list answers with no devices until the pack is ready.
+ */
+const pack: { state: SimulatorPackState } = { state: READY_PACK };
+
+function listNow(): SimulatorState {
+  return {
+    ...LIST,
+    packState: pack.state,
+    simulators: pack.state.kind === "ready" ? DEVICES : [],
+  };
+}
+
+function statusNow(): SimulatorStatusResponse {
+  return {
+    platforms: LIST.platforms,
+    packState: pack.state,
+    packVersion: null,
+    installed: null,
+  };
+}
 
 const RUNNING: SimulatorHostInstance = {
   instanceKey: "udid-1",
@@ -149,6 +186,8 @@ const RUNNING: SimulatorHostInstance = {
 };
 
 const opens: unknown[] = [];
+/** Whether the picker reached the host at all: the read that handshakes it. */
+const reads = { list: 0 };
 
 function answer(): SimulatorOpenResponse {
   return {
@@ -165,15 +204,29 @@ function answer(): SimulatorOpenResponse {
   };
 }
 
-function wrap(children: ReactNode) {
-  const queryClient = new QueryClient({
+let queryClient: QueryClient;
+
+function freshQueryClient(): void {
+  queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+}
+
+function wrap(children: ReactNode) {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>{children}</TooltipProvider>
     </QueryClientProvider>
   );
+}
+
+/** Makes the next `simulator.status` read happen now, as its pack poll would. */
+async function tickPackPoll(): Promise<void> {
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(HOST, "simulator.status"),
+    });
+  });
 }
 
 async function openPicker() {
@@ -196,7 +249,11 @@ async function openPicker() {
 describe("SimulatorCreatePicker", () => {
   beforeEach(() => {
     resetSimulatorPendingOpensForTests();
+    freshQueryClient();
     opens.length = 0;
+    reads.list = 0;
+    pack.state = READY_PACK;
+    world.support = true;
     world.negotiated = { major: 1, minor: 1 };
     world.openTile.mockReset();
     world.toastError.mockReset();
@@ -204,8 +261,17 @@ describe("SimulatorCreatePicker", () => {
       registry: hostRpcRegistry,
       requestId: () => "request",
       handlers: {
-        "simulator.list": () => LIST,
+        "simulator.list": () => {
+          reads.list += 1;
+          return listNow();
+        },
+        "simulator.status": () => statusNow(),
         "simulator.instances": () => ({ instances: [RUNNING] }),
+        "config.simulator.set": () => {
+          // The host takes the flip and starts fetching the tools.
+          pack.state = { kind: "installing", reason: null, progress: 0 };
+          return { enabled: true, idleMinutes: 15 };
+        },
         "simulator.open": (params) => {
           opens.push(params);
           return answer();
@@ -277,6 +343,67 @@ describe("SimulatorCreatePicker", () => {
     expect(new Set(requestIds).size).toBe(3);
   });
 
+  it("leaves the off state and lists the cold devices once the switch is on and the pack has installed", async () => {
+    pack.state = { kind: "off", reason: null, progress: null };
+    const user = await openPicker();
+    const turnOn = await screen.findByTestId("simulator-create-picker-turn-on");
+    expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+
+    await user.click(turnOn);
+
+    // The switch-on's own answer: the picker stops saying simulators are off.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("simulator-create-picker-turn-on"),
+      ).toBeNull();
+    });
+    expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+
+    pack.state = READY_PACK;
+    await tickPackPoll();
+
+    expect(
+      await screen.findByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+  });
+
+  const TOO_OLD = "Studio Mac needs an update before it can run simulators.";
+
+  it("reaches a machine this window has not addressed instead of calling it too old", async () => {
+    // Nothing is known about this machine yet: no handshake has completed, so
+    // the registry answers `null` for every simulator method.
+    world.support = null;
+    world.negotiated = null;
+    await openPicker();
+
+    // The read is what handshakes the machine, so it has to go out.
+    await waitFor(() => {
+      expect(reads.list).toBeGreaterThan(0);
+    });
+    expect(
+      await screen.findByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+    expect(screen.queryByText(TOO_OLD)).toBeNull();
+    // Boot another cannot be offered until the version is known - but then it
+    // says so rather than sitting dead.
+    expect(
+      within(screen.getByTestId("simulator-picker-running-udid-1")).getByRole(
+        "button",
+        { name: "Boot another" },
+      ),
+    ).toHaveProperty("disabled", true);
+    expect(screen.getByText("Asking Studio Mac about mobile simulators.")).
+      toBeTruthy();
+  });
+
+  it("says a machine whose manifest lacks the read needs an update, and asks it nothing", async () => {
+    world.support = false;
+    await openPicker();
+
+    expect(await screen.findByText(TOO_OLD)).toBeTruthy();
+    expect(reads.list).toBe(0);
+  });
+
   it("disables Boot another toward a 1.0 host, says why, and sends nothing for it", async () => {
     world.negotiated = { major: 1, minor: 0 };
     const user = await openPicker();
@@ -301,7 +428,11 @@ describe("SimulatorCreatePicker", () => {
 describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
   beforeEach(() => {
     resetSimulatorPendingOpensForTests();
+    freshQueryClient();
     opens.length = 0;
+    reads.list = 0;
+    pack.state = READY_PACK;
+    world.support = true;
     world.negotiated = { major: 1, minor: 0 };
     world.toastError.mockReset();
     world.client = null;
