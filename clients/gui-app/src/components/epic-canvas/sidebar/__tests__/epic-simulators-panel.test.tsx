@@ -848,5 +848,64 @@ describe("Mobile simulators panel", () => {
       expect(screen.queryByText("Booting")).toBeNull();
       expect(place).not.toHaveBeenCalled();
     });
+
+    it("takes a second Watch's session for the first open, whose requestId the host moved off it", async () => {
+      const place = vi.fn();
+      host_.openAnswer = () =>
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "The host did not answer in time.",
+            requestId: "request",
+            method: "simulator.open",
+            fatalDetails: null,
+          }),
+        );
+      publishStream({});
+      renderPanel(place);
+
+      fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+      const first = await waitFor(() => {
+        const [id] = Object.keys(
+          useSimulatorPendingOpensStore.getState().byRequestId,
+        );
+        expect(id).toBeDefined();
+        return id;
+      });
+      publishStream({ opening: [{ requestId: first }] });
+      await waitFor(() => {
+        expect(
+          useSimulatorPendingOpensStore.getState().byRequestId[first]
+            ?.seenOpening,
+        ).toBe(true);
+      });
+
+      // The second Watch of the instance is answered with the SAME live
+      // session, and the host stamps it with that open's requestId - so the
+      // first open's id is now on nothing the host publishes.
+      host_.openAnswer = () => Promise.resolve(openResponse("session-held"));
+      fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+      const second = await waitFor(() => {
+        const id = Object.keys(
+          useSimulatorPendingOpensStore.getState().byRequestId,
+        ).find((item) => item !== first);
+        expect(id).toBeDefined();
+        return id;
+      });
+      publishStream({
+        opening: [],
+        sessions: [
+          { ...openResponse("session-held").session, requestId: second },
+        ],
+      });
+
+      await waitFor(() => {
+        expect(
+          useSimulatorPendingOpensStore.getState().byRequestId[first]
+            ?.sessionId,
+        ).toBe("session-held");
+      });
+      expect(world.toastError).not.toHaveBeenCalled();
+    });
   });
 });

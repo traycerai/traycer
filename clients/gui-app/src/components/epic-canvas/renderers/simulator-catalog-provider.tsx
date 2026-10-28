@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useSimulatorCatalogInventory } from "@/hooks/simulator/use-simulator-catalog-inventory";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
@@ -32,6 +33,9 @@ export function SimulatorCatalogProvider(props: {
   const { epicId } = props;
   const readerClient = useEpicSessionHostClient();
   const catalog = useSimulatorCatalogInventory({ epicId, readerClient });
+  // The person the opens are: the catalog is read per user, and a session of
+  // theirs carries this id whichever machine it runs on.
+  const viewerUserId = useRequestContextUserId(readerClient);
   const byRequestId = useSimulatorPendingOpensStore(
     (state) => state.byRequestId,
   );
@@ -72,6 +76,7 @@ export function SimulatorCatalogProvider(props: {
           key={hostId}
           epicId={epicId}
           hostId={hostId}
+          viewerUserId={viewerUserId}
         />
       ))}
       {lost.map((open) => (
@@ -79,6 +84,7 @@ export function SimulatorCatalogProvider(props: {
           key={open.requestId}
           epicId={epicId}
           open={open}
+          viewerUserId={viewerUserId}
         />
       ))}
       {props.children}
@@ -95,8 +101,9 @@ export function SimulatorCatalogProvider(props: {
 function SimulatorPendingOpensWatcher(props: {
   readonly epicId: string;
   readonly hostId: string;
+  readonly viewerUserId: string | null;
 }) {
-  const { epicId, hostId } = props;
+  const { epicId, hostId, viewerUserId } = props;
   const sessions = useSimulatorSessionsForHost({ hostId, epicId });
   const byRequestId = useSimulatorPendingOpensStore(
     (state) => state.byRequestId,
@@ -106,7 +113,7 @@ function SimulatorPendingOpensWatcher(props: {
     if (lifecycle !== "live" || state === null) return;
     for (const open of simulatorPendingOpensForEpic(byRequestId, epicId)) {
       if (open.hostId !== hostId) continue;
-      const verdict = simulatorPendingOpenVerdict(open, state);
+      const verdict = simulatorPendingOpenVerdict(open, state, viewerUserId);
       if (verdict.kind === "session") {
         const { session } = verdict;
         if (open.sessionId === null && session.sessionId !== undefined)
@@ -137,7 +144,7 @@ function SimulatorPendingOpensWatcher(props: {
       removeSimulatorPendingOpen(open.requestId);
       toast.error(`Couldn't open ${open.name}.`);
     }
-  }, [byRequestId, epicId, hostId, lifecycle, state]);
+  }, [byRequestId, epicId, hostId, lifecycle, state, viewerUserId]);
   return null;
 }
 
@@ -159,8 +166,9 @@ function SimulatorPendingOpensWatcher(props: {
 function SimulatorLostOpenResolver(props: {
   readonly epicId: string;
   readonly open: SimulatorPendingOpen;
+  readonly viewerUserId: string | null;
 }) {
-  const { epicId, open } = props;
+  const { epicId, open, viewerUserId } = props;
   const binding = useHostBinding();
   const client = resolveNamedHostClient(binding, open.hostId);
   const supported = useHostSupportsMethod(open.hostId, "simulator.list");
@@ -187,9 +195,12 @@ function SimulatorLostOpenResolver(props: {
     // The stream has spoken for this open since the read went out, and its
     // verdict is the stream's to finish.
     if (current.sessionId !== null || current.seenOpening) return;
-    if (simulatorPendingOpenVerdict(current, data).kind !== "gone") return;
+    if (
+      simulatorPendingOpenVerdict(current, data, viewerUserId).kind !== "gone"
+    )
+      return;
     removeSimulatorPendingOpen(requestId);
     toast.error(`Couldn't open ${current.name}.`);
-  }, [data, requestId]);
+  }, [data, requestId, viewerUserId]);
   return null;
 }
