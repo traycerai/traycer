@@ -372,6 +372,26 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: ["Xcode", "Android SDK", "ANDROID_HOME"],
   },
+  simulatorRunningNow: {
+    kind: "row",
+    group: "mobileSimulators",
+    search: { contributesTo: "simulatorsTab" },
+    label: "Running now",
+    description:
+      "Power off ends every task's session on it. A copy is deleted when it powers off.",
+    availableWhen: alwaysAvailable,
+    keywords: ["instance", "clone", "power off", "keep running", "idle"],
+  },
+  simulatorIdleWindow: {
+    kind: "row",
+    group: "mobileSimulators",
+    search: { contributesTo: "simulatorsTab" },
+    label: "Power off when idle",
+    description:
+      "Minutes a simulator Traycer started stays on with nothing using it.",
+    availableWhen: alwaysAvailable,
+    keywords: ["idle", "timeout", "minutes", "battery", "memory"],
+  },
   simulatorTools: {
     kind: "row",
     group: "mobileSimulators",

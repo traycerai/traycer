@@ -107,11 +107,6 @@ import {
   TILE_KIND_SIMULATOR,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
-import {
-  tabSurfaceKey,
-  useSurfaceHostSelectionStore,
-} from "@/stores/host/surface-host-selection-store";
-
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -153,8 +148,7 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
-  // Mobile simulators are listed as a group inside the Browsers panel.
-  if (tabType === TILE_KIND_SIMULATOR) return "browsers";
+  if (tabType === TILE_KIND_SIMULATOR) return "simulators";
   return "artifacts";
 }
 
@@ -406,14 +400,6 @@ export const TabGroupView = memo(function TabGroupView(
         tab === undefined ? null : sidebarRevealNodeIdForTab(tab);
       if (sidebarNodeId !== null) {
         requestSidebarNodeReveal(tabId, sidebarNodeId);
-      }
-      // The Simulators group lists one host's simulators, so it is pinned to
-      // the tab's host or the row to reveal may not be listed. Browser rows
-      // are listed for every device, so a browser tab leaves the pin alone.
-      if (tab?.type === TILE_KIND_SIMULATOR) {
-        useSurfaceHostSelectionStore
-          .getState()
-          .setSelection(tabSurfaceKey("browsers", tabId), tab.hostId);
       }
       setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },

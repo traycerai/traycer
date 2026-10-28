@@ -1,3 +1,4 @@
+import type { SimulatorSessionEndReason } from "@traycer/protocol/host/simulator/catalog-contracts";
 import type {
   SimulatorPlatform,
   SimulatorSummary,
@@ -23,4 +24,39 @@ export function simulatorVersionLabel(
   if (version.length === 0) return platform;
   if (version.toLowerCase().startsWith(platform.toLowerCase())) return version;
   return `${platform} ${version}`;
+}
+
+/**
+ * The countdown an idle instance shows: "Idle · powers off in 7 min", rounded
+ * up so the last minute still reads "in 1 min". Null while the instance has
+ * no deadline (in use, kept running, or booted outside Traycer).
+ */
+export function simulatorIdleCountdownLabel(
+  idleUntil: number | null,
+  nowMs: number,
+): string | null {
+  if (idleUntil === null) return null;
+  const minutes = Math.max(1, Math.ceil((idleUntil - nowMs) / 60_000));
+  return `Idle · powers off in ${minutes} min`;
+}
+
+/** Why a closed row's session ended, as its notice says it. */
+export function simulatorSessionEndedLabel(
+  reason: SimulatorSessionEndReason,
+): string {
+  switch (reason) {
+    case "idle":
+      return "Powered off after being idle";
+    case "powerOff":
+    case "shutdown":
+      return "Powered off";
+    case "archived":
+      return "Ended when its agent was archived";
+    case "switchOff":
+      return "Ended when mobile simulators were turned off";
+    case "cold":
+      return "Shut down outside Traycer";
+    case "rebooted":
+      return "Restarted outside Traycer";
+  }
 }

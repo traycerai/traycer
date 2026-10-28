@@ -31,7 +31,7 @@ export type DockRegionId =
   | "todo";
 
 /**
- * The sidebar rail's ten panels. Named for what they are rather than for the
+ * The sidebar rail's eleven panels. Named for what they are rather than for the
  * panel ids they map onto (`chats` is titled "Agents"), which is what the rail
  * shows and what a person searching for one would type.
  */
@@ -39,6 +39,7 @@ export type RailRegionId =
   | "railAgents"
   | "railTerminals"
   | "railBrowsers"
+  | "railSimulators"
   | "railArtifacts"
   | "railGitDiff"
   | "railPullRequests"
@@ -55,7 +56,10 @@ export type RailRegionId =
 export type ChatDisplayRegionId = "toolActivity" | "thinking" | "timestamps";
 
 /** The rail panels whose presence rule can leave them out, and so offer Auto. */
-export type AutoRailRegionId = "railPullRequests" | "railComments";
+export type AutoRailRegionId =
+  | "railSimulators"
+  | "railPullRequests"
+  | "railComments";
 
 export type RegionId =
   | "homeTab"

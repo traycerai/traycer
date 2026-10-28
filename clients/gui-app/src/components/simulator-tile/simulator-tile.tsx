@@ -16,12 +16,14 @@ import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for"
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   useSimulatorActionMutation,
-  useSimulatorCloseMutation,
   useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
   useSimulatorOpenMutation,
-  useSimulatorShutdownMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
@@ -30,7 +32,10 @@ import {
   usePendingSimulatorConnectRequest,
 } from "@/lib/simulator-view/simulator-connect-requests";
 import { nextOrientation } from "@/lib/simulator-view/simulator-input-encoding";
-import { findSimulatorForTile } from "@/lib/simulator-view/simulator-tile-target";
+import {
+  findSessionFor,
+  findSimulatorForTile,
+} from "@/lib/simulator-view/simulator-tile-target";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
@@ -49,6 +54,11 @@ import { SimulatorToolbar } from "./simulator-toolbar";
 import { useOpenSimulatorTile } from "./use-open-simulator-tile";
 import { useSimulatorScreenshot } from "./use-simulator-screenshot";
 import { useSimulatorStream } from "./use-simulator-stream";
+import {
+  useSimulatorTileClose,
+  useSimulatorTileIdentity,
+  useSimulatorTilePowerOff,
+} from "./use-simulator-tile-session";
 
 export interface SimulatorTileProps {
   readonly node: SimulatorTileRef;
@@ -73,12 +83,21 @@ export interface SimulatorTileProps {
  *   no session       ─▶ the inventory, with Connect for this simulator
  *   session          ─▶ the live surface and its toolbar
  *
- * The task's session on this simulator may be one this tile opened, or one
- * it found - an agent's `simulator_open`, another window's tile, a session
- * that outlived a reload. The tile remembers which: closing it ends only a
- * session it opened itself, and a tile that has been live once does not
- * reconnect on its own when the session goes away under it (the agent closed
- * it, or the person did from the sidebar), where a freshly restored tile does.
+ * On a `@1.1` host the tile goes live only on the viewer's OWN person session
+ * on this instance (this owner, no agent), whoever sent the open: the tile,
+ * the + picker, the palette or the switcher. A restored tile that finds only
+ * an agent's session sends its bare open and gets one of its own. Closing the
+ * tile ends that one session (`close@1.1 { sessionId }`), which is the
+ * person's one session on the instance in every window and on every device.
+ *
+ * On a `@1.0` host the task's session may be one this tile opened, or one it
+ * found - an agent's `simulator_open`, another window's tile, a session that
+ * outlived a reload. The tile remembers which: closing it ends only a session
+ * it opened itself.
+ *
+ * Either way a tile that has been live once does not reconnect on its own
+ * when the session goes away under it (the agent closed it, or the person did
+ * from the panel), where a freshly restored tile does.
  */
 export function SimulatorTile(props: SimulatorTileProps) {
   const { node, viewTabId, tileId, epicId } = props;
@@ -92,7 +111,13 @@ export function SimulatorTile(props: SimulatorTileProps) {
   );
   const hostLabel = reachability.hostLabel;
   const state = sessions.state;
-  const session = findSessionFor(state, node.simulatorId);
+  const hostClient = useTabHostClient();
+  const viewerUserId = useRequestContextUserId(hostClient);
+  const v11 =
+    simulatorVerbsAreV11(
+      useHostNegotiatedMethodVersion(hostClient, "simulator.open"),
+    ) === true;
+  const session = findSessionFor(state, node.simulatorId, v11, viewerUserId);
   const { openedHere, onOpened, wasLive } = useSessionMemory(session);
   const connectRequest = usePendingSimulatorConnectRequest(node.id);
   useEffect(() => {
@@ -101,7 +126,6 @@ export function SimulatorTile(props: SimulatorTileProps) {
     if (connectRequest === null || session === null) return;
     takeSimulatorConnectRequest(node.id, connectRequest);
   }, [connectRequest, node.id, session]);
-  const hostClient = useTabHostClient();
   const { openTile } = useEpicTileNavigation();
   const placeTile = useCallback(
     (ref: SimulatorTileRef) => {
@@ -208,19 +232,10 @@ export function SimulatorTile(props: SimulatorTileProps) {
       hostId={hostId}
       session={session}
       state={state}
-      closesSession={openedHere}
+      v11={v11}
+      closesSession={v11 || openedHere}
       onCloseTile={closeTile}
     />
-  );
-}
-
-function findSessionFor(
-  state: SimulatorState | null,
-  simulatorId: string,
-): SimulatorSession | null {
-  if (state === null) return null;
-  return (
-    state.sessions.find((item) => item.simulatorId === simulatorId) ?? null
   );
 }
 
@@ -446,26 +461,34 @@ function LiveSimulatorTile(props: {
   readonly hostId: string;
   readonly session: SimulatorSession;
   readonly state: SimulatorState;
+  /** The host speaks `@1.1`: session ids, `simulator.powerOff`. */
+  readonly v11: boolean;
   /**
-   * Whether closing the tile also ends the session: true for one this tile
-   * opened, false for one it found (an agent's, another window's). A found
-   * session is ended from the sidebar row instead.
+   * Whether closing the tile also ends the session. On a `@1.1` host always:
+   * the session is the viewer's own person session, whoever sent the open.
+   * On a `@1.0` host only for one this tile opened, not one it found (an
+   * agent's, another window's), which is ended from the panel row instead.
    */
   readonly closesSession: boolean;
   readonly onCloseTile: () => void;
 }) {
-  const { node, epicId, hostId, session, state, closesSession, onCloseTile } =
-    props;
+  const {
+    node,
+    epicId,
+    hostId,
+    session,
+    state,
+    v11,
+    closesSession,
+    onCloseTile,
+  } = props;
   const hostClient = useTabHostClient();
   const hostEntry = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   const streamClient = useHostStreamClientFor(hostEntry, auth);
   const visible = useTileBodyVisible();
-  const summary =
-    state.simulators.find(
-      (simulator) => simulator.simulatorId === node.simulatorId,
-    ) ?? null;
-  const simulatorName = summary?.name ?? node.name;
+  const { instanceKey, simulatorName, version, drivenByAgent } =
+    useSimulatorTileIdentity({ hostId, node, session, state });
   const platform = session.platform;
 
   const stream = useSimulatorStream({
@@ -477,12 +500,6 @@ function LiveSimulatorTile(props: {
   });
   const { controller, state: streamState } = stream;
 
-  const close = useSimulatorCloseMutation(hostClient, hostId, node.simulatorId);
-  const shutdown = useSimulatorShutdownMutation(
-    hostClient,
-    hostId,
-    node.simulatorId,
-  );
   const action = useSimulatorActionMutation(
     hostClient,
     hostId,
@@ -496,37 +513,26 @@ function LiveSimulatorTile(props: {
     simulatorName,
   });
 
-  const closeMutate = close.mutation.mutate;
-  const onClose = useCallback(() => {
-    // The tile goes first: a close the host refuses still leaves the person
-    // with the tile gone, which is what they asked for, and the session is
-    // reported in the sidebar group until the host confirms.
-    onCloseTile();
-    if (closesSession && close.supported) {
-      closeMutate({ epicId, simulatorId: node.simulatorId, shutdown: false });
-    }
-  }, [
-    close.supported,
-    closeMutate,
-    closesSession,
+  const onClose = useSimulatorTileClose({
+    client: hostClient,
+    hostId,
     epicId,
-    node.simulatorId,
+    node,
+    session,
+    v11,
+    closesSession,
     onCloseTile,
-  ]);
-
-  const shutdownMutateAsync = shutdown.mutation.mutateAsync;
-  const onPowerOff = useCallback(() => {
-    // The tile closes off the mutation's OWN promise, never off `mutate`'s
-    // per-call `onSuccess`: the sessions stream can drop this simulator's
-    // session before the shutdown answers, which unmounts this tile and
-    // detaches the observer those callbacks reach. A failure is already
-    // toasted by the mutation and leaves the tile open.
-    void shutdownMutateAsync({
-      epicId,
-      simulatorId: node.simulatorId,
-      platform,
-    }).then(onCloseTile, () => undefined);
-  }, [epicId, node.simulatorId, onCloseTile, platform, shutdownMutateAsync]);
+  });
+  const powerOff = useSimulatorTilePowerOff({
+    client: hostClient,
+    hostId,
+    epicId,
+    node,
+    instanceKey,
+    platform: session.platform,
+    v11,
+    onCloseTile,
+  });
 
   const actionMutate = action.mutation.mutate;
   const orientation = streamState.config?.orientation ?? "portrait";
@@ -580,7 +586,8 @@ function LiveSimulatorTile(props: {
       <SimulatorToolbar
         platform={platform}
         simulatorName={simulatorName}
-        version={summary?.version ?? ""}
+        version={version}
+        drivenByAgent={drivenByAgent}
         onPressButton={inputReady ? onPressButton : null}
         onRotate={rotateReady ? onRotate : null}
         rotatePending={platform === "android" && action.mutation.isPending}
@@ -588,8 +595,9 @@ function LiveSimulatorTile(props: {
         screenshotPending={screenshot.isPending}
         onToggleSettings={action.supported ? onToggleSettings : null}
         settingsOpen={settingsOpen}
-        onPowerOff={shutdown.supported ? onPowerOff : null}
-        powerOffPending={shutdown.mutation.isPending}
+        onPowerOff={powerOff.onPowerOff}
+        confirmsPowerOff={!v11}
+        powerOffPending={powerOff.pending}
         onClose={onClose}
       />
       {/* The drawer floats over the surface rather than beside it, so a
@@ -615,6 +623,17 @@ function LiveSimulatorTile(props: {
           />
         ) : null}
       </div>
+      <ConfirmDestructiveDialog
+        open={powerOff.confirmingAgent}
+        onOpenChange={powerOff.setConfirmingAgent}
+        title={`Power off ${simulatorName}?`}
+        description="An agent is using it right now. Powering it off ends every task's session on it and stops the agent's work there."
+        cascadeSummary={null}
+        actionLabel="Power off"
+        isPending={powerOff.pending}
+        blockedReason={null}
+        onConfirm={powerOff.confirmAgent}
+      />
     </div>
   );
 }

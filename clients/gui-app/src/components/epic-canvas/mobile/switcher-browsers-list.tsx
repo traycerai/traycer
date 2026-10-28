@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import { SwitcherListHeader, SwitcherListRow } from "./switcher-list-row";
 import { SwitcherSearchField } from "./switcher-search-field";
-import { SwitcherSimulatorsSection } from "./switcher-simulators-section";
 import { useSwitcherActivate } from "./use-switcher-activate";
 import { browserTabDriverNames } from "@/components/epic-canvas/sidebar/browser-driver-coalescing";
 import { browserTabOrigin } from "@/lib/browser-view/browser-tab-display";
@@ -27,10 +26,6 @@ import {
 import { useBrowserListTabClose } from "@/components/epic-canvas/sidebar/use-browser-list-tab-close";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
-import {
-  useSurfaceHostPin,
-  useTabSurfaceKey,
-} from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
@@ -42,10 +37,9 @@ interface SwitcherListProps {
   readonly onClose: () => void;
 }
 
-/** Task-wide browser discovery with touch controls; simulators retain their own selected host. */
+/** Task-wide browser discovery with touch controls. */
 export function SwitcherBrowsersList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
-  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", tabId));
   const [searchQuery, setSearchQuery] = useState("");
   const model = useBrowserListModel(epicId, searchQuery, null);
   const chats = useEpicChatRecords();
@@ -121,12 +115,6 @@ export function SwitcherBrowsersList(props: SwitcherListProps) {
             </BrowserDeviceGroup>
           ))}
         </div>
-        <SwitcherSimulatorsSection
-          epicId={epicId}
-          tabId={tabId}
-          hostId={hostPin.resolvedHostId}
-          onClose={onClose}
-        />
       </div>
     </div>
   );

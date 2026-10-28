@@ -2744,8 +2744,13 @@ export const HOST_METHOD_POLL_TABLE = {
   "simulator.detail": { ...LATEST_SCHEDULING, poll: null },
   "simulator.action": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // The host-wide instance verbs: the read coalesces, the two writes are
-  // ordered like the session verbs above.
-  "simulator.instances": { ...LATEST_SCHEDULING, poll: null },
+  // ordered like the session verbs above. The read polls only where a caller
+  // opts in (Host ▸ Overview, the open + picker): an instance's idle
+  // countdown and its holders move with no push to the person's screen.
+  "simulator.instances": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10 * SECOND_MS },
+  },
   "simulator.powerOff": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

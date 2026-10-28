@@ -308,3 +308,83 @@ export function simulatorActionErrorText(error: HostRpcError): string {
   if (text.length === 0) return "The simulator didn't take that.";
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+/**
+ * Every instance booted on `hostId`, host-wide. `live` polls it while the
+ * surface is on screen: an idle countdown or a holder moves with no push.
+ */
+export function useSimulatorInstancesQuery(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  live: boolean,
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "simulator.instances">,
+  HostRpcError
+> {
+  const supported = useHostSupportsMethod(hostId, "simulator.instances");
+  return useHostQuery<HostRpcRegistry, "simulator.instances">({
+    cacheKeyIdentity: undefined,
+    client: supported ? client : null,
+    method: "simulator.instances",
+    params: {},
+    options: { poll: live },
+  });
+}
+
+/** `hostId`'s devices and this task's sessions there, as one read. */
+export function useSimulatorListQuery(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  epicId: string,
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "simulator.list">,
+  HostRpcError
+> {
+  const supported = useHostSupportsMethod(hostId, "simulator.list");
+  return useHostQuery<HostRpcRegistry, "simulator.list">({
+    cacheKeyIdentity: undefined,
+    client: supported ? client : null,
+    method: "simulator.list",
+    params: { epicId },
+    options: null,
+  });
+}
+
+const INSTANCE_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
+  "simulator.instances",
+  "simulator.list",
+];
+
+/**
+ * Powers one instance off host-wide. The answer may be `confirm-required`
+ * (a mid-turn agent holds it); the caller asks and sends `confirm: true`.
+ */
+export function useSimulatorPowerOffMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  instanceKey: string,
+): GatedSimulatorMutation<"simulator.powerOff"> {
+  const supported = useHostSupportsMethod(hostId, "simulator.powerOff");
+  const mutation = useHostScopedMutationForClient(client, {
+    method: "simulator.powerOff",
+    mutationKey: simulatorMutationKeys.powerOff(hostId ?? "", instanceKey),
+    errorMessage: "Couldn't power the simulator off.",
+    invalidateMethods: INSTANCE_INVALIDATIONS,
+  });
+  return { mutation, supported };
+}
+
+export function useSimulatorSetKeepRunningMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  instanceKey: string,
+): GatedSimulatorMutation<"simulator.setKeepRunning"> {
+  const supported = useHostSupportsMethod(hostId, "simulator.setKeepRunning");
+  const mutation = useHostScopedMutationForClient(client, {
+    method: "simulator.setKeepRunning",
+    mutationKey: simulatorMutationKeys.setKeepRunning(hostId ?? "", instanceKey),
+    errorMessage: "Couldn't change whether the simulator keeps running.",
+    invalidateMethods: INSTANCE_INVALIDATIONS,
+  });
+  return { mutation, supported };
+}

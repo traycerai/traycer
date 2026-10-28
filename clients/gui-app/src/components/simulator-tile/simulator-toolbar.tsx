@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
+import { SimulatorAgentBadge } from "./simulator-agent-badge";
 import {
   hardwareButtonLabel,
   hardwareButtonsForPlatform,
@@ -47,7 +48,14 @@ export interface SimulatorToolbarProps {
   readonly onToggleSettings: (() => void) | null;
   readonly settingsOpen: boolean;
   readonly onPowerOff: (() => void) | null;
+  /**
+   * Whether Power off asks here first. A `@1.1` host asks through its own
+   * `confirm-required` answer, only while an agent is mid-turn on it.
+   */
+  readonly confirmsPowerOff: boolean;
   readonly powerOffPending: boolean;
+  /** The Agent badge, while an agent's session drives this instance. */
+  readonly drivenByAgent: boolean;
   readonly onClose: () => void;
 }
 
@@ -69,6 +77,7 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
         <span className="min-w-0 truncate font-medium">
           {props.simulatorName}
         </span>
+        {props.drivenByAgent ? <SimulatorAgentBadge /> : null}
         <Badge variant="muted" size="xs" className="shrink-0">
           {simulatorVersionLabel({
             platform: props.platform,
@@ -188,7 +197,10 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
             aria-label="Power off"
             disabled={props.onPowerOff === null || props.powerOffPending}
             data-testid="simulator-power-off"
-            onClick={() => setConfirmPowerOff(true)}
+            onClick={() => {
+              if (props.confirmsPowerOff) setConfirmPowerOff(true);
+              else props.onPowerOff?.();
+            }}
           >
             {props.powerOffPending ? (
               <AgentSpinningDots
