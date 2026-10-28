@@ -50,6 +50,11 @@ export function BotMessageComposer(props: {
   readonly threadId: string | null;
   /** The question or proposal the reply answers, opening its thread; `null` otherwise. */
   readonly announcementId: string | null;
+  /**
+   * Whether the box may send: `false` while what it holds would go where the
+   * bot's host takes nothing now, the draft kept until it does.
+   */
+  readonly sendable: boolean;
   /** "Message name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
@@ -75,6 +80,7 @@ export function BotMessageComposer(props: {
     conversationId,
     threadId,
     announcementId,
+    sendable,
     placeholder,
     label,
     testId,
@@ -105,7 +111,10 @@ export function BotMessageComposer(props: {
   const inputId = useId();
   const trimmed = text.trim();
   const canSend =
-    trimmed.length > 0 && trimmed.length <= MESSAGE_MAX && !send.isPending;
+    sendable &&
+    trimmed.length > 0 &&
+    trimmed.length <= MESSAGE_MAX &&
+    !send.isPending;
 
   const submit = (): void => {
     if (!canSend) return;

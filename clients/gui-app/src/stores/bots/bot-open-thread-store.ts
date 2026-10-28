@@ -16,6 +16,12 @@ export interface BotOpenThread {
    */
   readonly announcement: boolean;
   /**
+   * The anchor is the bot's direct reply, whose own thread only a bound host
+   * that names it among its thread anchors opens: its box sends only while
+   * the bot's binding does.
+   */
+  readonly answer: boolean;
+  /**
    * The person's post that opened the thread as its send was accepted, which
    * the channel knows before the thread list or the channel's own row does.
    * `null` for a thread opened from a row.

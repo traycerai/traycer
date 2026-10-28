@@ -124,7 +124,7 @@ describe("bot threads", () => {
       threads: () => ({
         threads: THREADS,
         trunkCostUsd: null,
-        threadAnchors: [],
+        threadAnchors: null,
       }),
     });
 
@@ -145,7 +145,7 @@ describe("bot threads", () => {
   it("says when the bot has no threads", async () => {
     stage({
       bot: tracy,
-      threads: () => ({ threads: [], trunkCostUsd: null, threadAnchors: [] }),
+      threads: () => ({ threads: [], trunkCostUsd: null, threadAnchors: null }),
     });
 
     const result = await threads(BOT_ID_A);
@@ -160,7 +160,7 @@ describe("bot threads", () => {
       threads: () => ({
         threads: [{ ...THREADS[0], openRequestCount: -1 }],
         trunkCostUsd: null,
-        threadAnchors: [],
+        threadAnchors: null,
       }),
     });
 
@@ -175,7 +175,7 @@ describe("bot threads", () => {
       threads: () => ({
         threads: THREADS,
         trunkCostUsd: null,
-        threadAnchors: [],
+        threadAnchors: null,
       }),
     });
 
@@ -191,7 +191,7 @@ describe("bot threads", () => {
       threads: () => ({
         threads: THREADS,
         trunkCostUsd: null,
-        threadAnchors: [],
+        threadAnchors: null,
       }),
     });
 

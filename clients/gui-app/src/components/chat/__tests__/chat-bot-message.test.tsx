@@ -933,7 +933,10 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       await user.click(line);
 
       expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-      expect(openAnnouncementThread).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
+      expect(openAnnouncementThread).toHaveBeenCalledWith(
+        ANNOUNCEMENT_ID,
+        false,
+      );
     },
   );
 
@@ -955,7 +958,10 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
       expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-      expect(openAnnouncementThread).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
+      expect(openAnnouncementThread).toHaveBeenCalledWith(
+        ANNOUNCEMENT_ID,
+        false,
+      );
     },
   );
 
@@ -1043,7 +1049,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID, false);
     expect(openThread).not.toHaveBeenCalled();
   });
 
@@ -1125,7 +1131,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith("reply-row-1");
+    expect(openAnnouncementThread).toHaveBeenCalledWith("reply-row-1", true);
     expect(openThread).not.toHaveBeenCalled();
   });
 
@@ -1156,7 +1162,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID, false);
   });
 
   it("draws a direct reply's own thread line once its thread has replies, and opens that thread from it", async () => {
@@ -1192,7 +1198,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     await user.click(line);
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith("reply-row-1");
+    expect(openAnnouncementThread).toHaveBeenCalledWith("reply-row-1", true);
   });
 
   it("offers no hover actions on a bot reply that answers no post", () => {

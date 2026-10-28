@@ -453,7 +453,7 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
   it("opens on the question, followed directly by the box, and sends the first reply with the announcement's id and no thread", async () => {
     const user = userEvent.setup();
     channelMessages = [announcement("question-1", "Ship the release today?")];
-    mountPanel({ kind: "unopened" }, []);
+    mountPanel({ kind: "unopened", startable: true }, []);
 
     const origin = screen.getByTestId("bot-thread-anchor");
     expect(within(origin).getByText("Release Bot")).toBeTruthy();
@@ -528,7 +528,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
   it("opens on the reply, not the post it answered, and sends the first reply with the reply's id", async () => {
     const user = userEvent.setup();
     answeredPost();
-    mountPanel({ kind: "unopened" }, []);
+    mountPanel({ kind: "unopened", startable: true }, []);
 
     const origin = screen.getByTestId("bot-thread-anchor");
     expect(within(origin).getByText("Release Bot")).toBeTruthy();
@@ -566,7 +566,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
           "Message 'answer-1' is not a question, proposal or direct post of conversation 'conversation-channel': only those take a reply in a thread.",
         ),
       );
-    mountPanel({ kind: "unopened" }, []);
+    mountPanel({ kind: "unopened", startable: true }, []);
 
     await user.type(
       screen.getByRole("textbox", { name: "Reply in a new thread" }),
@@ -585,6 +585,32 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
       ),
     ).toBeTruthy();
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
+  });
+
+  it("keeps what the person typed and sends nothing while the bot's binding no longer opens a thread under the reply, and sends it once it does again", async () => {
+    const user = userEvent.setup();
+    answeredPost();
+    const panel = mountPanel({ kind: "unopened", startable: true }, []);
+    const box = (): HTMLTextAreaElement =>
+      screen.getByRole("textbox", { name: "Reply in a new thread" });
+    const sendButton = (): HTMLButtonElement =>
+      screen.getByTestId("bot-thread-composer-send");
+    await user.type(box(), "Which job?");
+    expect(sendButton().disabled).toBe(false);
+
+    panel.rerender(panelTree({ kind: "unopened", startable: false }));
+
+    expect(box().value).toBe("Which job?");
+    expect(sendButton().disabled).toBe(true);
+    await user.type(box(), "{Enter}");
+    expect(sent).toEqual([]);
+
+    panel.rerender(panelTree({ kind: "unopened", startable: true }));
+    await user.click(sendButton());
+
+    expect(
+      sent.map((request) => [request.text, request.announcementId]),
+    ).toEqual([["Which job?", "answer-1"]]);
   });
 });
 

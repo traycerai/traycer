@@ -83,7 +83,7 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * direct answer to such a post (decision 114), whose thread is its own
      * and not the post's. The message opens, or joins, the thread hung off
      * that row, as its first request when it opens it. Only a bound host
-     * whose `bot.thread.list` names `"answer"` in `threadAnchors` takes a
+     * whose `bot.thread.list` names `"answer"` in `threadAnchors.kinds` takes a
      * reply under a direct answer. `null` (or absent) otherwise; never set
      * with `threadId`.
      */
@@ -225,18 +225,37 @@ export const botThreadListResponseSchemaV10 = lazySchema(() =>
  */
 export const BOT_THREAD_ANCHOR_ANSWER = "answer";
 
+/**
+ * The channel rows, beyond a member's post, a question, a proposal and a
+ * direct post, under which one binding of the bot opens a thread when a
+ * member replies. They hold for that binding only: a client compares
+ * `hostId` and `epoch` with the bot's binding as it knows it, and reads
+ * none while they differ.
+ */
+export const botThreadAnchorsSchema = lazySchema(() =>
+  z.object({
+    /** The bound host that said them. */
+    hostId: z.string().min(1).max(255),
+    /** The bot's epoch on that host when it said them. */
+    epoch: z.number().int().nonnegative(),
+    /**
+     * `"answer"` ({@link BOT_THREAD_ANCHOR_ANSWER}) is the bot's direct
+     * answer. A value a client does not know is ignored.
+     */
+    kinds: z.array(z.string().min(1).max(64)).max(16),
+  }),
+);
+export type BotThreadAnchors = z.infer<typeof botThreadAnchorsSchema>;
+
 export const botThreadListResponseSchema = lazySchema(() =>
   botThreadListResponseSchemaV10.extend({
     /**
-     * `bot.thread.list@1.1`: the channel rows, beyond a member's post, a
-     * question, a proposal and a direct post, under which the bot's bound
-     * host opens a thread when a member replies; `"answer"`
-     * ({@link BOT_THREAD_ANCHOR_ANSWER}) is the bot's direct answer. Empty
-     * when the bound host has not said, as a host that predates the minor
+     * `bot.thread.list@1.1`: the rows the bot's bound host opens a thread
+     * under. `null` when it has not said, as a host that predates the minor
      * and one whose room values are not written yet: a reply under such a
-     * row is then refused. A value a client does not know is ignored.
+     * row is then refused.
      */
-    threadAnchors: z.array(z.string().min(1).max(64)).max(16),
+    threadAnchors: botThreadAnchorsSchema.nullable(),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

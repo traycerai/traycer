@@ -86,11 +86,14 @@ export interface ChatBotPresentation {
   /** Opens the thread of a channel post; `null` in a thread. */
   readonly openThread: ((postMessageId: string) => void) | null;
   /**
-   * Opens the thread under a question, a proposal or a direct post, by the
-   * row's message id: its thread when it has one, else a box whose first
-   * reply opens it. `null` in a thread.
+   * Opens the thread under a question, a proposal, a direct post or, where
+   * `answer`, the bot's direct reply, by the row's message id: its thread
+   * when it has one, else a box whose first reply opens it. `null` in a
+   * thread.
    */
-  readonly openAnnouncementThread: ((announcementId: string) => void) | null;
+  readonly openAnnouncementThread:
+    | ((announcementId: string, answer: boolean) => void)
+    | null;
   /**
    * Whether the bot's host opens a thread under a direct reply of the bot
    * (decision 114), so the reply opens its own thread and carries its line;

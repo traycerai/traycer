@@ -84,14 +84,8 @@ export function ChatBotMessage(props: {
     postId === null || presentation.threadLine === null
       ? null
       : presentation.threadLine(postId);
-  // A direct post has no thread until a member replies under it: its
-  // action opens the box whose first reply starts one, as under a question.
-  const openThread =
-    message.conversationRequest?.direct === true
-      ? presentation.openAnnouncementThread
-      : presentation.openThread;
   const replyInThread =
-    postId === null || openThread === null ? null : () => openThread(postId);
+    postId === null ? null : memberReplyInThread(message, postId, presentation);
   const failed = failedActionsOf(message, presentation);
   return (
     <BotMessageFrame
@@ -214,6 +208,24 @@ function BotRow(props: {
 }
 
 /**
+ * What a member's post opens from its hover actions: its own thread, or, for
+ * a direct post, which has no thread until a member replies under it, the
+ * box whose first reply starts one, as under a question. `null` in a thread.
+ */
+function memberReplyInThread(
+  message: ChatMessageModel,
+  postId: string,
+  presentation: ChatBotPresentation,
+): (() => void) | null {
+  if (message.conversationRequest?.direct !== true) {
+    const open = presentation.openThread;
+    return open === null ? null : () => open(postId);
+  }
+  const open = presentation.openAnnouncementThread;
+  return open === null ? null : () => open(postId, false);
+}
+
+/**
  * The thread a bot's row opens from its hover actions, and the line of it
  * the row carries: a question's, a proposal's or a direct reply's own
  * thread; for a direct reply where the bot's host does not take replies
@@ -228,19 +240,18 @@ function botRowThread(
   readonly threadLine: ChatBotThreadLine | null;
 } {
   const kind = message.announcement?.kind ?? null;
-  const ownThread =
-    kind === "question" ||
-    kind === "proposal" ||
-    (kind === null &&
-      message.repliesTo !== undefined &&
-      presentation.answerThreads);
+  const answer =
+    kind === null &&
+    message.repliesTo !== undefined &&
+    presentation.answerThreads;
+  const ownThread = kind === "question" || kind === "proposal" || answer;
   const anchorId = ownThread
     ? message.persistentMessageId
     : (message.repliesTo ?? null);
   const open = presentation.openAnnouncementThread;
   return {
     replyInThread:
-      anchorId === null || open === null ? null : () => open(anchorId),
+      anchorId === null || open === null ? null : () => open(anchorId, answer),
     threadLine:
       !ownThread || anchorId === null || presentation.threadLine === null
         ? null

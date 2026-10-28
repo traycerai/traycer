@@ -69,6 +69,21 @@ function snapshot(
   };
 }
 
+/** `snapshot(conversationsRevision, 0)` with the bot bound to `hostId` at `epoch`. */
+function claimed(
+  conversationsRevision: number | null,
+  hostId: string,
+  epoch: number,
+): BotSubscribeServerFrame {
+  const frame = snapshot(conversationsRevision, 0);
+  if (frame.kind !== "snapshot") throw new Error("expected a snapshot");
+  return {
+    ...frame,
+    bot: { ...frame.bot, boundHostId: hostId, hostEpoch: epoch },
+    boundHost: { hostId, epoch, isThisHost: hostId === HOST_ID },
+  };
+}
+
 function fixture(): {
   readonly session: StubSession;
   readonly listReads: { value: number };
@@ -165,7 +180,7 @@ describe("the bot's thread listing follows its subscription", () => {
       world.pendingReads[0]?.({
         threads: [],
         trunkCostUsd: 0,
-        threadAnchors: [],
+        threadAnchors: null,
       }),
     );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
@@ -191,7 +206,7 @@ describe("the bot's thread listing follows its subscription", () => {
       world.pendingReads[1]?.({
         threads: [],
         trunkCostUsd: 0,
-        threadAnchors: [],
+        threadAnchors: null,
       }),
     );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
@@ -225,12 +240,12 @@ describe("the bot's thread listing follows its subscription", () => {
       world.pendingReads[1]?.({
         threads: [],
         trunkCostUsd: 1.5,
-        threadAnchors: [],
+        threadAnchors: null,
       });
       world.pendingReads[0]?.({
         threads: [],
         trunkCostUsd: 0,
-        threadAnchors: [],
+        threadAnchors: null,
       });
     });
 
@@ -244,7 +259,47 @@ describe("the bot's thread listing follows its subscription", () => {
     expect(world.queryClient.getQueryState(world.threadListKey)?.data).toEqual({
       threads: [],
       trunkCostUsd: 1.5,
-      threadAnchors: [],
+      threadAnchors: null,
     });
+  });
+
+  it("reads the listing again when the bot moves to another binding, whatever the revision says, and keeps the new binding's body over a read that started before the move", async () => {
+    const world = fixture();
+    world.render();
+    act(() => world.session.emit(claimed(null, HOST_ID, 0)));
+    await waitFor(() => expect(world.listReads.value).toBe(1));
+
+    // Claimed by another host while the first read is unanswered; the
+    // serving host cannot read the room, so the revision says nothing.
+    act(() => world.session.emit(claimed(null, "host-older", 1)));
+    await waitFor(() => expect(world.listReads.value).toBe(2));
+
+    const before: BotThreadListResponse = {
+      threads: [],
+      trunkCostUsd: 0,
+      threadAnchors: { hostId: HOST_ID, epoch: 0, kinds: ["answer"] },
+    };
+    const after: BotThreadListResponse = {
+      threads: [],
+      trunkCostUsd: 0,
+      threadAnchors: null,
+    };
+    act(() => {
+      world.pendingReads[1]?.(after);
+      world.pendingReads[0]?.(before);
+    });
+
+    await waitFor(() =>
+      expect(
+        world.queryClient.getQueryState(world.threadListKey)?.fetchStatus,
+      ).toBe("idle"),
+    );
+    expect(world.queryClient.getQueryState(world.threadListKey)?.data).toEqual(
+      after,
+    );
+
+    // Claimed again by the same host, under a newer epoch.
+    act(() => world.session.emit(claimed(null, "host-older", 2)));
+    await waitFor(() => expect(world.listReads.value).toBe(3));
   });
 });

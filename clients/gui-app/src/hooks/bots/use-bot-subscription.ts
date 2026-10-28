@@ -320,15 +320,12 @@ function createSharedSubscription(
       queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
     queryClient.setQueryData(key, toSnapshot(frame));
     // A reply, a post or a verdict on the bound host: the threads' reply
-    // counts and costs moved, so their listing is read again. A read already
-    // in flight may predate the move, and an invalidation joins a running
-    // first read (nothing cached yet) rather than replacing it, so that read
-    // is cancelled first and the listing read afresh.
-    if (
-      previous !== null &&
-      frame.conversationsRevision !== null &&
-      frame.conversationsRevision !== previous.conversationsRevision
-    ) {
+    // counts and costs moved, so their listing is read again. So is a move
+    // of the bot to another binding, whose host says its own thread anchors.
+    // A read already in flight may predate the move, and an invalidation
+    // joins a running first read (nothing cached yet) rather than replacing
+    // it, so that read is cancelled first and the listing read afresh.
+    if (previous !== null && listingMoved(previous, frame)) {
       const queryKey = hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
         args.hostId,
         "bot.thread.list",
@@ -351,6 +348,23 @@ function createSharedSubscription(
   });
 
   return shared;
+}
+
+/** Whether `frame` moved the conversations revision or the bot's binding. */
+function listingMoved(
+  previous: BotSubscriptionSnapshot,
+  frame: Extract<BotSubscribeServerFrame, { kind: "snapshot" }>,
+): boolean {
+  if (
+    frame.conversationsRevision !== null &&
+    frame.conversationsRevision !== previous.conversationsRevision
+  ) {
+    return true;
+  }
+  return (
+    frame.boundHost.hostId !== previous.boundHost.hostId ||
+    frame.boundHost.epoch !== previous.boundHost.epoch
+  );
 }
 
 /** `activity` with the one entry an `activity` frame names replaced or removed. */

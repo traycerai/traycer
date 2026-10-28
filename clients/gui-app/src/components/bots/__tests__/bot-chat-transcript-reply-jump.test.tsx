@@ -483,7 +483,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, false);
   });
 
   it("draws a question's options as buttons that cannot be clicked in the channel", () => {

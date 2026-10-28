@@ -3,6 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 
 const LISTED = { threads: [], trunkCostUsd: 0.25 } as const;
+const SAID = { hostId: "host-c", epoch: 3 } as const;
 
 describe("bot.thread.list@1.1 thread anchors", () => {
   const line = hostRpcRegistry["bot.thread.list"][1];
@@ -14,17 +15,23 @@ describe("bot.thread.list@1.1 thread anchors", () => {
     if (upgrade === null) throw new Error("expected a 1.0 to 1.1 upgrade path");
     expect(
       upgrade.upgradeResponse(frozen.responseSchema.parse(LISTED)),
-    ).toEqual({ ...LISTED, threadAnchors: [] });
+    ).toEqual({ ...LISTED, threadAnchors: null });
   });
 
-  it("freezes 1.0 without the anchors, and keeps them on 1.1", () => {
-    const named = { ...LISTED, threadAnchors: [BOT_THREAD_ANCHOR_ANSWER] };
+  it("freezes 1.0 without the anchors, and keeps them and their binding on 1.1", () => {
+    const named = {
+      ...LISTED,
+      threadAnchors: { ...SAID, kinds: [BOT_THREAD_ANCHOR_ANSWER] },
+    };
     expect(frozen.responseSchema.parse(named)).toEqual(LISTED);
     expect(latest.responseSchema.parse(named)).toEqual(named);
   });
 
   it("keeps an anchor a client does not know, for the client to ignore", () => {
-    const later = { ...LISTED, threadAnchors: ["answer", "later-kind"] };
+    const later = {
+      ...LISTED,
+      threadAnchors: { ...SAID, kinds: ["answer", "later-kind"] },
+    };
     expect(latest.responseSchema.parse(later)).toEqual(later);
   });
 });

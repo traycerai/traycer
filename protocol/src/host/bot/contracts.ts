@@ -239,8 +239,8 @@ export const botThreadListV10 = defineRpcContract({
 
 /**
  * `bot.thread.list@1.1` (T85): the response names the rows the bound host
- * roots a thread on beyond a post, a question, a proposal and a direct post
- * (`threadAnchors`). A 1.0 host names none.
+ * roots a thread on beyond a post, a question, a proposal and a direct post,
+ * and the binding that said them (`threadAnchors`). A 1.0 host names none.
  */
 export const botThreadListV11 = defineRpcContract({
   method: "bot.thread.list",
@@ -255,7 +255,7 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
   from: botThreadListV10.schemaVersion,
   to: botThreadListV11.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({ ...response, threadAnchors: [] }),
+  upgradeResponse: (response) => ({ ...response, threadAnchors: null }),
 });
 
 /**

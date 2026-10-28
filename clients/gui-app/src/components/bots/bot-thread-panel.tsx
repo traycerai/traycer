@@ -52,7 +52,15 @@ export type BotThreadPanelThread =
       readonly retry: (() => void) | null;
     }
   | { readonly kind: "pending" }
-  | { readonly kind: "unopened" }
+  | {
+      readonly kind: "unopened";
+      /**
+       * Whether its box may send: `false` while the post is the bot's direct
+       * reply and the bot's binding no longer opens a thread under one. The
+       * draft stays.
+       */
+      readonly startable: boolean;
+    }
   | { readonly kind: "failed"; readonly retry: () => void };
 
 /**
@@ -322,6 +330,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         botId={props.botId}
         conversationId={props.conversationId}
         announcementId={props.originMessageId}
+        sendable={thread.startable}
         sendFailure={props.sendFailure}
       />
     );
@@ -334,6 +343,7 @@ function UnopenedThread(props: {
   readonly botId: string;
   readonly conversationId: string;
   readonly announcementId: string;
+  readonly sendable: boolean;
   readonly sendFailure: BotSendFailure;
 }): ReactNode {
   return (
@@ -342,6 +352,7 @@ function UnopenedThread(props: {
       conversationId={props.conversationId}
       threadId={null}
       announcementId={props.announcementId}
+      sendable={props.sendable}
       placeholder="Reply…"
       label="Reply in a new thread"
       testId="bot-thread-composer"
@@ -499,6 +510,7 @@ function KnownThread(
         conversationId={conversationId}
         threadId={threadId}
         announcementId={null}
+        sendable
         placeholder="Reply…"
         label="Reply in the thread"
         testId="bot-thread-composer"
