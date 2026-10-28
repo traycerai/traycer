@@ -1,5 +1,14 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Smartphone } from "lucide-react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   SimulatorHostInstance,
   SimulatorListResponse,
@@ -38,12 +47,15 @@ import {
   useSimulatorConfigSetMutation,
   useSimulatorInstancesQuery,
   useSimulatorListQuery,
+  useSimulatorStatusQuery,
 } from "@/hooks/simulator/use-simulator-mutations";
 import {
   useSimulatorInstanceOpen,
   type SimulatorOpenTarget,
 } from "@/hooks/simulator/use-simulator-instance-open";
+import type { HostRpcRegistry } from "@/lib/host";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { suggestedSimulatorHostId } from "@/lib/simulator-view/suggested-simulator-host";
@@ -165,6 +177,41 @@ function useSuggestedSimulatorHostId(tabId: string): string | null {
   });
 }
 
+/**
+ * Keeps the picker's devices with the host's pack. `simulator.list` carries
+ * both the pack state the footer reads and the devices the tools enumerate,
+ * but it neither polls nor moves on its own, so a Turn on - which installs
+ * the tools before anything can be listed - would otherwise leave the picker
+ * on its off state until it was closed and reopened. `simulator.status` is
+ * what the rest of the app watches through that install (its row polls while
+ * the pack is installing), so the list is asked again whenever that pack
+ * state moves.
+ */
+function useSimulatorListFollowsPack(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+): void {
+  const status = useSimulatorStatusQuery(client, hostId);
+  const packKind = status.data?.packState.kind ?? null;
+  const queryClient = useQueryClient();
+  const seen = useRef<{ hostId: string; packKind: string } | null>(null);
+  useEffect(() => {
+    if (hostId === null || packKind === null) return;
+    const previous = seen.current;
+    seen.current = { hostId, packKind };
+    // The first read of a host says nothing: the list was fetched with it.
+    if (
+      previous === null ||
+      previous.hostId !== hostId ||
+      previous.packKind === packKind
+    )
+      return;
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, "simulator.list"),
+    });
+  }, [hostId, packKind, queryClient]);
+}
+
 export function SimulatorCreatePickerBody(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -191,6 +238,7 @@ export function SimulatorCreatePickerBody(props: {
   );
   const listSupported = useHostSupportsMethod(hostId, "simulator.list");
   const list = useSimulatorListQuery(client, hostId, epicId);
+  useSimulatorListFollowsPack(client, hostId);
   const instances = useSimulatorInstancesQuery(client, hostId, true);
   const { open } = useSimulatorInstanceOpen(epicId);
   const { openTile } = useEpicTileNavigation();

@@ -15,6 +15,7 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useSimulatorCatalogActions } from "@/hooks/simulator/use-simulator-catalog-actions";
+import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   simulatorIdleCountdownLabel,
@@ -22,7 +23,7 @@ import {
   simulatorVersionLabel,
 } from "@/lib/simulator-view/simulator-labels";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
-import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
+import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 import {
   clearSidebarNodeRevealRequest,
   useSidebarNodeRevealRequest,
@@ -242,21 +243,39 @@ function SimulatorLiveRowItem(props: {
   const isActive = useIsActiveTile(tabId, row.tileId, row.hostId);
   const { openTile } = useEpicTileNavigation();
   const { closeRecords, closing } = useSimulatorCatalogActions(epicId);
+  const { open } = useSimulatorInstanceOpen(epicId);
+  const place = useCallback(
+    (ref: SimulatorTileRef) => {
+      openTile(tileIntent(ref, { tabId }, "explicit", "direct_ui"));
+    },
+    [openTile, tabId],
+  );
+  // A watch is a session of the person's own, so the row sends the open and
+  // the tile lands on its answer - the picker's and the switcher's path. A
+  // tile placed on its own would dedupe onto the existing one, which stopped
+  // attaching the moment the person's session ended elsewhere.
   const openRow = useCallback(() => {
-    openTile(
-      tileIntent(
-        makeSimulatorTileRef({
-          hostId: row.hostId,
-          simulatorId: row.simulatorId,
-          platform: row.platform,
-          name: row.name,
-        }),
-        { tabId },
-        "explicit",
-        "direct_ui",
-      ),
-    );
-  }, [openTile, row.hostId, row.name, row.platform, row.simulatorId, tabId]);
+    open({
+      hostId: row.hostId,
+      target: {
+        simulatorId: row.simulatorId,
+        platform: row.platform,
+        name: row.name,
+        version: row.version,
+      },
+      instance: row.instanceKey,
+      place,
+    });
+  }, [
+    open,
+    place,
+    row.hostId,
+    row.instanceKey,
+    row.name,
+    row.platform,
+    row.simulatorId,
+    row.version,
+  ]);
   const versionLabel = simulatorVersionLabel(row);
   const countdown = simulatorIdleCountdownLabel(row.idleUntil, props.nowMs);
   const rowClosing = row.records.some((record) => closing(record.sessionId));

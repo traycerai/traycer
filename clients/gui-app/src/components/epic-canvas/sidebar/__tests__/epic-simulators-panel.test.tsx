@@ -715,6 +715,45 @@ describe("Mobile simulators panel", () => {
       expect(place).not.toHaveBeenCalled();
     });
 
+    it("watches the row's instance from the panel: an open naming it, and the tile placed on its answer", async () => {
+      // The person's own session ended elsewhere; only the agent's holds the
+      // instance, so the row has to ask for a session of its own rather than
+      // focus a tile that would attach to nothing.
+      setCatalog([record("session-agent", { drivenByAgent: true })]);
+      let answer: (response: SimulatorOpenResponse) => void = () => undefined;
+      host_.openAnswer = () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        });
+      renderPanel(vi.fn());
+
+      fireEvent.click(await screen.findByTestId("epic-simulator-row-udid-1"));
+
+      await waitFor(() => {
+        expect(host_.opens).toHaveLength(1);
+      });
+      expect(host_.opens[0]).toMatchObject({
+        epicId: EPIC,
+        simulatorId: "udid-1",
+        platform: "ios",
+        boot: true,
+        instance: "udid-1",
+      });
+      expect(world.openTile).not.toHaveBeenCalled();
+
+      act(() => {
+        answer(openResponse("session-mine"));
+      });
+
+      await waitFor(() => {
+        expect(world.openTile).toHaveBeenCalledTimes(1);
+      });
+      expect(world.openTile.mock.calls[0][0]).toMatchObject({
+        node: { type: "simulator", hostId: HOST, simulatorId: "udid-1" },
+        gesture: "explicit",
+      });
+    });
+
     it("drops the row at once when a Watch's answer names a session the catalog already holds", async () => {
       const place = vi.fn();
       setCatalog([record("session-held", {})]);

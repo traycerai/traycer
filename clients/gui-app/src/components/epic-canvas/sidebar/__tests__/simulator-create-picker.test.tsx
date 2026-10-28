@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -18,7 +19,9 @@ import {
 import type {
   SimulatorHostInstance,
   SimulatorOpenResponse,
+  SimulatorPackState,
   SimulatorState,
+  SimulatorStatusResponse,
 } from "@traycer/protocol/host/simulator/schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -26,6 +29,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { resetSimulatorPendingOpensForTests } from "@/stores/epics/simulator-pending-opens-store";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
@@ -103,33 +107,64 @@ vi.mock("sonner", () => ({ toast: { error: world.toastError } }));
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { SimulatorCreatePicker } from "../simulator-create-picker";
 
+const DEVICES: SimulatorState["simulators"] = [
+  {
+    simulatorId: "udid-1",
+    platform: "ios",
+    name: "iPhone 16",
+    version: "18.0",
+    booted: true,
+    physical: false,
+  },
+  {
+    simulatorId: "udid-cold",
+    platform: "ios",
+    name: "iPad Air",
+    version: "18.0",
+    booted: false,
+    physical: false,
+  },
+];
+
 const LIST: SimulatorState = {
   revision: 1,
   hostId: HOST,
   platforms: [{ platform: "ios", available: true, reason: null }],
   packState: { kind: "ready", reason: null, progress: null },
   hubState: { kind: "running", lastError: null },
-  simulators: [
-    {
-      simulatorId: "udid-1",
-      platform: "ios",
-      name: "iPhone 16",
-      version: "18.0",
-      booted: true,
-      physical: false,
-    },
-    {
-      simulatorId: "udid-cold",
-      platform: "ios",
-      name: "iPad Air",
-      version: "18.0",
-      booted: false,
-      physical: false,
-    },
-  ],
+  simulators: DEVICES,
   sessions: [],
   booting: [],
 };
+
+const READY_PACK: SimulatorPackState = {
+  kind: "ready",
+  reason: null,
+  progress: null,
+};
+
+/**
+ * The host's pack, which both reads carry. Without the tools there is nothing
+ * to enumerate, so the list answers with no devices until the pack is ready.
+ */
+const pack: { state: SimulatorPackState } = { state: READY_PACK };
+
+function listNow(): SimulatorState {
+  return {
+    ...LIST,
+    packState: pack.state,
+    simulators: pack.state.kind === "ready" ? DEVICES : [],
+  };
+}
+
+function statusNow(): SimulatorStatusResponse {
+  return {
+    platforms: LIST.platforms,
+    packState: pack.state,
+    packVersion: null,
+    installed: null,
+  };
+}
 
 const RUNNING: SimulatorHostInstance = {
   instanceKey: "udid-1",
@@ -165,15 +200,29 @@ function answer(): SimulatorOpenResponse {
   };
 }
 
-function wrap(children: ReactNode) {
-  const queryClient = new QueryClient({
+let queryClient: QueryClient;
+
+function freshQueryClient(): void {
+  queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+}
+
+function wrap(children: ReactNode) {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>{children}</TooltipProvider>
     </QueryClientProvider>
   );
+}
+
+/** Makes the next `simulator.status` read happen now, as its pack poll would. */
+async function tickPackPoll(): Promise<void> {
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(HOST, "simulator.status"),
+    });
+  });
 }
 
 async function openPicker() {
@@ -196,7 +245,9 @@ async function openPicker() {
 describe("SimulatorCreatePicker", () => {
   beforeEach(() => {
     resetSimulatorPendingOpensForTests();
+    freshQueryClient();
     opens.length = 0;
+    pack.state = READY_PACK;
     world.negotiated = { major: 1, minor: 1 };
     world.openTile.mockReset();
     world.toastError.mockReset();
@@ -204,8 +255,14 @@ describe("SimulatorCreatePicker", () => {
       registry: hostRpcRegistry,
       requestId: () => "request",
       handlers: {
-        "simulator.list": () => LIST,
+        "simulator.list": () => listNow(),
+        "simulator.status": () => statusNow(),
         "simulator.instances": () => ({ instances: [RUNNING] }),
+        "config.simulator.set": () => {
+          // The host takes the flip and starts fetching the tools.
+          pack.state = { kind: "installing", reason: null, progress: 0 };
+          return { enabled: true, idleMinutes: 15 };
+        },
         "simulator.open": (params) => {
           opens.push(params);
           return answer();
@@ -277,6 +334,30 @@ describe("SimulatorCreatePicker", () => {
     expect(new Set(requestIds).size).toBe(3);
   });
 
+  it("leaves the off state and lists the cold devices once the switch is on and the pack has installed", async () => {
+    pack.state = { kind: "off", reason: null, progress: null };
+    const user = await openPicker();
+    const turnOn = await screen.findByTestId("simulator-create-picker-turn-on");
+    expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+
+    await user.click(turnOn);
+
+    // The switch-on's own answer: the picker stops saying simulators are off.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("simulator-create-picker-turn-on"),
+      ).toBeNull();
+    });
+    expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+
+    pack.state = READY_PACK;
+    await tickPackPoll();
+
+    expect(
+      await screen.findByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+  });
+
   it("disables Boot another toward a 1.0 host, says why, and sends nothing for it", async () => {
     world.negotiated = { major: 1, minor: 0 };
     const user = await openPicker();
@@ -301,7 +382,9 @@ describe("SimulatorCreatePicker", () => {
 describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
   beforeEach(() => {
     resetSimulatorPendingOpensForTests();
+    freshQueryClient();
     opens.length = 0;
+    pack.state = READY_PACK;
     world.negotiated = { major: 1, minor: 0 };
     world.toastError.mockReset();
     world.client = null;
