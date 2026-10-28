@@ -228,6 +228,8 @@ function tileRenderer<K extends TileKindId>(
  * canvas host's. Without it a tile on a remote host sees the canvas host's
  * stream, and every consumer that compares the two has to fall back; the
  * boundary makes that mismatch impossible instead of handled per surface.
+ * A link opens on the tile's host only when neither a Browsers panel pin nor
+ * a local host picks another (`BrowserOpenSessionsProvider`).
  * It is a no-op when the tile is on the canvas host, and coordinators are
  * refcounted, so N tiles on one host share one stream.
  *

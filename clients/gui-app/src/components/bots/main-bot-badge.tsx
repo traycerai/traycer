@@ -1,22 +1,37 @@
 import type { ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
+import { Star } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { cn } from "@/lib/utils";
 
 /**
- * The mark of an environment's main bot (decision 30), beside its name on
- * Home and in its tab's header.
+ * The mark of an environment's main bot (decisions 30, 104): a small star
+ * beside its name on Home, in the channel sidebar and in its channel's header.
+ * Muted, or in its row's own colour (`current`) where the row is filled.
+ * The tooltip opens from a plain wrapper, so the labelled star is not also
+ * described by a tooltip repeating its name.
  */
-export function MainBotBadge(props: { readonly testId: string }): ReactNode {
+export function MainBotBadge(props: {
+  readonly testId: string;
+  readonly tone: "muted" | "current";
+}): ReactNode {
   return (
     <TooltipWrapper
-      label="The main bot tidies the shared memory."
+      label="Main bot"
       side="top"
       sideOffset={6}
       align={undefined}
     >
-      <Badge variant="info" size="xs" data-testid={props.testId}>
-        Main
-      </Badge>
+      <span className="inline-flex shrink-0">
+        <Star
+          role="img"
+          aria-label="Main bot"
+          data-testid={props.testId}
+          className={cn(
+            "size-3 fill-current",
+            props.tone === "muted" ? "text-muted-foreground" : "text-current",
+          )}
+        />
+      </span>
     </TooltipWrapper>
   );
 }

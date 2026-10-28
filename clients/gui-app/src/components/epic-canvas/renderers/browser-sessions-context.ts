@@ -58,3 +58,19 @@ export const BrowserSessionsSnapshotContext =
 export function useMaybeBrowserSessionsSnapshot(): BrowserSessionsSnapshot | null {
   return useContext(BrowserSessionsSnapshotContext);
 }
+
+/**
+ * The same kind of stable handle, onto the sessions of the host a browser the
+ * person opens from this canvas tab goes to (`useBrowserOpenHost`). `current`
+ * is null when neither a Browsers panel pin nor a local host picks one; an open
+ * then goes to {@link BrowserSessionsSnapshotContext}'s host, as before.
+ *
+ * Its own context because every tile re-provides the snapshot above for the
+ * TILE's host, and the open host has to reach through that.
+ */
+export const BrowserOpenSessionsSnapshotContext =
+  createContext<BrowserSessionsSnapshot | null>(null);
+
+export function useMaybeBrowserOpenSessionsSnapshot(): BrowserSessionsSnapshot | null {
+  return useContext(BrowserOpenSessionsSnapshotContext);
+}

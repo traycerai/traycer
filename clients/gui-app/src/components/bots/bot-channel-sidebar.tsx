@@ -4,6 +4,7 @@ import { ExternalLink, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import {
   TeamBotSetupDialog,
   type TeamBotSetupTarget,
@@ -212,6 +213,7 @@ function SidebarSection(props: {
           <li key={bot.botId}>
             <ChannelRow
               bot={bot}
+              isMain={bot.botId === group.mainBotId}
               active={bot.botId === activeBotId}
               unread={unreadBotIds.has(bot.botId)}
               locked={locked}
@@ -226,12 +228,13 @@ function SidebarSection(props: {
 
 function ChannelRow(props: {
   readonly bot: BotRecord;
+  readonly isMain: boolean;
   readonly active: boolean;
   readonly unread: boolean;
   readonly locked: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, active, unread, locked, onOpen } = props;
+  const { bot, isMain, active, unread, locked, onOpen } = props;
   return (
     <button
       type="button"
@@ -251,6 +254,12 @@ function ChannelRow(props: {
     >
       <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />
       <span className="truncate">{bot.title}</span>
+      {isMain ? (
+        <MainBotBadge
+          testId="bot-channel-row-main"
+          tone={active ? "current" : "muted"}
+        />
+      ) : null}
     </button>
   );
 }
