@@ -18,19 +18,20 @@ export type SandboxMovingState =
 
 /**
  * A chat's host as a sandbox, by one precedence: the task's end record, then
- * a listed row's known state, then a move, then unknown.
+ * a listed row's known state, then a move, then a sandbox something names.
  *
- * - `none` - proven not a sandbox (a person's host), or an awake sandbox this
- *   device reaches. A failed, disabled or missing read never proves it.
+ * - `none` - a host nothing names as a sandbox (the task, the directory and
+ *   the viewer's sandbox list), or an awake sandbox this device reaches.
  * - `resting` - suspended, stopped or frozen. `configuration` is `null` until
  *   the team configuration it bills under resolves.
  * - `moving` - between two states, or destroyed before the task records the
  *   end.
- * - `pending` - not known here, named when anything names it.
+ * - `pending` - a sandbox the task or the directory names, its state not
+ *   known here.
  */
 export type ChatSandboxState =
   | { readonly kind: "none" }
-  | { readonly kind: "pending"; readonly name: string | null }
+  | { readonly kind: "pending"; readonly name: string }
   | {
       readonly kind: "moving";
       readonly sandbox: SandboxSummary;
@@ -197,8 +198,8 @@ const MOVING_VERB: Record<SandboxMovingState, string> = {
 };
 
 /** A sandbox whose state this device cannot tell yet. */
-function unknownSandboxLine(name: string | null): string {
-  return `${name ?? "This chat's sandbox"} isn't available — this chat stays readable.`;
+function unknownSandboxLine(name: string): string {
+  return `${name} isn't available — this chat stays readable.`;
 }
 
 /** A moving sandbox's line, as its row and setup line say it. */

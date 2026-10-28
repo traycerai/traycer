@@ -15,15 +15,13 @@ export interface TaskSandboxEndedHost {
  * - `ended` - a sandbox's permanent end, which survives removal from the live
  *   sandbox and host lists;
  * - `sandbox` - a sandbox the task names, with no end;
- * - `person` - a host the task's answered list names as a person's;
- * - `unknown` - anything that proves nothing: the hosts are loading, failed,
- *   unsupported or disabled, or the list does not hold this host.
+ * - `other` - the task names no sandbox: a person's host, a host the list does
+ *   not hold, or hosts that are loading, failed, unsupported or disabled.
  */
 export type TaskSandboxHost =
   | { readonly kind: "ended"; readonly ended: TaskSandboxEndedHost }
   | { readonly kind: "sandbox"; readonly name: string }
-  | { readonly kind: "person" }
-  | { readonly kind: "unknown" };
+  | { readonly kind: "other" };
 
 export function useTaskSandboxHost(
   epicId: string,
@@ -37,11 +35,10 @@ export function taskSandboxHostOf(
   taskHosts: TaskHostsView,
   hostId: string | null,
 ): TaskSandboxHost {
-  if (hostId === null || taskHosts.kind !== "hosts") return { kind: "unknown" };
+  if (hostId === null || taskHosts.kind !== "hosts") return { kind: "other" };
   const host = taskHosts.hosts.find((row) => row.hostId === hostId);
-  if (host === undefined) return { kind: "unknown" };
   // `label` is a sandbox's display name, null for a person's host.
-  if (host.label === null) return { kind: "person" };
+  if (host === undefined || host.label === null) return { kind: "other" };
   return host.sandboxEnd === null
     ? { kind: "sandbox", name: host.label }
     : { kind: "ended", ended: { name: host.label, end: host.sandboxEnd } };
