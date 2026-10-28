@@ -350,14 +350,14 @@ function mountComposer(settings: ChatRunSettings) {
       onSettingsChange={null}
       activeTurnStatus={null}
       steerCapable={false}
-      steerProtocolSupported={true}
+      steerProtocolSupported
       autoPermissionModeProtocolSupported={null}
       getDraftBlobBridgeSupported={() => false}
       getActiveTurnForSteer={() => null}
       editingQueueItemId={null}
       onCancelQueueEdit={null}
       hasPendingApprovals={false}
-      stopDisabled={true}
+      stopDisabled
       onStopTurn={null}
       workspaceControls={null}
       workspaceAvailability={{ status: "ready", disabledHint: null }}

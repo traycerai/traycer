@@ -127,7 +127,10 @@ import {
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
-import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import {
+  ComposerHostNotice,
+  type ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
 import { useLandingOwner } from "@/hooks/home/use-landing-owner";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
@@ -176,6 +179,21 @@ function landingComposerCanSubmit(args: {
     args.workspaceCanStart &&
     args.hasSubmittableContent
   );
+}
+
+/**
+ * What Send would be refused for now: the stage's check while a stage takes
+ * the send, else the sandbox host's own. Read on every render, so a refusal
+ * already shown follows the pick and the placement.
+ */
+function landingSendRefusal(
+  stage: StagedSandbox | null,
+  check: (stage: StagedSandbox) => ComposerHostNoticeState | null,
+  hostRefusal: ComposerHostNoticeState | null,
+): ComposerHostNoticeState | null {
+  return stage !== null && stage.phase !== "handoff"
+    ? check(stage)
+    : hostRefusal;
 }
 
 export function LandingComposer(props: LandingComposerProps) {
@@ -554,13 +572,11 @@ export function LandingComposer(props: LandingComposerProps) {
     stagedNow,
     stagedSignInCheck.check,
   );
-  // What Send would be refused for now: the stage's check while a stage takes
-  // the send, else the sandbox host's own. Read on every render, so a refusal
-  // already shown follows the pick and the placement.
-  const sendRefusal =
-    stagedNow !== null && stagedNow.phase !== "handoff"
-      ? stagedSignInCheck.check(stagedNow)
-      : sandboxAgentGate.notice;
+  const sendRefusal = landingSendRefusal(
+    stagedNow,
+    stagedSignInCheck.check,
+    sandboxAgentGate.notice,
+  );
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
     workspaceDisabledHint: workspaceGate.disabledHint,
     signedOut: reauthGate.signedOut,

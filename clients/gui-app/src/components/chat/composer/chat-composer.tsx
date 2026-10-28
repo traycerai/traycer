@@ -326,17 +326,18 @@ function ProfileDisabledRecovery(props: {
  * A resting sandbox's chat reads no host: `hostClient` is `null` for it (see
  * `runHostClient`), and the catalogue decides alone.
  */
-function useAgentRunGate(
-  hostClient: HostClient<HostRpcRegistry> | null,
-  hostId: string | null,
-  harnessId: GuiHarnessId | null,
-  focused: boolean,
-  resting: boolean,
-): {
+function useAgentRunGate(input: {
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly harnessId: GuiHarnessId | null;
+  readonly focused: boolean;
+  readonly resting: boolean;
+}): {
   readonly hint: string | null;
   readonly blocked: boolean;
   readonly refusal: ComposerHostNoticeState | null;
 } {
+  const { hostClient, hostId, harnessId, focused, resting } = input;
   const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
   const liveAgentGate = useSandboxAgentGate({
     hostId: resting ? null : hostId,
@@ -635,13 +636,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
-  const agentRunGate = useAgentRunGate(
-    runHostClient,
-    tabHostId,
+  const agentRunGate = useAgentRunGate({
+    hostClient: runHostClient,
+    hostId: tabHostId,
     harnessId,
     focused,
     resting,
-  );
+  });
   const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,

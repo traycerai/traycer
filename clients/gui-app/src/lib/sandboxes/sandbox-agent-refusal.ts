@@ -26,7 +26,9 @@ export function stagedSandboxCheckingNotice(
 
 export interface SandboxAgentRemedies {
   /** Opens a model picker on the agents sandboxes offer (`null`: unknown). */
-  readonly onChooseModel?: (offeredAgents: ReadonlyArray<string> | null) => void;
+  readonly onChooseModel?: (
+    offeredAgents: ReadonlyArray<string> | null,
+  ) => void;
   readonly onOpenTerminalInstead?: () => void;
   readonly onChooseAnotherHost?: () => void;
 }

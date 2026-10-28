@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPrestartRuntimeRequest } from "@traycer/protocol/host/agent/gui/prestart-runtime";
 
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { ChatComposer } from "../chat-composer";
 
 /**
@@ -46,6 +48,8 @@ const captured = vi.hoisted(() => ({
   paneFocused: true,
   draftHasText: false,
   stagedWorktree: false,
+  /** The sandbox this chat's next message wakes, while it rests. */
+  resting: null as RestingChatSandbox | null,
   toolbarStore: null as {
     readonly getState: () => {
       readonly setSelection: (next: {
@@ -71,12 +75,17 @@ const captured = vi.hoisted(() => ({
 }));
 
 // A chat composer on a sandbox host refuses an unrunnable agent at Send;
-// nothing in this suite sits on one.
+// nothing in this suite sits on one, nor on a resting sandbox's chat.
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => ({
     blocked: captured.agentNotice !== null,
     hint: captured.agentNotice === null ? null : captured.agentNotice.message,
     notice: captured.agentNotice,
+  }),
+  useRestingSandboxAgentGate: () => ({
+    blocked: false,
+    hint: null,
+    notice: null,
   }),
 }));
 
@@ -327,6 +336,7 @@ beforeEach(async () => {
   captured.paneFocused = true;
   captured.draftHasText = false;
   captured.stagedWorktree = false;
+  captured.resting = null;
   captured.agentNotice = null;
   captured.packHint = null;
 });
@@ -372,7 +382,7 @@ function composerElement() {
       topSpacing="normal"
       topSlot={null}
       suggestedPrompt={undefined}
-      restingSandbox={null}
+      restingSandbox={captured.resting}
     />
   );
 }
@@ -456,6 +466,25 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
 
   it("not while a worktree is staged for this chat", () => {
     captured.stagedWorktree = true;
+    mountComposer();
+
+    userInput(true);
+
+    expect(captured.mutate).not.toHaveBeenCalled();
+  });
+
+  it("not for a resting sandbox's chat: the tab's host only serves its copy, and the turn runs on the sandbox", () => {
+    captured.resting = {
+      kind: "resting",
+      sandbox: sandboxSummaryFixture({
+        id: "sbx-rest",
+        hostId: "host-rest",
+        state: "suspended",
+        displayName: "e2e-sbx-rest",
+      }),
+      configuration: { kind: "personal" },
+      wakeChangesPayer: false,
+    };
     mountComposer();
 
     userInput(true);

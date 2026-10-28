@@ -398,7 +398,6 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
       [],
       new Set(),
       new Map(),
-      null,
     );
     expect(visible).toEqual([]);
 
@@ -415,7 +414,6 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
       [],
       new Set(),
       new Map(),
-      null,
     );
     expect(visibleSignedOut.map((h) => h.id)).toEqual(["claude"]);
   });
@@ -431,7 +429,7 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
     };
     expect(railHarnessDegraded(explicitlyOff, new Set())).toBe(false);
     expect(
-      visibleRailHarnesses([explicitlyOff], [], new Set(), new Map(), null),
+      visibleRailHarnesses([explicitlyOff], [], new Set(), new Map()),
     ).toEqual([]);
   });
 
@@ -443,15 +441,17 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
       enabled: false,
       available: false,
     };
-    expect(
-      visibleRailHarnesses(
-        [harness("claude"), traycerOff, harness("codex")],
-        [],
-        new Set(),
-        new Map(),
-        ["traycer"],
-      ).map((h) => h.id),
-    ).toEqual(["traycer"]);
+    const entries = visibleRailEntries({
+      harnesses: [harness("claude"), traycerOff, harness("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map(),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: ["traycer"],
+    });
+
+    expect(entries.map((entry) => entry.harness.id)).toEqual(["traycer"]);
   });
 
   // Enablement is no longer tri-state: there is no "auto, undetected" middle
@@ -469,7 +469,7 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
     };
     expect(railHarnessDegraded(stickyOn, new Set())).toBe(true);
     expect(
-      visibleRailHarnesses([stickyOn], [], new Set(), new Map(), null).map(
+      visibleRailHarnesses([stickyOn], [], new Set(), new Map()).map(
         (h) => h.id,
       ),
     ).toEqual(["claude"]);

@@ -44,6 +44,20 @@ const NOT_BLOCKED: SandboxAgentGate = {
   notice: null,
 };
 
+/** An agent sandboxes don't run, refused with "Choose a model" on what they do. */
+function notOfferedGate(
+  harnessId: GuiHarnessId,
+  offeredAgents: ReadonlyArray<string> | undefined,
+  remedies: SandboxAgentRemedies,
+): SandboxAgentGate {
+  const notice = sandboxAgentNotOfferedNotice(
+    harnessId,
+    offeredAgents ?? null,
+    remedies,
+  );
+  return { blocked: true, hint: notice.message, notice };
+}
+
 /** The pending notice holds Send while the destination proves launch readiness. */
 function sandboxAgentPreparingGate(harnessId: GuiHarnessId): SandboxAgentGate {
   const providerId = guiHarnessIdToProviderId(harnessId);
@@ -85,28 +99,16 @@ export function useSandboxAgentGate(
     input.active && configuration !== null && configuration.kind === "team",
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
-  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId)) {
-    const notice = sandboxAgentNotOfferedNotice(
-      input.harnessId,
-      offeredAgents,
-      input,
-    );
-    return { blocked: true, hint: notice.message, notice };
-  }
+  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId))
+    return notOfferedGate(input.harnessId, offeredAgents, input);
   const readiness = requestedAgentReadiness(
     input.harnessId,
     harnesses.data?.harnesses,
     providers.data?.providers,
     opencodeLine,
   );
-  if (readiness.kind === "not-offered") {
-    const notice = sandboxAgentNotOfferedNotice(
-      input.harnessId,
-      offeredAgents ?? null,
-      input,
-    );
-    return { blocked: true, hint: notice.message, notice };
-  }
+  if (readiness.kind === "not-offered")
+    return notOfferedGate(input.harnessId, offeredAgents, input);
   if (readiness.kind === "ready") return NOT_BLOCKED;
   if (readiness.kind === "waiting")
     return sandboxAgentPreparingGate(input.harnessId);
@@ -163,10 +165,5 @@ export function useRestingSandboxAgentGate(input: {
   const offeredAgents = catalogue.data?.offeredAgents;
   if (offeredAgents === undefined || offeredAgents.includes(input.harnessId))
     return NOT_BLOCKED;
-  const notice = sandboxAgentNotOfferedNotice(
-    input.harnessId,
-    offeredAgents,
-    {},
-  );
-  return { blocked: true, hint: notice.message, notice };
+  return notOfferedGate(input.harnessId, offeredAgents, {});
 }
