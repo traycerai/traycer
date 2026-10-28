@@ -6,12 +6,34 @@ import type {
   SimulatorPlatform,
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
-import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
+import {
+  useHostNegotiatedMethodVersions,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import type { SimulatorOpenTarget } from "./use-simulator-instance-open";
+
+/** Resolves a requester for one named host, or `null` when it cannot. */
+type ResolveClient = (hostId: string) => HostClient<HostRpcRegistry> | null;
+
+/**
+ * The refusal both reads below report when the binding cannot address the
+ * host. Takes the RESOLVED client rather than the resolver: a fetcher that
+ * passes `resolveClient` as a value reads to the query lint as cache identity
+ * it has left out of the key, and it is deliberately not in the key - the
+ * requester is resolved per call so a cached entry never pins a client.
+ */
+function requireClient(
+  client: HostClient<HostRpcRegistry> | null,
+): HostClient<HostRpcRegistry> {
+  if (client === null) throw new Error("Couldn't reach this host.");
+  return client;
+}
 
 /** One row a list of machines offers: watch an instance, or boot a device. */
 export interface SimulatorInventoryEntry {
@@ -100,9 +122,7 @@ export function simulatorInventoryEntries(args: {
  * is a different key, which fetches on its own.
  */
 function simulatorInventoryQuery(args: {
-  readonly resolveClient: (
-    hostId: string,
-  ) => HostClient<HostRpcRegistry> | null;
+  readonly resolveClient: ResolveClient;
   readonly hostId: string;
   readonly epicId: string;
   readonly enabled: boolean;
@@ -114,8 +134,12 @@ function simulatorInventoryQuery(args: {
     enabled,
     retry: false,
     queryFn: async (): Promise<readonly SimulatorInventoryEntry[]> => {
-      const client = resolveClient(hostId);
-      if (client === null) throw new Error("Couldn't reach this host.");
+      const client = requireClient(resolveClient(hostId));
+      // Deliberately its own `simulator.list`, not the contact read's cached
+      // answer below: the cold rows come from this answer and the running rows
+      // from `simulator.instances`, and the two have to describe ONE moment.
+      // Fold a cached device list into a fresh instance list and a simulator
+      // booted since would be listed twice - running, and still cold.
       const state = await client.request("simulator.list", { epicId });
       const instances = speaksV11
         ? (await client.request("simulator.instances", {})).instances
@@ -130,13 +154,82 @@ function simulatorInventoryQuery(args: {
 }
 
 /**
+ * The read that CONTACTS a machine, for the hosts whose simulator minor is not
+ * known yet.
+ *
+ * The inventory read above waits for that minor, because the minor decides
+ * which shape its answer has - and before this, nothing else was asking.
+ * `useHostNegotiatedMethodVersions` only OBSERVES the registry, and the
+ * requester is resolved inside the inventory's own fetcher, which the same
+ * unanswered question had disabled. So a machine the task catalog names but
+ * this client has never dialled stayed unnegotiated until some unrelated
+ * surface happened to touch it, and the palette omitted it or sat on
+ * "Loading simulators…". The + picker had the same defect and the same fix.
+ *
+ * `simulator.list` is the read a host-parametric surface reaches a machine
+ * with, so DISPATCHING it is the handshake; `useSimulatorListQuery` carries
+ * that contract for the picker. Withheld only from a host whose manifest
+ * PROVES the method absent - merely unknown is the state this read resolves,
+ * and reading it as absence is how the deadlock is spelled. Keyed exactly as
+ * `useHostQuery` keys that method, through the same error boundary and method
+ * stamp, so the answer is the entry every other simulator surface reads
+ * rather than a private copy.
+ *
+ * Returns the hosts whose contact attempt FAILED while their minor is still
+ * unknown: a machine that cannot be reached reports `error` instead of a
+ * palette that spins on it for ever. Only while unknown, because once the
+ * minor lands the inventory read's own state is the honest one and this
+ * query's last error is frozen in a disabled observer.
+ */
+function useSimulatorHostContact(args: {
+  readonly resolveClient: ResolveClient;
+  readonly hostIds: readonly string[];
+  readonly epicId: string;
+  readonly enabled: boolean;
+  readonly minorUnknown: (hostId: string) => boolean;
+  readonly listSupport: ReadonlyMap<string, NegotiatedMethodVersion>;
+}): ReadonlySet<string> {
+  const { resolveClient, hostIds, epicId, enabled, minorUnknown, listSupport } =
+    args;
+  return useQueries({
+    queries: hostIds.map((hostId) =>
+      queryOptions({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "simulator.list">(
+          hostId,
+          "simulator.list",
+          { epicId },
+        ),
+        enabled:
+          enabled && minorUnknown(hostId) && listSupport.get(hostId) !== false,
+        retry: false,
+        meta: stampHostRpcMethod(undefined, "simulator.list"),
+        queryFn: () =>
+          withHostQueryErrorBoundary("simulator.list", () =>
+            requireClient(resolveClient(hostId)).request("simulator.list", {
+              epicId,
+            }),
+          ),
+      }),
+    ),
+    combine: (results) =>
+      new Set(
+        hostIds.filter(
+          (hostId, index) => results[index].isError && minorUnknown(hostId),
+        ),
+      ),
+  });
+}
+
+/**
  * What each of several machines offers to open, for the surfaces that list
  * more than one machine (the palette). One read per machine.
  *
- * A machine whose simulator minor is still unnegotiated is NOT read: the gate
- * decides which of the two shapes the answer has, and `null` there is "not
- * known yet", never "`@1.0`". Subscribed per host (`hostIds` is memoized by
- * the caller), so the read starts on its own the moment the handshake lands.
+ * A machine whose simulator minor is still unnegotiated is not SHAPED yet: the
+ * gate decides which of the two shapes the answer has, and `null` there is
+ * "not known yet", never "`@1.0`". It is still CONTACTED - see
+ * {@link useSimulatorHostContact}, which is what makes the minor land - and
+ * the subscription per host (`hostIds` is memoized by the caller) is what
+ * starts the shaped read the moment it does.
  */
 export function useSimulatorInventories(args: {
   readonly hostIds: readonly string[];
@@ -150,27 +243,45 @@ export function useSimulatorInventories(args: {
     [binding],
   );
   const versions = useHostNegotiatedMethodVersions(hostIds, "simulator.open");
+  const listSupport = useHostNegotiatedMethodVersions(
+    hostIds,
+    "simulator.list",
+  );
+  const speaksV11 = useCallback(
+    (hostId: string) => simulatorVerbsAreV11(versions.get(hostId) ?? null),
+    [versions],
+  );
+  const minorUnknown = useCallback(
+    (hostId: string) => speaksV11(hostId) === null,
+    [speaksV11],
+  );
+  const unreachable = useSimulatorHostContact({
+    resolveClient,
+    hostIds,
+    epicId,
+    enabled,
+    minorUnknown,
+    listSupport,
+  });
   return useQueries({
-    queries: hostIds.map((hostId) => {
-      const speaksV11 = simulatorVerbsAreV11(versions.get(hostId) ?? null);
-      return simulatorInventoryQuery({
+    queries: hostIds.map((hostId) =>
+      simulatorInventoryQuery({
         resolveClient,
         hostId,
         epicId,
-        enabled: enabled && speaksV11 !== null,
-        speaksV11: speaksV11 === true,
-      });
-    }),
+        enabled: enabled && !minorUnknown(hostId),
+        speaksV11: speaksV11(hostId) === true,
+      }),
+    ),
     combine: (results) =>
       results.map((result, index): SimulatorHostInventory => {
+        const hostId = hostIds[index];
         let status: SimulatorHostInventory["status"] = "ready";
-        if (result.isError) status = "error";
+        // A failed contact is this host's answer while the shaped read is
+        // still waiting on a minor that will never arrive from it.
+        if (result.isError || unreachable.has(hostId)) status = "error";
         else if (result.isPending) status = "loading";
-        return {
-          hostId: hostIds[index],
-          status,
-          entries: result.data ?? [],
-        };
+        return { hostId, status, entries: result.data ?? [] };
       }),
   });
 }
