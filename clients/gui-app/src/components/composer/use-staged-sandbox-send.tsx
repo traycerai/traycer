@@ -46,6 +46,10 @@ import {
   type StagePrice,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  useSandboxOperation,
+  type SandboxRowOperation,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import {
@@ -445,6 +449,26 @@ export function useStagedSandboxSend(input: {
 }
 
 /**
+ * Stop needs the row's word that the sandbox is awake. A listed row can still
+ * read its resting state while a start or resume runs: the stage's boot step
+ * says so first, and a pending verb does until a list answer newer than it
+ * reads the row awake.
+ */
+function stopOffered(
+  stage: StagedSandbox | null,
+  row: SandboxSummary | undefined,
+  listedAt: number,
+  operation: SandboxRowOperation | null,
+): boolean {
+  const waking =
+    (stage?.step === "booting" && stage.failure === null) ||
+    (operation?.kind === "pending" &&
+      (operation.verb === "start" || operation.verb === "resume") &&
+      listedAt < operation.submittedAt);
+  return row?.state === "awake" && !waking;
+}
+
+/**
  * The facts the setup line reads beyond its stage: the cost line, and for the
  * shape refusal the region, the shape and whether a smaller one is affordable.
  * `null` while there is no stage.
@@ -454,7 +478,8 @@ export function useSetupLineFacts(
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
-  const sandboxes = useSandboxList().data?.sandboxes;
+  const sandboxList = useSandboxList();
+  const sandboxes = sandboxList.data?.sandboxes;
   // Whether the stage's sandbox is awake: `null` until the list has its row.
   const stageSandboxId =
     stage?.createdSandboxId ??
@@ -465,6 +490,13 @@ export function useSetupLineFacts(
       : sandboxes?.find((candidate) => candidate.id === stageSandboxId);
   const sandboxAwake =
     stageRow === undefined ? null : stageRow.state === "awake";
+  const operation = useSandboxOperation(stageSandboxId ?? "");
+  const sandboxStoppable = stopOffered(
+    stage,
+    stageRow,
+    sandboxList.dataUpdatedAt,
+    operation,
+  );
   // A resting sandbox of the person's costs what its row says.
   const existingPrice = useMemo<StagePrice | null>(() => {
     if (stage === null || stage.target.kind !== "existing") return null;
@@ -491,6 +523,7 @@ export function useSetupLineFacts(
         smallerShapeAffordable: false,
         offeredAgents: catalogue?.offeredAgents ?? null,
         sandboxAwake,
+        sandboxStoppable,
       };
     }
     const { shape, configuration } = stage.target;
@@ -523,8 +556,9 @@ export function useSetupLineFacts(
         ),
       offeredAgents: catalogue.offeredAgents ?? null,
       sandboxAwake,
+      sandboxStoppable,
     };
-  }, [catalogue, existingPrice, sandboxAwake, stage, user]);
+  }, [catalogue, existingPrice, sandboxAwake, sandboxStoppable, stage, user]);
 }
 
 /**

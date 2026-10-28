@@ -184,6 +184,11 @@ export interface SandboxSetupLineFacts {
   readonly offeredAgents: ReadonlyArray<string> | null;
   /** Whether the stage's sandbox is awake now; `null` before its row is listed. */
   readonly sandboxAwake: boolean | null;
+  /**
+   * The stage's sandbox is listed awake and no start or resume of it is
+   * under way: Stop is offered only then.
+   */
+  readonly sandboxStoppable: boolean;
 }
 
 /**
@@ -216,7 +221,10 @@ export function SandboxSetupLine(props: {
         }
       : {
           ...props.actions,
-          onStop: stage.createdSandboxId === null ? null : props.actions.onStop,
+          onStop:
+            stage.createdSandboxId !== null && props.facts.sandboxStoppable
+              ? props.actions.onStop
+              : null,
         };
   const failure = stage.failure;
   if (failure !== null && isRefusal(failure)) {

@@ -53,6 +53,7 @@ function facts(smallerShapeAffordable: boolean): SandboxSetupLineFacts {
     smallerShapeAffordable,
     offeredAgents: null,
     sandboxAwake: null,
+    sandboxStoppable: true,
   };
 }
 

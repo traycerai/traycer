@@ -2823,6 +2823,7 @@ function pendingSandboxModelRecovery(input: {
       stage: input.stage,
       tabId: input.tabId,
       restage: false,
+      keepHost: true,
       modelPickerHarnessId: "traycer",
     });
   };
@@ -2924,8 +2925,17 @@ function PendingStagedSendItem(props: {
   if (stage === null || facts === null) {
     return <PendingSendMessage send={send} />;
   }
-  const backToComposer = (restage: boolean): ReturnedPendingSandboxSend => {
-    return endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
+  const backToComposer = (
+    restage: boolean,
+    keepHost: boolean,
+  ): ReturnedPendingSandboxSend => {
+    return endSendBackToComposer({
+      send,
+      stage,
+      tabId: props.tabId,
+      restage,
+      keepHost,
+    });
   };
   const stop = (): void => {
     void stopPendingSend(
@@ -2934,7 +2944,9 @@ function PendingStagedSendItem(props: {
       () => {
         attention.current = {
           userId: send.userId,
-          giveBack: () => backToComposer(false),
+          // Back in this task's composer, still on the stopped sandbox: its
+          // send starts it again.
+          giveBack: () => backToComposer(false, true),
         };
         stopAttention.set(send.id, attention.current);
       },
@@ -2984,7 +2996,7 @@ function PendingStagedSendItem(props: {
                 );
                 return;
               }
-              const returned = backToComposer(false);
+              const returned = backToComposer(false, false);
               if (
                 !Object.hasOwn(
                   usePendingSandboxSendStore.getState().sends,
@@ -2993,11 +3005,11 @@ function PendingStagedSendItem(props: {
               )
                 recordCancelledSandboxSend(send, returned);
             },
-            onChooseAnotherHost: () => backToComposer(false),
+            onChooseAnotherHost: () => backToComposer(false, false),
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),
-            onChangeShape: () => backToComposer(true),
+            onChangeShape: () => backToComposer(true, false),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,
@@ -3178,14 +3190,17 @@ function useOpenTerminalWhenUp(
 /**
  * Ends the send and puts the message back in this task's new-agent
  * composer, where the person picks a host again; `restage` stages the same
- * sandbox there, for a shape change. A fork has no message to put back: it
- * ends, and the chat it came from is where to fork again.
+ * sandbox there, for a shape change, and `keepHost` names the sandbox the
+ * send was made on (a Stop's give-back, a model recovery). A fork has no
+ * message to put back: it ends, and the chat it came from is where to fork
+ * again.
  */
 function endSendBackToComposer(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly tabId: string;
   readonly restage: boolean;
+  readonly keepHost: boolean;
   readonly modelPickerHarnessId?: GuiHarnessId;
 }): ReturnedPendingSandboxSend {
   const { send } = input;
@@ -3212,10 +3227,7 @@ function endSendBackToComposer(input: {
     useStagedSandboxStore.getState().stage(key, input.stage.target);
     openStagedShapeSheet(key);
   }
-  if (
-    input.modelPickerHarnessId !== undefined &&
-    input.stage.createdHostId !== null
-  ) {
+  if (input.keepHost && input.stage.createdHostId !== null) {
     useSurfaceHostSelectionStore
       .getState()
       .setSelection(
@@ -3228,7 +3240,9 @@ function endSendBackToComposer(input: {
     tabId: input.tabId,
     placement: returned.kind === "task" ? returned.placement : null,
     parentId: returned.kind === "task" ? returned.parentId : null,
-    hostId: null,
+    // Named, not only pinned: a pin on an offline sandbox falls back to
+    // another host, and a named one sends there or nowhere.
+    hostId: input.keepHost ? input.stage.createdHostId : null,
     modelPickerHarnessId: input.modelPickerHarnessId,
   });
   return returned;
