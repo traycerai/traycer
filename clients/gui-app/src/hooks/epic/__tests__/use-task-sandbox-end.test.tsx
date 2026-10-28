@@ -61,31 +61,31 @@ describe("useTaskSandboxHost", () => {
     });
   });
 
-  it("names a person's host only from an answered list", () => {
+  it("names no sandbox for a person's host", () => {
     view.current = {
       kind: "hosts",
       hosts: [row({ label: null, sandboxEnd: END })],
     };
 
-    expect(hostOf("host-a")).toEqual({ kind: "person" });
+    expect(hostOf("host-a")).toEqual({ kind: "other" });
   });
 
   it.each([
     { kind: "error", retry: () => undefined },
     { kind: "none" },
   ] as const)(
-    "proves nothing about a host while the task's hosts read $kind (unanswered reads as none)",
+    "names no sandbox while the task's hosts read $kind (unanswered reads as none)",
     (current) => {
       view.current = current;
 
-      expect(hostOf("host-a")).toEqual({ kind: "unknown" });
+      expect(hostOf("host-a")).toEqual({ kind: "other" });
     },
   );
 
-  it("proves nothing about a host the list does not hold, or no host", () => {
+  it("names no sandbox for a host the list does not hold, or no host", () => {
     view.current = { kind: "hosts", hosts: [row({})] };
 
-    expect(hostOf("elsewhere")).toEqual({ kind: "unknown" });
-    expect(hostOf(null)).toEqual({ kind: "unknown" });
+    expect(hostOf("elsewhere")).toEqual({ kind: "other" });
+    expect(hostOf(null)).toEqual({ kind: "other" });
   });
 });

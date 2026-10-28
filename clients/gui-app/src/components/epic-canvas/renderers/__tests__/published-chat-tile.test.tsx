@@ -1862,24 +1862,9 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
     expect(text).toBe("Stopping e2e-sbx-p1 · pending");
   });
 
-  it("draws no offline banner, no Clone and no offline footer after a reload, before the task's hosts answer", () => {
+  it("never prints the raw host id of a sandbox the task names and the directory no longer lists, before and after its end arrives", () => {
     sandboxSurface.sources = {
-      taskHosts: { kind: "none" },
-      sandboxes: [],
-      entry: null,
-    };
-    mountOwnCopy();
-
-    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-    expect(chatTileSessionViewCalls.at(-1)?.readOnlyNotice ?? "").not.toContain(
-      "offline",
-    );
-  });
-
-  it("never prints the raw host id of a destroyed sandbox the directory no longer lists, and names it once the task's end arrives", () => {
-    sandboxSurface.sources = {
-      taskHosts: { kind: "none" },
+      taskHosts: { kind: "hosts", hosts: [TASK_ROW] },
       sandboxes: [],
       entry: null,
     };
@@ -1924,8 +1909,8 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
 
 /**
  * One precedence on the copy, through the real hook: a task end, then a
- * listed row's known state, then a move, then unknown. A failed or disabled
- * read never proves the host is not a sandbox.
+ * listed row's known state, then a move, then a named sandbox not known here.
+ * A host nothing names as a sandbox takes the surface's own path.
  */
 describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
   function mountOwnCopy(): void {
@@ -1971,7 +1956,7 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
     hour12: false,
   });
 
-  it("keeps a reloaded chat unknown, never offline, when both the task's hosts and the list fail", () => {
+  it("takes the ordinary offline path for a host nothing names as a sandbox, when both the task's hosts and the list fail", () => {
     sandboxSurface.sources = {
       taskHosts: { kind: "error", retry: () => undefined },
       sandboxes: null,
@@ -1979,9 +1964,9 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
     };
     mountOwnCopy();
 
-    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
-    expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
-      "This chat's sandbox isn't available — this chat stays readable.",
+    expect(screen.getByTestId("published-chat-dead-tile-chat-1")).toBeTruthy();
+    expect(chatTileSessionViewCalls.at(-1)?.readOnlyNotice).not.toContain(
+      "isn't available",
     );
   });
 

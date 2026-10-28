@@ -28,7 +28,7 @@ const sources = vi.hoisted(
     configurations: SandboxConfigurations;
     entry: HostDirectoryEntry | null;
   } => ({
-    task: { kind: "unknown" },
+    task: { kind: "other" },
     sandboxes: [],
     configurations: {
       configurations: [{ kind: "personal" }],
@@ -83,7 +83,7 @@ function stateOf(reachable: boolean) {
 }
 
 beforeEach(() => {
-  sources.task = { kind: "unknown" };
+  sources.task = { kind: "other" };
   sources.sandboxes = [];
   sources.configurations = {
     configurations: [
@@ -213,22 +213,16 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toEqual({ kind: "pending", name: `label-${HOST}` });
   });
 
-  it("reads a host nothing places as pending, unnamed, when the list read failed or the task's hosts prove nothing", () => {
-    expect(stateOf(false)).toEqual({ kind: "pending", name: null });
+  it("reads a host nothing names as a sandbox as not one, even when the list read failed", () => {
+    expect(stateOf(false)).toEqual({ kind: "none" });
 
     sources.sandboxes = null;
-    expect(stateOf(false)).toEqual({ kind: "pending", name: null });
+    expect(stateOf(false)).toEqual({ kind: "none" });
   });
 
   it("reads a host the directory knows as a person's as not a sandbox, without waiting on the task", () => {
     sources.sandboxes = null;
     sources.entry = remoteEntry(HOST, null);
-
-    expect(stateOf(false)).toEqual({ kind: "none" });
-  });
-
-  it("reads a host the task's answered list names as a person's as not a sandbox", () => {
-    sources.task = { kind: "person" };
 
     expect(stateOf(false)).toEqual({ kind: "none" });
   });
