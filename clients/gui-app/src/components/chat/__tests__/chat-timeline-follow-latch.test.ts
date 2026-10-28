@@ -8,7 +8,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { LegendListRef } from "@legendapp/list/react";
+import type { LegendListRef, LegendListState } from "@legendapp/list/react";
 import { SANDBOX_SCROLL_GESTURE_EVENT } from "@/lib/sandbox/bridge-host";
 import {
   CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
@@ -138,15 +138,20 @@ function installScrollableNodeShim(): ScrollableNodeShim {
 }
 
 let capturedResizeCallbacks: Array<ResizeObserverCallback>;
+let capturedResizeObservers: Array<ControllableResizeObserver>;
 
 class ControllableResizeObserver implements ResizeObserver {
   private readonly callback: ResizeObserverCallback;
+  readonly observedTargets: Array<Element> = [];
 
   constructor(callback: ResizeObserverCallback) {
     this.callback = callback;
     capturedResizeCallbacks.push(this.callback);
+    capturedResizeObservers.push(this);
   }
-  observe(): void {}
+  observe(target: Element): void {
+    this.observedTargets.push(target);
+  }
   unobserve(): void {}
   disconnect(): void {
     const callbackIndex = capturedResizeCallbacks.indexOf(this.callback);
@@ -210,6 +215,8 @@ const DEFAULT_FOLLOW_LATCH_OPTIONS = {
 
 interface FakeListRef {
   readonly current: LegendListRef;
+  /** Moves the list's last row, as rows above it remeasuring would. */
+  readonly setLastRowTop: (top: number) => void;
   readonly scrollToEnd: Mock<() => Promise<void>>;
   readonly scrollToOffset: Mock<
     (params: {
@@ -219,17 +226,61 @@ interface FakeListRef {
   >;
 }
 
+const FAKE_LAST_ROW_KEY = "last-row";
+const FAKE_LAST_ROW_TOP_PX = 1000;
+
+/** The slice of the list's state the latch reads - its rows and where they
+ *  sit - over a state otherwise at rest. */
+function makeFakeListState(rowTops: ReadonlyMap<string, number>) {
+  const keys = [...rowTops.keys()];
+  const state: LegendListState = {
+    activeStickyIndex: -1,
+    contentLength: 0,
+    data: keys,
+    elementAtIndex: () => null,
+    end: 0,
+    endBuffered: 0,
+    isAtEnd: false,
+    isAtStart: false,
+    isNearEnd: false,
+    isNearStart: false,
+    isEndReached: false,
+    isStartReached: false,
+    isWithinMaintainScrollAtEndThreshold: false,
+    getAverageItemSizes: () => ({}),
+    indexByKey: (key) => keys.indexOf(key),
+    keyAtIndex: (index) => keys[index],
+    listen: () => () => undefined,
+    listenToPosition: () => () => undefined,
+    positionAtIndex: (index) => rowTops.get(keys[index]) ?? 0,
+    positionByKey: (key) => rowTops.get(key),
+    scroll: 0,
+    scrollLength: 0,
+    scrollVelocity: 0,
+    sizeAtIndex: () => 0,
+    sizes: new Map(),
+    start: 0,
+    startBuffered: 0,
+  };
+  return state;
+}
+
 function makeFakeListRef(node: HTMLDivElement): FakeListRef {
+  const rowTops = new Map<string, number>([
+    [FAKE_LAST_ROW_KEY, FAKE_LAST_ROW_TOP_PX],
+  ]);
+  const cancelPendingScroll = vi.fn((): boolean => false);
   const scrollToEnd = vi.fn((): Promise<void> => Promise.resolve());
   const scrollToOffset = vi.fn((): Promise<void> => Promise.resolve());
   const current: LegendListRef = {
+    cancelPendingScroll,
     clearCaches: notImplemented,
     flashScrollIndicators: notImplemented,
     getAnimatableRef: () => node,
     getNativeScrollRef: () => node,
     getScrollableNode: () => node,
     getScrollResponder: () => null,
-    getState: notImplemented,
+    getState: () => makeFakeListState(rowTops),
     reportContentInset: notImplemented,
     scrollIndexIntoView: notImplemented,
     scrollItemIntoView: notImplemented,
@@ -241,7 +292,12 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     setScrollProcessingEnabled: notImplemented,
     setVisibleContentAnchorOffset: notImplemented,
   };
-  return { current, scrollToEnd, scrollToOffset };
+  return {
+    current,
+    setLastRowTop: (top) => rowTops.set(FAKE_LAST_ROW_KEY, top),
+    scrollToEnd,
+    scrollToOffset,
+  };
 }
 
 describe("useChatTimelineFollowLatch", () => {
@@ -251,6 +307,7 @@ describe("useChatTimelineFollowLatch", () => {
 
   beforeEach(() => {
     capturedResizeCallbacks = [];
+    capturedResizeObservers = [];
     vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
     animationFrameCallbacks = new Map();
     nextAnimationFrameId = 1;
@@ -487,7 +544,12 @@ describe("useChatTimelineFollowLatch", () => {
     fireNativeScroll(node);
     shim.setGeometry(node, { scrollHeight: 1800 });
     result.current.followEndIfPermitted();
-    for (let frame = 0; frame < 12; frame += 1) flushAnimationFrame();
+    for (let frame = 1; frame <= 12; frame += 1) {
+      // The tail outgrows every landing, as a deferred shrink or a streaming
+      // row resize can leave it, so no attempt reaches the strict bottom.
+      shim.setGeometry(node, { scrollHeight: 1800 + frame * 100 });
+      flushAnimationFrame();
+    }
 
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(
       CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
@@ -721,10 +783,155 @@ describe("useChatTimelineFollowLatch", () => {
     // the fractional movement remains inside the strict-bottom epsilon.
     shim.setGeometry(node, { scrollTop: 999.5 });
     fireNativeScroll(node);
+    // Delivered in the gesture's own frame, the report could have been queued
+    // before it; the end of the next frame with no other report settles it.
+    flushAnimationFrame();
+    flushAnimationFrame();
     shim.setGeometry(node, { scrollHeight: 1700 });
     result.current.followEndIfPermitted();
 
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a strict-bottom scroll report delivered in a wheel's own frame", () => {
+    function followingAtStrictBottom() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      return { node, listRef, onFollowIntentChange, result };
+    }
+
+    const WHEEL_UP = {
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    } as const;
+
+    // A write made before the wheel queued a scroll report that the browser
+    // delivers after the wheel event, in the wheel's own frame, before the
+    // wheel has scrolled: it reads the old strict-bottom geometry and cannot
+    // say the gesture stayed at the edge. Taken as that, it released the
+    // wheel's arm, and the wheel's own report a frame later (300px from the
+    // end) was corrected back to the end.
+    it("does not release the wheel's arm, so the wheel's own report detaches follow", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom();
+
+      result.current.noteReaderGesture(WHEEL_UP);
+      fireNativeScroll(node);
+      flushAnimationFrame();
+      shim.setGeometry(node, { scrollTop: 700 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    // A wheel that cannot move the view has no report of its own, so the
+    // withheld report is all there is: the end of the frame after the wheel
+    // settles it, and streaming follows again.
+    it("releases the arm of a wheel that did not move the view once its frame has passed", () => {
+      const { node, listRef, result } = followingAtStrictBottom();
+
+      result.current.noteReaderGesture(WHEEL_UP);
+      fireNativeScroll(node);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a reader whose departure the list's own clamp published", () => {
+    const WHEEL_UP = {
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    } as const;
+    // The list's own end, short of the DOM's by the temporary end pad.
+    const LIST_END_SCROLL_TOP = 1000;
+    const END_PAD_PX = 64;
+
+    /** A following reader with an end command pending under the end pad,
+     *  whose wheel superseded it: the list clamps the write to its own end,
+     *  and that report publishes the departure ahead of the wheel's scroll. */
+    function departedAtPaddedEnd() {
+      const node = shim.makeNode({
+        scrollTop: LIST_END_SCROLL_TOP,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      listRef.scrollToEnd.mockImplementation(() => new Promise<void>(() => {}));
+      listRef.scrollToOffset.mockImplementation(({ offset }): Promise<void> => {
+        shim.setGeometry(node, {
+          scrollTop: Math.min(offset, LIST_END_SCROLL_TOP),
+        });
+        return Promise.resolve();
+      });
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      shim.setGeometry(node, { scrollHeight: 1500 + END_PAD_PX });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+
+      result.current.noteReaderGesture(WHEEL_UP);
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenCalledTimes(1);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      return { node, listRef, onFollowIntentChange, result };
+    }
+
+    // The pad dropping leaves the reader at the strict bottom with no scroll
+    // report. That is the list's clamp, not the reader returning: taken as
+    // that, the wheel's own report a moment later read as layout and was
+    // corrected back to the tail.
+    it("stays detached when the end pad drops under them, so the wheel's own report is not corrected", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        departedAtPaddedEnd();
+
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      result.current.followEndIfPermitted();
+      flushAnimationFrame();
+      shim.setGeometry(node, { scrollTop: 700 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenCalledTimes(1);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(700);
+    });
+
+    it("follows again at a strict bottom they return to after their wheel's report", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        departedAtPaddedEnd();
+
+      shim.setGeometry(node, { scrollTop: 700, scrollHeight: 1500 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("blocks a maintain correction between touch intent and native scroll", () => {
@@ -800,6 +1007,74 @@ describe("useChatTimelineFollowLatch", () => {
     shim.setGeometry(node, { scrollHeight: 1900 });
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  describe("a free reader's touch during a suppressed restore", () => {
+    const TOUCH_DEPARTURE = {
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    };
+
+    function mountFreeReader(isSuppressed: () => boolean) {
+      const node = shim.makeNode({
+        scrollTop: 400,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onReaderGesture = vi.fn();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onReaderGesture,
+          isCorrectionSuppressed: isSuppressed,
+        }),
+      );
+      fireTouch(node, "touchstart", 100);
+      return { node, onReaderGesture };
+    }
+
+    it("publishes the departure when a scroll report moves the view", () => {
+      const { node, onReaderGesture } = mountFreeReader(() => true);
+
+      shim.setGeometry(node, { scrollTop: 300 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+      expect(onReaderGesture).toHaveBeenCalledWith(TOUCH_DEPARTURE);
+    });
+
+    it("publishes nothing once the restore is no longer suppressing", () => {
+      const { node, onReaderGesture } = mountFreeReader(() => false);
+
+      shim.setGeometry(node, { scrollTop: 300 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).not.toHaveBeenCalled();
+    });
+
+    it("publishes nothing for a report at the contact offset", () => {
+      const { node, onReaderGesture } = mountFreeReader(() => true);
+
+      shim.setGeometry(node, { scrollTop: 400.5 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).not.toHaveBeenCalled();
+    });
+
+    it("does not publish again once the publish lifted the suppression", () => {
+      let suppressed = true;
+      const { node, onReaderGesture } = mountFreeReader(() => suppressed);
+
+      shim.setGeometry(node, { scrollTop: 300 });
+      fireNativeScroll(node);
+      suppressed = false;
+      shim.setGeometry(node, { scrollTop: 250 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("publishes a touch departure at the lift when its scroll report is still pending", () => {
@@ -1168,6 +1443,169 @@ describe("useChatTimelineFollowLatch", () => {
 
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a detached reader arriving at the end while reattachment is suppressed", () => {
+    interface DetachedReader {
+      readonly node: HTMLDivElement;
+      readonly listRef: FakeListRef;
+      readonly onFollowIntentChange: Mock<(intent: boolean) => void>;
+      readonly maintain: () => void;
+      readonly liftSuppression: () => void;
+    }
+
+    function mountDetachedReader(): DetachedReader {
+      const node = shim.makeNode({
+        scrollTop: 700,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(intent: boolean) => void>();
+      let suppressed = true;
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isReattachSuppressed: () => suppressed,
+        }),
+      );
+      return {
+        node,
+        listRef,
+        onFollowIntentChange,
+        maintain: () => result.current.followEndIfPermitted(),
+        liftSuppression: () => {
+          suppressed = false;
+        },
+      };
+    }
+
+    // The settle lifts the suppression and the tail has grown past the reader
+    // without a scroll report.
+    function settleAfterGrowth(reader: DetachedReader): void {
+      reader.liftSuppression();
+      shim.setGeometry(reader.node, { scrollHeight: 1700 });
+      reader.maintain();
+    }
+
+    it("follows the end the reader asked for once the settle lifts, though the tail grew", () => {
+      const reader = mountDetachedReader();
+      reader.node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+
+      shim.setGeometry(reader.node, { scrollTop: 1000 });
+      fireNativeScroll(reader.node);
+      expect(reader.onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(reader.listRef.scrollToEnd).not.toHaveBeenCalled();
+
+      settleAfterGrowth(reader);
+
+      expect(reader.onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(reader.listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays detached when the reader wheels away before the settle", () => {
+      const reader = mountDetachedReader();
+      reader.node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+      shim.setGeometry(reader.node, { scrollTop: 1000 });
+      fireNativeScroll(reader.node);
+      reader.node.dispatchEvent(new WheelEvent("wheel", { deltaY: -180 }));
+
+      settleAfterGrowth(reader);
+
+      expect(reader.onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(reader.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("stays detached at a clamp the reader did not ask for", () => {
+      const reader = mountDetachedReader();
+      reader.node.dispatchEvent(new WheelEvent("wheel", { deltaY: -180 }));
+      shim.setGeometry(reader.node, { scrollTop: 1000 });
+      fireNativeScroll(reader.node);
+
+      settleAfterGrowth(reader);
+
+      expect(reader.onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(reader.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("follows an arrival that only a maintain call observed", () => {
+      const reader = mountDetachedReader();
+      reader.node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+
+      shim.setGeometry(reader.node, { scrollTop: 1000 });
+      reader.maintain();
+      expect(reader.listRef.scrollToEnd).not.toHaveBeenCalled();
+
+      settleAfterGrowth(reader);
+
+      expect(reader.onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(reader.listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a toward-end reader and rows that move the end", () => {
+    function mountDetachedReader() {
+      const node = shim.makeNode({
+        scrollTop: 700,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+      return { node, listRef, onFollowIntentChange };
+    }
+
+    // Rows above the reader remeasure by 300px: the list moves the last row
+    // and the reader down with them, so the end the wheel headed for is now
+    // 300px further down than the offset it recorded.
+    const SHIFT_PX = 300;
+
+    it("does not reattach a reader still short of the end the rows moved", () => {
+      const { node, listRef, onFollowIntentChange } = mountDetachedReader();
+
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + SHIFT_PX);
+      shim.setGeometry(node, {
+        scrollTop: 1000 + SHIFT_PX - 100,
+        scrollHeight: 2100,
+      });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("reattaches a reader who reaches the end the rows moved", () => {
+      const { node, listRef, onFollowIntentChange } = mountDetachedReader();
+
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + SHIFT_PX);
+      shim.setGeometry(node, {
+        scrollTop: 1000 + SHIFT_PX - 100,
+        scrollHeight: 2100,
+      });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 1000 + SHIFT_PX });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("still reattaches at the old end when only the tail grew", () => {
+      const { node, listRef, onFollowIntentChange } = mountDetachedReader();
+
+      shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1700 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("owns an animated go-live operation until its fresh-DOM landing resolves", () => {
@@ -1718,6 +2156,349 @@ describe("useChatTimelineFollowLatch", () => {
     // Follow releases to the navigation; no corrective snap-back is issued.
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("corrects a toward-end wheel whose report lands short of a tail that grew while following", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+      }),
+    );
+    fireNativeScroll(node); // confirm following at the strict bottom
+
+    // The tail grows while following; the reader is now 200px short of it.
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+
+    // The wheel's native report lands short of the grown tail.
+    shim.setGeometry(node, { scrollTop: 1100 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces an unreported away-from-end arm with a toward-end wheel and corrects", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+      }),
+    );
+    fireNativeScroll(node); // confirm following at the strict bottom
+
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    // The away-from-end wheel's native scroll report has not arrived yet.
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("does not supersede a pending end correction with a toward-end wheel while following", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    listRef.scrollToEnd.mockImplementation(
+      () => new Promise<void>(() => undefined),
+    );
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+      }),
+    );
+
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+
+    expect(listRef.scrollToOffset).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("follows a toward-end wheel at the bottom when no scroll event arrives after it", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+      }),
+    );
+    fireNativeScroll(node); // confirm at the strict bottom
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    shim.setGeometry(node, { scrollTop: 200 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    // Geometry returns to the strict bottom with no scroll event delivered.
+    shim.setGeometry(node, { scrollTop: 1000 });
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("also observes the legend-list content container child so its own resize follows", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const content = document.createElement("div");
+    content.className = "legend-list-content-container";
+    node.appendChild(content);
+    const listRef = makeFakeListRef(node);
+    renderHook(() =>
+      useChatTimelineFollowLatch(
+        listRef,
+        true,
+        true,
+        DEFAULT_FOLLOW_LATCH_OPTIONS,
+      ),
+    );
+
+    const [observer] = capturedResizeObservers;
+    expect(observer.observedTargets).toContain(content);
+
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    fireResizeObservers();
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  describe("completeOwnedFreeNavigation", () => {
+    it("follows a strict-bottom landing even while reattach is suppressed", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: () => true,
+        }),
+      );
+
+      result.current.beginOwnedFreeNavigation();
+      result.current.completeOwnedFreeNavigation();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("detaches when its landing is away from the bottom", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: undefined,
+        }),
+      );
+
+      result.current.beginOwnedFreeNavigation();
+      shim.setGeometry(node, { scrollTop: 200 });
+      result.current.completeOwnedFreeNavigation();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("follows when the navigation's own departure report already consumed its arm", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: undefined,
+        }),
+      );
+
+      result.current.beginOwnedFreeNavigation();
+      // The navigation's own first report departs the strict bottom,
+      // consuming its arm exactly as a reader gesture's report would.
+      shim.setGeometry(node, { scrollTop: 400 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      // It then lands back at the strict bottom. That report is still the
+      // navigation's: follow waits for its completion, so no correction can
+      // start under it and outlive it.
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      result.current.completeOwnedFreeNavigation();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("is a no-op once reader input has abandoned the navigation", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: undefined,
+        }),
+      );
+
+      result.current.beginOwnedFreeNavigation();
+      result.current.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: false,
+      });
+      // Land away from the bottom - a landing an owned navigation would
+      // otherwise read as its own detaching landing.
+      shim.setGeometry(node, { scrollTop: 300 });
+      result.current.completeOwnedFreeNavigation();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op once a touch contact has begun", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: undefined,
+        }),
+      );
+
+      result.current.beginOwnedFreeNavigation();
+      fireTouch(node, "touchstart", 100);
+      shim.setGeometry(node, { scrollTop: 300 });
+      result.current.completeOwnedFreeNavigation();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalled();
+    });
+
+    it("without a prior begin is a no-op", () => {
+      const node = shim.makeNode({
+        scrollTop: 300,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: undefined,
+        }),
+      );
+
+      result.current.completeOwnedFreeNavigation();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalled();
+    });
+  });
+
+  it("beginOwnedFreeNavigation does not itself change follow intent", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+      }),
+    );
+
+    result.current.beginOwnedFreeNavigation();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalled();
   });
 
   describe("while reattachment is suppressed", () => {

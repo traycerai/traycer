@@ -21,6 +21,7 @@ import {
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
+  chatTimelineNavigationSettledAtLocation,
   selectActiveUserMessageId,
   viewportAnchorRowKey,
   viewportActiveUserMessageId,
@@ -868,8 +869,7 @@ function scheduleChatTimelineDoubleRaf(callback: () => void): () => void {
  * Promise to resolve - its target-aware finish (`finishScrollTo` in the
  * vendored source only resolves once the library itself considers that
  * specific scroll done), not any `scrollend` DOM event/timeout race
- * (`awaitScrollSettle`, still used by the pill/nav callers below - see
- * `settleChatTimelineNavigation`'s own doc comment for why those stay as-is).
+ * (`awaitScrollSettle`, still used by the pill's end navigation below).
  * Then a further double-rAF quiet window, since rows can still be mid-
  * measurement the instant the library considers itself finished.
  * `getPendingScroll` is re-invoked on every wait (never captured once) - a
@@ -2294,6 +2294,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ) {
       return false;
     }
+    const isPastTarget = resolvePendingEndLanding();
+    // With every row loaded, a strict bottom the frozen target does not prove
+    // the reader past is the restore's own landing on estimated sizes. It
+    // keeps converging and releases the gate itself; stopping it here would
+    // leave the gate armed for good.
+    if (!isPastTarget && pendingHydrationRestoreAnchorIdRef.current === null) {
+      return false;
+    }
     // A partial transcript can clamp the measured bootstrap to its own end.
     // Stop that placeholder restore before its valid/exhausted callbacks
     // normalize durable state. The raw hydration coordinate stays armed
@@ -2301,7 +2309,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     activeNavigationSettleCleanupRef.current?.();
     activeNavigationSettleCleanupRef.current = null;
     resolvePendingRestoreEndLandingRef.current = null;
-    const isPastTarget = resolvePendingEndLanding();
     pendingMeasuredFreeRestoreRef.current = null;
     return isPastTarget;
   }, []);
@@ -2388,6 +2395,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // navigation, restoration convergence) superseded - decoupled from follow
   // ownership, which no longer exists as a separate concept.
   const anchorUserScrollGenerationRef = useRef(0);
+  // The same for restoration convergence, bumped only by input that publishes
+  // a reading position. A bare pointer preflight (a click, the first contact
+  // of a touch) says nothing about where the reader wants to be, and the
+  // restore it would abort is the only release of the persistence gate: the
+  // view would stay on the mount's bootstrap frame with nothing saved after.
+  const readerPositionGenerationRef = useRef(0);
   // Persistence is a publication step, not an unmount side effect that may
   // sample arbitrary bootstrap geometry. Until a saved pixel restore
   // validates, the cache entry read at mount remains the authoritative reader
@@ -2528,21 +2541,23 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // to a newer operation.
       activeAnimatedImperativeScrollGenerationRef.current = null;
       anchorUserScrollGenerationRef.current += 1;
-      // A bare pointer preflight is not yet a published reading position.
-      // Keep the measured restore target armed so a subsequent strict-bottom
-      // landing can still prove it moved past that frozen target atomically.
-      // Explicit navigation has already cleared the hydration id before it
-      // reaches here, while wheel/touch/keyboard publish immediately.
-      if (
-        publishesReaderPosition ||
-        pendingHydrationRestoreAnchorIdRef.current === null
-      ) {
-        pendingMeasuredFreeRestoreRef.current = null;
-      }
+      // A bare pointer preflight is not yet a published reading position: the
+      // restore converging keeps its measured target, so a subsequent
+      // strict-bottom landing can still prove it moved past that frozen target
+      // atomically. Explicit navigation retires that target when its own loop
+      // replaces the restore's.
       if (publishesReaderPosition) {
+        readerPositionGenerationRef.current += 1;
+        pendingMeasuredFreeRestoreRef.current = null;
         pendingHydrationRestoreAnchorIdRef.current = null;
         forgetPendingHydrationRestore(identity);
         restorePersistencePendingRef.current = false;
+        // The restore or navigation this ends may have a command the list
+        // still holds until its layout settles; it would land after the
+        // reader's own scroll and undo it.
+        if (activeNavigationSettleCleanupRef.current !== null) {
+          chatTimelineRef.current?.cancelPendingScroll();
+        }
       }
       // A preflight is not a departure. The latch remains authoritative and
       // publishes a mode change only after the gesture/navigation produces a
@@ -2644,7 +2659,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // its own - a real gesture already bumps the generation and is
         // caught by `isAborted` above.
         shouldYieldToReader: () => false,
-        validate: () => followLatchRef.current?.isAtStrictEnd() === true,
+        // While the reader still follows, a landing short of the end is a
+        // tail that outgrew it - a streaming reply can grow past every retry
+        // before its `scrollend` - and the latch's own corrections chase it.
+        validate: () =>
+          followLatchRef.current?.isAtStrictEnd() === true ||
+          timelineScrollModeRef.current === "following-end",
         reissue: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.beginOwnedEndNavigation();
@@ -2653,6 +2673,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onSettledValid: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.completeOwnedEndNavigation(true);
+          // Completion cancels the owned correction; a tail that has stopped
+          // growing short of the landing is reached by maintenance instead.
+          followLatchRef.current?.followEndIfPermitted();
         },
         // Ticket 10: free-scrolling with the pill visible beats silently
         // claiming ownership from an invalid landing.
@@ -3204,14 +3227,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [captureLastVisibleScrollSnapshot, scheduleActiveViewportUpdate, visible]);
 
   const scrollToTimelineLocation = useCallback(
-    (location: ChatTimelineNavigationLocation): void => {
-      void chatTimelineRef.current?.scrollToIndex({
+    (location: ChatTimelineNavigationLocation): Promise<void> =>
+      chatTimelineRef.current?.scrollToIndex({
         index: location.index,
         animated: location.animated,
         viewPosition: 0,
         viewOffset: location.viewOffset,
-      });
-    },
+      }) ?? Promise.resolve(),
     [],
   );
 
@@ -3228,6 +3250,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // `afterSettle` runs once the ROW landing is done (valid or exhausted), so
   // a block-level `scrollIntoView` cannot fight the 1px row-top re-issue.
   // Find passes `null`; `navigateToMessage` requests the inner reveal here.
+  //
+  // It settles on the list's own promise, never a `scrollend` race: a landing
+  // that needs no scroll fires no `scrollend`, and the list can hold the
+  // command behind its own readiness for longer than any fallback. The
+  // navigation owns the view until its last command has run - completing
+  // first would let that command land with nobody owning it.
   const issueFreeTimelineNavigation = useCallback(
     (
       location: ChatTimelineNavigationLocation,
@@ -3241,19 +3269,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
       );
-      scrollToTimelineLocation(location);
+      let pendingScroll = scrollToTimelineLocation(location);
+      let lastSettleTimedOut = false;
+      let cancelled = false;
       const scrollNode = list.getScrollableNode();
       const finishFreeNavigation = (): void => {
         finishImperativeScrollOperation(imperativeScrollGeneration);
         followLatchRef.current?.completeOwnedFreeNavigation();
         afterSettle?.();
       };
-      activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
+      const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
-          awaitScrollSettle(
-            scrollNode,
-            onSettle,
-            CHAT_ANCHOR_SETTLE_FALLBACK_MS,
+          awaitChatTimelineScrollPromiseSettle(
+            () => pendingScroll,
+            (timedOut) => {
+              lastSettleTimedOut = timedOut;
+              onSettle();
+            },
+            CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
           ),
         isAborted: () =>
           anchorUserScrollGenerationRef.current !== generationAtIssue,
@@ -3261,19 +3294,21 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // the generation and is caught above.
         shouldYieldToReader: () => false,
         validate: () =>
-          chatTimelineNavigationLandedAtLocation(
+          !lastSettleTimedOut &&
+          chatTimelineNavigationSettledAtLocation(
             {
               positionAtIndex: (index) =>
                 list.getState().positionAtIndex(index),
               scroll: scrollNode.scrollTop,
               topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
             },
+            scrollNode.scrollHeight - scrollNode.clientHeight,
             location,
             CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX,
           ),
         reissue: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
-          void list.scrollToIndex({
+          pendingScroll = list.scrollToIndex({
             index: location.index,
             animated: false,
             viewPosition: 0,
@@ -3285,18 +3320,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           restorePersistencePendingRef.current = false;
         },
         onSettledInvalid: () => {
-          finishFreeNavigation();
-          acceptExhaustedPersistedRestoreFallback(
-            restorePersistencePendingRef,
-            pendingMeasuredFreeRestoreRef,
-          );
-          // Accept - already correctly free-scrolling/suppressed wherever
-          // the bounded retries landed; nothing claims to be "at this exact
-          // spot" the way following-end does, so there is no mode to
-          // reconcile.
+          const finishExhausted = (): void => {
+            finishFreeNavigation();
+            acceptExhaustedPersistedRestoreFallback(
+              restorePersistencePendingRef,
+              pendingMeasuredFreeRestoreRef,
+            );
+          };
+          if (!lastSettleTimedOut) {
+            finishExhausted();
+            return;
+          }
+          // The last command is still queued (a window that paints no
+          // frames runs none of the list's readiness checks): wait for it to
+          // run, or for a newer command to supersede it.
+          const finishTrailing = (): void => {
+            if (
+              cancelled ||
+              anchorUserScrollGenerationRef.current !== generationAtIssue
+            ) {
+              return;
+            }
+            finishExhausted();
+          };
+          void pendingScroll.then(finishTrailing, finishTrailing);
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
+      activeNavigationSettleCleanupRef.current = (): void => {
+        cancelled = true;
+        cancelSettle();
+      };
     },
     [
       beginImperativeScrollOperation,
@@ -3358,7 +3412,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (!list || initialIndex === undefined) return false;
 
       activeNavigationSettleCleanupRef.current?.();
-      const generationAtIssue = anchorUserScrollGenerationRef.current;
+      const generationAtIssue = readerPositionGenerationRef.current;
       const scrollNode = list.getScrollableNode();
       const targetIndex = (): number | null =>
         rowIndexByKeyRef.current.get(messageId) ?? null;
@@ -3376,19 +3430,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX,
         );
       };
-      const issue = (index: number): Promise<void> => {
-        const target = expectedTimelineScrollTop(
-          list,
+      // By row, not by a precomputed offset: the list then renders the saved
+      // row and places it from its position when the command runs. A row
+      // deep in a long reply would otherwise be targeted from that reply's
+      // estimated height, clamp at an estimated end, and never render to be
+      // measured.
+      const issue = (index: number): Promise<void> =>
+        list.scrollToIndex({
           index,
-          viewOffset,
-          listTopOffsetAdjustmentRef.current,
-        );
-        if (target === null) return Promise.resolve();
-        return list.scrollToOffset({
-          offset: target,
           animated: false,
+          viewPosition: 0,
+          viewOffset,
         });
-      };
 
       let pendingRestoreScrollPromise = issue(initialIndex);
       let lastRestoreSettleTimedOut = false;
@@ -3403,20 +3456,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
           ),
         // Fixup (pointer-generation-order): the caller's own predicate must
-        // run FIRST. `handleTranscriptPointerDown` bumps
-        // `anchorUserScrollGenerationRef` on every pointerdown, including
-        // one that goes on to scroll past this restore's issued target to
-        // true bottom - with the generation check first, `||` short-circuits
-        // and the caller's atomic frozen-target predicate (which performs
-        // the pending-id/registry/gate clear as a side effect when it
-        // resolves) never runs at all, leaving all three pieces armed after
-        // a pointer-driven reach-the-edge. Callers whose own predicate never
-        // has a resolving side effect (`() => false`, the hydration-retry
-        // and visibility-replay callers) are unaffected by the reorder -
-        // `false || X` and `X || false` are equivalent there.
+        // run FIRST. A scrollbar pointerdown bumps
+        // `readerPositionGenerationRef` and can go on to scroll past this
+        // restore's issued target to true bottom - with the generation check
+        // first, `||` short-circuits and the caller's atomic frozen-target
+        // predicate (which performs the pending-id/registry/gate clear as a
+        // side effect when it resolves) never runs at all, leaving all three
+        // pieces armed after a pointer-driven reach-the-edge. Callers whose
+        // own predicate never has a resolving side effect (`() => false`, the
+        // hydration-retry and visibility-replay callers) are unaffected by
+        // the reorder - `false || X` and `X || false` are equivalent there.
         isAborted: () =>
           isAborted() ||
-          anchorUserScrollGenerationRef.current !== generationAtIssue,
+          readerPositionGenerationRef.current !== generationAtIssue,
         shouldYieldToReader: () => false,
         validate: () => !lastRestoreSettleTimedOut && landedAtSavedLocation(),
         reissue: () => {
@@ -3710,70 +3762,91 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // The React commit that mounts restored reserve geometry owns the final
     // measured landing synchronously; correctness cannot depend on rAF, which
     // is legitimately paused for background/unfocused Electron renderers.
-    restorePersistedTimelineLocation(pending.messageId, pending.viewOffset, {
-      isAborted: () => {
-        // A scrollbar/manual strict-end landing can be observed by the
-        // restoration settle before the browser publishes its native scroll
-        // event. Reconcile that fresh DOM geometry through the latch (the
-        // sole authority) before deciding whether the restore still owns the
-        // viewport.
-        followLatchRef.current?.observeLiveGeometry();
-        if (timelineScrollModeRef.current === "free-scrolling") return false;
-        // Fixup (internal-tab-bottom-follow): `settleChatTimelineNavigation`'s
-        // own abort path (`if (input.isAborted()) return;`) calls neither
-        // `onSettledValid` nor `onSettledInvalid`, so nothing else would
-        // ever release the persistence gate for this mount if a saved
-        // free-scrolling restore was still converging when the timeline
-        // reported following-end - every later scroll-mirror capture and
-        // the eventual unmount save would silently no-op forever
-        // (`captureLiveChatTabScrollSnapshot`'s own gate check), leaving a
-        // stale free-scrolling cache entry across the next same-pane
-        // remount. But hydration-transaction P1 (chat-messages.test.tsx
-        // "close-before-hydration"/"bare pointerdown... before hydration")
-        // needs the OPPOSITE outcome for a tail-only partial snapshot,
-        // whose clamped restore target IS the current tail - that landing
-        // reports following-end purely because not enough content has
-        // hydrated yet, not because the reader moved anywhere, and must
-        // NOT release the gate (a later remount still needs the ORIGINAL
-        // saved row, not this transient tail).
-        // `isDemonstrablyPastIssuedFreeRestoreTarget` distinguishes the two
-        // against the frozen `issuedTarget` above, not a recomputed one.
-        const isPastTarget = resolvePendingEndLanding();
-        if (isPastTarget) {
-          // Atomic reader-supersession: resolve the WHOLE pending
-          // hydration transaction as one transition, not just the
-          // persistence gate. A missing raw coordinate also lives in the
-          // module-level pending registry (`pendingHydrationRestoreByTabKey`),
-          // which a same-instance remount's `rawSavedTabState` initializer
-          // prefers over the ordinary cache, and which the hydration-retry
-          // effect below still watches. Leaving either armed after a
-          // proven reader move would let a later arrival of the formerly
-          // missing row yank the reader back off the bottom they
-          // deliberately reached, or let a permanent close before that
-          // arrival re-commit the stale coordinate to durable storage.
-          pendingHydrationRestoreAnchorIdRef.current = null;
-          forgetPendingHydrationRestore(identity);
-          restorePersistencePendingRef.current = false;
+    const issued = restorePersistedTimelineLocation(
+      pending.messageId,
+      pending.viewOffset,
+      {
+        isAborted: () => {
+          // A scrollbar/manual strict-end landing can be observed by the
+          // restoration settle before the browser publishes its native scroll
+          // event. Reconcile that fresh DOM geometry through the latch (the
+          // sole authority) before deciding whether the restore still owns the
+          // viewport.
+          followLatchRef.current?.observeLiveGeometry();
+          if (timelineScrollModeRef.current === "free-scrolling") return false;
+          // Fixup (internal-tab-bottom-follow): `settleChatTimelineNavigation`'s
+          // own abort path (`if (input.isAborted()) return;`) calls neither
+          // `onSettledValid` nor `onSettledInvalid`, so nothing else would
+          // ever release the persistence gate for this mount if a saved
+          // free-scrolling restore was still converging when the timeline
+          // reported following-end - every later scroll-mirror capture and
+          // the eventual unmount save would silently no-op forever
+          // (`captureLiveChatTabScrollSnapshot`'s own gate check), leaving a
+          // stale free-scrolling cache entry across the next same-pane
+          // remount. But hydration-transaction P1 (chat-messages.test.tsx
+          // "close-before-hydration"/"bare pointerdown... before hydration")
+          // needs the OPPOSITE outcome for a tail-only partial snapshot,
+          // whose clamped restore target IS the current tail - that landing
+          // reports following-end purely because not enough content has
+          // hydrated yet, not because the reader moved anywhere, and must
+          // NOT release the gate (a later remount still needs the ORIGINAL
+          // saved row, not this transient tail).
+          // `isDemonstrablyPastIssuedFreeRestoreTarget` distinguishes the two
+          // against the frozen `issuedTarget` above, not a recomputed one.
+          const isPastTarget = resolvePendingEndLanding();
+          if (isPastTarget) {
+            // Atomic reader-supersession: resolve the WHOLE pending
+            // hydration transaction as one transition, not just the
+            // persistence gate. A missing raw coordinate also lives in the
+            // module-level pending registry (`pendingHydrationRestoreByTabKey`),
+            // which a same-instance remount's `rawSavedTabState` initializer
+            // prefers over the ordinary cache, and which the hydration-retry
+            // effect below still watches. Leaving either armed after a
+            // proven reader move would let a later arrival of the formerly
+            // missing row yank the reader back off the bottom they
+            // deliberately reached, or let a permanent close before that
+            // arrival re-commit the stale coordinate to durable storage.
+            pendingHydrationRestoreAnchorIdRef.current = null;
+            forgetPendingHydrationRestore(identity);
+            restorePersistencePendingRef.current = false;
+          }
+          resolvePendingRestoreEndLandingRef.current = null;
+          pendingMeasuredFreeRestoreRef.current = null;
+          return true;
+        },
+        onValidated: () => {
+          resolvePendingRestoreEndLandingRef.current = null;
+        },
+        onExhausted: () => {
+          resolvePendingRestoreEndLandingRef.current = null;
+          // A bounded whole-row restore accepts its clamped fallback. A part's
+          // provisional owner position still cannot replace the exact saved
+          // coordinate while its hydration is pending.
+          restorePersistencePendingRef.current =
+            isSavedTurnPart &&
+            pendingHydrationRestoreAnchorIdRef.current !== null;
+          pendingMeasuredFreeRestoreRef.current = null;
+          reconcileInvalidTimelineLanding();
+        },
+      },
+    );
+    // The frozen target belongs to this loop. A loop that replaces it (the
+    // hydration catch-up, a visibility replay, a navigation) is not judged
+    // against it: a strict bottom resolved against this target would cancel
+    // that loop instead.
+    const settleCleanup = activeNavigationSettleCleanupRef.current;
+    if (issued && settleCleanup !== null) {
+      activeNavigationSettleCleanupRef.current = (): void => {
+        settleCleanup();
+        if (
+          resolvePendingRestoreEndLandingRef.current ===
+          resolvePendingEndLanding
+        ) {
+          resolvePendingRestoreEndLandingRef.current = null;
+          pendingMeasuredFreeRestoreRef.current = null;
         }
-        resolvePendingRestoreEndLandingRef.current = null;
-        pendingMeasuredFreeRestoreRef.current = null;
-        return true;
-      },
-      onValidated: () => {
-        resolvePendingRestoreEndLandingRef.current = null;
-      },
-      onExhausted: () => {
-        resolvePendingRestoreEndLandingRef.current = null;
-        // A bounded whole-row restore accepts its clamped fallback. A part's
-        // provisional owner position still cannot replace the exact saved
-        // coordinate while its hydration is pending.
-        restorePersistencePendingRef.current =
-          isSavedTurnPart &&
-          pendingHydrationRestoreAnchorIdRef.current !== null;
-        pendingMeasuredFreeRestoreRef.current = null;
-        reconcileInvalidTimelineLanding();
-      },
-    });
+      };
+    }
   }, [
     identity,
     isSavedTurnPart,
