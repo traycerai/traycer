@@ -959,6 +959,24 @@ describe("<SideTabStrip />", () => {
     expect(screen.queryByTestId("tab-title-input-epic-e-alpha")).toBeNull();
   });
 
+  it("closes a collapsed tile from its context menu, which draws no hover close", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    await renderStrip("/elsewhere", LEFT_STRIP);
+    fireEvent.click(screen.getByTestId("side-tab-strip-collapse"));
+    const beta = screen.getByTestId("tab-epic-e-beta");
+    expect(beta.getAttribute("data-side-tab")).toBe("collapsed");
+    expect(within(beta).queryByTestId("tab-close-epic-e-beta")).toBeNull();
+
+    fireEvent.contextMenu(beta);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /^Close Tab/ }),
+    );
+    await flushNav();
+
+    expect(screen.queryByTestId("tab-epic-e-beta")).toBeNull();
+    expect(screen.getByTestId("tab-epic-e-alpha")).toBeDefined();
+  });
+
   it("switches to monogram tiles on collapse and back", async () => {
     openEpicTabs(["Alpha Beta", "Gamma"]);
     const strip = await renderStrip("/elsewhere", LEFT_STRIP);

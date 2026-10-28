@@ -558,12 +558,10 @@ describe("the Close Tab item", () => {
     const onClose = vi.fn<(tab: HeaderTab) => void>();
     renderCloseMenu(true, onClose);
 
-    const close = await screen.findByTestId(
-      `tab-close-${EPIC_TAB.kind}-${EPIC_TAB.id}-menu`,
-    );
-    const closeOthers = screen.getByTestId(
-      `tab-close-others-${EPIC_TAB.kind}-${EPIC_TAB.id}`,
-    );
+    const close = await screen.findByRole("menuitem", { name: /^Close Tab/ });
+    const closeOthers = screen.getByRole("menuitem", {
+      name: "Close Other Tabs",
+    });
     expect(close.nextElementSibling).toBe(closeOthers);
     // The chord is `epic.close`, the strip tab's own. `tab.close` (⌘W) closes
     // the active tile inside the task, which is not what this item does.
@@ -579,9 +577,7 @@ describe("the Close Tab item", () => {
     const onClose = vi.fn<(tab: HeaderTab) => void>();
     renderCloseMenu(false, onClose);
 
-    const close = await screen.findByTestId(
-      `tab-close-${EPIC_TAB.kind}-${EPIC_TAB.id}-menu`,
-    );
+    const close = await screen.findByRole("menuitem", { name: /^Close Tab/ });
     expect(close.getAttribute("data-disabled")).not.toBeNull();
     fireEvent.click(close);
     expect(onClose).not.toHaveBeenCalled();
