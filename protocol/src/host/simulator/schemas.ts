@@ -74,7 +74,24 @@ export const simulatorHubStateSchema = lazySchema(() =>
 );
 export type SimulatorHubState = z.infer<typeof simulatorHubStateSchema>;
 
-export const simulatorSummarySchema = lazySchema(() =>
+/**
+ * The released `@1.0` lines below are frozen: each `...V10` schema is the
+ * shape its contract shipped with, and the unsuffixed schema is the live
+ * `@1.1` shape that extends it. Never point a `@1.0` contract at a live
+ * schema; a field added there would grow onto the released line.
+ */
+
+/**
+ * The key of one booted instance or ledger row: the iOS udid, or the Android
+ * AVD name. Instance ids are reused by design, so it is never a catalog
+ * identity; `sessionId` is.
+ */
+const instanceKeySchema = lazySchema(() => z.string().min(1).max(191));
+
+/** An open's or a session's ulid, and the client's open `requestId`. */
+const sessionIdentifierSchema = lazySchema(() => z.string().min(1).max(191));
+
+export const simulatorSummarySchemaV10 = lazySchema(() =>
   z.object({
     simulatorId: z.string().min(1),
     platform: simulatorPlatformSchema,
@@ -82,6 +99,37 @@ export const simulatorSummarySchema = lazySchema(() =>
     version: z.string(),
     booted: z.boolean(),
     physical: z.boolean(),
+  }),
+);
+
+/**
+ * One booted copy of a device: the device's own (`cloneOf: null`) or a clone
+ * Traycer created from it. `drivenByAgent` says only that some agent's live
+ * session holds it, never whose. `idleUntil` is the epoch-millisecond
+ * deadline at which an idle instance Traycer booted powers off; null while
+ * it is in use, exempted by `keepRunning`, or booted outside Traycer.
+ */
+export const simulatorInstanceSchema = lazySchema(() =>
+  z.object({
+    instanceKey: instanceKeySchema,
+    name: z.string(),
+    booted: z.boolean(),
+    /** The source device's key for a clone; null for the device's own. */
+    cloneOf: instanceKeySchema.nullable(),
+    drivenByAgent: z.boolean(),
+    keepRunning: z.boolean(),
+    idleUntil: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type SimulatorInstance = z.infer<typeof simulatorInstanceSchema>;
+
+/**
+ * A root device. On `@1.1` clones are never devices: they appear only under
+ * their source's `instances`, which a `@1.0` host does not send.
+ */
+export const simulatorSummarySchema = lazySchema(() =>
+  simulatorSummarySchemaV10.extend({
+    instances: z.array(simulatorInstanceSchema).optional(),
   }),
 );
 export type SimulatorSummary = z.infer<typeof simulatorSummarySchema>;
@@ -92,7 +140,7 @@ export type SimulatorSummary = z.infer<typeof simulatorSummarySchema>;
  * Only the owner may open, close or shut down through the verbs; viewing is
  * epic-scoped.
  */
-export const simulatorSessionSchema = lazySchema(() =>
+export const simulatorSessionSchemaV10 = lazySchema(() =>
   z.object({
     epicId: z.string().min(1),
     ownerUserId: z.string().min(1),
@@ -103,24 +151,61 @@ export const simulatorSessionSchema = lazySchema(() =>
     openedAt: z.string().min(1),
   }),
 );
+
+/**
+ * On `@1.1` a session is one person's or one agent's hold on one instance.
+ * Every new field is absent from a `@1.0` host; a `@1.1` host always sends
+ * `sessionId` and `instanceKey`, and sends `agentId` and `requestId` as null
+ * when there is none (a person's session; an open with no `requestId`).
+ */
+export const simulatorSessionSchema = lazySchema(() =>
+  simulatorSessionSchemaV10.extend({
+    /** The catalog identity, minted when no live session held the key. */
+    sessionId: sessionIdentifierSchema.optional(),
+    /** The `requestId` of the open that last returned this session. */
+    requestId: sessionIdentifierSchema.nullable().optional(),
+    /** The agent holding the session; null for a person's. */
+    agentId: z.string().min(1).nullable().optional(),
+    instanceKey: instanceKeySchema.optional(),
+  }),
+);
 export type SimulatorSession = z.infer<typeof simulatorSessionSchema>;
+
+/** A person's open still in flight, keyed by the `requestId` it was sent with. */
+export const simulatorOpeningSchema = lazySchema(() =>
+  z.object({
+    requestId: sessionIdentifierSchema,
+  }),
+);
+export type SimulatorOpening = z.infer<typeof simulatorOpeningSchema>;
 
 /**
  * The service's published state for one epic: everything the tile and the
  * agent tools render. `sessions` and `booting` are scoped to the requesting
  * epic; `simulators` is the whole machine's inventory.
  */
-export const simulatorStateSchema = lazySchema(() =>
+export const simulatorStateSchemaV10 = lazySchema(() =>
   z.object({
     revision: z.number().int().nonnegative(),
     hostId: z.string().min(1),
     platforms: z.array(simulatorPlatformAvailabilitySchema),
     packState: simulatorPackStateSchema,
     hubState: simulatorHubStateSchema,
-    simulators: z.array(simulatorSummarySchema),
-    sessions: z.array(simulatorSessionSchema),
+    simulators: z.array(simulatorSummarySchemaV10),
+    sessions: z.array(simulatorSessionSchemaV10),
     /** Simulator ids with a boot in flight for this epic. */
     booting: z.array(z.string().min(1)),
+  }),
+);
+export type SimulatorStateV10 = z.infer<typeof simulatorStateSchemaV10>;
+
+/** `@1.1`: the live summaries and sessions, and the opens in flight. */
+export const simulatorStateSchema = lazySchema(() =>
+  simulatorStateSchemaV10.extend({
+    simulators: z.array(simulatorSummarySchema),
+    sessions: z.array(simulatorSessionSchema),
+    /** This epic's opens that carried a `requestId` and have not answered. */
+    opening: z.array(simulatorOpeningSchema).optional(),
   }),
 );
 export type SimulatorState = z.infer<typeof simulatorStateSchema>;
@@ -131,10 +216,11 @@ export const simulatorListRequestSchema = lazySchema(() =>
   }),
 );
 export type SimulatorListRequest = z.infer<typeof simulatorListRequestSchema>;
+export const simulatorListResponseSchemaV10 = simulatorStateSchemaV10;
 export const simulatorListResponseSchema = simulatorStateSchema;
 export type SimulatorListResponse = z.infer<typeof simulatorListResponseSchema>;
 
-export const simulatorOpenRequestSchema = lazySchema(() =>
+export const simulatorOpenRequestSchemaV10 = lazySchema(() =>
   z.object({
     epicId: z.string().min(1),
     simulatorId: z.string().min(1),
@@ -143,25 +229,70 @@ export const simulatorOpenRequestSchema = lazySchema(() =>
     boot: z.boolean(),
   }),
 );
+
+/**
+ * `instance` on `simulator.open@1.1`: `"auto"` prefers the caller's own live
+ * instance on the device, then one no other agent drives, else a clone;
+ * `"new"` always creates one; any other value names an instance by its key.
+ * Absent means exactly the instance `simulatorId` names, the `@1.0` meaning.
+ */
+export const SIMULATOR_INSTANCE_POLICIES = ["auto", "new"] as const;
+export const simulatorInstanceChoiceSchema = lazySchema(() =>
+  z.union([z.enum(SIMULATOR_INSTANCE_POLICIES), instanceKeySchema]),
+);
+export type SimulatorInstanceChoice = z.infer<
+  typeof simulatorInstanceChoiceSchema
+>;
+
+export const simulatorOpenRequestSchema = lazySchema(() =>
+  simulatorOpenRequestSchemaV10.extend({
+    instance: simulatorInstanceChoiceSchema.optional(),
+    /**
+     * The client's key for the pending row; the host lists it in `opening`
+     * while the open runs and writes it onto the session it returns.
+     */
+    requestId: sessionIdentifierSchema.optional(),
+  }),
+);
 export type SimulatorOpenRequest = z.infer<typeof simulatorOpenRequestSchema>;
-export const simulatorOpenResponseSchema = lazySchema(() =>
+export const simulatorOpenResponseSchemaV10 = lazySchema(() =>
   z.object({
-    session: simulatorSessionSchema,
+    session: simulatorSessionSchemaV10,
     /**
      * The simulator as the hub reports it after the open. Its `simulatorId`
      * is authoritative: an Android AVD name becomes a serial on boot.
      */
+    simulator: simulatorSummarySchemaV10,
+  }),
+);
+/**
+ * `@1.1`: the session carries its `sessionId`, unchanged when the open found
+ * a live session on the same key.
+ */
+export const simulatorOpenResponseSchema = lazySchema(() =>
+  simulatorOpenResponseSchemaV10.extend({
+    session: simulatorSessionSchema,
     simulator: simulatorSummarySchema,
   }),
 );
 export type SimulatorOpenResponse = z.infer<typeof simulatorOpenResponseSchema>;
 
-export const simulatorCloseRequestSchema = lazySchema(() =>
+export const simulatorCloseRequestSchemaV10 = lazySchema(() =>
   z.object({
     epicId: z.string().min(1),
     simulatorId: z.string().min(1),
     /** Also power the simulator off after the session is removed. */
     shutdown: z.boolean(),
+  }),
+);
+/**
+ * `@1.1`: with `sessionId`, ends that one session the caller owns (or, for an
+ * ended one, retires its notice). Without it, the `@1.0` meaning: every
+ * session the caller owns on exactly the instance `simulatorId` names.
+ */
+export const simulatorCloseRequestSchema = lazySchema(() =>
+  simulatorCloseRequestSchemaV10.extend({
+    sessionId: sessionIdentifierSchema.optional(),
   }),
 );
 export type SimulatorCloseRequest = z.infer<typeof simulatorCloseRequestSchema>;
@@ -277,6 +408,86 @@ export type SimulatorRemoveToolsResponse = z.infer<
 >;
 
 /**
+ * `simulator.instances`: every instance booted on this machine, host-wide,
+ * with no epic. `tasks` lists the epics holding a live session on it that the
+ * caller can view; `otherTaskCount` counts the rest, so a viewer of one task
+ * never learns another's.
+ */
+export const simulatorInstancesRequestSchema = lazySchema(() => z.object({}));
+export type SimulatorInstancesRequest = z.infer<
+  typeof simulatorInstancesRequestSchema
+>;
+export const simulatorHostInstanceSchema = lazySchema(() =>
+  simulatorInstanceSchema.extend({
+    /** The id the instance is reached by now: a udid or a booted serial. */
+    simulatorId: z.string().min(1),
+    platform: simulatorPlatformSchema,
+    version: z.string(),
+    /** The source device's name for a clone; null for the device's own. */
+    cloneOfName: z.string().nullable(),
+    /** Only an instance Traycer booted follows the idle rule. */
+    bootedByTraycer: z.boolean(),
+    tasks: z.array(z.object({ epicId: z.string().min(1) })),
+    otherTaskCount: z.number().int().nonnegative(),
+  }),
+);
+export type SimulatorHostInstance = z.infer<
+  typeof simulatorHostInstanceSchema
+>;
+export const simulatorInstancesResponseSchema = lazySchema(() =>
+  z.object({
+    instances: z.array(simulatorHostInstanceSchema),
+  }),
+);
+export type SimulatorInstancesResponse = z.infer<
+  typeof simulatorInstancesResponseSchema
+>;
+
+/**
+ * `simulator.powerOff`: powers one instance off host-wide and ends every
+ * session on it, removing a clone. While a mid-turn agent's session holds it
+ * and `confirm` is false, nothing happens and the answer is
+ * `confirm-required`; the caller asks, then sends `confirm: true`.
+ */
+export const simulatorPowerOffRequestSchema = lazySchema(() =>
+  z.object({
+    instanceKey: instanceKeySchema,
+    confirm: z.boolean(),
+  }),
+);
+export type SimulatorPowerOffRequest = z.infer<
+  typeof simulatorPowerOffRequestSchema
+>;
+export const simulatorPowerOffResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("powered-off"), instanceKey: instanceKeySchema }),
+    z.object({
+      kind: z.literal("confirm-required"),
+      instanceKey: instanceKeySchema,
+    }),
+  ]),
+);
+export type SimulatorPowerOffResponse = z.infer<
+  typeof simulatorPowerOffResponseSchema
+>;
+
+/** `simulator.setKeepRunning`: exempts one instance from the idle rule, or not. */
+export const simulatorSetKeepRunningRequestSchema = lazySchema(() =>
+  z.object({
+    instanceKey: instanceKeySchema,
+    keepRunning: z.boolean(),
+  }),
+);
+export type SimulatorSetKeepRunningRequest = z.infer<
+  typeof simulatorSetKeepRunningRequestSchema
+>;
+export const simulatorSetKeepRunningResponseSchema =
+  simulatorSetKeepRunningRequestSchema;
+export type SimulatorSetKeepRunningResponse = z.infer<
+  typeof simulatorSetKeepRunningResponseSchema
+>;
+
+/**
  * `config.simulator.*`: the one machine-user-global switch. On, the host
  * installs the tools, runs the simulators in a tile and lets agents drive
  * them; there is no separate agent switch.
@@ -285,22 +496,61 @@ export const configSimulatorGetRequestSchema = lazySchema(() => z.object({}));
 export type ConfigSimulatorGetRequest = z.infer<
   typeof configSimulatorGetRequestSchema
 >;
-export const configSimulatorResponseSchema = lazySchema(() =>
+export const configSimulatorResponseSchemaV10 = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
+  }),
+);
+
+/**
+ * The idle window, in minutes: an instance Traycer booted powers off once no
+ * session has used it for this long, unless kept running.
+ */
+export const SIMULATOR_IDLE_MINUTES_DEFAULT = 15;
+export const SIMULATOR_IDLE_MINUTES_MIN = 1;
+export const SIMULATOR_IDLE_MINUTES_MAX = 24 * 60;
+const idleMinutesSchema = lazySchema(() =>
+  z
+    .number()
+    .int()
+    .min(SIMULATOR_IDLE_MINUTES_MIN)
+    .max(SIMULATOR_IDLE_MINUTES_MAX),
+);
+
+/** `@1.1`: `idleMinutes` is absent from a `@1.0` host, which has no idle rule. */
+export const configSimulatorResponseSchema = lazySchema(() =>
+  configSimulatorResponseSchemaV10.extend({
+    idleMinutes: idleMinutesSchema.optional(),
   }),
 );
 export type ConfigSimulatorResponse = z.infer<
   typeof configSimulatorResponseSchema
 >;
-export const configSimulatorSetRequestSchema = lazySchema(() =>
+export const configSimulatorSetRequestSchemaV10 = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
+  }),
+);
+/**
+ * `@1.1`: a partial write merged with the stored block. `enabled: null` and
+ * an absent `idleMinutes` keep the stored value, so `{ enabled: null,
+ * idleMinutes }` never turns simulators on or off. `enabled` stays a
+ * required key because a minor cannot make a request field optional: a
+ * `@1.1` write that omits it could not be projected onto a `@1.0` host, and
+ * a `null` one is refused there, which is right, since that host has no
+ * idle window to write.
+ */
+export const configSimulatorSetRequestSchema = lazySchema(() =>
+  z.object({
+    enabled: z.boolean().nullable(),
+    idleMinutes: idleMinutesSchema.optional(),
   }),
 );
 export type ConfigSimulatorSetRequest = z.infer<
   typeof configSimulatorSetRequestSchema
 >;
+export const configSimulatorSetResponseSchemaV10 =
+  configSimulatorResponseSchemaV10;
 export const configSimulatorSetResponseSchema = configSimulatorResponseSchema;
 export type ConfigSimulatorSetResponse = z.infer<
   typeof configSimulatorSetResponseSchema
