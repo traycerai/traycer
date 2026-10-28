@@ -33,6 +33,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 export type SettingsSectionId =
   | "dev-artifact-proof"
@@ -543,6 +544,14 @@ export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * section or a link that names it opens that page, as its route redirects
  * there.
  */
+/**
+ * The pages of the features this build does not ship (`unreleased-features.ts`):
+ * sandboxes, a team's members and the environment's secrets. Not offered,
+ * and their routes redirect to Settings.
+ */
+export const UNRELEASED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
+  new Set(["sandboxes", "members", "secrets"]);
+
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {
@@ -565,6 +574,8 @@ export const RETIRED_SECTION_REPLACEMENTS: Readonly<
 const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
   (section) =>
     !RETIRED_SETTINGS_SECTION_IDS.has(section.id) &&
+    (UNRELEASED_FEATURES_ENABLED ||
+      !UNRELEASED_SETTINGS_SECTION_IDS.has(section.id)) &&
     (import.meta.env.DEV || !DEV_ONLY_SETTINGS_SECTION_IDS.has(section.id)),
 );
 

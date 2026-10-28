@@ -101,6 +101,7 @@ import {
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * What an in-task picker knows about its task: the hosts it already uses,
@@ -473,7 +474,8 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      newRows: rows.map(newRowPresentation),
+      // No New sandbox row in a build without sandboxes.
+      newRows: UNRELEASED_FEATURES_ENABLED ? rows.map(newRowPresentation) : [],
       rememberedConfigurationKey:
         memoryHostId === null
           ? null
