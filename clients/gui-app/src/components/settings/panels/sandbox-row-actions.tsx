@@ -4,7 +4,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { toast } from "sonner";
-import { v4 as uuidv4 } from "uuid";
 import type {
   SandboxLifecycleVerb,
   SandboxSummary,
@@ -28,6 +27,7 @@ import {
 } from "@/components/hosts/sandbox-confirm-dialogs";
 import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import { SandboxFailedRowActions } from "@/components/hosts/sandbox-failed-row-actions";
 import { restingVerb } from "@/components/composer/use-sandbox-staging";
 import {
   startStagedTerminal,
@@ -35,7 +35,6 @@ import {
 } from "@/components/composer/use-staged-sandbox-send";
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
-import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import {
   useSandboxOperation,
@@ -65,7 +64,6 @@ import {
   alreadyDestroyedLine,
   sandboxVerbPendingLine,
 } from "@/lib/sandboxes/sandbox-strings";
-import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   readStagedSandbox,
@@ -87,19 +85,42 @@ const DIALOG_OF: Partial<Record<SandboxRowAction, RowDialog>> = {
   "idle-settings": "idle",
 };
 
+interface SandboxRowActionsProps {
+  readonly summary: SandboxSummary;
+  readonly configuration: SandboxPageConfiguration;
+  readonly unreachable: boolean;
+  readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
+}
+
 /**
  * One row's actions, by Flow 6's matrix: the primary button, `Give it another
  * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
  * after the row says who pays.
  */
-export function SandboxRowActions(props: {
-  readonly summary: SandboxSummary;
-  readonly configuration: SandboxPageConfiguration;
-  readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
-  readonly settingsFailed: boolean;
-}): ReactNode {
+export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
+  if (props.summary.state === "failed" && props.summary.kind !== "automation") {
+    return (
+      <SandboxFailedRowActions
+        summary={props.summary}
+        configuration={props.configuration}
+      />
+    );
+  }
+  return (
+    <SandboxLifecycleRowActions
+      {...props}
+      inlineDetails={
+        props.settingsFailed || props.summary.guestConfigured === false
+      }
+    />
+  );
+}
+
+function SandboxLifecycleRowActions(
+  props: SandboxRowActionsProps & { readonly inlineDetails: boolean },
+): ReactNode {
   const { summary, configuration } = props;
   const [dialog, setDialog] = useState<RowDialog | null>(null);
   const verb = useSandboxVerb(summary.id);
@@ -107,11 +128,6 @@ export function SandboxRowActions(props: {
   const operation = useSandboxOperation(summary.id);
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
   const patch = useSandboxPatch(summary.id);
-  const create = useSandboxCreate();
-  // One key per Retry until the server answers it: a press after an answer
-  // that never came reuses it, so the server joins the create it may have
-  // accepted instead of making a second sandbox.
-  const [retryKey, setRetryKey] = useState(() => uuidv4());
   const repair = useSandboxRepairGuestConfigurationOnHost(summary.hostId);
   const repairGuestSetup = useSandboxRepairGuestSetupOnHost(summary.hostId);
   const applyingOperation = useSandboxSettingsOperation(summary.hostId);
@@ -141,7 +157,6 @@ export function SandboxRowActions(props: {
   const busy =
     pendingVerb !== null ||
     patch.isPending ||
-    create.isPending ||
     repair.isPending ||
     repairGuestSetup.isPending ||
     applyingOperation === "pending" ||
@@ -166,42 +181,7 @@ export function SandboxRowActions(props: {
         "account",
         null,
       ),
-    // A failed Automations start is retried by starting it again; any other
-    // failed row by its create.
-    retry: () =>
-      summary.kind === "automation"
-        ? openAutomationTerminal.retry()
-        : create.mutate(
-            {
-              request: {
-                os: summary.os,
-                cpus: summary.cpus,
-                memoryMb: summary.memoryMb,
-                diskMb: summary.diskMb,
-                region: summary.region,
-                displayName: summary.displayName,
-                idleMinutes: summary.idleMinutes,
-                burst: false,
-                createdByHostId: null,
-                createdByAgentId: null,
-                environmentId: summary.environmentId,
-                // The row's `null` is never; on a create `null` is the
-                // configuration's default and `0` is never.
-                destroyAfterRestingMinutes:
-                  summary.destroyAfterRestingMinutes ?? 0,
-                createdByTaskId: null,
-                clientRequestId: retryKey,
-              },
-              teamName:
-                configuration.kind === "team" ? configuration.teamName : null,
-            },
-            {
-              onSuccess: () => setRetryKey(uuidv4()),
-              onError: (error) => {
-                if (createErrorNeedsFreshKey(error)) setRetryKey(uuidv4());
-              },
-            },
-          ),
+    retry: () => openAutomationTerminal.retry(),
     "retry-applying": () => repair.mutate({}),
     "repair-setup": () => repairGuestSetup.mutate({}),
     "open-tab": () =>
@@ -277,7 +257,7 @@ export function SandboxRowActions(props: {
       <SandboxRowSettingsFailureActions
         summary={summary}
         configuration={configuration}
-        settingsFailed={props.settingsFailed}
+        visible={props.inlineDetails}
         menu={actions.menu}
         pendingVerb={pendingVerb}
         busy={busy}
@@ -308,12 +288,14 @@ export function SandboxRowActions(props: {
                 {sandboxRowActionLabel(action, configuration)}
               </DropdownMenuItem>
             ))}
-          <DropdownMenuItem
-            data-testid="sandbox-row-menu-details"
-            onSelect={() => openSandboxDetails(summary.id)}
-          >
-            {DETAILS}
-          </DropdownMenuItem>
+          {props.inlineDetails ? null : (
+            <DropdownMenuItem
+              data-testid="sandbox-row-menu-details"
+              onSelect={() => openSandboxDetails(summary.id)}
+            >
+              {DETAILS}
+            </DropdownMenuItem>
+          )}
           {pendingVerb === null && actions.menu.includes("destroy") ? (
             <>
               <DropdownMenuSeparator />
@@ -398,15 +380,14 @@ function useSandboxSettingsPrimaryAction(
 function SandboxRowSettingsFailureActions(props: {
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
-  readonly settingsFailed: boolean;
+  readonly visible: boolean;
   readonly menu: readonly SandboxRowAction[];
   readonly pendingVerb: SandboxRowVerb | null;
   readonly busy: boolean;
   readonly run: (action: SandboxRowAction) => void;
 }): ReactNode {
   const chooseAnother = useChooseAnotherHost();
-  if (!props.settingsFailed && props.summary.guestConfigured !== false)
-    return null;
+  if (!props.visible) return null;
   const actions =
     props.pendingVerb === null
       ? props.menu.filter(
