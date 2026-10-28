@@ -113,7 +113,7 @@ const OPENED: SimulatorOpenResponse = {
   },
 };
 
-function buildSpine(): {
+function buildSpine(args: { readonly reachable: () => boolean }): {
   readonly spine: HostClient<HostRpcRegistry>;
   readonly methods: string[];
 } {
@@ -126,7 +126,11 @@ function buildSpine(): {
     registry: hostRpcRegistry,
     requestId: () => "simulator-inventory-req",
     handlers: {
-      "simulator.list": () => record("simulator.list", LIST),
+      "simulator.list": () => {
+        record("simulator.list", null);
+        if (!args.reachable()) throw new Error("dial refused");
+        return LIST;
+      },
       "simulator.instances": () => record("simulator.instances", INSTANCES),
       "simulator.open": () => record("simulator.open", OPENED),
     },
@@ -189,21 +193,61 @@ afterEach(() => {
 });
 
 describe("useSimulatorInventories", () => {
-  it("sends nothing while the host's simulator minor is still unnegotiated", async () => {
-    const { spine, methods } = buildSpine();
+  it("contacts a host whose simulator minor is unknown, and withholds only the version-dependent read", async () => {
+    const { spine, methods } = buildSpine({ reachable: () => true });
     hostBindingMock.current = { hostClient: spine };
 
     const { result } = renderInventories();
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(methods).toContain("simulator.list");
     });
 
-    expect(methods).toEqual([]);
+    // `simulator.list` is what reaches the machine, so it goes out with the
+    // minor still unknown; `simulator.instances` is the read whose presence
+    // the minor decides, and it waits. Until the handshake it records answers
+    // the question, no shape is committed - an entry list here would be the
+    // `@1.0` stand-in asserted without evidence.
+    expect(methods).toEqual(["simulator.list"]);
+    expect(result.current.inventories[0]?.status).toBe("loading");
     expect(result.current.inventories[0]?.entries).toEqual([]);
   });
 
+  it("reports a host it cannot reach instead of loading for ever", async () => {
+    const { spine } = buildSpine({ reachable: () => false });
+    hostBindingMock.current = { hostClient: spine };
+
+    const { result } = renderInventories();
+
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.status).toBe("error");
+    });
+  });
+
+  it("stops reporting a failed contact once the minor lands anyway", async () => {
+    let reachable = false;
+    const { spine } = buildSpine({ reachable: () => reachable });
+    hostBindingMock.current = { hostClient: spine };
+
+    const { result } = renderInventories();
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.status).toBe("error");
+    });
+
+    // Another surface reached the machine: the contact read's frozen failure
+    // is no longer this host's answer, the shaped read's own state is.
+    reachable = true;
+    act(() => {
+      negotiateV11();
+    });
+
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.status).toBe("ready");
+    });
+    expect(result.current.inventories[0]?.entries[0]?.drivenByAgent).toBe(true);
+  });
+
   it("reads the `@1.1` instance shape once the handshake lands, never the `@1.0` stand-in", async () => {
-    const { spine, methods } = buildSpine();
+    const { spine, methods } = buildSpine({ reachable: () => true });
     hostBindingMock.current = { hostClient: spine };
 
     const { result, rerender } = renderInventories();
@@ -243,7 +287,7 @@ describe("useSimulatorInventories", () => {
       "simulator.open": { major: 1, minor: 0 },
       "simulator.list": { major: 1, minor: 0 },
     });
-    const { spine, methods } = buildSpine();
+    const { spine, methods } = buildSpine({ reachable: () => true });
     hostBindingMock.current = { hostClient: spine };
 
     const { result } = renderInventories();
@@ -269,7 +313,7 @@ describe("useSimulatorInventories", () => {
 
   it("is asked again after an open, inside the 60 s freshness window", async () => {
     negotiateV11();
-    const { spine, methods } = buildSpine();
+    const { spine, methods } = buildSpine({ reachable: () => true });
     hostBindingMock.current = { hostClient: spine };
 
     const { result } = renderInventories();
