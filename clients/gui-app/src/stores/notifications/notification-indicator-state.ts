@@ -71,7 +71,7 @@ const EMPTY_HOST_INDICATOR_STATE: HostNotificationsIndicatorState = {
  * when neither side counted, so a known count is never hidden by an unknown
  * one. The flags still light the entity the unknown side holds.
  */
-export function addUnreadCounts(
+function addUnreadCounts(
   left: number | null,
   right: number | null,
 ): number | null {

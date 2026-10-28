@@ -2,10 +2,11 @@
  * A bot's model settings over the REAL toolbar-store hook: only the host's
  * harness and model catalogue, the palette registration and the seeded
  * profile check are replaced (the boundaries `use-composer-toolbar-store.test`
- * replaces). When the bot list refetches after a write and the row now names
- * another tuple than the one in the picker - a change made elsewhere, or a
- * write the host answered with something else - the picker's store moves to
- * the row's tuple and Apply has nothing left to apply.
+ * replaces). When the panel is handed a new bot prop whose row names another
+ * tuple than the one in the picker - a change made elsewhere, or a write the
+ * host answered with something else - the picker's store moves to the row's
+ * tuple and Apply has nothing left to apply. The new prop is supplied by the
+ * test; how the open panel receives a refetched row is not exercised here.
  */
 import { StrictMode, type ReactNode } from "react";
 import {
