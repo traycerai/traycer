@@ -451,17 +451,20 @@ export function useStagedSandboxSend(input: {
 /**
  * Stop needs the row's word that the sandbox is awake. A listed row can still
  * read its resting state while a start or resume runs: the stage's boot step
- * and the row's own verb say so first.
+ * says so first, and a pending verb does until a list answer newer than it
+ * reads the row awake.
  */
 function stopOffered(
   stage: StagedSandbox | null,
   row: SandboxSummary | undefined,
+  listedAt: number,
   operation: SandboxRowOperation | null,
 ): boolean {
   const waking =
     (stage?.step === "booting" && stage.failure === null) ||
     (operation?.kind === "pending" &&
-      (operation.verb === "start" || operation.verb === "resume"));
+      (operation.verb === "start" || operation.verb === "resume") &&
+      listedAt < operation.submittedAt);
   return row?.state === "awake" && !waking;
 }
 
@@ -475,7 +478,8 @@ export function useSetupLineFacts(
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
-  const sandboxes = useSandboxList().data?.sandboxes;
+  const sandboxList = useSandboxList();
+  const sandboxes = sandboxList.data?.sandboxes;
   // Whether the stage's sandbox is awake: `null` until the list has its row.
   const stageSandboxId =
     stage?.createdSandboxId ??
@@ -487,7 +491,12 @@ export function useSetupLineFacts(
   const sandboxAwake =
     stageRow === undefined ? null : stageRow.state === "awake";
   const operation = useSandboxOperation(stageSandboxId ?? "");
-  const sandboxStoppable = stopOffered(stage, stageRow, operation);
+  const sandboxStoppable = stopOffered(
+    stage,
+    stageRow,
+    sandboxList.dataUpdatedAt,
+    operation,
+  );
   // A resting sandbox of the person's costs what its row says.
   const existingPrice = useMemo<StagePrice | null>(() => {
     if (stage === null || stage.target.kind !== "existing") return null;

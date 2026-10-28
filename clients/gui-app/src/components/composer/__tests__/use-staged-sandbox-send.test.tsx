@@ -105,6 +105,8 @@ const mocks = vi.hoisted(() => ({
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
   /** The sandbox list rows the setup line prices a resting sandbox from. */
   sandboxes: null as SandboxSummary[] | null,
+  /** When the listed rows answered; `0` is an answer older than any verb. */
+  sandboxesAt: 0,
   /** The account's host directory, which names the new host once it dials. */
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   repairHostIds: [] as string[],
@@ -205,7 +207,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
     useSandboxList: (...args: Parameters<typeof actual.useSandboxList>) =>
       mocks.sandboxes === null
         ? actual.useSandboxList(...args)
-        : { data: { sandboxes: mocks.sandboxes } },
+        : {
+            data: { sandboxes: mocks.sandboxes },
+            dataUpdatedAt: mocks.sandboxesAt,
+          },
   };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
@@ -375,6 +380,7 @@ beforeEach(() => {
   mocks.user = null;
   mocks.catalogue = null;
   mocks.sandboxes = null;
+  mocks.sandboxesAt = 0;
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
@@ -639,6 +645,51 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   describe("Stop while a start or resume is under way", () => {
+    it.each(["start", "resume"] as const)(
+      "offers Stop again once a list answer newer than a pending %s reads the row awake",
+      async (verb) => {
+        stageCreated("applying", null);
+        listCreatedAwake();
+        const client = new QueryClient();
+        const answer = Promise.withResolvers<void>();
+        const view = render(
+          <QueryClientProvider client={client}>
+            <Harness openTerminal={vi.fn()} />
+          </QueryClientProvider>,
+        );
+        act(() => {
+          void client
+            .getMutationCache()
+            .build(client, {
+              mutationKey: sandboxMutationKeys.verb("sbx-1"),
+              mutationFn: () => answer.promise,
+              onMutate: () => ({
+                userId:
+                  useAuthStore.getState().contextMetadata?.userId ?? null,
+              }),
+            })
+            .execute(verb);
+        });
+        await waitFor(() => {
+          expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+        });
+
+        // The verb's reply is still out; a list answer after it reads awake.
+        mocks.sandboxesAt = Date.now();
+        view.rerender(
+          <QueryClientProvider client={client}>
+            <Harness openTerminal={vi.fn()} />
+          </QueryClientProvider>,
+        );
+        expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+
+        await act(async () => {
+          answer.resolve();
+          await answer.promise;
+        });
+      },
+    );
+
     it.each(["stopped", "suspended"] as const)(
       "offers no Stop while the wake runs over a cached %s row",
       (state) => {
