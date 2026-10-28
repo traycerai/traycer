@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useStore } from "zustand";
 import type {
   OpenChatQueuedItem,
   OpenChatQueuedPromptItem,
+  ChatQueueSteerRestartReason,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -9,10 +11,7 @@ import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import {
-  decideSteerSettings,
-  type SteerSettingsDecision,
-} from "@/lib/chats/decide-steer-settings";
+import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   EMPTY_COMPOSER_DRAFT,
@@ -27,7 +26,12 @@ import {
   releaseComposerContentImageRoots,
 } from "@/lib/composer/composer-content-image-roots";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
+import type { QueueEditFollowUpReplacement } from "@/stores/chats/queue-edit-custody";
 import type { ChatTileUiAction } from "./chat-tile-session-state";
+
+const SETTINGS_RESTART_REASONS: ReadonlyArray<ChatQueueSteerRestartReason> = [
+  "settings",
+];
 
 interface QueuedEditDraftSnapshot {
   readonly hadDraft: boolean;
@@ -69,7 +73,8 @@ export interface ChatQueueActionsInput {
    * Safe to substitute here because `decideSteerSettings` compares harness,
    * model, reasoning effort, service tier and profile - never `permissionMode`
    * - so the clamp cannot move its verdict, and `newSettings` is the tuple it
-   * was handed, which is how `confirmSteerRestart` inherits the clamp too.
+   * was handed, which is how `confirmSteerRestart` inherits the clamp too: it
+   * sends again the tuple the steer was first sent or decided with.
    */
   readonly nextStepSettings: ChatRunSettings;
   readonly currentEpicId: string;
@@ -104,6 +109,7 @@ export interface ChatQueueActionsResult {
   readonly handleComposerSettingsChange: (settings: ChatRunSettings) => void;
   readonly steerRestart: {
     readonly open: boolean;
+    readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
     readonly changed: ReadonlyArray<string>;
     readonly onOpenChange: (open: boolean) => void;
     readonly onRestart: () => void;
@@ -139,15 +145,91 @@ export function useChatQueueActions(
     persistChatRunSettings,
   } = input;
 
-  // Set when steering a queued prompt requires ending the running turn (a
-  // turn-start-baked setting differs); drives the confirm dialog.
+  // Set when steering a queued prompt needs a turn-start-baked setting the
+  // running turn can't absorb; drives the confirm dialog before anything is
+  // sent.
   const [pendingSteerRestart, setPendingSteerRestart] = useState<{
-    readonly item: OpenChatQueuedItem;
-    readonly decision: Extract<
-      SteerSettingsDecision,
-      { readonly kind: "interrupt_restart" }
-    >;
+    readonly queueItemId: string;
+    readonly newSettings: ChatRunSettings | null;
+    readonly changed: ReadonlyArray<string>;
   } | null>(null);
+  // A steer this tile sent unconfirmed - the row's Steer button, or a queue
+  // edit's Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.40` refused
+  // because it would end the running turn. Read, not taken: it stays in the
+  // store until this tile's dialog is answered, so a pane that was unfocused
+  // when the refusal arrived asks once it is focused again. A closed tile
+  // releases its questions for another tile to claim, including a steer whose
+  // refusal arrives after it closed. This tile's oldest refusal is asked
+  // first; the next one opens once it is answered. An older host never
+  // refuses: it restarts the turn as it always did.
+  const ownRefusal = useStore(
+    handle.store,
+    (state) =>
+      state.steerRestartRefusals.find(
+        (refusal) => refusal.initiatorId === tileInstanceId,
+      ) ?? null,
+  );
+  const orphanRefusalId = useStore(
+    handle.store,
+    (state) =>
+      state.steerRestartRefusals.find((refusal) => refusal.initiatorId === null)
+        ?.clientActionId ?? null,
+  );
+  const mountedSteerOwner = useRef<{
+    readonly store: ChatSessionStoreHandle["store"];
+    readonly initiatorId: string;
+  } | null>(null);
+  useEffect(() => {
+    const owner = { store: handle.store, initiatorId: tileInstanceId };
+    mountedSteerOwner.current = owner;
+    return () => {
+      mountedSteerOwner.current = null;
+      // StrictMode replays effects without closing the tile. Let that setup
+      // keep ownership, but release a real teardown or a changed binding.
+      queueMicrotask(() => {
+        const mounted = mountedSteerOwner.current;
+        if (
+          mounted?.store === owner.store &&
+          mounted.initiatorId === owner.initiatorId
+        ) {
+          return;
+        }
+        owner.store.getState().releaseSteerRestartInitiator(owner.initiatorId);
+      });
+    };
+  }, [handle.store, tileInstanceId]);
+  useEffect(() => {
+    if (ownRefusal !== null || orphanRefusalId === null) return;
+    handle.store
+      .getState()
+      .claimSteerRestartRefusal(orphanRefusalId, tileInstanceId);
+  }, [handle.store, orphanRefusalId, ownRefusal, tileInstanceId]);
+  const steerRestartPrompt: {
+    readonly queueItemId: string;
+    readonly newSettings: ChatRunSettings | null;
+    readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
+    readonly changed: ReadonlyArray<string>;
+    readonly refusedTurnId: string | null;
+    readonly editSettings: ChatRunSettings | null;
+  } | null = useMemo(() => {
+    if (pendingSteerRestart !== null) {
+      return {
+        ...pendingSteerRestart,
+        reasons: SETTINGS_RESTART_REASONS,
+        refusedTurnId: null,
+        editSettings: null,
+      };
+    }
+    if (ownRefusal === null) return null;
+    return {
+      queueItemId: ownRefusal.queueItemId,
+      newSettings: ownRefusal.newSettings,
+      reasons: ownRefusal.reasons,
+      changed: [],
+      refusedTurnId: ownRefusal.turnId,
+      editSettings: ownRefusal.editSettings,
+    };
+  }, [ownRefusal, pendingSteerRestart]);
   const queuedEditRestoreDraftRef = useRef<QueuedEditDraftSnapshot | null>(
     null,
   );
@@ -334,6 +416,13 @@ export function useChatQueueActions(
       // (the store assigns a fresh object every snapshot, so depending on it would
       // re-create this callback every streamed token → lowerQueue → composerModel
       // churn -> composer re-render).
+      if (handle.store.getState().queuedSteerRestartConfirmationSupported()) {
+        chatActions.queueSteerNow(item.queueItemId, nextStepSettings, false, {
+          initiatorId: tileInstanceId,
+          editSettings: null,
+        });
+        return;
+      }
       const decision = decideSteerSettings(
         handle.store.getState().activeTurn,
         nextStepSettings,
@@ -350,30 +439,94 @@ export function useChatQueueActions(
         // direction this whole gate is built to fail in: a steer the host
         // refuses outright kills the button for the session, while a demoted
         // one still lands and costs the judge on a turn the user can re-run.
-        chatActions.queueSteerNow(item.queueItemId, nextStepSettings);
+        //
+        // Sent unconfirmed: if the host would still have to end the turn
+        // (images or a harness that cannot steer), it
+        // refuses and names why, and the dialog asks.
+        chatActions.queueSteerNow(item.queueItemId, nextStepSettings, false, {
+          initiatorId: tileInstanceId,
+          editSettings: null,
+        });
         return;
       }
       // A change the running turn can't absorb: confirm ending the turn first.
-      setPendingSteerRestart({ item, decision });
+      setPendingSteerRestart({
+        queueItemId: item.queueItemId,
+        newSettings: decision.newSettings,
+        changed: decision.changed,
+      });
     },
-    [chatActions, nextStepSettings, handle.store],
+    [chatActions, nextStepSettings, handle.store, tileInstanceId],
+  );
+
+  // Answering the dialog settles whichever question it showed: the local
+  // settings one, or the host's refusal, which leaves the store with it. A
+  // queue edit's refused steer hands its custody to the frame the answer sent.
+  const settleSteerRestart = useCallback(
+    (replacement: QueueEditFollowUpReplacement | null): void => {
+      if (pendingSteerRestart !== null) {
+        setPendingSteerRestart(null);
+        return;
+      }
+      if (ownRefusal !== null) {
+        handle.store
+          .getState()
+          .takeSteerRestartRefusal(ownRefusal.clientActionId, replacement);
+      }
+    },
+    [handle.store, ownRefusal, pendingSteerRestart],
   );
 
   const confirmSteerRestart = useCallback((): void => {
-    if (pendingSteerRestart === null) return;
-    const { decision, item } = pendingSteerRestart;
+    if (steerRestartPrompt === null) return;
+    const { queueItemId, newSettings, refusedTurnId, editSettings } =
+      steerRestartPrompt;
+    // The host asked about the turn running when it refused. Once another has
+    // started, confirming would end a turn the person never saw: the steer
+    // goes again unconfirmed, and the host asks about the turn now running.
+    // A refusal that arrived while this client showed no turn names none, so
+    // it is confirmed against whichever turn is running, as is the settings
+    // question a host below `chat.subscribe@1.40` leaves to this client.
+    const liveTurnId = handle.store.getState().activeTurn?.turnId ?? null;
     const actionId = chatActions.queueSteerNow(
-      item.queueItemId,
-      decision.newSettings,
+      queueItemId,
+      newSettings,
+      refusedTurnId === null || refusedTurnId === liveTurnId,
+      { initiatorId: tileInstanceId, editSettings },
     );
     if (actionId === null) return;
-    setPendingSteerRestart(null);
-  }, [chatActions, pendingSteerRestart]);
+    settleSteerRestart({ clientActionId: actionId, intent: "steer" });
+  }, [
+    chatActions,
+    handle.store,
+    settleSteerRestart,
+    steerRestartPrompt,
+    tileInstanceId,
+  ]);
 
-  const handleSteerRestartOpenChange = useCallback((open: boolean): void => {
-    if (open) return;
-    setPendingSteerRestart(null);
-  }, []);
+  const handleSteerRestartOpenChange = useCallback(
+    (open: boolean): void => {
+      if (open) return;
+      // Declining a queue edit's steer keeps the rest of the edit: the
+      // settings it asked for rode only on the steer, so they go as a save of
+      // their own. A save that cannot go out leaves the question open, as
+      // Confirm does.
+      if (
+        steerRestartPrompt !== null &&
+        steerRestartPrompt.editSettings !== null
+      ) {
+        const saveId = chatActions.queueSettingsUpdate(
+          steerRestartPrompt.queueItemId,
+          steerRestartPrompt.editSettings,
+        );
+        if (saveId === null) return;
+        settleSteerRestart({ clientActionId: saveId, intent: "save" });
+        return;
+      }
+      settleSteerRestart(null);
+    },
+    [chatActions, settleSteerRestart, steerRestartPrompt],
+  );
 
   const handleComposerSettingsChange = useCallback(
     (settings: ChatRunSettings): void => {
@@ -440,8 +593,9 @@ export function useChatQueueActions(
     steerQueuedItemNow,
     handleComposerSettingsChange,
     steerRestart: {
-      open: pendingSteerRestart !== null,
-      changed: pendingSteerRestart?.decision.changed ?? [],
+      open: steerRestartPrompt !== null,
+      reasons: steerRestartPrompt?.reasons ?? [],
+      changed: steerRestartPrompt?.changed ?? [],
       onOpenChange: handleSteerRestartOpenChange,
       onRestart: confirmSteerRestart,
     },

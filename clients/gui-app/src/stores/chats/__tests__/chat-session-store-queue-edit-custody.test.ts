@@ -31,6 +31,7 @@ import {
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import { chatCapHasActiveWork } from "@/stores/chats/session-registry";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -248,6 +249,8 @@ function submitEdit(
     restore: { content: EDITED, browserAnnotations },
     settings,
     intent,
+    steerRestartConfirmed: false,
+    steerInitiatorId: "tile-1",
   });
   if (editActionId === null) throw new Error("expected the edit to dispatch");
   const edit = harness.sent.at(-2);
@@ -652,7 +655,12 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     harness = openWithQueuedRow();
     const store = harness.handle.store;
 
-    const steerId = store.getState().queueSteerNow(QUEUE_ITEM_ID, SETTINGS);
+    const steerId = store
+      .getState()
+      .queueSteerNow(QUEUE_ITEM_ID, SETTINGS, false, {
+        initiatorId: "tile-1",
+        editSettings: null,
+      });
     if (steerId === null) throw new Error("expected a steer frame");
     expect(store.getState().pendingActions[steerId].queueItemId).toBe(
       QUEUE_ITEM_ID,
@@ -710,6 +718,8 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
       intent: "save",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-1",
     });
 
     expect(result).toBeNull();
@@ -1017,6 +1027,383 @@ describe("an edit refused while its follow-up is applied", () => {
   });
 });
 
+describe("an edit refused while its steer waits for the person to confirm ending the turn", () => {
+  function refuseSteerUnconfirmed(target: Harness, clientActionId: string) {
+    target.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "Steering this message now would end the current turn.",
+      code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+      backgroundStopTaskIds: [],
+      token: null,
+      steerRestartReasons: ["harness"],
+    });
+  }
+
+  function followUpAloneNotices(target: Harness) {
+    return target.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+      );
+  }
+
+  // The steer has not happened: the confirm dialog holds it, and the person
+  // may still cancel. Saying it "was still steered" would be false either way.
+  it("does not say the steer went ahead when the text's refusal comes first", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+    refuseSteerUnconfirmed(harness, followUpActionId);
+
+    const state = harness.handle.store.getState();
+    expect(followUpAloneNotices(harness)).toEqual([]);
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+    expect(state.takeSteerRestartRefusal(followUpActionId, null)).toMatchObject(
+      {
+        queueItemId: QUEUE_ITEM_ID,
+      },
+    );
+  });
+
+  it("does not say the steer went ahead when the steer's refusal comes first", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [],
+    );
+
+    refuseSteerUnconfirmed(harness, followUpActionId);
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+
+    const state = harness.handle.store.getState();
+    expect(followUpAloneNotices(harness)).toEqual([]);
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+  });
+});
+
+describe("a saved edit whose steer waits for the person to confirm ending the turn", () => {
+  it("holds the chat and the record until the dialog is answered, then releases both", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      OTHER_SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: followUpActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "Steering this message now would end the current turn.",
+      code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+      backgroundStopTaskIds: [],
+      token: null,
+      steerRestartReasons: ["settings"],
+    });
+
+    // The settings the person asked for ride on nothing the host has seen, so
+    // the chat cannot be evicted while the dialog is open.
+    expect(
+      Object.keys(harness.handle.store.getState().queueEditRecords),
+    ).not.toEqual([]);
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
+
+    expect(
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal(followUpActionId, null),
+    ).toMatchObject({ queueItemId: QUEUE_ITEM_ID });
+
+    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
+  });
+
+  function refuseSteerForSettings(
+    target: Harness,
+    clientActionId: string,
+  ): void {
+    target.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "Steering this message now would end the current turn.",
+      code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+      backgroundStopTaskIds: [],
+      token: null,
+      steerRestartReasons: ["settings"],
+    });
+  }
+
+  function noticesTellingTheSteerOrPartialOutcome(target: Harness) {
+    return target.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) =>
+          notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE ||
+          notice.message.includes("Text saved; settings/steering were not"),
+      );
+  }
+
+  it("hands the edited text back when the text is refused after the dialog is answered", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      OTHER_SETTINGS,
+      [],
+    );
+
+    refuseSteerForSettings(harness, followUpActionId);
+    expect(
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal(followUpActionId, null),
+    ).toMatchObject({ queueItemId: QUEUE_ITEM_ID });
+
+    // The text is still unaccounted for: the record and the chat's hold stay.
+    expect(harness.handle.store.getState().queueEditRecords).not.toEqual({});
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+    // Cancelling the dialog must not read as "steered with the earlier text".
+    expect(noticesTellingTheSteerOrPartialOutcome(harness)).toEqual([]);
+  });
+
+  it("releases the chat once the text is saved after the dialog is answered", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      OTHER_SETTINGS,
+      [],
+    );
+
+    refuseSteerForSettings(harness, followUpActionId);
+    harness.handle.store
+      .getState()
+      .takeSteerRestartRefusal(followUpActionId, null);
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.queueEditRecords).toEqual({});
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
+    expect(state.failedSendRestoration).toBeNull();
+    expect(noticesTellingTheSteerOrPartialOutcome(harness)).toEqual([]);
+  });
+
+  /**
+   * The dialog's answer is itself a frame: Cancel with other settings saves
+   * them (`queueSettingsUpdate`), Restart sends the steer again confirmed. The
+   * record follows that frame until its own ack or a reconnect sweep.
+   */
+  function refusedSteerWithTextAccepted(): EditFrames & {
+    readonly live: Harness;
+  } {
+    const harnessInUse = openWithQueuedRow();
+    harness = harnessInUse;
+    const frames = submitEdit(harnessInUse, "steer", OTHER_SETTINGS, []);
+    ack(harnessInUse, {
+      clientActionId: frames.editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    refuseSteerForSettings(harnessInUse, frames.followUpActionId);
+    return { ...frames, live: harnessInUse };
+  }
+
+  function cancelDialogSavingSettings(
+    target: Harness,
+    refusedActionId: string,
+  ): string {
+    const saveId = target.handle.store
+      .getState()
+      .queueSettingsUpdate(QUEUE_ITEM_ID, OTHER_SETTINGS);
+    if (saveId === null) throw new Error("expected a queueSettingsUpdate");
+    target.handle.store.getState().takeSteerRestartRefusal(refusedActionId, {
+      clientActionId: saveId,
+      intent: "save",
+    });
+    return saveId;
+  }
+
+  function restartDialogSteering(
+    target: Harness,
+    refusedActionId: string,
+  ): string {
+    const steerId = target.handle.store
+      .getState()
+      .queueSteerNow(QUEUE_ITEM_ID, OTHER_SETTINGS, true, {
+        initiatorId: "tile-1",
+        editSettings: OTHER_SETTINGS,
+      });
+    if (steerId === null) throw new Error("expected a queueSteerNow");
+    target.handle.store.getState().takeSteerRestartRefusal(refusedActionId, {
+      clientActionId: steerId,
+      intent: "steer",
+    });
+    return steerId;
+  }
+
+  function noticesFor(target: Harness, clientActionId: string) {
+    return target.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.clientActionId === clientActionId,
+      );
+  }
+
+  it("keeps the record on the settings save the Cancel sent, and says so when a reconnect sweeps it", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const saveId = cancelDialogSavingSettings(live, followUpActionId);
+
+    expect(live.handle.store.getState().queueEditRecords).not.toEqual({});
+    expect(chatCapHasActiveWork(live.handle, null)).toBe(true);
+
+    reconnectWithItems(live, [queuedRow(EDITED)]);
+
+    const stated = noticesFor(live, saveId);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not confirmed after reconnecting",
+    );
+    expect(stated[0].message).toContain("You asked for");
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+
+  it("reports the settings save the Cancel sent as not applied when the host refuses it", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const saveId = cancelDialogSavingSettings(live, followUpActionId);
+
+    live.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: saveId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+      reason: "Queue item not found.",
+      code: "QUEUE_ITEM_NOT_FOUND",
+      backgroundStopTaskIds: [],
+      token: null,
+    });
+
+    const stated = noticesFor(live, saveId);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not applied (Queue item not found)",
+    );
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+
+  it("releases the chat quietly when the settings save the Cancel sent is accepted", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const saveId = cancelDialogSavingSettings(live, followUpActionId);
+
+    ack(live, {
+      clientActionId: saveId,
+      action: "queueSettingsUpdate",
+      status: "accepted",
+    });
+
+    const state = live.handle.store.getState();
+    expect(state.queueEditRecords).toEqual({});
+    expect(chatCapHasActiveWork(live.handle, null)).toBe(false);
+    expect(noticesTellingTheSteerOrPartialOutcome(live)).toEqual([]);
+    expect(state.failedSendRestoration).toBeNull();
+  });
+
+  it("keeps the record on the confirmed steer Restart sent, and says so when a reconnect sweeps it", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const steerId = restartDialogSteering(live, followUpActionId);
+
+    expect(live.handle.store.getState().queueEditRecords).not.toEqual({});
+    expect(chatCapHasActiveWork(live.handle, null)).toBe(true);
+
+    reconnectWithItems(live, [queuedRow(EDITED)]);
+
+    const stated = noticesFor(live, steerId);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not confirmed after reconnecting",
+    );
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+
+  it("asks again when the confirmed steer is refused on a turn change, and settles when that dialog is cancelled", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const steerId = restartDialogSteering(live, followUpActionId);
+
+    refuseSteerForSettings(live, steerId);
+
+    const held = live.handle.store.getState();
+    const record = Object.values(held.queueEditRecords)[0];
+    expect(record).toMatchObject({
+      followUp: "confirming",
+      followUpActionId: steerId,
+    });
+    expect(
+      held.steerRestartRefusals.filter(
+        (refusal) => refusal.clientActionId === steerId,
+      ),
+    ).toHaveLength(1);
+
+    live.handle.store.getState().takeSteerRestartRefusal(steerId, null);
+
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+});
+
 describe("cancelling a row retires its returned queue-edit records", () => {
   function retainedAfterReconnect(): {
     readonly started: Harness;
@@ -1247,6 +1634,8 @@ describe("a refused queue edit retracts this host's blob acks (finding 8)", () =
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
       intent: "save",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-1",
     });
     if (editActionId === null) throw new Error("expected the edit to dispatch");
     // Nothing is forgotten by submitting.

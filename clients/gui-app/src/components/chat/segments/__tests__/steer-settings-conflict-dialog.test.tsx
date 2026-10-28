@@ -12,10 +12,75 @@ function renderDialog() {
       open
       onOpenChange={onOpenChange}
       onRestart={onRestart}
+      reasons={["settings"]}
       changed={["model"]}
     />,
   );
 }
+
+describe("<SteerSettingsConflictDialog /> reasons", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("names every reason the turn would end for", () => {
+    render(
+      <SteerSettingsConflictDialog
+        open
+        onOpenChange={onOpenChange}
+        onRestart={onRestart}
+        reasons={["harness", "settings", "images", "slash_command", "skills"]}
+        changed={[]}
+      />,
+    );
+
+    expect(screen.getByRole("dialog").textContent).toContain(
+      [
+        "This agent can't take a message while its turn is running.",
+        "This message uses different settings.",
+        "This agent can't take images while its turn is running.",
+        "A slash command can't run inside a turn that is already running.",
+        "A skill can't be added to a turn that is already running.",
+        "Sending it now will end the current turn and start a new one with this message.",
+      ].join(" "),
+    );
+  });
+
+  it("keeps the settings wording for a settings change alone", () => {
+    renderDialog();
+
+    expect(
+      screen.getByText("End the current turn to send with new settings?"),
+    ).toBeDefined();
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "The current turn is running with different model.",
+    );
+  });
+});
+
+describe("<SteerSettingsConflictDialog /> unnamed settings", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("does not name settings it cannot list", () => {
+    render(
+      <SteerSettingsConflictDialog
+        open
+        onOpenChange={onOpenChange}
+        onRestart={onRestart}
+        reasons={["settings"]}
+        changed={[]}
+      />,
+    );
+
+    const text = screen.getByRole("dialog").textContent;
+    expect(text).toContain(
+      "The current turn is running with different settings.",
+    );
+    expect(text).not.toContain("these settings");
+  });
+});
 
 describe("<SteerSettingsConflictDialog /> keyboard navigation", () => {
   beforeEach(() => {
