@@ -42,6 +42,10 @@ import {
 import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
+import {
+  useSandboxSettingsNoticeTitle,
+  type SandboxApplyFailedDetail,
+} from "@/hooks/sandboxes/use-sandbox-settings-notice";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import {
@@ -389,7 +393,7 @@ function EnvironmentNoticeExtra(props: {
   return (
     <EnvironmentNotificationExtra
       detail={props.detail}
-      onSettingsApplied={() => actions.resolveNotice(props.row)}
+      onSettingsApplied={() => actions.retireNotice(props.row)}
     />
   );
 }
@@ -407,7 +411,7 @@ function SandboxNoticeExtra(props: {
       onDetails={() => props.onActivate(props.row)}
       onDismiss={() => actions.clear(props.row)}
       active={props.row.resolvedAt === null}
-      onExtended={() => actions.resolveNotice(props.row)}
+      onExtended={() => actions.retireNotice(props.row)}
     />
   );
 }
@@ -479,13 +483,23 @@ function NotificationRowMain(props: {
   readonly remoteHostLabel: string | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
 }): ReactNode {
-  const body = (
-    <NotificationRowBody
-      title={props.row.title}
-      body={props.displayBody}
-      isRead={props.isRead}
-    />
-  );
+  const detail = props.row.environmentDetail ?? null;
+  const body =
+    detail?.kind === "environment_apply_failed" &&
+    detail.sandbox !== null &&
+    detail.sandbox !== undefined ? (
+      <SandboxSettingsFailedRowBody
+        detail={detail}
+        title={props.row.title}
+        isRead={props.isRead}
+      />
+    ) : (
+      <NotificationRowBody
+        title={props.row.title}
+        body={props.displayBody}
+        isRead={props.isRead}
+      />
+    );
 
   if (props.isNavigable && props.originUnavailability === null) {
     return (
@@ -585,6 +599,19 @@ function NotificationRowControlButton(
       </button>
     </TooltipWrapper>
   );
+}
+
+/**
+ * A sandbox's settings failure: its line follows the sandbox's row now, and
+ * its explanation is the card's alone (the body any host formats repeats it).
+ */
+function SandboxSettingsFailedRowBody(props: {
+  readonly detail: SandboxApplyFailedDetail;
+  readonly title: string;
+  readonly isRead: boolean;
+}): ReactNode {
+  const title = useSandboxSettingsNoticeTitle(props.detail, props.title);
+  return <NotificationRowBody title={title} body="" isRead={props.isRead} />;
 }
 
 interface NotificationRowBodyProps {

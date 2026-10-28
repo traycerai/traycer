@@ -65,6 +65,15 @@ export const sandboxQueryKeys = {
     "sandbox-catalogue",
     "missing",
   ],
+  traycerModels: (
+    authService: object,
+    userId: string | null,
+  ): readonly unknown[] => ["auth", "traycer-models", authService, userId],
+  traycerModelsMissing: (): readonly unknown[] => [
+    "auth",
+    "traycer-models",
+    "missing",
+  ],
   // The broker's grants summary for one sandbox host. Not under
   // `registeredHostsAll`: it is a read of authn's grant set, refreshed on
   // focus and after a grant decision, never on the directory's liveness tick.

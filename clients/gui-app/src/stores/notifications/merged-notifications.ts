@@ -41,6 +41,7 @@ import {
   classifyNotificationLifecycle,
   compareAttentionTiers,
   isActionableNotice,
+  isRetiredNotice,
   compareFeedIdAscending,
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
@@ -207,7 +208,8 @@ function isHostUnsupportedError(error: unknown): boolean {
 
 export interface MergedNotificationsActions {
   readonly markAsRead: (row: MergedNotificationRow | string) => void;
-  readonly resolveNotice: (row: MergedNotificationRow) => void;
+  /** The notice's action succeeded or its sandbox moved on: it leaves the bell. */
+  readonly retireNotice: (row: MergedNotificationRow) => void;
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
@@ -363,7 +365,18 @@ export function mergedUnreadCount(input: {
 /** Every merged row, newest-first across the active feed plus renderer-local
  * failures - the shared base the id/Attention/Recent projections all derive
  * from without recomputing their own source subscriptions. */
+/** Every row the bell shows: a retired notice has left it. */
 export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
+  const rows = useMergedNotificationRowsWithRetired();
+  return useMemo(() => rows.filter((row) => !isRetiredNotice(row)), [rows]);
+}
+
+/**
+ * The merged rows with retired notices still in them, for the one reader
+ * that must see them: the bell's count, whose relay summary may still count
+ * a retired notice an older writer resolved without reading.
+ */
+function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   // The host that SERVED these rows, not whichever host is app-wide active -
   // `originHostId` routes activation and names the machine in the row, so the
@@ -781,7 +794,7 @@ export function useNotificationBellState(): NotificationBellState {
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  const rows = useMergedNotificationRows();
+  const rows = useMergedNotificationRowsWithRetired();
   // The relay summary counts unread severities. These notices instead stay
   // actionable after reading and leave attention only when retired. Adjust
   // their known contribution without discarding any unseen summary rows.
@@ -1757,19 +1770,25 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 
   return useMemo(
     () => ({
-      resolveNotice: (row) => {
+      retireNotice: (row) => {
         if (
           row.source !== "cloud" ||
           !isActionableNotice(row) ||
           !canMutateCloudEntry(row.sourceId, originatingAccountId)
         )
           return;
-        // The action has already succeeded. Retire immediately even while
-        // an older relay omits resolvedAt or the marker write is unavailable.
+        // Retire immediately even while an older relay omits resolvedAt or
+        // the marker writes are unavailable: a resolved notice is retired.
         useCloudNotificationsStore
           .getState()
           .resolveNoticeLocally(row.sourceId, Date.now());
         cloudResolve.mutate({
+          entryId: row.sourceId,
+          mutationContext: { originatingAccountId, current: null },
+        });
+        // The clear takes it out of every device's feed, an older client's
+        // included, which would otherwise keep a resolved notice in Recent.
+        cloudClear.mutate({
           entryId: row.sourceId,
           mutationContext: { originatingAccountId, current: null },
         });

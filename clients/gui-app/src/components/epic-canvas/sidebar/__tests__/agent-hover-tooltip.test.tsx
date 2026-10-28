@@ -954,6 +954,7 @@ describe("AgentHoverTooltip host section", () => {
           destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
           cause: "resting",
           actor: null,
+          idleMinutes: null,
         },
       }),
     );
@@ -978,9 +979,10 @@ describe("AgentHoverTooltip host section", () => {
       taskHostRow({
         sandboxEnd: {
           state: "destroyed",
-          destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
+          destroyedAt: new Date(2026, 9, 27, 6, 21).getTime(),
           cause: "verb",
           actor: "Ada",
+          idleMinutes: null,
         },
       }),
     );
@@ -998,10 +1000,9 @@ describe("AgentHoverTooltip host section", () => {
 
     const details = await screen.findByTestId("task-sandbox-end-details");
     expect(details.textContent).toContain("team-box");
-    expect(details.textContent).toContain("Oct 27");
-    expect(details.textContent).toContain("06:21 UTC");
-    expect(details.textContent).toContain("Ada");
-    expect(details.textContent).toContain("Its files are gone");
+    expect(details.textContent).toContain(
+      "team-box was destroyed on Oct 27 at 06:21 by Ada. Its files are gone; this chat stays readable.",
+    );
     // A destroyed host has no sandbox row to open: the viewer's sandbox
     // details are never asked for.
     expect(h.openDetails).not.toHaveBeenCalled();

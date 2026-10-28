@@ -74,6 +74,8 @@ export const RunnerHostInvoke = {
   listSandboxes: "runnerHost:sandboxes:list",
   getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
+  // traycer-server's Traycer model catalog, for a sandbox's model picker.
+  getTraycerModels: "runnerHost:traycer:models",
   createSandbox: "runnerHost:sandboxes:create",
   destroySandbox: "runnerHost:sandboxes:destroy",
   patchSandbox: "runnerHost:sandboxes:patch",

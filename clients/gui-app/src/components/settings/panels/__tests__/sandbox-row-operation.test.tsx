@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -105,6 +106,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-egress-events", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
+  useHostMethodSupport: () => false,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-grants-query", () => ({
   useSandboxGrants: () => ({ data: undefined }),
@@ -290,6 +292,24 @@ async function press(testCase: VerbCase): Promise<HTMLElement> {
     expect(screen.queryByRole("dialog")).toBeNull();
   }
   return row;
+}
+
+/** Presses Copy diagnostics in the open Details and answers what it copied. */
+async function copiedDiagnostics(): Promise<string> {
+  const writeText = vi.fn((_text: string) => Promise.resolve());
+  const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  try {
+    fireEvent.click(screen.getByTestId("sandbox-details-export"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+  } finally {
+    if (original === undefined) Reflect.deleteProperty(navigator, "clipboard");
+    else Object.defineProperty(navigator, "clipboard", original);
+  }
+  return writeText.mock.calls[0]?.[0] ?? "";
 }
 
 describe("sandbox row operations", () => {
@@ -507,7 +527,7 @@ describe("sandbox row operations", () => {
     );
     expect(
       (await screen.findByRole("region", { name: "History" })).textContent,
-    ).toContain("Failure code: sandbox_busy");
+    ).not.toContain("sandbox_busy");
     await userEvent.keyboard("{Escape}");
     const retried = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();
     mocks.binding?.auth.runSandboxVerb.mockReturnValue(retried.promise);
@@ -721,12 +741,15 @@ describe("sandbox row operations", () => {
       const history = await screen.findByRole("region", { name: "History" });
       expect(history.textContent).toContain(sentence);
       expect(history.textContent).toContain(
-        "It's in use (an agent turn, a running shell or an open tab), so it stays awake.",
+        "It's in use (an agent turn or a running shell), so it stays awake.",
       );
-      expect(history.textContent).toContain("Failure code: sandbox_busy");
+      // Details shows the SBX code; the raw code goes only in the export.
+      expect(history.textContent).not.toContain("Failure code");
+      expect(history.textContent).not.toContain("sandbox_busy");
       expect(history.textContent).toContain(
         `Support reference: ${testCase.reference}`,
       );
+      expect(await copiedDiagnostics()).toContain("sandbox_busy");
       await userEvent.keyboard("{Escape}");
 
       const retry = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();

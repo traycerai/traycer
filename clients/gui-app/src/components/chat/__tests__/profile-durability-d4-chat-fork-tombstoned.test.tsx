@@ -369,6 +369,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     initialHostId: null,
     onlyHostIds: null,
     stagedSandbox: null,
+    carriesComposerDraft: false,
   };
 }
 

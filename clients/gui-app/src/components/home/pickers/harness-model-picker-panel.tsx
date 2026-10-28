@@ -63,6 +63,8 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly activeDescendant: string | undefined;
   readonly catalogHarnesses: ReadonlyArray<HarnessOption>;
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
+  /** See `VisibleRailEntriesInput.offeredAgents`. */
+  readonly offeredAgents: ReadonlyArray<string> | null;
   readonly profilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
@@ -258,6 +260,7 @@ export function HarnessModelPickerPanelBody(
     activeDescendant,
     catalogHarnesses,
     fallbackHarnesses,
+    offeredAgents,
     profilesByHarnessId,
     resolvedActiveProviderId,
     activeProfileId,
@@ -350,6 +353,7 @@ export function HarnessModelPickerPanelBody(
           onRefresh={onRefreshCatalog}
           refreshDisabledReason={hostUnavailableLabel ?? undefined}
           onOpenProviderSettings={onOpenProviderSettings}
+          offeredAgents={offeredAgents}
         />
         <div
           ref={bindProfileDropdownContainer}

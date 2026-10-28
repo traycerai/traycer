@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -189,6 +190,42 @@ const MOCK_HOST_DIRECTORY = {
 // The directory list the reachability hook reads. `null` leaves the real hook
 // in charge (this file mounts no host binding, so it answers nothing); a case
 // that needs the directory to name a host sets it and `afterEach` clears it.
+// What the task says of the chat's host, and the viewer's sandbox list, when
+// a case sets them; otherwise the real reads answer.
+const taskSandboxTestState = vi.hoisted(
+  (): { task: TaskSandboxHost | null; sandboxes: SandboxSummary[] | null } => ({
+    task: null,
+    sandboxes: null,
+  }),
+);
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...actual,
+    useSandboxList: () => {
+      const real = actual.useSandboxList();
+      const sandboxes = taskSandboxTestState.sandboxes;
+      return sandboxes === null
+        ? real
+        : { ...real, data: { sandboxes }, isLoading: false };
+    },
+  };
+});
+vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/epic/use-task-sandbox-end")>();
+  return {
+    ...actual,
+    useTaskSandboxHost: (epicId: string, hostId: string | null) => {
+      const real = actual.useTaskSandboxHost(epicId, hostId);
+      return taskSandboxTestState.task ?? real;
+    },
+  };
+});
+
 const directoryListTestState = vi.hoisted(() => ({
   entries: null as readonly HostDirectoryEntry[] | null,
 }));
@@ -220,6 +257,29 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 // runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
 // an unrelated component (~55 tests across these files). Enumeration fails the
 // useful way instead: vitest names the missing export and the module.
+// The cloud catalogue: the real read, unless a test says what it answered.
+const sandboxCatalogueTestState = vi.hoisted(() => ({
+  catalogue: null as SandboxCatalogue | null,
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+      >();
+    return {
+      ...actual,
+      useSandboxCatalogue: (enabled: boolean) => {
+        const result = actual.useSandboxCatalogue(enabled);
+        return sandboxCatalogueTestState.catalogue === null
+          ? result
+          : { ...result, data: sandboxCatalogueTestState.catalogue };
+      },
+    };
+  },
+);
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useOptionalHostClient: () => null,
@@ -527,9 +587,15 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
+import {
+  convertReplicaChat,
+  createPublishedChatSessionHandle,
+} from "@/lib/chats/published-chat-session";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -1730,6 +1796,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
     vi.restoreAllMocks();
@@ -1740,6 +1807,8 @@ describe("<ChatTile />", () => {
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
     directoryListTestState.entries = null;
+    taskSandboxTestState.task = null;
+    taskSandboxTestState.sandboxes = null;
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -1958,6 +2027,137 @@ describe("<ChatTile />", () => {
     expect(banner.textContent).toContain('while "Office Mac" is offline');
   });
 
+  it.each([
+    ["before a session handle", null],
+    ["with a handle, before its snapshot", seedDocWithChat],
+  ] as const)(
+    "says a stopping sandbox's own line, never the dead-host body, %s",
+    async (_case, seed) => {
+      directoryListTestState.entries = [
+        {
+          hostId: HOST_ID,
+          label: "e2e-sbx-p1",
+          kind: "remote",
+          websocketUrl: "wss://sbx.example.com/rpc",
+          version: "1.0.0",
+          transportDialability: "dialable",
+        },
+      ];
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-p1",
+          hostId: HOST_ID,
+          displayName: "e2e-sbx-p1",
+          state: "stopping",
+        }),
+      ];
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seed, "editor");
+      chatHarness.installDeferred();
+      renderChatTile();
+      await advanceLegendListTime(0);
+
+      expect(screen.getAllByText("Stopping e2e-sbx-p1 · pending")).toHaveLength(
+        1,
+      );
+      expect(document.body.textContent).not.toContain("offline");
+    },
+  );
+
+  it.each([
+    ["before a session handle", null],
+    ["with a handle, before its snapshot", seedDocWithChat],
+  ] as const)(
+    "says a starting sandbox's own line alone, never the host-starting banner, %s",
+    async (_case, seed) => {
+      // An answered, empty directory: the host reads as starting.
+      directoryListTestState.entries = [];
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-p1",
+          hostId: HOST_ID,
+          displayName: "e2e-sbx-p1",
+          state: "starting",
+        }),
+      ];
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seed, "editor");
+      chatHarness.installDeferred();
+      renderChatTile();
+      await advanceLegendListTime(0);
+
+      expect(screen.getAllByText("Starting e2e-sbx-p1 · pending")).toHaveLength(
+        1,
+      );
+      expect(screen.queryByTestId("chat-host-starting-chat-1")).toBeNull();
+      expect(document.body.textContent).not.toContain("Waiting for the host");
+    },
+  );
+
+  it.each(["owner", "viewer"] as const)(
+    "says a destroyed sandbox's end in one line, with its actions and no composer, to the %s",
+    async (access) => {
+      directoryListTestState.entries = [
+        {
+          hostId: HOST_ID,
+          label: "e2e-sbx-p1",
+          kind: "remote",
+          websocketUrl: "wss://sbx.example.com/rpc",
+          version: "1.0.0",
+          transportDialability: "dialable",
+        },
+      ];
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+      taskSandboxTestState.task = {
+        kind: "ended",
+        ended: {
+          name: "e2e-sbx-p1",
+          end: {
+            state: "destroyed",
+            destroyedAt: new Date(2026, 9, 28, 1, 27).getTime(),
+            cause: "verb",
+            actor: "you",
+            idleMinutes: null,
+          },
+        },
+      };
+      chatHarness.teardown();
+      chatHarness.install(access, []);
+      renderChatTile();
+      await advanceLegendListTime(0);
+      await waitFor(() => {
+        expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+      });
+
+      expect(
+        screen.getAllByText(
+          "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.",
+        ),
+      ).toHaveLength(1);
+      expect(
+        screen.getAllByRole("button", { name: "Continue on another host" }),
+      ).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Details" })).toHaveLength(
+        1,
+      );
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+      expect(screen.queryByText(/Read-only viewer/)).toBeNull();
+    },
+  );
+
   it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot({
       attached: true,
@@ -2143,6 +2343,11 @@ describe("<ChatTile />", () => {
     }
     liveTile.unmount();
 
+    // The send wakes the sandbox only for an agent the catalogue offers.
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
     renderRestingCopy(handle);
 
     await waitFor(() => {
@@ -2175,6 +2380,28 @@ describe("<ChatTile />", () => {
     });
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {
+    renderRestingCopy(
+      createPublishedChatSessionHandle({
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        ownerUserId: "owner-1",
+        title: CHAT_ARTIFACT.name,
+        createdAt: 1,
+        updatedAt: 1,
+        conversion: convertReplicaChat([], []),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    });
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+    expect(
+      screen.queryByText("Reconnecting to the host — sending is paused"),
+    ).toBeNull();
   });
 
   it("keeps resting-copy composer settings local while live settings persist", async () => {

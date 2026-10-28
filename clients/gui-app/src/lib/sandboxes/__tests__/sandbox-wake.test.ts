@@ -16,6 +16,8 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
@@ -268,6 +270,116 @@ describe("wakeSandboxOnPick", () => {
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
       { description: "Add credits, then try again." },
+    );
+  });
+
+  it("names the pot a team sandbox's refused wake was checked against, in the line a row shows", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.directory.findById.mockReturnValue(
+      sandboxHostEntry(HOST_ID, { id: "team_1", name: "Acme" }),
+    );
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    const refuseFrom = (creditSource: SandboxCreditSource) =>
+      binding.auth.runSandboxVerb.mockResolvedValueOnce({
+        ...refusal(402, "insufficient_credit"),
+        shortfallMc: 120,
+        creditSource,
+      });
+
+    refuseFrom("team-allowance");
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      {
+        description:
+          "Your Acme allowance is short $0.12. $0.12 more wakes it for an hour.",
+      },
+    );
+
+    refuseFrom("team");
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      {
+        description:
+          "Your Acme credits are short $0.12. $0.12 more wakes it for an hour.",
+      },
+    );
+  });
+
+  it("says the team's pot, nameless, when the directory has no row for the sandbox", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 120,
+      creditSource: "team-allowance",
+    });
+
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      {
+        description:
+          "Your team allowance is short $0.12. $0.12 more wakes it for an hour.",
+      },
+    );
+
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: null,
+      creditSource: "team",
+    });
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      {
+        description: "Your team's credits don't cover an hour of this sandbox.",
+      },
+    );
+  });
+
+  it("keeps the add-credits wording for a refusal from the person's own balance, and for one that named no pot", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.directory.findById.mockReturnValue(
+      sandboxHostEntry(HOST_ID, { id: "team_1", name: "Acme" }),
+    );
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 10_100,
+      creditSource: "personal",
+    });
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      { description: "Add 11 credits, then try again." },
+    );
+
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 10_100,
+    });
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      { description: "Add 11 credits, then try again." },
     );
   });
 

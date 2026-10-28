@@ -704,6 +704,7 @@ export function Fixture(): ReactElement {
               topSpacing="normal"
               topSlot={null}
               suggestedPrompt={undefined}
+              restingSandbox={null}
             />
           </ChatDockCompactStripProvider>
         </ChatDiffTargetContext.Provider>

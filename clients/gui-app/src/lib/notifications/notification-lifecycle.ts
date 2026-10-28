@@ -42,11 +42,21 @@ export function isActionableNotice(row: NotificationLifecycleInput): boolean {
 }
 
 /**
+ * A resolved actionable notice is retired: it leaves the bell, Recent
+ * included, and the outcome notice or the wake is its trace. Rows an older
+ * writer only resolved are retired here too.
+ */
+export function isRetiredNotice(row: NotificationLifecycleInput): boolean {
+  return isActionableNotice(row) && row.resolvedAt !== null;
+}
+
+/**
  * The single lifecycle classifier: every feed row belongs to Attention or
  * Recent, never both. Attention membership is unread host prompts,
  * unread host failures, unread app-local failures, unresolved actionable
  * notices and unread bot answers, as the hosts' summaries count them.
- * Collaboration rows are never attention-eligible.
+ * Collaboration rows are never attention-eligible. A retired notice
+ * ({@link isRetiredNotice}) is in neither: the merged rows drop it.
  */
 export function classifyNotificationLifecycle(
   row: NotificationLifecycleInput,
