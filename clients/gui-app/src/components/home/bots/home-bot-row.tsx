@@ -141,7 +141,7 @@ export function HomeBotRow(props: {
           <span className="truncate text-ui-sm text-foreground">
             {row.title}
           </span>
-          {isMain ? <MainBotBadge testId="home-bot-main" /> : null}
+          {isMain ? <MainBotBadge testId="home-bot-main" tone="muted" /> : null}
         </span>
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs text-muted-foreground">
           {state === null ? null : (

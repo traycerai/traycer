@@ -4,6 +4,7 @@ import { ExternalLink, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import {
   TeamBotSetupDialog,
   type TeamBotSetupTarget,
@@ -219,6 +220,7 @@ function SidebarSection(props: {
           <li key={bot.botId}>
             <ChannelRow
               bot={bot}
+              isMain={bot.botId === group.mainBotId}
               active={bot.botId === activeBotId}
               unread={unreadByBotId.has(bot.botId)}
               unreadCount={unreadByBotId.get(bot.botId) ?? null}
@@ -234,6 +236,7 @@ function SidebarSection(props: {
 
 function ChannelRow(props: {
   readonly bot: BotRecord;
+  readonly isMain: boolean;
   readonly active: boolean;
   readonly unread: boolean;
   /** Drawn right-aligned; `null` where the host does not count. */
@@ -241,7 +244,7 @@ function ChannelRow(props: {
   readonly locked: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, active, unread, unreadCount, locked, onOpen } = props;
+  const { bot, isMain, active, unread, unreadCount, locked, onOpen } = props;
   return (
     <button
       type="button"
@@ -260,7 +263,16 @@ function ChannelRow(props: {
       )}
     >
       <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />
-      <span className="min-w-0 flex-1 truncate">{bot.title}</span>
+      {/* The star sits on the name, before any count. */}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="truncate">{bot.title}</span>
+        {isMain ? (
+          <MainBotBadge
+            testId="bot-channel-row-main"
+            tone={active ? "current" : "muted"}
+          />
+        ) : null}
+      </span>
       {unreadCount === null ? null : (
         <UnreadCountBadge
           count={unreadCount}
