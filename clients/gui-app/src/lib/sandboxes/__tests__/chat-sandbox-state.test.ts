@@ -107,7 +107,7 @@ describe("resolveChatSandbox", () => {
     const answered = { ...ROLES[0][1], reachable: true };
 
     expect(
-      resolveChatSandbox({ kind: "pending", name: null }, answered),
+      resolveChatSandbox({ kind: "pending", name: "e2e-sbx-p1" }, answered),
     ).toEqual({ line: null, composer: { kind: "ordinary" } });
     expect(resolveChatSandbox({ kind: "none" }, ROLES[0][1])).toEqual({
       line: null,

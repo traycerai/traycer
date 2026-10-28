@@ -228,31 +228,28 @@ describe("EpicSidebarCloudChatRow", () => {
       "e2e-sbx-p1 isn't available — this chat stays readable.",
     ],
     [
-      "a host nothing places yet",
+      "a host nothing names as a sandbox, as an ordinary offline host",
       { kind: "none" } as const,
-      "This chat's sandbox isn't available — this chat stays readable.",
+      "On Tanveer's laptop, offline",
     ],
-  ])(
-    "says the sandbox's own line on the lock for %s, never offline",
-    (_case, view, line) => {
-      render(
-        <TaskHostsViewContext value={view}>
-          <EpicSidebarCloudChatRow
-            chat={CHAT}
-            childEntries={NO_CHILDREN}
-            expansion={LEAF_EXPANSION}
-            tabId="tab-1"
-            depth={0}
-            selectionMode={false}
-          />
-        </TaskHostsViewContext>,
-      );
+  ])("says the lock for %s", (_case, view, line) => {
+    render(
+      <TaskHostsViewContext value={view}>
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          childEntries={NO_CHILDREN}
+          expansion={LEAF_EXPANSION}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </TaskHostsViewContext>,
+    );
 
-      expect(
-        screen.getByRole("button", { name: `Walkthrough — ${line}` }),
-      ).toBeTruthy();
-    },
-  );
+    expect(
+      screen.getByRole("button", { name: `Walkthrough — ${line}` }),
+    ).toBeTruthy();
+  });
 
   it("keeps a reachable row's accessible name to the chat title", () => {
     // The row carries a timestamp with its own text; without an explicit label
