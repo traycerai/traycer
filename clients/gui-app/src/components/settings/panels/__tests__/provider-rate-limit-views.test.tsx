@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { formatResetFullDateTime } from "@/lib/relative-time";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import {
   AntigravityRateLimitView,
@@ -62,15 +62,6 @@ type KimiRateLimits = Extract<
 >;
 
 const NOW = Date.now();
-
-/** Same calendar formatting Grok's billing-period range uses (local TZ). */
-function formatGrokPeriodDate(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 
 afterEach(() => {
   cleanup();
@@ -230,7 +221,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     ]);
     expect(screen.getByText(/^Expires in /)).toBeTruthy();
     expect(
-      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`),
+      screen.getByText(`Expires ${formatSettingsDate(laterExpiry, true)}`),
     ).toBeTruthy();
     expect(screen.getByText("+1 more not shown")).toBeTruthy();
     // Nothing to hover in Settings - the list is already on screen.
@@ -246,7 +237,7 @@ describe("CodexRateLimitView (extended fields)", () => {
       "text-destructive",
     );
     expect(
-      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`)
+      screen.getByText(`Expires ${formatSettingsDate(laterExpiry, true)}`)
         .className,
     ).not.toContain("text-destructive");
   });
@@ -296,7 +287,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(within(tooltip).getByText(/^Expires in /)).toBeTruthy();
     expect(
       within(tooltip).getByText(
-        `Expires ${formatResetFullDateTime(laterExpiry)}`,
+        `Expires ${formatSettingsDate(laterExpiry, true)}`,
       ),
     ).toBeTruthy();
     expect(within(tooltip).getByText("+1 more not shown")).toBeTruthy();
@@ -506,7 +497,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     );
     expect(
       screen.getByText(
-        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+        `Resets ${formatSettingsDate(NOW + 3 * 24 * 60 * 60 * 1000, true)}`,
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
@@ -571,7 +562,7 @@ describe("ClaudeRateLimitView", () => {
     expect(screen.getByText("Fable")).toBeTruthy();
     expect(
       screen.getByText(
-        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+        `Resets ${formatSettingsDate(NOW + 3 * 24 * 60 * 60 * 1000, true)}`,
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
@@ -783,7 +774,11 @@ describe("HuggingFaceRateLimitView", () => {
 
   it("renders the billing period the figures cover", () => {
     render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
-    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(
+      screen.getByText(
+        `${formatSettingsDate(Date.parse(huggingFace.periodStart ?? ""), false)} - ${formatSettingsDate(Date.parse(huggingFace.periodEnd ?? ""), false)}`,
+      ),
+    ).toBeTruthy();
   });
 
   it("drops the billing period rather than rendering Invalid Date", () => {
@@ -838,11 +833,10 @@ describe("KiloCodeRateLimitView", () => {
 });
 
 describe("GrokRateLimitView", () => {
-  // UTC midnights - local toLocaleDateString may shift the calendar day, so
-  // expected range strings are built with the same formatter as production.
+  // The wire's UTC midnights are displayed in the reader's local timezone.
   const periodStart = Date.UTC(2026, 6, 22);
   const periodEnd = Date.UTC(2026, 6, 29);
-  const expectedBillingPeriod = `${formatGrokPeriodDate(periodStart)} - ${formatGrokPeriodDate(periodEnd)}`;
+  const expectedBillingPeriod = `${formatSettingsDate(periodStart, false)} - ${formatSettingsDate(periodEnd, false)}`;
 
   const grokWithPeriod: GrokRateLimits = {
     provider: "grok",

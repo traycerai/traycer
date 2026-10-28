@@ -15,6 +15,7 @@
  * reachability and the agent hover card (replaced by a stand-in that renders
  * `extraContent` inline, because the real card opens on hover only).
  */
+import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import {
   act,
   cleanup,
@@ -455,12 +456,24 @@ function renderCloudRow(
       selectionMode={false}
     />
   );
+  // The panel provides the reach set and the task's hosts it came from
+  // together; the row names a person's host only from that answer.
   renderUnderSession(
     reachSet === null ? (
       row
     ) : (
       <TaskHostReachContext.Provider value={reachSet}>
-        {row}
+        <TaskHostsViewContext
+          value={hostsView([
+            hostRow(
+              ownerHostId,
+              reachSet.has(ownerHostId) ? "other_principal" : "same_principal",
+              VIEWER,
+            ),
+          ])}
+        >
+          {row}
+        </TaskHostsViewContext>
       </TaskHostReachContext.Provider>
     ),
   );
@@ -605,6 +618,24 @@ describe("the Agents tree's local rows: the reach mark comes from reach alone", 
         "agent-hover-reach-line",
       ),
     ).toBeNull();
+  });
+
+  it("says an offline sandbox owner's own line in the row's name, never offline", () => {
+    hostState.view.current = hostsView([
+      {
+        ...hostRow("host-offline", "same_principal", VIEWER),
+        label: "e2e-sbx-p1",
+      },
+    ]);
+    hostState.reachability.set("host-offline", "unreachable");
+    renderLocalPanel();
+
+    expect(
+      screen.getByTestId("epic-sidebar-tree-lock-chat-offline"),
+    ).toBeTruthy();
+    expect(localRowLabel("chat-offline")).toBe(
+      "Chat chat-offline, e2e-sbx-p1 isn't available — this chat stays readable.",
+    );
   });
 
   it("carries both on a foreign, offline owner's row", () => {

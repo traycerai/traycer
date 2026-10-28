@@ -1,0 +1,37 @@
+/** Above this a count reads `99+`, as the bell's badge caps it. */
+const UNREAD_COUNT_CAP = 99;
+
+/** A count as an unread badge prints it. */
+export function formatUnreadCount(count: number): string {
+  return count > UNREAD_COUNT_CAP ? `${UNREAD_COUNT_CAP}+` : String(count);
+}
+
+/**
+ * An accessible name with how many of its notifications are unread, when
+ * there are any: "Tracy, 3 unread".
+ */
+export function labelWithUnreadCount(
+  label: string,
+  unreadCount: number | null,
+): string {
+  return unreadCount === null || unreadCount <= 0
+    ? label
+    : `${label}, ${formatUnreadCount(unreadCount)} unread`;
+}
+
+/**
+ * Whether a row counts toward its entity's unread count: unread, and of a
+ * severity that reading the entity marks, so looking at it always clears the
+ * count. An informational row is neither marked nor counted.
+ */
+export function countsTowardEntityUnread(entry: {
+  readonly severity: string;
+  readonly readAt: number | null;
+}): boolean {
+  return (
+    entry.readAt === null &&
+    (entry.severity === "needs_action" ||
+      entry.severity === "done" ||
+      entry.severity === "failure")
+  );
+}

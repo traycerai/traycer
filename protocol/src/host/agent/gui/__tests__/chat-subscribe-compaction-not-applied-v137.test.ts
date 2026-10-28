@@ -5,8 +5,6 @@ import {
   chatSubscribeV135,
   chatSubscribeV136,
   chatSubscribeV137,
-  chatSubscribeV138,
-  chatSubscribeV139,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -25,12 +23,12 @@ import {
 
 const line = hostStreamRpcRegistry["chat.subscribe"][1];
 const MINORS = Object.keys(line.versions).map(Number);
-const NOT_APPLIED_MINOR = 37;
+const LIVE_MINOR = 37;
 const FIRST_WINDOWED_MINOR = 8;
 const FIRST_TASK_OVERDUE_MINOR = 27;
 const SEND_WOULD_QUEUE_MINOR = 34;
 const MEMORY_CURATION_MINOR = 35;
-const FROZEN_MINORS = MINORS.filter((minor) => minor < NOT_APPLIED_MINOR);
+const FROZEN_MINORS = MINORS.filter((minor) => minor < LIVE_MINOR);
 const FROZEN_WINDOWED_MINORS = FROZEN_MINORS.filter(
   (minor) => minor >= FIRST_WINDOWED_MINOR,
 );
@@ -320,10 +318,8 @@ function parseFrame(
 }
 
 describe("chat.subscribe@1.37 registration", () => {
-  it("binds chatSubscribeV137 above 1.36, frozen under the 1.39 head", () => {
-    expect(line.latestMinor).toBe(39);
-    expect(line.versions[39].contract).toBe(chatSubscribeV139);
-    expect(line.versions[38].contract).toBe(chatSubscribeV138);
+  it("binds chatSubscribeV137 above 1.36, frozen under the 1.40 head", () => {
+    expect(line.latestMinor).toBe(40);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
@@ -331,20 +327,14 @@ describe("chat.subscribe@1.37 registration", () => {
     expect(chatSubscribeV137.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV138.serverFrameSchema).not.toBe(
-      openChatSubscribeWindowedServerFrameSchema,
-    );
-    expect(chatSubscribeV139.serverFrameSchema).toBe(
-      openChatSubscribeWindowedServerFrameSchema,
-    );
     expect(chatSubscribeV136.serverFrameSchema).not.toBe(
       chatSubscribeV137.serverFrameSchema,
     );
   });
 
-  it("registers every minor from 1.0 through 1.39", () => {
+  it("registers every minor from 1.0 through 1.40", () => {
     expect([...MINORS].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 40 }, (_, minor) => minor),
+      Array.from({ length: 41 }, (_, minor) => minor),
     );
   });
 });
@@ -356,30 +346,26 @@ describe.each(SURFACES)(
 
     it("keeps notApplied: true exactly as sent on 1.37", () => {
       const parsed = asRecord(
-        serverFrameSchema.parse(surface.frame(NOT_APPLIED_MINOR, true)),
+        serverFrameSchema.parse(surface.frame(LIVE_MINOR, true)),
         "frame",
       );
-      expect(surface.compaction(parsed, NOT_APPLIED_MINOR).notApplied).toBe(
-        true,
-      );
+      expect(surface.compaction(parsed, LIVE_MINOR).notApplied).toBe(true);
     });
 
     it("keeps an explicit false on 1.37", () => {
       const parsed = asRecord(
-        serverFrameSchema.parse(surface.frame(NOT_APPLIED_MINOR, false)),
+        serverFrameSchema.parse(surface.frame(LIVE_MINOR, false)),
         "frame",
       );
-      expect(surface.compaction(parsed, NOT_APPLIED_MINOR).notApplied).toBe(
-        false,
-      );
+      expect(surface.compaction(parsed, LIVE_MINOR).notApplied).toBe(false);
     });
 
     it("reads an absent flag as a plain failure on 1.37", () => {
       const parsed = asRecord(
-        serverFrameSchema.parse(surface.frame(NOT_APPLIED_MINOR, undefined)),
+        serverFrameSchema.parse(surface.frame(LIVE_MINOR, undefined)),
         "frame",
       );
-      const decoded = surface.compaction(parsed, NOT_APPLIED_MINOR);
+      const decoded = surface.compaction(parsed, LIVE_MINOR);
       if (surface.name === "blockDelta event") {
         // The event keeps the key optional; only the stored block defaults it.
         expect(decoded.notApplied).toBeUndefined();
@@ -389,7 +375,7 @@ describe.each(SURFACES)(
     });
 
     it("refuses a non-boolean flag on 1.37", () => {
-      const frame = surface.frame(NOT_APPLIED_MINOR, undefined);
+      const frame = surface.frame(LIVE_MINOR, undefined);
       const carrier = JSON.stringify(frame).replace(
         /"error":"Copilot did not apply this compaction\."/,
         '"error":"Copilot did not apply this compaction.","notApplied":"yes"',
@@ -452,11 +438,11 @@ describe("the frozen windowed snapshot keeps its settings, queue and tail", () =
   );
 });
 
-describe("the 1.37 snapshot keeps the retained boundaries", () => {
+describe("the live 1.37 snapshot keeps the retained boundaries", () => {
   it("carries both queue arms, sendWouldQueue and the flag together", () => {
     const parsed = parseFrame(
-      NOT_APPLIED_MINOR,
-      windowedSnapshotFrame(NOT_APPLIED_MINOR, true),
+      LIVE_MINOR,
+      windowedSnapshotFrame(LIVE_MINOR, true),
     );
     const snapshot = asRecord(parsed.snapshot, "snapshot");
     const kinds = itemKinds(
@@ -465,13 +451,11 @@ describe("the 1.37 snapshot keeps the retained boundaries", () => {
     expect(kinds).toEqual(["task-overdue", "memory-curation"]);
     expect(snapshot.sendWouldQueue).toBe(true);
     expect(asRecord(snapshot.chat, "chat").settings).toEqual(canonicalSettings);
-    expect(SURFACES[1].compaction(parsed, NOT_APPLIED_MINOR).notApplied).toBe(
-      true,
-    );
+    expect(SURFACES[1].compaction(parsed, LIVE_MINOR).notApplied).toBe(true);
   });
 
   it("1.35 keeps the memory-curation item and strips the flag from the same frame", () => {
-    const frame = windowedSnapshotFrame(NOT_APPLIED_MINOR, true);
+    const frame = windowedSnapshotFrame(LIVE_MINOR, true);
     const parsed = parseFrame(35, frame);
     const snapshot = asRecord(parsed.snapshot, "snapshot");
     const kinds = itemKinds(
@@ -482,7 +466,7 @@ describe("the 1.37 snapshot keeps the retained boundaries", () => {
   });
 
   it("1.34 refuses the memory-curation item that 1.35, 1.36 and 1.37 accept", () => {
-    const frame = windowedSnapshotFrame(NOT_APPLIED_MINOR, undefined);
+    const frame = windowedSnapshotFrame(LIVE_MINOR, undefined);
     expect(chatSubscribeV134.serverFrameSchema.safeParse(frame).success).toBe(
       false,
     );

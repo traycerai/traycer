@@ -391,7 +391,11 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         crossHostMessaging: null,
         sessions: null,
       }),
-      "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      "host.notifications.indicatorState": () => ({
+        epics: {},
+        chats: {},
+        complete: true,
+      }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
       // The editing panel reads a board's source by hash, as it does live.
       "epic.readArtifactObject": (request: EpicReadArtifactObjectRequest) => {

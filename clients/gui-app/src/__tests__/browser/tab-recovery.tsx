@@ -121,6 +121,7 @@ function buildMessengerFactory(): MessengerFactory<HostRpcRegistry> {
         "host.notifications.indicatorState": () => ({
           epics: {},
           chats: {},
+          complete: true,
         }),
         "epic.getTaskContexts": () => ({ tasks: {} }),
       },

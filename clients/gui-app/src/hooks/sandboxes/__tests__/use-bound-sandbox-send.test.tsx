@@ -1,27 +1,50 @@
 import { renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
   pendingSend,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  pendingSandboxSendFacts,
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  pendingSendState,
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+
+const catalogue = vi.hoisted(() => ({
+  data: undefined as SandboxCatalogue | undefined,
+}));
+
+// The cloud catalogue: which agents sandboxes run. It offers the picked agent
+// unless a test says otherwise.
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: catalogue.data }),
+}));
+
+const OFFERS_PICK: SandboxCatalogue = {
+  providers: [],
+  offeredAgents: [PICKED_SETTINGS.harnessId],
+};
 
 /**
  * Sending into a chat whose sandbox rests hands the message to the existing
  * pending-send path: the real pending store and the real staged store, with the
- * sandbox's own wake staged under it. Nothing is stubbed.
+ * sandbox's own wake staged under it. Only the catalogue read is answered.
  */
 
-type Resting = Extract<ChatSandboxState, { kind: "resting" }>;
-
-function resting(state: "suspended" | "stopped"): Resting {
+function resting(state: "suspended" | "stopped"): RestingChatSandbox {
   return {
     kind: "resting",
     sandbox: sandboxSummaryFixture({
@@ -50,6 +73,7 @@ function pendingSends() {
 }
 
 beforeEach(() => {
+  catalogue.data = OFFERS_PICK;
   usePendingSandboxSendStore.setState({ sends: {} });
   useStagedSandboxStore.setState({ bySurface: {} });
 });
@@ -120,6 +144,69 @@ describe("useBoundSandboxSend", () => {
     expect(
       Object.keys(useStagedSandboxStore.getState().bySurface),
     ).toHaveLength(1);
+  });
+
+  it("refuses an agent sandboxes don't offer before anything is staged, so nothing wakes", () => {
+    catalogue.data = { providers: [], offeredAgents: ["traycer"] };
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: resting("suspended"),
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(false);
+
+    expect(pendingSends()).toEqual([]);
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("refuses when the catalogue couldn't be read: nothing is recorded or staged, so nothing wakes", () => {
+    catalogue.data = undefined;
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: resting("suspended"),
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(false);
+
+    expect(pendingSends()).toEqual([]);
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("sends when an older server's catalogue names no agents, and the pending driver runs the wake", () => {
+    catalogue.data = { providers: [] };
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: resting("suspended"),
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(true);
+
+    const [send] = pendingSends();
+    const stage =
+      useStagedSandboxStore.getState().bySurface[
+        pendingSendSurfaceKey(send.id)
+      ];
+    if (stage === undefined) throw new Error("the send staged no wake");
+    expect(stage.target).toMatchObject({ kind: "existing", verb: "resume" });
+    const decision = transitionPendingSend(
+      pendingSendState(send, "none"),
+      "observe",
+      pendingSandboxSendFacts(send.id, {
+        ...UNKNOWN_PENDING_SEND_FACTS,
+        stageStatus: stage.phase,
+        wakeInFlight: false,
+      }),
+    );
+    expect(decision.effects).toContain("run-stage");
   });
 
   it("sends nothing and stages nothing without a resting target", () => {

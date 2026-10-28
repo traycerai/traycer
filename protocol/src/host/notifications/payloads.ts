@@ -327,6 +327,34 @@ export function parseHostOperationCommonPayload(
  */
 export const HOST_OPERATION_WORKTREE_DELETION = "worktree.deletion";
 
+/**
+ * The `operation` identifier of a bot's answer to a person's post, minted
+ * once per participant. An unread one needs the person's attention: it is the
+ * answer they asked for, so it counts in the bell's number beside prompts and
+ * failures, as its own class after both.
+ */
+export const HOST_OPERATION_BOT_THREAD_VERDICT = "bot.thread.verdict";
+
+/**
+ * Whether a notification is a bot's answer: a `host.operation.finished` row
+ * whose payload names {@link HOST_OPERATION_BOT_THREAD_VERDICT}. Reads the
+ * payload as the open record it is on the wire, so a row of any version
+ * answers the same way.
+ */
+export function isBotThreadVerdictNotification(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  const payload = entry.payload;
+  return (
+    entry.kind === "host.operation.finished" &&
+    typeof payload === "object" &&
+    payload !== null &&
+    "operation" in payload &&
+    payload.operation === HOST_OPERATION_BOT_THREAD_VERDICT
+  );
+}
+
 export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
   "busy",
   "not_managed",
@@ -1035,6 +1063,21 @@ export type HostNotificationSandboxNoticePayload = z.infer<
   typeof hostNotificationSandboxNoticePayloadSchema
 >;
 
+/** No hook identity, configuration, URL or header may ride a removal notice. */
+export const hostNotificationHooksRemovedPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("notification_hooks_removed"),
+      hostId: idSchema,
+      hostName: z.string(),
+      count: z.number().int().positive(),
+    })
+    .strict(),
+);
+export type HostNotificationHooksRemovedPayload = z.infer<
+  typeof hostNotificationHooksRemovedPayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationChatStoppedPayloadSchema,
@@ -1063,6 +1106,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationTeamHostReturnedPayloadSchema,
     hostNotificationSecretRemovedPayloadSchema,
     hostNotificationSandboxNoticePayloadSchema,
+    hostNotificationHooksRemovedPayloadSchema,
   ]),
 );
 export type HostNotificationKnownPayload = z.infer<
@@ -1163,5 +1207,7 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "secret_removed";
     case "sandbox.notice":
       return payloadKind === "sandbox_notice";
+    case "notification.hooks.removed":
+      return payloadKind === "notification_hooks_removed";
   }
 }

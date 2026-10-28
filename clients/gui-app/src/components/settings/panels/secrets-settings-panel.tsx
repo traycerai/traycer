@@ -81,10 +81,9 @@ function SecretsListPanelShell(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const list = useEnvironmentSecretsQuery(props.client);
-  // The page shows its empty state only with no secret and no removal
-  // still under way (`SecretsPage`).
+  // Match the page's retained answer even if a refetch fails: the failure
+  // stays beside that content rather than duplicating its empty-state copy.
   const empty =
-    !list.isError &&
     list.data !== undefined &&
     list.data.secrets.length === 0 &&
     list.data.removed.every((entry) => entry.removal.outcome === "destroyed");

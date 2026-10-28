@@ -47,12 +47,12 @@ import {
   titleCaseFromToken,
 } from "@/lib/provider-rate-limit-content";
 import {
-  formatResetFullDateTime,
   useIsFarReset,
   useRelativeTimestamp,
   useResetCountdown,
   useSampledNow,
 } from "@/lib/relative-time";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import { cn } from "@/lib/utils";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { useRegionValue } from "@/lib/layout-overrides";
@@ -231,7 +231,7 @@ function RelativeResetLine({
 }
 
 /**
- * Exact calendar date/time ("Resets Sat, Jul 18, 2026, 3:35 AM") - for weekly-scale windows,
+ * Settings date/time for weekly-scale windows,
  * where a relative countdown ("Resets in 3d") is too coarse to act on. Pure,
  * no clock subscription.
  */
@@ -244,7 +244,7 @@ function ExactResetLine({
 }): ReactNode {
   return (
     <span className={cn("text-ui-xs", tone)}>
-      Resets {formatResetFullDateTime(resetsAt)}
+      Resets {formatSettingsDate(resetsAt, true)}
     </span>
   );
 }
@@ -628,7 +628,7 @@ function CodexResetCreditExpiry({
   return (
     <span className={cn(warning && "text-destructive")}>
       {farExpiry
-        ? `Expires ${formatResetFullDateTime(credit.expiresAt)}`
+        ? `Expires ${formatSettingsDate(credit.expiresAt, true)}`
         : `Expires in ${countdown ?? "less than a minute"}`}
     </span>
   );
@@ -1136,8 +1136,8 @@ export function HuggingFaceRateLimitView({
 // period the figures cover - the same orientation grok's billing-period row
 // gives. Rendered only when both bounds are present and parseable: the endpoint
 // is schema-less, so an unparseable value degrades to no row rather than to
-// "Invalid Date". The wire carries ISO strings here, not the epoch ms grok
-// uses, hence the separate formatter.
+// "Invalid Date". The wire carries ISO strings here, so parse them before
+// handing the range to the same formatter as the other providers.
 function HuggingFacePeriodRow({
   periodStart,
   periodEnd,
@@ -1146,19 +1146,15 @@ function HuggingFacePeriodRow({
   readonly periodEnd: string | null;
 }): ReactNode {
   if (periodStart === null || periodEnd === null) return null;
-  const start = new Date(periodStart);
-  const end = new Date(periodEnd);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
-  const format = (value: Date): string =>
-    value.toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
+  const start = Date.parse(periodStart);
+  const end = Date.parse(periodEnd);
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
   return (
     <div className="flex items-center justify-between text-ui-sm">
       <span className="text-muted-foreground">Billing period</span>
-      <span className="font-medium text-foreground">{`${format(start)} - ${format(end)}`}</span>
+      <span className="font-medium text-foreground">
+        {formatBillingRange(start, end)}
+      </span>
     </div>
   );
 }
@@ -1297,20 +1293,7 @@ function KimiRateLimitView({
 }
 
 /**
- * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
- * grok's billing period and Cursor's billing cycle - both render a plain epoch
- * range, so neither provider owns this formatter.
- */
-function formatBillingRangeDate(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-/**
- * The billing period's start-end range ("Jul 22, 2026 - Jul 29, 2026"), shown
+ * The billing period's start-end range, shown
  * in grok's unmeasured-period fallback where there's no usage bar to carry a
  * reset date. `null` unless both bounds are known.
  */
@@ -1319,7 +1302,7 @@ function formatBillingRange(
   periodEnd: number | null,
 ): string | null {
   if (periodStart === null || periodEnd === null) return null;
-  return `${formatBillingRangeDate(periodStart)} - ${formatBillingRangeDate(periodEnd)}`;
+  return `${formatSettingsDate(periodStart, false)} - ${formatSettingsDate(periodEnd, false)}`;
 }
 
 /**

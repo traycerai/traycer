@@ -21,6 +21,10 @@ import { queryClient } from "@/lib/query-client";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
+import {
+  sandboxCreditShortLine,
+  type SandboxConfigurationCopy,
+} from "@/lib/sandboxes/sandbox-strings";
 
 /** How often the sandbox list is re-read while a wake is under way. */
 const WAKE_POLL_INTERVAL_MS = 2_000;
@@ -217,7 +221,7 @@ async function runSharedWake(
 
 function toastWakeOutcome(
   outcome: SandboxWakeOutcome,
-  teamOwned: boolean,
+  configuration: SandboxConfigurationCopy,
 ): void {
   switch (outcome.kind) {
     case "awake":
@@ -226,17 +230,32 @@ function toastWakeOutcome(
       // A team sandbox's wake is on its payer's bundle, not the viewer's
       // credits, so the personal "your credits ran out" would misdirect.
       toast.warning("This sandbox is frozen", {
-        description: teamOwned ? "Its payer's bundle is out." : outcome.message,
+        description:
+          configuration.kind === "team"
+            ? "Its payer's bundle is out."
+            : outcome.message,
       });
       return;
-    case "credit-gate":
+    case "credit-gate": {
+      // A refusal that named a team pot says which, as a row does; the
+      // person's own balance, or an older server's silence, keeps the
+      // add-credits line.
+      const { creditSource } = outcome;
       toast.warning("Not enough credits to wake this sandbox", {
         description:
-          outcome.shortfallMc === null
-            ? "Add credits, then try again."
-            : `Add ${formatCreditsRequired(outcome.shortfallMc)} credits, then try again.`,
+          creditSource === undefined ||
+          creditSource === null ||
+          creditSource === "personal"
+            ? addCreditsLine(outcome.shortfallMc)
+            : sandboxCreditShortLine(
+                configuration,
+                creditSource,
+                outcome.shortfallMc,
+                { waking: true, context: "sentence" },
+              ),
       });
       return;
+    }
     case "wake-not-available":
       toast.warning("This sandbox can't be woken from here yet", {
         description:
@@ -255,6 +274,12 @@ function toastWakeOutcome(
       toastWakeFailed();
       return;
   }
+}
+
+function addCreditsLine(shortfallMc: number | null): string {
+  return shortfallMc === null
+    ? "Add credits, then try again."
+    : `Add ${formatCreditsRequired(shortfallMc)} credits, then try again.`;
 }
 
 function toastWakeFailed(): void {
@@ -308,18 +333,21 @@ export function startSandboxWake(
   const entry = directory.findById(hostId);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const teamOwned = facts !== null && facts.ownerTeamName !== null;
-  return runSandboxWake({ client, binding, hostId, teamOwned, gesture });
+  const configuration: SandboxConfigurationCopy =
+    facts !== null && facts.ownerTeamName !== null
+      ? { kind: "team", teamName: facts.ownerTeamName }
+      : { kind: "personal" };
+  return runSandboxWake({ client, binding, hostId, configuration, gesture });
 }
 
 function runSandboxWake(input: {
   readonly client: QueryClient;
   readonly binding: SandboxWakeBinding;
   readonly hostId: string;
-  readonly teamOwned: boolean;
+  readonly configuration: SandboxConfigurationCopy;
   readonly gesture: SandboxVerbGesture | null;
 }): Promise<SandboxWakeOutcome | null> {
-  const { client, binding, hostId, teamOwned, gesture } = input;
+  const { client, binding, hostId, configuration, gesture } = input;
   const { auth, directory } = binding;
   // The account this wake runs for. A wake that ends under another account
   // stops polling (see `readSandboxFacts`), and reports and refreshes nothing:
@@ -335,7 +363,7 @@ function runSandboxWake(input: {
       void client.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
-      toastWakeOutcome(run.outcome, teamOwned);
+      toastWakeOutcome(run.outcome, configuration);
     },
     onError: () => {
       if (signedInUserId() !== startedBy) return;

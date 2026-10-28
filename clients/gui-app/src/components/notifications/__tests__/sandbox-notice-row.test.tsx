@@ -20,7 +20,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import type {
   HostNotificationSandboxNotice,
   HostNotificationSeverity,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -107,9 +107,9 @@ function noticeRow(
   entryId: string,
   notice: HostNotificationSandboxNotice,
   severity: HostNotificationSeverity,
-): HostNotificationsCloudFeedRowV15 & {
+): HostNotificationsCloudFeedRowV16 & {
   readonly entry: Extract<
-    HostNotificationsCloudFeedRowV15["entry"],
+    HostNotificationsCloudFeedRowV16["entry"],
     { kind: "sandbox.notice" }
   >;
 } {
@@ -139,7 +139,7 @@ function noticeRow(
 }
 
 function seedCloud(
-  rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>,
+  rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
 ): void {
   notificationFeedMode.value = "cloud";
   useCloudNotificationsStore.getState().applySnapshot({
@@ -392,18 +392,19 @@ describe("a sandbox.notice row in the notification center", () => {
     ).toBe("1");
   });
 
-  it("a resolved warning relayed by the server is recent even if unread", async () => {
+  it("a resolved warning relayed by the server has left the bell, even unread", async () => {
     const row = noticeRow("entry-resolved", WARNING, "needs_action");
     seedCloud([{ ...row, entry: { ...row.entry, resolvedAt: Date.now() } }]);
     renderCenter();
-    await screen.findByText("Recent activity");
+    await screen.findByTestId("notifications-bell");
+    expect(screen.queryByTestId("notification-entry")).toBeNull();
     expect(screen.queryByText("Needs attention")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   });
 
   it("excludes Details-only settings failures from the task and actionable notice count", async () => {
-    const row: HostNotificationsCloudFeedRowV15 = {
+    const row: HostNotificationsCloudFeedRowV16 = {
       ...noticeRow("entry-settings", WARNING, "needs_action"),
       entry: {
         id: "entry-settings",
@@ -532,8 +533,10 @@ describe("a sandbox.notice row in the notification center", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
+    // Past its deadline the warning leaves the bell; the outcome notice is
+    // its trace.
     expect(screen.queryByText("Needs attention")).toBeNull();
-    expect(screen.getByText("Recent activity")).not.toBeNull();
+    expect(screen.queryByTestId("notification-entry")).toBeNull();
     expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   });
 
@@ -555,7 +558,7 @@ describe("a sandbox.notice row in the notification center", () => {
     ).toEqual(["Give it another 5 minutes", "Details", "Dismiss"]);
   });
 
-  it("extends with the row's own period, then retires the warning to Recent activity", async () => {
+  it("extends with the row's own period, then the retired warning leaves the bell", async () => {
     const warning = noticeRow("entry-warning", WARNING, "needs_action");
     seedCloud([warning]);
     renderCenter();
@@ -573,10 +576,13 @@ describe("a sandbox.notice row in the notification center", () => {
       expect(hostCalls("host.notifications.cloudFeed.resolve")).toEqual([
         { entryId: "entry-warning" },
       ]);
+      expect(hostCalls("host.notifications.cloudFeed.clear")).toEqual([
+        { entryId: "entry-warning" },
+      ]);
     });
     await waitFor(() => {
       expect(screen.queryByText("Needs attention")).toBeNull();
-      expect(screen.getByText("Recent activity")).not.toBeNull();
+      expect(screen.queryByTestId("notification-entry")).toBeNull();
       expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
     });
     // The deployed pool strips resolvedAt until its protocol pin is rebuilt.

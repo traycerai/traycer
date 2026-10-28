@@ -7,6 +7,7 @@ import type {
   MutationLaneStatus,
   ServiceStatusSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 export const VERSION_LIST_PREVIEW = 10;
 
@@ -211,14 +212,14 @@ export function extractErrorMessage(
 
 export function formatCheckedAtTooltip(checkedAt: string | null): string {
   if (checkedAt === null) return "Never checked";
-  return `Last checked ${new Date(checkedAt).toLocaleString()}`;
+  return `Last checked ${formatInstallDate(checkedAt)}`;
 }
 
 export function formatInstallDate(iso: string): string {
   if (iso.length === 0) return "unknown";
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleString();
+  return formatSettingsDate(parsed.getTime(), true);
 }
 
 function formatReleaseAge(releasedAt: string, nowMs: number): string {

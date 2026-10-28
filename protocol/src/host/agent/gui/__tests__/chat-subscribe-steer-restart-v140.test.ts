@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  chatSubscribeV138,
   chatSubscribeV139,
+  chatSubscribeV140,
   type ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -11,11 +11,11 @@ import {
 } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 
 /**
- * `chat.subscribe@1.39`: a queued steer that would end the running turn needs
+ * `chat.subscribe@1.40`: a queued steer that would end the running turn needs
  * the person's confirmation. `queueSteerNow` carries `restartConfirmed`, and
  * a rejected ack names each cause in `steerRestartReasons`.
  *
- * `1.38` and below keep neither. A host strips the reasons from an ack to a
+ * `1.39` and below keep neither. A host strips the reasons from an ack to a
  * lower peer, as it does `cause` below `1.12`. A client sends the frame as
  * is, as it does a `send`'s `browserAnnotations`: a lower host has no field
  * for the confirmation, drops it, and restarts the turn as it always did.
@@ -49,84 +49,84 @@ const rejectedAck = {
   steerRestartReasons: ["settings", "images"],
 } as const;
 
-describe("chat.subscribe@1.39 registration", () => {
-  it("binds chatSubscribeV139 as the latest minor over the frozen 1.38", () => {
-    expect(line.latestMinor).toBe(39);
-    expect(line.versions[39].contract).toBe(chatSubscribeV139);
-    expect(chatSubscribeV139.schemaVersion).toEqual({ major: 1, minor: 39 });
-    expect(chatSubscribeV139.openRequestSchema).toBe(
-      chatSubscribeV138.openRequestSchema,
+describe("chat.subscribe@1.40 registration", () => {
+  it("binds chatSubscribeV140 as the latest minor over the frozen 1.39", () => {
+    expect(line.latestMinor).toBe(40);
+    expect(line.versions[40].contract).toBe(chatSubscribeV140);
+    expect(chatSubscribeV140.schemaVersion).toEqual({ major: 1, minor: 40 });
+    expect(chatSubscribeV140.openRequestSchema).toBe(
+      chatSubscribeV139.openRequestSchema,
     );
   });
 });
 
 describe("queueSteerNow restart confirmation", () => {
-  it("1.39 reads restartConfirmed, false when omitted", () => {
+  it("1.40 reads restartConfirmed, false when omitted", () => {
     expect(
-      chatSubscribeV139.clientFrameSchema.parse({
+      chatSubscribeV140.clientFrameSchema.parse({
         ...steerFrame,
         restartConfirmed: true,
       }),
     ).toMatchObject({ kind: "queueSteerNow", restartConfirmed: true });
-    expect(chatSubscribeV139.clientFrameSchema.parse(steerFrame)).toMatchObject(
+    expect(chatSubscribeV140.clientFrameSchema.parse(steerFrame)).toMatchObject(
       { kind: "queueSteerNow", restartConfirmed: false },
     );
   });
 
-  it("the client sends it as is; a 1.38 host drops the key it has no field for", () => {
+  it("the client sends it as is; a 1.39 host drops the key it has no field for", () => {
     const frame: ChatSubscribeClientFrame = {
       ...steerFrame,
       restartConfirmed: true,
     };
     const sent = projectChatClientFrameForVersion(frame, {
       major: 1,
-      minor: 38,
+      minor: 39,
     });
     expect(sent).toBe(frame);
-    expect(chatSubscribeV138.clientFrameSchema.parse(sent)).not.toHaveProperty(
+    expect(chatSubscribeV139.clientFrameSchema.parse(sent)).not.toHaveProperty(
       "restartConfirmed",
     );
   });
 });
 
 describe("actionAck steer restart reasons", () => {
-  it("1.39 reads every reason; 1.38 has no such key", () => {
+  it("1.40 reads every reason; 1.39 has no such key", () => {
     expect(
-      chatSubscribeV139.serverFrameSchema.parse(rejectedAck),
+      chatSubscribeV140.serverFrameSchema.parse(rejectedAck),
     ).toMatchObject({ steerRestartReasons: ["settings", "images"] });
     expect(
-      chatSubscribeV138.serverFrameSchema.parse(rejectedAck),
+      chatSubscribeV139.serverFrameSchema.parse(rejectedAck),
     ).not.toHaveProperty("steerRestartReasons");
   });
 
-  it("1.39 still decodes the published slash_command and skills members", () => {
+  it("1.40 still decodes the published slash_command and skills members", () => {
     expect(
-      chatSubscribeV139.serverFrameSchema.parse({
+      chatSubscribeV140.serverFrameSchema.parse({
         ...rejectedAck,
         steerRestartReasons: ["slash_command", "skills"],
       }),
     ).toMatchObject({ steerRestartReasons: ["slash_command", "skills"] });
   });
 
-  it("1.39 refuses a reason outside the vocabulary", () => {
+  it("1.40 refuses a reason outside the vocabulary", () => {
     expect(
-      chatSubscribeV139.serverFrameSchema.safeParse({
+      chatSubscribeV140.serverFrameSchema.safeParse({
         ...rejectedAck,
         steerRestartReasons: ["workspace"],
       }).success,
     ).toBe(false);
   });
 
-  it("the host strips the reasons below 1.39 and keeps the draft-image cause from 1.12", () => {
+  it("the host strips the reasons below 1.40 and keeps the draft-image cause from 1.12", () => {
     const ack = { ...rejectedAck, cause: "too-large" };
-    const onV138 = projectChatActionAckForVersion(ack, { major: 1, minor: 38 });
-    expect(onV138).not.toHaveProperty("steerRestartReasons");
-    expect(onV138).toMatchObject({ cause: "too-large" });
+    const onV139 = projectChatActionAckForVersion(ack, { major: 1, minor: 39 });
+    expect(onV139).not.toHaveProperty("steerRestartReasons");
+    expect(onV139).toMatchObject({ cause: "too-large" });
     const onV111 = projectChatActionAckForVersion(ack, { major: 1, minor: 11 });
     expect(onV111).not.toHaveProperty("steerRestartReasons");
     expect(onV111).not.toHaveProperty("cause");
     expect(
-      projectChatActionAckForVersion(ack, { major: 1, minor: 39 }),
+      projectChatActionAckForVersion(ack, { major: 1, minor: 40 }),
     ).toMatchObject({ steerRestartReasons: ["settings", "images"] });
   });
 });

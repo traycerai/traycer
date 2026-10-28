@@ -565,8 +565,8 @@ describe("ChatStreamClient protocol capability getters", () => {
   );
 
   it.each([
-    [{ major: 1, minor: 38 }, false],
-    [{ major: 1, minor: 39 }, true],
+    [{ major: 1, minor: 39 }, false],
+    [{ major: 1, minor: 40 }, true],
     [null, false],
     [{ major: 2, minor: 0 }, false],
   ] as const)(

@@ -14,9 +14,11 @@ import { NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR } from "@/lib/notificat
 import { notificationsQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+/** No answer yet: nothing held, and not known to be the whole origin. */
 const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
   epics: {},
   chats: {},
+  complete: null,
 };
 
 export interface UseHostNotificationIndicatorsArgs {
@@ -239,13 +241,33 @@ function mergeIndicatorResponses(
         response !== undefined,
     );
   if (responses.length === 0) return EMPTY_INDICATOR_STATE;
-  return responses.reduce<HostNotificationsIndicatorStateResponse>(
-    (combined, response) => ({
-      epics: mergeEntityIndicatorStates(combined.epics, response.epics),
-      chats: mergeEntityIndicatorStates(combined.chats, response.chats),
-    }),
-    EMPTY_INDICATOR_STATE,
-  );
+  return {
+    epics: responses.reduce(
+      (combined, response) =>
+        mergeEntityIndicatorStates(combined, response.epics),
+      EMPTY_INDICATOR_STATE.epics,
+    ),
+    chats: responses.reduce(
+      (combined, response) =>
+        mergeEntityIndicatorStates(combined, response.chats),
+      EMPTY_INDICATOR_STATE.chats,
+    ),
+    complete: combinedCompleteness(results),
+  };
+}
+
+/** The chunks together are the whole origin only when every chunk has
+ * answered and says so: a chunk with no answer yet would make its ids read as
+ * known zeros. A partition among them makes them a partition, and otherwise
+ * it is unknown. */
+function combinedCompleteness(
+  results: ReadonlyArray<
+    UseQueryResult<HostNotificationsIndicatorStateResponse, HostRpcError>
+  >,
+): boolean | null {
+  if (results.some((result) => result.data?.complete === false)) return false;
+  if (results.every((result) => result.data?.complete === true)) return true;
+  return null;
 }
 
 function mergeEntityIndicatorStates(
@@ -265,9 +287,21 @@ function mergeEntityIndicatorStates(
       pendingFork: prior.pendingFork || state.pendingFork,
       unreadFailure: prior.unreadFailure || state.unreadFailure,
       unreadDone: prior.unreadDone || state.unreadDone,
+      // Crossed chunks ask one host about one entity more than once: the
+      // answers count the same rows, so they agree rather than add.
+      unreadCount: sameRowsUnreadCount(prior.unreadCount, state.unreadCount),
     };
   }
   return merged;
+}
+
+function sameRowsUnreadCount(
+  left: number | null,
+  right: number | null,
+): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.max(left, right);
 }
 
 function firstSupportedHostError(

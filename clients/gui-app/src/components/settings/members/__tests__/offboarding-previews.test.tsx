@@ -20,6 +20,7 @@ function renderRemove(preview: RemovePreviewModel): string {
     <RemovePreviewDialog
       open
       memberName="Priya"
+      memberEmail="priya@acme.test"
       confirmName="Priya"
       teamName="Acme"
       preview={{ status: "ready", preview }}
@@ -94,7 +95,9 @@ describe("RemovePreviewDialog", () => {
 
   it("leads with the removal's reach and confirms with the first name", () => {
     renderRemove(PREVIEW);
-    expect(screen.getByText("Remove Priya from Acme")).toBeTruthy();
+    expect(
+      screen.getByText("Remove Priya (priya@acme.test) from Acme"),
+    ).toBeTruthy();
     expect(
       screen.getByText(
         "Priya loses Acme's settings, hosts and connected services. Here is what the removal stops, for Priya and for everyone else.",
@@ -117,6 +120,7 @@ describe("RemovePreviewDialog", () => {
       <RemovePreviewDialog
         open
         memberName="Priya"
+        memberEmail="priya@acme.test"
         confirmName="Priya"
         teamName="Acme"
         preview={{ status: "ready", preview: PREVIEW }}

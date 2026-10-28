@@ -14,11 +14,7 @@ import {
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import {
-  repliedPostOf,
-  replyFollowsPost,
-  replyRowIdFor,
-} from "@/lib/bots/reply-row";
+import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
   botUserSenderId,
@@ -532,7 +528,6 @@ function BotChatTranscriptBody(props: {
         botTitle: title,
         scrollToMessage,
         replyFollowsPost: followsPost,
-        repliedPost: null,
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
@@ -543,10 +538,9 @@ function BotChatTranscriptBody(props: {
     return {
       botTitle: title,
       // A thread post's verdict is in its thread, which the thread line
-      // opens; a direct post's reply, and the post it answers, are here.
+      // opens; a direct post's reply is here.
       scrollToMessage,
       replyFollowsPost: followsPost,
-      repliedPost: (messageId) => repliedPostOf(messages, messageId),
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,

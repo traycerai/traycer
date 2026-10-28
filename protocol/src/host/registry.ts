@@ -404,6 +404,7 @@ import {
   chatSubscribeV137,
   chatSubscribeV138,
   chatSubscribeV139,
+  chatSubscribeV140,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -660,6 +661,7 @@ import {
   botReadV10,
   botSubscribeV10,
   botSubscribeV11,
+  botSubscribeV12,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -1112,18 +1114,26 @@ import {
 import {
   hostNotificationHooksSave,
   hostNotificationHooksSaveV20,
+  hostNotificationHooksSaveV30,
+  hostNotificationHooksSaveUpgradeV2ToV3,
+  hostNotificationHooksSaveDowngradeV30ToV20,
+  hostNotificationHooksSaveDowngradeV30ToV10,
   hostNotificationHooksSaveUpgradeV1ToV2,
   hostNotificationHooksSaveDowngradeV20ToV10,
   hostNotificationHooksStatus,
+  hostNotificationHooksStatusV20,
+  hostNotificationHooksStatusUpgradeV1ToV2,
+  hostNotificationHooksStatusDowngradeV20ToV10,
   hostNotificationHooksTest,
   hostNotificationsClearAll,
   hostNotificationsClearAllUpgradeV10ToV11,
   hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateUpgradeV11ToV12,
   hostNotificationsIndicatorStateV10,
   hostNotificationsIndicatorStateV11,
-  hostNotificationsListDowngradeV24ToV10,
+  hostNotificationsIndicatorStateV12,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
   hostNotificationsListUpgradeV21ToV22,
@@ -1135,6 +1145,9 @@ import {
   hostNotificationsListUpgradeV23ToV24,
   hostNotificationsListV23,
   hostNotificationsListV24,
+  hostNotificationsListV25,
+  hostNotificationsListUpgradeV24ToV25,
+  hostNotificationsListDowngradeV25ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkAllReadUpgradeV10ToV11,
   hostNotificationsMarkAllReadV11,
@@ -1148,12 +1161,14 @@ import {
   hostNotificationsFeedSubscribeV14,
   hostNotificationsFeedSubscribeV15,
   hostNotificationsFeedSubscribeV16,
+  hostNotificationsFeedSubscribeV17,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV14,
   hostNotificationsCloudFeedSubscribeV15,
+  hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -7272,6 +7287,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksStatusV20,
+          upgradeFromPreviousVersion: hostNotificationHooksStatusUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksStatusDowngradeV20ToV10,
+      },
+    },
   },
   "host.notificationHooks.test": {
     degrade: { kind: "unsupported" },
@@ -7308,6 +7335,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {
         1: hostNotificationHooksSaveDowngradeV20ToV10,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksSaveV30,
+          upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksSaveDowngradeV30ToV10,
+        2: hostNotificationHooksSaveDowngradeV30ToV20,
       },
     },
   },
@@ -11972,7 +12012,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -12016,9 +12056,14 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV23ToV24,
           responseGrowthProjectionGated: true,
         },
+        5: {
+          contract: hostNotificationsListV25,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV24ToV25,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV24ToV10,
+        1: hostNotificationsListDowngradeV25ToV10,
       },
     },
   },
@@ -12043,7 +12088,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
   "host.notifications.indicatorState": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsIndicatorStateV10,
@@ -12053,6 +12098,11 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           contract: hostNotificationsIndicatorStateV11,
           upgradeFromPreviousVersion:
             hostNotificationsIndicatorStateUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostNotificationsIndicatorStateV12,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -14150,7 +14200,7 @@ type HostRpcNotificationMethodMap = {
       readonly downgradePathsFromLatest: Record<never, never>;
     };
     readonly 2: {
-      readonly latestMinor: 4;
+      readonly latestMinor: 5;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsListV20;
@@ -14174,9 +14224,14 @@ type HostRpcNotificationMethodMap = {
           readonly contract: typeof hostNotificationsListV24;
           readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV23ToV24;
         };
+        readonly 5: {
+          readonly contract: typeof hostNotificationsListV25;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV24ToV25;
+          readonly responseGrowthProjectionGated: true;
+        };
       };
       readonly downgradePathsFromLatest: {
-        readonly 1: typeof hostNotificationsListDowngradeV24ToV10;
+        readonly 1: typeof hostNotificationsListDowngradeV25ToV10;
       };
     };
   };
@@ -14200,7 +14255,7 @@ type HostRpcNotificationMethodMap = {
   readonly "host.notifications.indicatorState": {
     readonly degrade: { readonly kind: "unsupported" };
     readonly 1: {
-      readonly latestMinor: 1;
+      readonly latestMinor: 2;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsIndicatorStateV10;
@@ -14209,6 +14264,10 @@ type HostRpcNotificationMethodMap = {
         readonly 1: {
           readonly contract: typeof hostNotificationsIndicatorStateV11;
           readonly upgradeFromPreviousVersion: typeof hostNotificationsIndicatorStateUpgradeV10ToV11;
+        };
+        readonly 2: {
+          readonly contract: typeof hostNotificationsIndicatorStateV12;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsIndicatorStateUpgradeV11ToV12;
         };
       };
       readonly downgradePathsFromLatest: Record<never, never>;
@@ -14493,7 +14552,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -14523,12 +14582,13 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         6: {
           contract: hostNotificationsFeedSubscribeV16,
         },
+        7: { contract: hostNotificationsFeedSubscribeV17 },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -14551,6 +14611,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         5: {
           contract: hostNotificationsCloudFeedSubscribeV15,
         },
+        6: { contract: hostNotificationsCloudFeedSubscribeV16 },
       },
     },
   },
@@ -15455,13 +15516,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
     1: {
       // @1.1 says why a session failed or parked (`reason`, T69); @1.0 stays
       // bound to its frozen frames so an older peer's re-parse strips it.
-      latestMinor: 1,
+      // @1.2 names the chats subscribed to the person's notification feed
+      // (`notificationSubscriptions`, T84); @1.1 is frozen without it.
+      latestMinor: 2,
       versions: {
         0: {
           contract: botSubscribeV10,
         },
         1: {
           contract: botSubscribeV11,
+        },
+        2: {
+          contract: botSubscribeV12,
         },
       },
     },
@@ -15507,7 +15573,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 39,
+      latestMinor: 40,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15712,10 +15778,15 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         37: { contract: chatSubscribeV137 },
         // @1.38 adds `opencodeLineHeld` to the snapshot.
         38: { contract: chatSubscribeV138 },
-        // @1.39: a queued steer that would restart the turn needs the person's
+        // @1.39 is the notification-digest line: the `notification-digest`
+        // queue item on a personal bot chat subscribed to its person's feed
+        // (projection: the host omits it below @1.39). @1.35 to @1.38 are
+        // frozen at their seven-arm queue.
+        39: { contract: chatSubscribeV139 },
+        // @1.40: a queued steer that would restart the turn needs the person's
         // confirmation (`queueSteerNow.restartConfirmed`), and a refused one
         // names its causes (`actionAck.steerRestartReasons`, stripped below).
-        39: { contract: chatSubscribeV139 },
+        40: { contract: chatSubscribeV140 },
       },
     },
   },

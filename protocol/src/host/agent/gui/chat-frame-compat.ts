@@ -50,7 +50,7 @@ const CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR = 12;
  * unconfirmed restart only for a peer on this line, so a lower peer never
  * receives that code; the reasons are stripped for it all the same.
  */
-export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 39;
+export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 40;
 
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
@@ -187,6 +187,15 @@ export const CHAT_SUBSCRIBE_TASK_OVERDUE_MINOR = 27;
  * no predicate.
  */
 export const CHAT_SUBSCRIBE_MEMORY_CURATION_MINOR = 35;
+
+/**
+ * The first minor whose queue may carry a `notification-digest` item (a
+ * digest of the person's notification feed, waiting on the personal bot chat
+ * that subscribed to it, Tracy Bots T84). Same posture as the constants
+ * above: the host omits the item, and the queue events that name it, from
+ * every peer below this minor.
+ */
+export const CHAT_SUBSCRIBE_NOTIFICATION_DIGEST_MINOR = 39;
 
 /**
  * The first minor whose `tool_call` block and `tool_call.completed` event may

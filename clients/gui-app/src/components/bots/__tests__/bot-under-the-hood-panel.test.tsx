@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotNotificationSubscription } from "@traycer/protocol/host/bot/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
@@ -217,6 +218,9 @@ function thread(
 /** The bound host the next panel renders with. */
 let boundHost: { hostId: string; isThisHost: boolean };
 
+/** The notification watches the next panel renders with. */
+let notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+
 function Panel(props: {
   readonly onSelectSession: (sessionChatId: string | null) => void;
   readonly sessionChatId: string | null;
@@ -233,6 +237,7 @@ function Panel(props: {
       trunkChatId={TRUNK_ID}
       tasks={[]}
       openRequestCount={null}
+      notificationSubscriptions={notificationSubscriptions}
       boundHost={boundHost}
       environmentLabel="Acme"
       environmentBots={props.environmentBots}
@@ -265,6 +270,7 @@ beforeEach(() => {
   mocks.state.channelHandle = null;
   mocks.state.connectable = { hostIds: [], resolved: true };
   boundHost = { hostId: HOST_ID, isThisHost: true };
+  notificationSubscriptions = null;
   useBotTabsStore.setState({ tabs: {} });
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
@@ -588,5 +594,71 @@ describe("<BotUnderTheHoodPanel /> the post a thread answers", () => {
     const [row] = screen.getAllByTestId("bot-thread-row");
     expect(within(row).queryByText("Please review the release")).toBeNull();
     expect(within(row).getByText("Thread")).toBeTruthy();
+  });
+});
+
+describe("<BotUnderTheHoodPanel /> notification watches", () => {
+  function renderPanel(): void {
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
+  }
+
+  it("says the trunk and a thread are watching the person's notifications, each in words", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    notificationSubscriptions = [
+      { target: { kind: "trunk" }, attentionOnly: true, everySeconds: null },
+      {
+        target: { kind: "thread", threadId: "thread-a" },
+        attentionOnly: false,
+        everySeconds: 3600,
+      },
+    ];
+    renderPanel();
+
+    const watches = screen.getByTestId("bot-notification-watches");
+    const [trunk, threadWatch] = within(watches).getAllByTestId(
+      "bot-notification-watch",
+    );
+    expect(within(trunk).getByText("Trunk")).toBeTruthy();
+    expect(
+      within(trunk).getByText(
+        "Watching your notifications (attention only, on event)",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(threadWatch).getByText(
+        "Watching your notifications (everything, every hour)",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("names a watching thread the listing has not loaded as a thread", () => {
+    notificationSubscriptions = [
+      {
+        target: { kind: "thread", threadId: "thread-unlisted" },
+        attentionOnly: true,
+        everySeconds: 600,
+      },
+    ];
+    renderPanel();
+
+    const [row] = screen.getAllByTestId("bot-notification-watch");
+    expect(within(row).getByText("A thread")).toBeTruthy();
+  });
+
+  it("shows nothing when the host reports no watches, or does not know them", () => {
+    notificationSubscriptions = [];
+    renderPanel();
+    expect(screen.queryByTestId("bot-notification-watches")).toBeNull();
+    cleanup();
+
+    notificationSubscriptions = null;
+    renderPanel();
+    expect(screen.queryByTestId("bot-notification-watches")).toBeNull();
   });
 });

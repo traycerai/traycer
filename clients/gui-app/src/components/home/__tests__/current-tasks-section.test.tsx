@@ -16,7 +16,9 @@ const testState = vi.hoisted(() => ({
   pendingPinIds: new Set<string>(),
   worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
   openInBackground:
-    vi.fn<(epicId: string, title: string | undefined) => void>(),
+    vi.fn<
+      (epicId: string, title: string | undefined, source: string) => void
+    >(),
   requestOpenInNewWindow: vi.fn<(item: HistoryItem) => void>(),
   isNewWindowAvailable: false,
 }));
@@ -740,6 +742,7 @@ describe("<CurrentTasksSection />", () => {
       expect(testState.openInBackground).toHaveBeenCalledWith(
         "epic-a",
         "Task a",
+        "direct_ui",
       );
       expect(testState.openItem).not.toHaveBeenCalled();
     });
@@ -834,6 +837,7 @@ describe("<CurrentTasksSection />", () => {
       expect(testState.openInBackground).toHaveBeenCalledWith(
         "epic-a",
         "Task a",
+        "direct_ui",
       );
       expect(testState.openItem).not.toHaveBeenCalled();
     });
@@ -1020,6 +1024,7 @@ describe("<CurrentTasksSection />", () => {
       expect(testState.openInBackground).toHaveBeenCalledWith(
         "epic-b",
         "Task b",
+        "direct_ui",
       );
     });
 

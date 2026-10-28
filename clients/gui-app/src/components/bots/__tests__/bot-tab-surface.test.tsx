@@ -319,6 +319,7 @@ function snapshot(): BotSubscriptionSnapshot {
     tasks: [],
     openRequestCount: 0,
     conversationsRevision: null,
+    notificationSubscriptions: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
     activity: null,
   };
@@ -974,7 +975,7 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the bot's picture, the channel's name, its two views and the settings ⋮ only, even for the environment's main bot", () => {
+  it("draws the header as the bot's picture, the channel's name with the main bot's star, its two views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -992,6 +993,22 @@ describe("<BotTabSurface /> main bot", () => {
     expect(
       within(header).getByRole("button", { name: "Channel settings" }),
     ).toBe(screen.getByTestId("bot-channel-settings-open"));
+    expect(screen.getByTestId("bot-tab-title").nextElementSibling).toBe(
+      within(header).getByRole("img", { name: "Main bot" }).parentElement,
+    );
+  });
+
+  it.each([
+    ["is not main", { "env-team": OTHER_BOT_ID }],
+    ["is not known", null],
+  ])("draws no star in the header when the bot %s", (_name, mainBotIds) => {
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    mocks.state.mainBotIds = mainBotIds;
+    render(surface());
+
+    const header = screen.getByTestId("bot-tab-title").closest("header");
+    if (header === null) throw new Error("expected the channel header");
+    expect(within(header).queryByRole("img", { name: "Main bot" })).toBeNull();
   });
 
   it.each([

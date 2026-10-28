@@ -4,6 +4,7 @@ import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contract
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import {
+  useMaybeBrowserOpenSessionsSnapshot,
   useMaybeBrowserSessionsSnapshot,
   type BrowserSessionsSnapshot,
   type BrowserSessionsState,
@@ -45,12 +46,15 @@ interface MatchedTab {
 }
 
 /**
- * Opens a URL in a browser tile on this epic's host (A4, B1, B4).
+ * Opens a URL in a browser tile (A4, B1, B4) on the host a browser opened from
+ * this canvas tab goes to (`useBrowserOpenHost`): the Browsers panel's pin,
+ * else this machine's own host, else the host of the tile the link is in.
  *
  * A tab already showing the same page is focused instead of opening a second
  * one - that is what keeps repeated link clicks from stacking tabs and splits
- * (P2). Middle-click bypasses the match on purpose: it means "another one, in
- * the background" (B4).
+ * (P2). Only that host's tabs are matched: a tab showing the page on another
+ * machine is not where the person asked for it. Middle-click bypasses the
+ * match on purpose: it means "another one, in the background" (B4).
  *
  * A failure NEVER falls out to the OS browser on its own (A5). The user gets
  * the reason and an explicit "Open in browser" action, because silently
@@ -61,6 +65,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
   // Read at CLICK time, not subscribed: this hook is mounted by every link
   // surface in the app and the sessions context is a fresh object per stream
   // frame (C8).
+  const openSnapshot = useMaybeBrowserOpenSessionsSnapshot();
   const snapshot = useMaybeBrowserSessionsSnapshot();
   const binding = useHostBinding();
   const directory = binding === null ? null : binding.directory;
@@ -69,7 +74,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
 
   return useCallback(
     (input: OpenBrowserUrlInput): void => {
-      const sessions = sessionsOf(snapshot);
+      const sessions = sessionsOf(openSnapshot) ?? sessionsOf(snapshot);
       const failed = (reason: string): void => {
         toast.error(reason, {
           action: {
@@ -156,7 +161,7 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
           );
         });
     },
-    [directory, openExternal, openTile, snapshot],
+    [directory, openExternal, openTile, openSnapshot, snapshot],
   );
 }
 

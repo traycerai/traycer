@@ -544,27 +544,15 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     };
   }
 
-  it("names the post a reply answers by its sender and first line, and lands the list on that post's row", async () => {
-    const user = userEvent.setup();
+  it("draws a direct reply as its own row, with nothing of the post it answers above it", () => {
     mountTranscript(
-      [directPost(DIRECT_REQUEST), directReply(null)],
+      [directPost(DIRECT_REQUEST), otherUserMessage(), directReply(null)],
       channel(null),
     );
 
-    const line = screen.getByTestId("bot-replied-post");
-    expect(within(line).getByText("Please review")).toBeTruthy();
-    const postRow = within(scrollStub())
-      .getByTestId("bot-member-row")
-      .closest("[data-row-id]");
-    expect(postRow).not.toBeNull();
-    expect(scrollStub().getAttribute("data-scroll-kind")).toBe("none");
-
-    await user.click(line);
-
-    expect(scrollStub().getAttribute("data-scroll-kind")).toBe("message");
-    expect(scrollStub().getAttribute("data-scroll-row-id")).toBe(
-      postRow?.getAttribute("data-row-id"),
-    );
+    const replyRow = within(scrollStub()).getByTestId("bot-reply-row");
+    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
+    expect(within(replyRow).queryByText(/Please review/)).toBeNull();
   });
 
   it("draws a member's post in the colour its sender's id hashes to, as every other picture of that member is", () => {
@@ -637,14 +625,5 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
     expect(chooseOption).toHaveBeenCalledWith("Production");
-  });
-
-  it("names no replied post in a thread, whose rows answer within it", () => {
-    mountTranscript(
-      [directPost(DIRECT_REQUEST), directReply(null)],
-      THREAD_SURFACE,
-    );
-
-    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
   });
 });

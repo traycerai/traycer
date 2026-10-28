@@ -405,7 +405,7 @@ describe("the secrets list", () => {
     expect(screen.getByTestId("secrets-add")).toBeTruthy();
   });
 
-  it("drops the rows it already showed when a later read fails, rather than keeping them beside the failure", async () => {
+  it("keeps the rows it already showed beside the failure line when a later read fails, and recovers on Retry", async () => {
     const host = buildSecretsHost({ secrets: [secretFixture({})] });
     const queryClient = renderPage(host);
     await screen.findByTestId("secret-row");
@@ -413,9 +413,18 @@ describe("the secrets list", () => {
     host.state.listError = new Error("Connect to manage secrets.");
     await queryClient.invalidateQueries();
 
-    expect(await screen.findByTestId("secrets-page-error")).toBeTruthy();
-    expect(screen.queryByTestId("secret-row")).toBeNull();
+    // The last answer is still the best known one: its completion is unknown,
+    // so the row stays, and the page never claims there is nothing.
+    const error = await screen.findByTestId("secrets-page-error");
+    expect(screen.getByTestId("secret-row")).toBeTruthy();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
+
+    host.state.listError = null;
+    fireEvent.click(within(error).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("secrets-page-error")).toBeNull();
+    });
+    expect(screen.getByTestId("secret-row")).toBeTruthy();
   });
 
   it("reads a failed list as Personal's one failure line with Retry, never the empty state", async () => {

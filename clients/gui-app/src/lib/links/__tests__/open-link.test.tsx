@@ -50,6 +50,8 @@ const toastWarning = vi.hoisted(() =>
 
 const harness = vi.hoisted<{
   sessions: BrowserSessionsState | null;
+  /** The chosen open host's inventory; null when no pin or local host picks one. */
+  openSessions: BrowserSessionsState | null;
   bridged: string[];
   intents: TileOpenIntent[];
   /** Tab ids with an Electron control binding (headless tabs have none). */
@@ -59,6 +61,7 @@ const harness = vi.hoisted<{
   entries: Map<string, HostDirectoryEntry>;
 }>(() => ({
   sessions: null,
+  openSessions: null,
   bridged: [],
   intents: [],
   boundTabIds: [],
@@ -79,6 +82,9 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsSnapshot: () => ({ current: harness.sessions }),
+  useMaybeBrowserOpenSessionsSnapshot: () => ({
+    current: harness.openSessions,
+  }),
 }));
 vi.mock("@/lib/links/open-external-link", () => ({
   useOpenExternalLink: () => ({
@@ -168,6 +174,25 @@ function liveSessions(
   };
 }
 
+const OPEN_HOST_ID = "host-open";
+const openTabOnOpenHost = vi.fn<BrowserSessionsState["openTab"]>(() =>
+  Promise.resolve({
+    sessionId: "session-on-open-host",
+    tabId: "tab-on-open-host",
+    handoffToken: null,
+  }),
+);
+
+function openHostSessions(
+  tabs: readonly BrowserTabInfo[],
+): BrowserSessionsState {
+  return {
+    ...liveSessions([{ ...session(tabs), hostId: OPEN_HOST_ID }]),
+    hostId: OPEN_HOST_ID,
+    openTab: openTabOnOpenHost,
+  };
+}
+
 function click(overrides: Partial<LinkClickEvent>): LinkClickEvent {
   return {
     altKey: false,
@@ -204,6 +229,7 @@ function openViewTab(): void {
 
 beforeEach(() => {
   harness.sessions = liveSessions([]);
+  harness.openSessions = null;
   harness.bridged = [];
   harness.intents = [];
   harness.boundTabIds = [];
@@ -543,8 +569,8 @@ describe("useOpenLink", () => {
   });
 });
 
-function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
-  const item: HostListItem = {
+function hostItem(kind: "personal" | "sandbox"): HostListItem {
+  return {
     hostId: HOST_ID,
     displayName: HOST_ID,
     platform: "linux",
@@ -568,7 +594,13 @@ function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
         }
       : {}),
   };
-  return hostListItemToDirectoryEntry(item, "wss://relay.example.test");
+}
+
+function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    hostItem(kind),
+    "wss://relay.example.test",
+  );
 }
 
 describe("useOpenLink on a host that does not take sign-ins", () => {
@@ -657,6 +689,71 @@ describe("useOpenLink on a host that does not take sign-ins", () => {
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     expect(toastWarning).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOpenLink on the open host", () => {
+  const SAME_PAGE = tab({ tabId: "tab-same", url: DOCS_URL });
+
+  it("opens the tile on the open host, through that host's openTab", async () => {
+    harness.openSessions = openHostSessions([]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTabOnOpenHost).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents[0].node).toMatchObject({
+      type: "browser-session",
+      hostId: OPEN_HOST_ID,
+    });
+  });
+
+  it("does not focus a tab showing the page on the tile's own host", async () => {
+    harness.sessions = liveSessions([session([SAME_PAGE])]);
+    harness.openSessions = openHostSessions([]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTabOnOpenHost).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(harness.intents[0].node).toMatchObject({ hostId: OPEN_HOST_ID });
+  });
+
+  it("focuses a tab showing the page on the open host", async () => {
+    harness.openSessions = openHostSessions([SAME_PAGE]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTabOnOpenHost).not.toHaveBeenCalled();
+    expect(harness.intents[0].node).toMatchObject({
+      hostId: OPEN_HOST_ID,
+      tabId: "tab-same",
+    });
+  });
+
+  it("refuses a credentialed URL on a sandbox open host though the tile's host is personal", () => {
+    harness.entries.set(HOST_ID, remoteEntry("personal"));
+    harness.entries.set(
+      OPEN_HOST_ID,
+      hostListItemToDirectoryEntry(
+        { ...hostItem("sandbox"), hostId: OPEN_HOST_ID },
+        "wss://relay.example.test",
+      ),
+    );
+    harness.openSessions = openHostSessions([]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("https://alice:token@example.test/docs", "markdown", null);
+
+    expect(openTabOnOpenHost).not.toHaveBeenCalled();
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+    expect(toastWarning).toHaveBeenCalledTimes(1);
   });
 });
 

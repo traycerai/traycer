@@ -90,6 +90,7 @@ function snapshot(activity: BotActivity | null): BotSubscribeServerFrame {
     tasks: [],
     openRequestCount: 0,
     conversationsRevision: 0,
+    notificationSubscriptions: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: activity !== null },
     activity,
     hasBinaryPayload: false,

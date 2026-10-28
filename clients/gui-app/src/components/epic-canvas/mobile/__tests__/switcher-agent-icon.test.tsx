@@ -4,11 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SwitcherAgentIcon } from "@/components/epic-canvas/mobile/switcher-agent-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { AgentActivityTier } from "@/lib/agent-activity";
+import type { HostNotificationsIndicatorState } from "@traycer/protocol/host/notifications/contracts";
 import type {
-  HostNotificationsIndicatorState,
-  HostNotificationsIndicatorStateResponse,
-} from "@traycer/protocol/host/notifications/contracts";
-import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+  NotificationIndicatorRecords,
+  SurfaceNotificationIndicators,
+} from "@/stores/notifications/notification-indicator-state";
 
 // Drive the epic-selector reads the icon (and the shared status mapping it now
 // routes through) depends on. `tui` non-null + type "terminal-agent" reaches
@@ -52,7 +52,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicNodeHostId: () => state.ownerHostId,
 }));
 
-const NO_INDICATORS: HostNotificationsIndicatorStateResponse = {
+const NO_INDICATORS: NotificationIndicatorRecords = {
   epics: {},
   chats: {},
 };
@@ -63,11 +63,12 @@ const QUIET: HostNotificationsIndicatorState = {
   pendingApproval: false,
   pendingInterview: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 function chatIndicators(
   flags: Partial<HostNotificationsIndicatorState>,
-): HostNotificationsIndicatorStateResponse {
+): NotificationIndicatorRecords {
   return { epics: {}, chats: { n1: { ...QUIET, ...flags } } };
 }
 

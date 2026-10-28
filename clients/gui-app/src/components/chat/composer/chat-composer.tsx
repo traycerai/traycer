@@ -71,7 +71,13 @@ import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import {
+  useRestingSandboxAgentGate,
+  useSandboxAgentGate,
+} from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { useBoundSandboxRemedies } from "@/hooks/sandboxes/use-bound-sandbox-remedies";
+import type { SandboxAgentRemedies } from "@/lib/sandboxes/sandbox-agent-refusal";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
@@ -99,6 +105,7 @@ import {
   promptSuggestionAllowed,
 } from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
+import { clearChatComposerDraft } from "./clear-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
@@ -266,6 +273,13 @@ interface ChatComposerProps {
    * host below `1.20`.
    */
   readonly suggestedPrompt: string | undefined;
+  /**
+   * The sandbox this chat is bound to, while it rests and the next message
+   * wakes it; `null` otherwise. Such a chat is drawn by its published copy,
+   * bound to the host SERVING that copy, so the tab's host is not where the
+   * send runs: the run gates and the toolbar's pick answer for the sandbox.
+   */
+  readonly restingSandbox: RestingChatSandbox | null;
 }
 
 export interface ChatComposerSubmitInput {
@@ -322,24 +336,41 @@ function ProfileDisabledRecovery(props: {
  * is refused instead, never moved to another agent. Ranked with the pack
  * gate: both say the agent cannot run here yet. `refusal` is the sandbox's
  * notice, while no pack hint outranks it.
+ *
+ * A resting sandbox's chat reads no host: `hostClient` is `null` for it (see
+ * `runHostClient`), and what the client last read of that sandbox's own
+ * switch and the catalogue decide.
  */
-function useAgentRunGate(
-  hostClient: HostClient<HostRpcRegistry> | null,
-  hostId: string | null,
-  harnessId: GuiHarnessId | null,
-  focused: boolean,
-): {
+function useAgentRunGate(input: {
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly harnessId: GuiHarnessId | null;
+  readonly focused: boolean;
+  readonly restingSandbox: RestingChatSandbox | null;
+  readonly remedies: SandboxAgentRemedies;
+}): {
   readonly hint: string | null;
   readonly blocked: boolean;
   readonly refusal: ComposerHostNoticeState | null;
 } {
+  const { hostClient, hostId, harnessId, focused, remedies } = input;
+  const restingHostId = input.restingSandbox?.sandbox.hostId ?? null;
+  const resting = restingHostId !== null;
   const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
-  const sandboxAgentGate = useSandboxAgentGate({
-    hostId,
+  const liveAgentGate = useSandboxAgentGate({
+    ...remedies,
+    hostId: resting ? null : hostId,
     client: hostClient,
     harnessId,
     active: focused,
   });
+  const restingAgentGate = useRestingSandboxAgentGate({
+    ...remedies,
+    resting,
+    hostId: restingHostId,
+    harnessId,
+  });
+  const sandboxAgentGate = resting ? restingAgentGate : liveAgentGate;
   return {
     hint: packGate.hint ?? sandboxAgentGate.hint,
     blocked: packGate.blocked || sandboxAgentGate.blocked,
@@ -350,13 +381,20 @@ function useAgentRunGate(
 /**
  * The sandbox agent gate's refusal, standing above the composer while it
  * holds, with the configuration's Providers: the disabled Send's hint
- * carries no link. Dismissed, it stays away until the refusal changes.
+ * carries no link. Dismissed, it stays away until the refusal changes, and so
+ * it does once its message is cancelled (`cancelledMessages` counts them).
  */
 function SandboxAgentRefusalNotice(props: {
   readonly notice: ComposerHostNoticeState | null;
+  readonly cancelledMessages: number;
 }): ReactNode {
-  const { notice } = props;
+  const { notice, cancelledMessages } = props;
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [seenCancels, setSeenCancels] = useState(cancelledMessages);
+  if (cancelledMessages !== seenCancels) {
+    setSeenCancels(cancelledMessages);
+    setDismissed(notice?.message ?? null);
+  }
   if (notice === null || notice.message === dismissed) return null;
   return (
     <div className="mb-3 w-full">
@@ -401,11 +439,18 @@ function ChatComposerImpl(props: ChatComposerProps) {
     getDraftBlobBridgeSupported,
     getQueuedSteerRestartConfirmationSupported,
     suggestedPrompt,
+    restingSandbox,
   } = props;
   const readingWidth = useReadingWidthStyle();
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  // The client for reads about the host this chat's turns RUN on: the tab's
+  // own, except for a resting sandbox's chat, whose tab host only serves its
+  // published copy and whose sandbox answers nothing until it wakes. Its
+  // providers, packs, profiles and limits say nothing about that send.
+  const resting = restingSandbox !== null;
+  const runHostClient = resting ? null : hostClient;
   const guideRef = useRef<HTMLDivElement | null>(null);
   const submitWithGuide = useFirstTaskSubmit(
     onSubmitMessage,
@@ -538,6 +583,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       // offered, and a sticky `auto` would otherwise survive both.
       chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
       stagedSurfaceKey: null,
+      sendsToRestingSandbox: resting,
     },
   );
   const prestartSupport = useHostMethodSupport(
@@ -553,6 +599,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     (settings: ChatRunSettings) => {
       if (
         !focused ||
+        resting ||
         currentEpicId === null ||
         prestartSupport !== true ||
         settings.model.length === 0
@@ -575,7 +622,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
         accountContext: useAccountContextStore.getState().accountContext,
       });
     },
-    [focused, currentEpicId, prestartSupport, tabHostId, taskId, prestart],
+    [
+      focused,
+      resting,
+      currentEpicId,
+      prestartSupport,
+      tabHostId,
+      taskId,
+      prestart,
+    ],
   );
   const handleUserInput = useCallback(
     (wasEmpty: boolean) => {
@@ -595,25 +650,43 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
-  // re-auth banner above the composer; a doomed turn can't start.
+  // re-auth banner above the composer; a doomed turn can't start. Off for a
+  // resting sandbox's chat, whose turn runs on the sandbox's own sign-in.
   const reauthGate = useProviderReauthGate(
     harnessId,
     profileId,
-    focused,
+    focused && !resting,
     seedSource.kind,
   );
   const profileEligibility = useProfileEligibilityGate(
-    hostClient,
+    runHostClient,
     harnessId,
     profileId,
     focused,
   );
-  const agentRunGate = useAgentRunGate(
-    hostClient,
-    tabHostId,
+  // "Cancel the message": withdrawn, not sent - the composer clears as a send
+  // clears it, and the refusal it answered closes.
+  const [cancelledMessages, setCancelledMessages] = useState(0);
+  const cancelMessage = useCallback((): void => {
+    clearChatComposerDraft({ taskId, pickerStore, editorRef });
+    setCancelledMessages((count) => count + 1);
+  }, [pickerStore, taskId]);
+  const boundSandboxRemedies = useBoundSandboxRemedies({
+    chatId: taskId,
+    epicId: currentEpicId,
+    viewTabId,
+    hostId: tabHostId,
+    restingSandbox,
+    onCancelMessage: cancelMessage,
+  });
+  const agentRunGate = useAgentRunGate({
+    hostClient: runHostClient,
+    hostId: tabHostId,
     harnessId,
     focused,
-  );
+    restingSandbox,
+    remedies: boundSandboxRemedies,
+  });
   const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,
@@ -632,7 +705,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     selectedModel,
     active: focused,
-    client: hostClient,
+    client: runHostClient,
   });
   // ONE value for both readers: the chain's `rateLimitVisible` below and the
   // return banner, which OUTRANKS the advisory in that chain and so absorbs
@@ -982,7 +1055,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
               }
             />
           ) : null}
-          <SandboxAgentRefusalNotice notice={agentRunGate.refusal} />
+          <SandboxAgentRefusalNotice
+            notice={agentRunGate.refusal}
+            cancelledMessages={cancelledMessages}
+          />
           {topSlot}
           <div className="relative flex flex-col gap-3">
             <ComposerTileIdProvider tileId={taskId}>

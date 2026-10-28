@@ -19,6 +19,7 @@ import { pickableHostOptions } from "@/components/settings/host-scope/host-optio
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useBrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
 import { useBrowserCatalogActions } from "@/hooks/browser/use-browser-catalog-actions";
+import { useServingLocalHostId } from "@/hooks/browser/use-browser-open-host";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import {
@@ -81,6 +82,9 @@ export function BrowserCreatePicker(props: {
   const catalog = useBrowserCatalogContext();
   const localSessions = useBrowserSessionsContext();
   const pin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
+  // This machine while it can serve, so the tab is native, else the task's
+  // host. Never the pin: choosing here is already explicit.
+  const preferredHostId = useServingLocalHostId() ?? pin.followingHostId;
   const { withOwner } = useBrowserCatalogActions(props.epicId);
   const { openTile } = useEpicTileNavigation();
   const queryClient = useQueryClient();
@@ -157,7 +161,7 @@ export function BrowserCreatePicker(props: {
     options,
     scope: catalog?.scope,
     ownerHostId: localSessions.hostId,
-    suggestedHostId: pin.followingHostId,
+    suggestedHostId: preferredHostId,
   });
   return (
     <DropdownMenu>

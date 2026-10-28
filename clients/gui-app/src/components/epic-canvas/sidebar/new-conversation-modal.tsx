@@ -771,6 +771,7 @@ export function NewConversationModalBody(props: {
         opened = openActiveModelPickerForHarness(
           harnessId,
           newConversationSurfaceKey(epicId),
+          null,
         );
     };
     open();
@@ -1025,6 +1026,7 @@ export function NewConversationModalBody(props: {
       // host stages nothing.
       stagedSurfaceKey:
         hostId === null ? newConversationSurfaceKey(epicId) : null,
+      sendsToRestingSandbox: false,
     },
   );
   const harnessId = useStore(
@@ -1167,6 +1169,7 @@ export function NewConversationModalBody(props: {
     hint: agentHint,
     blocked: agentBlocked,
     refusal: sandboxAgentRefusal,
+    sendRefusal,
     stagedSignInCheck,
     checking: stagedCatalogueNotice,
   } = usePlacementAgentGates({
@@ -1341,8 +1344,9 @@ export function NewConversationModalBody(props: {
   const {
     notice: hostNotice,
     raise: raiseHostNotice,
+    raiseSendRefusal,
     dismiss: dismissHostNotice,
-  } = useComposerHostNotice(resolvedHostId);
+  } = useComposerHostNotice(resolvedHostId, sendRefusal);
   // The mirror line, once per task: the start host has another owner than a
   // host already working here. A refusal outranks it in the one slot; it is
   // marked seen when dismissed or when the agent starts.
@@ -1760,7 +1764,7 @@ export function NewConversationModalBody(props: {
           )
             return;
           if (signedOut !== null) {
-            raiseHostNotice(signedOut);
+            raiseSendRefusal();
             return;
           }
           const content = buildSubmittedChatJSONContent(
@@ -1794,7 +1798,7 @@ export function NewConversationModalBody(props: {
       parentId,
       pickerStore,
       placement,
-      raiseHostNotice,
+      raiseSendRefusal,
       stagedSignInCheck,
       toolbarStore,
     ],
@@ -1855,7 +1859,7 @@ export function NewConversationModalBody(props: {
     // created from a keystroke the user had every reason to read as a no-op.
     if (!canSubmit) return;
     if (sandboxAgentRefusal !== null) {
-      raiseHostNotice(sandboxAgentRefusal);
+      raiseSendRefusal();
       return;
     }
     const editor = editorRef.current;
@@ -2171,6 +2175,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     epicId,
     raiseHostNotice,
+    raiseSendRefusal,
     resolvedHostId,
     sandboxAgentRefusal,
     sandboxStaging,
@@ -2610,7 +2615,8 @@ function useNewConversationDraftFields(
  * its hint, and on a sandbox an agent that cannot run there is refused at
  * Send, with the configuration's Providers, never swapped or held behind a
  * disabled button. A staged sandbox's send (`stagedAhead`) waits for its own
- * agent on the sandbox instead, checked by `stagedSignInCheck`.
+ * agent on the sandbox instead, checked by `stagedSignInCheck`. `sendRefusal`
+ * is what Send would be refused for now, by whichever of the two applies.
  */
 function usePlacementAgentGates(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -2626,6 +2632,7 @@ function usePlacementAgentGates(input: {
   readonly hint: string | null;
   readonly blocked: boolean;
   readonly refusal: ComposerHostNoticeState | null;
+  readonly sendRefusal: ComposerHostNoticeState | null;
   readonly checking: ComposerHostNoticeState | null;
   readonly stagedSignInCheck: StagedSendSignInCheck;
 } {
@@ -2654,6 +2661,7 @@ function usePlacementAgentGates(input: {
       hint: checking?.message ?? null,
       blocked: checking !== null,
       refusal: null,
+      sendRefusal: stagedCheck,
       stagedSignInCheck,
       checking,
     };
@@ -2662,6 +2670,7 @@ function usePlacementAgentGates(input: {
     hint: packGate.hint,
     blocked: packGate.blocked,
     refusal: sandboxAgentGate.notice,
+    sendRefusal: sandboxAgentGate.notice,
     stagedSignInCheck,
     checking,
   };

@@ -23,7 +23,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { HostNotificationsCloudFeedRowV15 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
@@ -118,12 +118,13 @@ const RESTING_SINCE = DESTROY_AT - PERIOD_MINUTES * 60_000;
 const auth = createFakeSandboxBinding();
 let queryClient: QueryClient;
 let resolvedIds: string[];
+let clearedIds: string[];
 
 function warning(
   entryId: string,
   updatedAt: number,
   resolvedAt: null | undefined,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "cloud-resting",
@@ -154,7 +155,7 @@ function warning(
     },
   };
 }
-function seed(rows: HostNotificationsCloudFeedRowV15[]): void {
+function seed(rows: HostNotificationsCloudFeedRowV16[]): void {
   useCloudNotificationsStore.setState({ accountId: "resting-user" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
@@ -289,6 +290,7 @@ beforeEach(() => {
     },
   });
   resolvedIds = [];
+  clearedIds = [];
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => crypto.randomUUID(),
@@ -296,6 +298,10 @@ beforeEach(() => {
       "host.notifications.cloudFeed.resolve": (params) => {
         resolvedIds.push(params.entryId);
         return Promise.resolve({ status: "applied", version: 2 });
+      },
+      "host.notifications.cloudFeed.clear": (params) => {
+        clearedIds.push(params.entryId);
+        return Promise.resolve({ status: "applied", version: 3 });
       },
     },
   });
@@ -349,15 +355,14 @@ describe("sandbox resting warnings in the notification center", () => {
     },
   );
 
-  it("moves an ended episode from Needs attention to Recent activity with the center open", async () => {
+  it("takes an ended episode out of the bell with the center open: no Needs attention, no Recent row", async () => {
     seed([warning("resting", Date.now(), undefined)]);
     mount(true, false);
-    await waitFor(() =>
-      expect(screen.queryByText("Needs attention")).toBeNull(),
-    );
-    expect(screen.getByText("Recent activity")).toBeTruthy();
-    expect(screen.getByText(/build-box is destroyed/)).toBeTruthy();
-    await waitFor(() => expect(resolvedIds).toEqual(["resting"]));
+    await waitFor(() => expect(clearedIds).toEqual(["resting"]));
+    expect(resolvedIds).toEqual(["resting"]);
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(screen.queryByText(/build-box is destroyed/)).toBeNull();
+    expect(bellLabel()).toBe("Notifications");
   });
 
   it("keeps the same clock in Needs attention and counts it on the bell", async () => {
