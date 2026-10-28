@@ -40,26 +40,34 @@ import { cn } from "@/lib/utils";
  * The open post's thread as the channel's thread list has it: listed; not
  * listed yet but known by its id, as a thread the person's post opened as it
  * was sent is until the next read; not listed yet, as a just-posted thread
- * opened from its row is; not opened yet, a question, proposal or direct
- * post nobody has replied under; or unknown, because the read failed.
+ * opened from its row is; not opened yet, a question, proposal, direct post
+ * or direct reply nobody has replied under; or unknown, because the read
+ * failed.
+ *
+ * `sendable` says whether a thread with a box takes a send - a reply, a
+ * picked option, a retry or an edit: `false` while its post is the bot's
+ * direct reply and the bot's binding does not open a thread under one. The
+ * box and its draft stay.
  */
 export type BotThreadPanelThread =
-  | { readonly kind: "listed"; readonly thread: BotThreadSummary }
+  | {
+      readonly kind: "listed";
+      readonly thread: BotThreadSummary;
+      readonly sendable: boolean;
+    }
   | {
       readonly kind: "posted";
       readonly threadId: string;
       /** The list's read failed: Retry reads it again. `null` while it has not. */
       readonly retry: (() => void) | null;
+      readonly sendable: boolean;
     }
   | { readonly kind: "pending" }
   | {
       readonly kind: "unopened";
-      /**
-       * Whether its box may send: `false` while the post is the bot's direct
-       * reply and the bot's binding no longer opens a thread under one. The
-       * draft stays.
-       */
-      readonly startable: boolean;
+      /** As for `posted`: the box and its draft stay through a failed read. */
+      readonly retry: (() => void) | null;
+      readonly sendable: boolean;
     }
   | { readonly kind: "failed"; readonly retry: () => void };
 
@@ -311,6 +319,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         conversationId={thread.thread.conversationId}
         listed={thread.thread}
         retry={null}
+        sendable={thread.sendable}
       />
     );
   }
@@ -321,6 +330,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         threadId={thread.threadId}
         listed={null}
         retry={thread.retry}
+        sendable={thread.sendable}
       />
     );
   }
@@ -330,7 +340,8 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         botId={props.botId}
         conversationId={props.conversationId}
         announcementId={props.originMessageId}
-        sendable={thread.startable}
+        retry={thread.retry}
+        sendable={thread.sendable}
         sendFailure={props.sendFailure}
       />
     );
@@ -343,24 +354,30 @@ function UnopenedThread(props: {
   readonly botId: string;
   readonly conversationId: string;
   readonly announcementId: string;
+  readonly retry: (() => void) | null;
   readonly sendable: boolean;
   readonly sendFailure: BotSendFailure;
 }): ReactNode {
+  // The failure is a slot before the box, so the box keeps its place, and
+  // its draft, as the read fails and recovers.
   return (
-    <BotMessageComposer
-      botId={props.botId}
-      conversationId={props.conversationId}
-      threadId={null}
-      announcementId={props.announcementId}
-      sendable={props.sendable}
-      placeholder="Reply…"
-      label="Reply in a new thread"
-      testId="bot-thread-composer"
-      failure={props.sendFailure}
-      edit={null}
-      onEditEnd={noEdit}
-      onSent={keepOpenThread}
-    />
+    <>
+      <ThreadListReadFailure retry={props.retry} />
+      <BotMessageComposer
+        botId={props.botId}
+        conversationId={props.conversationId}
+        threadId={null}
+        announcementId={props.announcementId}
+        sendable={props.sendable}
+        placeholder="Reply…"
+        label="Reply in a new thread"
+        testId="bot-thread-composer"
+        failure={props.sendFailure}
+        edit={null}
+        onEditEnd={noEdit}
+        onSent={keepOpenThread}
+      />
+    </>
   );
 }
 
@@ -390,6 +407,7 @@ function KnownThread(
     readonly threadId: string;
     readonly listed: BotThreadSummary | null;
     readonly retry: (() => void) | null;
+    readonly sendable: boolean;
   },
 ): ReactNode {
   const {
@@ -401,6 +419,7 @@ function KnownThread(
     threadId,
     listed,
     retry,
+    sendable,
     resolveMember,
     sendFailure,
   } = props;
@@ -429,38 +448,54 @@ function KnownThread(
     onEdit: setEdit,
     failure: sendFailure,
   });
+  // A thread that takes no send says a failed message with neither Retry nor
+  // Edit, as a host that cannot re-deliver does.
+  const failedRequestShown = useMemo(
+    () =>
+      sendable
+        ? failedRequest
+        : (requestId: string, senderUserId: string | null) => {
+            const failed = failedRequest(requestId, senderUserId);
+            return failed === null
+              ? null
+              : { ...failed, retry: null, edit: null };
+          },
+    [failedRequest, sendable],
+  );
   // A reply's option, clicked, is the person's next message in the thread:
-  // offered only while no earlier pick is still being sent, and a pick that
-  // fails says so where a failed message does.
+  // offered only while no earlier pick is still being sent and the thread
+  // takes a send, and a pick that fails says so where a failed message does.
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
-      chooseOption: sending
-        ? null
-        : (choice: string) => {
-            clearSendFailure();
-            send(
-              {
-                botId,
-                conversationId,
-                text: choice,
-                threadId,
-                announcementId: null,
-                redeliver: null,
-                supersedes: null,
-              },
-              { onError: failSend },
-            );
-          },
-      failedRequest,
+      chooseOption:
+        sending || !sendable
+          ? null
+          : (choice: string) => {
+              clearSendFailure();
+              send(
+                {
+                  botId,
+                  conversationId,
+                  text: choice,
+                  threadId,
+                  announcementId: null,
+                  redeliver: null,
+                  supersedes: null,
+                },
+                { onError: failSend },
+              );
+            },
+      failedRequest: failedRequestShown,
     }),
     [
       botId,
       clearSendFailure,
       conversationId,
       failSend,
-      failedRequest,
+      failedRequestShown,
       send,
+      sendable,
       sending,
       threadId,
     ],
@@ -510,7 +545,7 @@ function KnownThread(
         conversationId={conversationId}
         threadId={threadId}
         announcementId={null}
-        sendable
+        sendable={sendable}
         placeholder="Reply…"
         label="Reply in the thread"
         testId="bot-thread-composer"

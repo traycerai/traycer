@@ -359,17 +359,21 @@ export function BotChannelView(props: {
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { refetch: refetchThreads } = threadList;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
-    if (openThread !== null) return { kind: "listed", thread: openThread };
+    // A direct reply's thread takes a send while the bot's binding opens it.
+    const sendable = open?.answer !== true || answerThreads;
+    if (openThread !== null) {
+      return { kind: "listed", thread: openThread, sendable };
+    }
     const retry = threadList.isError ? () => void refetchThreads() : null;
-    // A thread its post opened keeps its box through a failed read.
+    // A thread its post opened, and a box that starts one, keep the box and
+    // its draft through a failed read.
     if (open !== null && open.sent !== null) {
-      return { kind: "posted", threadId: open.sent.threadId, retry };
+      return { kind: "posted", threadId: open.sent.threadId, retry, sendable };
+    }
+    if (open?.announcement === true) {
+      return { kind: "unopened", retry, sendable };
     }
     if (retry !== null) return { kind: "failed", retry };
-    if (open?.announcement === true) {
-      // A direct reply's box sends while the bot's binding opens its thread.
-      return { kind: "unopened", startable: !open.answer || answerThreads };
-    }
     return { kind: "pending" };
   }, [answerThreads, open, openThread, refetchThreads, threadList.isError]);
   useReadThreadWhilePresented({
