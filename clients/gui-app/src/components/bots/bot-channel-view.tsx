@@ -361,12 +361,12 @@ export function BotChannelView(props: {
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     // A direct reply's thread takes a send while the bot's binding opens it.
     const sendable = open?.answer !== true || answerThreads;
-    if (openThread !== null) {
-      return { kind: "listed", thread: openThread, sendable };
-    }
     const retry = threadList.isError ? () => void refetchThreads() : null;
-    // A thread its post opened, and a box that starts one, keep the box and
-    // its draft through a failed read.
+    // A listed thread, one its post opened and a box that starts one keep
+    // what the list last said, the box and its draft through a failed read.
+    if (openThread !== null) {
+      return { kind: "listed", thread: openThread, retry, sendable };
+    }
     if (open !== null && open.sent !== null) {
       return { kind: "posted", threadId: open.sent.threadId, retry, sendable };
     }

@@ -420,6 +420,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
 function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
   return {
     kind: "listed",
+    retry: null,
     thread: threadSummary(anchorSenderUserId),
     sendable: true,
   };
@@ -591,6 +592,40 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 
+  it("keeps the box, its draft and its focus while the list drops the reply's thread after a claim and lists it again, and sends the draft into the thread", async () => {
+    const user = userEvent.setup();
+    answeredPost();
+    const taking = listed("user-teammate");
+    if (taking.kind !== "listed") throw new Error("expected a listed thread");
+    const panel = mountPanel(taking, []);
+    const box = screen.getByTestId("bot-thread-composer-input");
+    await user.type(box, "Which job?");
+
+    // Claimed: the room drops the earlier host's threads, and the new host
+    // has not written its own yet.
+    panel.rerender(
+      panelTree({ kind: "unopened", retry: null, sendable: false }),
+    );
+    expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
+    expect(box).toHaveProperty("value", "Which job?");
+    expect(document.activeElement).toBe(box);
+
+    // The new host writes the thread, and opens threads under a reply.
+    panel.rerender(panelTree(taking));
+    expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
+    expect(box).toHaveProperty("value", "Which job?");
+    expect(document.activeElement).toBe(box);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(
+      sent.map((request) => [
+        request.text,
+        request.threadId,
+        request.announcementId,
+      ]),
+    ).toEqual([["Which job?", THREAD_ID, null]]);
+  });
+
   it("keeps what the person typed and sends nothing while the bot's binding no longer opens a thread under the reply, and sends it once it does again", async () => {
     const user = userEvent.setup();
     answeredPost();
@@ -680,6 +715,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     mountPanel(
       {
         kind: "listed",
+        retry: null,
         thread: { ...zero.thread, replyCount: 0 },
         sendable: true,
       },
@@ -825,6 +861,34 @@ describe("<BotThreadPanel /> a listed thread", () => {
     ]);
   });
 
+  it("says a failed read of the list above the replies it last listed, with Retry, and sends again once the read recovers", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<() => void>();
+    const taking = listed("user-teammate");
+    if (taking.kind !== "listed") throw new Error("expected a listed thread");
+    const panel = mountPanel({ ...taking, retry, sendable: false }, [
+      botReply(null),
+    ]);
+
+    const failure = screen.getByTestId("bot-thread-error");
+    expect(
+      within(screen.getByTestId("bot-thread-replies")).getByText(
+        "Which way should I go?",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("bot-thread-composer-send").hasAttribute("disabled"),
+    ).toBe(true);
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+
+    panel.rerender(panelTree(taking));
+    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
+    await user.type(screen.getByTestId("bot-thread-composer-input"), "Thanks");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(sent.map((request) => request.text)).toEqual(["Thanks"]);
+  });
+
   it("draws no choices under a reply that offers none", () => {
     mountPanel(listed("user-teammate"), [botReply(null)]);
 
@@ -958,6 +1022,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     view.rerender(
       panelTree({
         kind: "listed",
+        retry: null,
         thread: { ...zero.thread, replyCount: 0 },
         sendable: true,
       }),
@@ -1041,6 +1106,7 @@ describe("<BotThreadPanel /> the anchor", () => {
     mountPanel(
       {
         kind: "listed",
+        retry: null,
         thread: {
           ...resolved.thread,
           anchor: { ...resolved.thread.anchor, resolvedAt: 3_000 },
@@ -1412,6 +1478,34 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
     });
     expect((box as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("drops an edit, keeping the text as it was typed, when the thread leaves the list, and does not put the failed text back when it returns", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
+    const taking = listed(VIEWER_USER_ID);
+    if (taking.kind !== "listed") throw new Error("expected a listed thread");
+    const panel = mountPanel(taking, [
+      memberMessage(
+        "member-reply-1",
+        REPLY_REQUEST,
+        "Hold for now",
+        VIEWER_USER_ID,
+      ),
+    ]);
+    const box = screen.getByTestId("bot-thread-composer-input");
+    await user.click(within(replyRow()).getByTestId("bot-message-edit"));
+    await user.type(box, " please");
+
+    panel.rerender(
+      panelTree({ kind: "unopened", retry: null, sendable: false }),
+    );
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    panel.rerender(panelTree(taking));
+
+    expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
+    expect(box).toHaveProperty("value", "Hold for now please");
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
   });
 
   it("drops the edit and its text when the person cancels it", async () => {
