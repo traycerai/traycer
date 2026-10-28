@@ -405,6 +405,7 @@ function mountChannelWith(
               directive={null}
               appConversationChatId={CHANNEL_ID}
               resolveMember={resolveMember}
+              tasks={[]}
               openThread={openThread}
               onOpenThread={onOpenThread}
               onOpenUnderTheHood={vi.fn()}

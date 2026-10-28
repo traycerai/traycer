@@ -14,6 +14,7 @@ import {
   type BotThreadListResponse,
   type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -152,6 +153,8 @@ export function BotChannelView(props: {
    */
   readonly appConversationChatId: string | null;
   readonly resolveMember: BotMemberResolver;
+  /** The bot's tasks: the open thread lists the ones it set up. */
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The thread open beside the channel; `null` for none. */
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
@@ -166,6 +169,7 @@ export function BotChannelView(props: {
     directive,
     appConversationChatId,
     resolveMember,
+    tasks,
     openThread: open,
     onOpenThread,
     onOpenUnderTheHood,
@@ -505,6 +509,7 @@ export function BotChannelView(props: {
               originMessageId={openThreadPostId}
               sent={open?.sent ?? null}
               thread={panelThread}
+              tasks={tasks}
               anchorSenderLabel={anchorSenderLabel}
               resolveMember={resolveMember}
               onClose={() => onOpenThread(null)}

@@ -664,6 +664,7 @@ import {
   botSubscribeV10,
   botSubscribeV11,
   botSubscribeV12,
+  botSubscribeV13,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -15526,7 +15527,10 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // bound to its frozen frames so an older peer's re-parse strips it.
       // @1.2 names the chats subscribed to the person's notification feed
       // (`notificationSubscriptions`, T84); @1.1 is frozen without it.
-      latestMinor: 2,
+      // @1.3 says where each task came from (`spun`, `label`,
+      // `originRequestId`, `createdByChatId`, T82); @1.2 and earlier bind
+      // the task entry frozen without them.
+      latestMinor: 3,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15536,6 +15540,9 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         2: {
           contract: botSubscribeV12,
+        },
+        3: {
+          contract: botSubscribeV13,
         },
       },
     },

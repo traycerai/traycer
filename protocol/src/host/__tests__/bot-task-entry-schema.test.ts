@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   botSubscribeServerFrameSchema,
   botTaskEntrySchema,
@@ -17,6 +18,10 @@ const TRACKING_EVERY: BotTaskEntry = {
   state: "tracking",
   endedReason: null,
   createdByUserId: null,
+  spun: null,
+  label: null,
+  originRequestId: null,
+  createdByChatId: null,
 };
 
 const TRACKING_ON_COMPLETION: BotTaskEntry = {
@@ -28,6 +33,10 @@ const TRACKING_ON_COMPLETION: BotTaskEntry = {
   state: "tracking",
   endedReason: null,
   createdByUserId: null,
+  spun: null,
+  label: null,
+  originRequestId: null,
+  createdByChatId: null,
 };
 
 function issuePaths(entry: BotTaskEntry): string[] {
@@ -379,6 +388,69 @@ describe("botTaskEntrySchema createdByUserId", () => {
     const { createdByUserId: _omitted, ...withoutField } = TRACKING_EVERY;
 
     expect(botTaskEntrySchema.parse(withoutField).createdByUserId).toBeNull();
+  });
+});
+
+describe("bot.subscribe@1.3 task provenance", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const PROVENANCE = {
+    spun: true,
+    label: "Nightly triage",
+    originRequestId: "req-1",
+    createdByChatId: "thread-1",
+  } as const;
+  const UNKNOWN_PROVENANCE = {
+    spun: null,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+  } as const;
+
+  function snapshotWith(tasks: ReadonlyArray<object>): object {
+    return {
+      ...snapshotFrame([], null),
+      tasks,
+      notificationSubscriptions: null,
+    };
+  }
+
+  it("reads an entry from a host that predates the fields as unknown provenance", () => {
+    const {
+      spun: _spun,
+      label: _label,
+      originRequestId: _origin,
+      createdByChatId: _creator,
+      ...withoutFields
+    } = TRACKING_EVERY;
+
+    expect(botTaskEntrySchema.parse(withoutFields)).toEqual({
+      ...TRACKING_EVERY,
+      ...UNKNOWN_PROVENANCE,
+    });
+  });
+
+  it("carries the provenance to a 1.3 subscriber and strips it below 1.3", () => {
+    const frame = snapshotWith([{ ...TRACKING_EVERY, ...PROVENANCE }]);
+
+    expect(line.latestMinor).toBe(3);
+    const latest = line.versions[3].contract.serverFrameSchema.parse(frame);
+    expect(latest.kind === "snapshot" ? latest.tasks : null).toEqual([
+      { ...TRACKING_EVERY, ...PROVENANCE },
+    ]);
+    const {
+      spun: _spun,
+      label: _label,
+      originRequestId: _origin,
+      createdByChatId: _creator,
+      ...v12Entry
+    } = TRACKING_EVERY;
+    for (const minor of [0, 1, 2] as const) {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(frame);
+      expect(parsed.kind === "snapshot" ? parsed.tasks : null).toEqual([
+        v12Entry,
+      ]);
+    }
   });
 });
 
