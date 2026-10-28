@@ -123,6 +123,11 @@ export interface VisibleRailEntriesInput {
    * falls back to its first selectable profile (typically ambient).
    */
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
+  /**
+   * The agents a sandbox refusal's remedy opened the picker on, or `null` for
+   * the host's own rail; see `visibleRailHarnesses`.
+   */
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }
 
 /**
@@ -143,12 +148,14 @@ export function visibleRailEntries(
     preparingByHarnessId,
     profilesByHarnessId,
     activeProfileIdByHarnessId,
+    offeredAgents,
   } = input;
   return visibleRailHarnesses(
     harnesses,
     fallbackHarnesses,
     degradedHarnessIds,
     preparingByHarnessId,
+    offeredAgents,
   ).map((harness) =>
     buildRailEntry({
       harness,
@@ -176,16 +183,23 @@ export function visibleRailEntries(
  * in 30 seconds". They render gated and labelled instead, and a pack that
  * BLOCKS execution is the one thing still sorted below the ready providers -
  * see `deprioritized` for why that survived and degradation did not.
+ *
+ * Opened from a sandbox refusal (`offeredAgents` non-null), the rail answers
+ * what the SANDBOX runs, not what this host does: it lists exactly the offered
+ * agents, an offered one this host has turned off included, and nothing else.
  */
 export function visibleRailHarnesses(
   harnesses: ReadonlyArray<HarnessOption>,
   fallbackHarnesses: ReadonlyArray<HarnessOption>,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
   preparingByHarnessId: ReadonlyMap<GuiHarnessId, ProviderPackPreparing>,
+  offeredAgents: ReadonlyArray<string> | null,
 ): ReadonlyArray<HarnessOption> {
   const source = harnesses.length > 0 ? harnesses : fallbackHarnesses;
   const visible = source.filter((harness) =>
-    railHarnessVisible(harness, degradedHarnessIds, preparingByHarnessId),
+    offeredAgents === null
+      ? railHarnessVisible(harness, degradedHarnessIds, preparingByHarnessId)
+      : offeredAgents.includes(harness.id),
   );
   // Asks whether the pack state BLOCKS, not whether one exists. Bare map
   // membership was coherent before the gate landed - a preparing tab was

@@ -77,7 +77,13 @@ const answers = vi.hoisted(() => ({
     vi.fn<(address: { configurationId: string; pageId: string }) => void>(),
   onOpenTerminalInstead: vi.fn<() => void>(),
   onChooseAnotherHost: vi.fn<() => void>(),
-  openForHarness: vi.fn<(harnessId: GuiHarnessId) => void>(),
+  openForHarness:
+    vi.fn<
+      (
+        harnessId: GuiHarnessId,
+        offeredAgents: ReadonlyArray<string> | null,
+      ) => void
+    >(),
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -317,7 +323,9 @@ describe("useSandboxAgentGate", () => {
       ],
     });
     gate.notice?.action?.onAction();
-    expect(answers.openForHarness).toHaveBeenCalledWith("traycer");
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer", [
+      "traycer",
+    ]);
     gate.notice?.secondaryActions?.[0]?.onAction();
     gate.notice?.secondaryActions?.[1]?.onAction();
     expect(answers.onOpenTerminalInstead).toHaveBeenCalledOnce();
@@ -601,7 +609,9 @@ describe("useStagedSendSignInCheck", () => {
     refusal?.action?.onAction();
     refusal?.secondaryActions?.[0]?.onAction();
     refusal?.secondaryActions?.[1]?.onAction();
-    expect(answers.openForHarness).toHaveBeenCalledWith("traycer");
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer", [
+      "traycer",
+    ]);
     expect(answers.onOpenTerminalInstead).toHaveBeenCalledOnce();
     expect(answers.onChooseAnotherHost).toHaveBeenCalledOnce();
   });

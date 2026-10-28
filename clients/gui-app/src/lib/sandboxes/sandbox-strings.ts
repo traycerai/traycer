@@ -457,6 +457,10 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
+/** Held while the catalogue says which agents sandboxes run. */
+export const CHECKING_SANDBOX_AGENTS =
+  "Checking which agents run on sandboxes.";
+
 export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }

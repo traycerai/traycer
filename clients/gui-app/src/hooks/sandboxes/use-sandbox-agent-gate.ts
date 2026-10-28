@@ -20,6 +20,7 @@ import {
 } from "@/lib/provider-ordering";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  CHECKING_SANDBOX_AGENTS,
   configurationLabel,
   openProvidersLabel,
   enableSandboxInferenceLine,
@@ -85,7 +86,11 @@ export function useSandboxAgentGate(
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
   if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId)) {
-    const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
+    const notice = sandboxAgentNotOfferedNotice(
+      input.harnessId,
+      offeredAgents,
+      input,
+    );
     return { blocked: true, hint: notice.message, notice };
   }
   const readiness = requestedAgentReadiness(
@@ -95,7 +100,11 @@ export function useSandboxAgentGate(
     opencodeLine,
   );
   if (readiness.kind === "not-offered") {
-    const notice = sandboxAgentNotOfferedNotice(input.harnessId, input);
+    const notice = sandboxAgentNotOfferedNotice(
+      input.harnessId,
+      offeredAgents ?? null,
+      input,
+    );
     return { blocked: true, hint: notice.message, notice };
   }
   if (readiness.kind === "ready") return NOT_BLOCKED;
@@ -120,4 +129,44 @@ export function useSandboxAgentGate(
       secondaryActions: sandboxAgentSecondaryActions(input),
     },
   };
+}
+
+const CHECKING_OFFERED_AGENTS: SandboxAgentGate = {
+  blocked: true,
+  hint: CHECKING_SANDBOX_AGENTS,
+  notice: {
+    kind: "mirror",
+    message: CHECKING_SANDBOX_AGENTS,
+    pending: true,
+    action: null,
+  },
+};
+
+/**
+ * `useSandboxAgentGate` for a chat whose sandbox rests. Its chat is drawn by
+ * the published copy, bound to the host SERVING that copy, so no host this
+ * composer can read is the one the send runs on, and the sandbox itself
+ * answers nothing until it is awake. The cloud catalogue decides here, before
+ * any wake: an agent sandboxes don't offer is refused, and an offered one
+ * passes, leaving its readiness to the woken sandbox. Inert while `resting`
+ * is false.
+ */
+export function useRestingSandboxAgentGate(input: {
+  readonly resting: boolean;
+  readonly harnessId: GuiHarnessId | null;
+  readonly active: boolean;
+}): SandboxAgentGate {
+  const catalogue = useSandboxCatalogue(input.active && input.resting);
+  if (!input.resting || input.harnessId === null) return NOT_BLOCKED;
+  if (catalogue.data === undefined && catalogue.isFetching)
+    return CHECKING_OFFERED_AGENTS;
+  const offeredAgents = catalogue.data?.offeredAgents;
+  if (offeredAgents === undefined || offeredAgents.includes(input.harnessId))
+    return NOT_BLOCKED;
+  const notice = sandboxAgentNotOfferedNotice(
+    input.harnessId,
+    offeredAgents,
+    {},
+  );
+  return { blocked: true, hint: notice.message, notice };
 }

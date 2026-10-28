@@ -1620,6 +1620,7 @@ describe("LandingComposer direct submit gate", () => {
         expect(testState.openModelPicker).toHaveBeenCalledExactlyOnceWith(
           "traycer",
           null,
+          ["traycer"],
         );
         fireEvent.click(
           screen.getByRole("button", { name: "Choose another host" }),
@@ -1627,6 +1628,31 @@ describe("LandingComposer direct submit gate", () => {
         expect(readStagedSandbox("landing:window-test")).toBeNull();
       },
     );
+
+    it("follows the pick after a refusal at Send: another unoffered agent switches the line, an offered one clears it", async () => {
+      testState.pickHarness = "codex";
+      testState.catalogue = { providers: [], offeredAgents: ["traycer"] };
+      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+      const { rerender } = await sendFromComposer();
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      );
+
+      testState.pickHarness = "claude";
+      act(() => testState.toolbarStore?.setState({}));
+      rerender();
+
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      );
+
+      testState.pickHarness = "traycer";
+      act(() => testState.toolbarStore?.setState({}));
+      rerender();
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(testState.startTask).not.toHaveBeenCalled();
+    });
 
     it("keeps the send pending while the catalogue loads and waits for another Send after it settles", async () => {
       testState.catalogue = undefined;

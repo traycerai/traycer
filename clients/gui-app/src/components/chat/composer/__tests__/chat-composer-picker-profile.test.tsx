@@ -304,6 +304,7 @@ function mountComposer() {
         topSpacing="normal"
         topSlot={null}
         suggestedPrompt={undefined}
+        restingSandbox={null}
       />
     </QueryClientProvider>,
   );

@@ -73,6 +73,7 @@ describe("visibleRailEntries", () => {
         ],
       ]),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     // The rail no longer splits by profile - one tab for Claude, full stop.
@@ -91,6 +92,7 @@ describe("visibleRailEntries", () => {
         ["codex", [profile("ambient", "ambient", "Codex Terminal account")]],
       ]),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     expect(entries).toEqual([
@@ -121,6 +123,7 @@ describe("visibleRailEntries", () => {
       activeProfileIdByHarnessId: new Map<GuiHarnessId, string | null>([
         ["claude", "work-uuid"],
       ]),
+      offeredAgents: null,
     });
 
     expect(entries[0].accentDot).toEqual({
@@ -146,6 +149,7 @@ describe("visibleRailEntries", () => {
         ],
       ]),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     expect(entries[0].accentDot).toEqual({
@@ -185,6 +189,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       preparingByHarnessId: new Map([["claude", downloading]]),
       profilesByHarnessId: new Map(),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     expect(entries).toHaveLength(1);
@@ -211,6 +216,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       ]),
       profilesByHarnessId: new Map(),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     // Must stay null, never coerced to 0 - a 0% bar and an unknown-progress
@@ -230,6 +236,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       preparingByHarnessId: new Map([["codex", downloading]]),
       profilesByHarnessId: new Map(),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     expect(entries.map((entry) => entry.harness.id)).toEqual([
@@ -267,6 +274,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
         preparingByHarnessId: new Map([["codex", preparing]]),
         profilesByHarnessId: new Map(),
         activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+        offeredAgents: null,
       }).map((entry) => entry.harness.id);
 
     expect(order(downloadingBehindRunnableBinary)).toEqual(["codex", "claude"]);
@@ -283,6 +291,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       preparingByHarnessId: new Map([["claude", downloading]]),
       profilesByHarnessId: new Map(),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     expect(entries[0].preparing).toBeNull();
@@ -389,6 +398,7 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
       [],
       new Set(),
       new Map(),
+      null,
     );
     expect(visible).toEqual([]);
 
@@ -405,6 +415,7 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
       [],
       new Set(),
       new Map(),
+      null,
     );
     expect(visibleSignedOut.map((h) => h.id)).toEqual(["claude"]);
   });
@@ -420,8 +431,27 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
     };
     expect(railHarnessDegraded(explicitlyOff, new Set())).toBe(false);
     expect(
-      visibleRailHarnesses([explicitlyOff], [], new Set(), new Map()),
+      visibleRailHarnesses([explicitlyOff], [], new Set(), new Map(), null),
     ).toEqual([]);
+  });
+
+  it("keeps an offered agent this host turned off on a sandbox refusal's rail, and drops what sandboxes don't run", () => {
+    const traycerOff: HarnessOption = {
+      ...harness("claude"),
+      id: "traycer",
+      label: "Traycer",
+      enabled: false,
+      available: false,
+    };
+    expect(
+      visibleRailHarnesses(
+        [harness("claude"), traycerOff, harness("codex")],
+        [],
+        new Set(),
+        new Map(),
+        ["traycer"],
+      ).map((h) => h.id),
+    ).toEqual(["traycer"]);
   });
 
   // Enablement is no longer tri-state: there is no "auto, undetected" middle
@@ -439,7 +469,7 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
     };
     expect(railHarnessDegraded(stickyOn, new Set())).toBe(true);
     expect(
-      visibleRailHarnesses([stickyOn], [], new Set(), new Map()).map(
+      visibleRailHarnesses([stickyOn], [], new Set(), new Map(), null).map(
         (h) => h.id,
       ),
     ).toEqual(["claude"]);
@@ -495,6 +525,7 @@ describe("visibleRailEntries: signed-out while available", () => {
       preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map(),
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+      offeredAgents: null,
     });
 
     expect(entries.map((entry) => entry.harness.id)).toEqual([

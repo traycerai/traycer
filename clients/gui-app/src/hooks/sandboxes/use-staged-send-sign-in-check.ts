@@ -10,6 +10,7 @@ import {
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   ADD_CREDITS_LINK,
+  CHECKING_SANDBOX_AGENTS,
   CHOOSE_ANOTHER_HOST,
   notEnoughCreditsLine,
   teamAllowanceShortLine,
@@ -108,12 +109,12 @@ export function useStagedSendSignInCheck(
         return {
           kind: "mirror",
           pending: true,
-          message: "Checking which agents run on sandboxes.",
+          message: CHECKING_SANDBOX_AGENTS,
           action: null,
         };
       if (offeredAgents === undefined || offeredAgents.includes(harnessId))
         return null;
-      return sandboxAgentNotOfferedNotice(harnessId, {
+      return sandboxAgentNotOfferedNotice(harnessId, offeredAgents, {
         onChooseModel,
         onOpenTerminalInstead,
         onChooseAnotherHost,

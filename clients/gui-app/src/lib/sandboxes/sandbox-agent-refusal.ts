@@ -25,7 +25,8 @@ export function stagedSandboxCheckingNotice(
 }
 
 export interface SandboxAgentRemedies {
-  readonly onChooseModel?: () => void;
+  /** Opens a model picker on the agents sandboxes offer (`null`: unknown). */
+  readonly onChooseModel?: (offeredAgents: ReadonlyArray<string> | null) => void;
   readonly onOpenTerminalInstead?: () => void;
   readonly onChooseAnotherHost?: () => void;
 }
@@ -54,21 +55,27 @@ export function sandboxAgentDisplayName(harnessId: GuiHarnessId): string {
   return providerId === null ? harnessId : providerDisplayName(providerId);
 }
 
-/** A rejected pick stays selected until the person chooses its replacement. */
+/**
+ * A rejected pick stays selected until the person chooses its replacement.
+ * "Choose a model" opens on what sandboxes offer (`offeredAgents`, the cloud
+ * catalogue's list), never on the rail of the host the picker reads.
+ */
 export function sandboxAgentNotOfferedNotice(
   harnessId: GuiHarnessId,
+  offeredAgents: ReadonlyArray<string> | null,
   remedies: SandboxAgentRemedies,
 ): ComposerHostNoticeState {
+  const chooseModel =
+    remedies.onChooseModel ??
+    ((offered: ReadonlyArray<string> | null) => {
+      openActiveModelPickerForHarness("traycer", null, offered);
+    });
   return {
     kind: "refused",
     message: agentNotOfferedOnSandboxesLine(sandboxAgentDisplayName(harnessId)),
     action: {
       label: "Choose a model",
-      onAction:
-        remedies.onChooseModel ??
-        (() => {
-          openActiveModelPickerForHarness("traycer", null);
-        }),
+      onAction: () => chooseModel(offeredAgents),
     },
     secondaryActions: sandboxAgentSecondaryActions(remedies),
   };

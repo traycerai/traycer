@@ -153,6 +153,7 @@ export function ModalFixture() {
               }
               catalogHarnesses={[HARNESS]}
               fallbackHarnesses={[HARNESS]}
+              offeredAgents={null}
               profilesByHarnessId={new Map()}
               resolvedActiveProviderId="claude"
               activeProfileId={null}

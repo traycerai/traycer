@@ -530,6 +530,10 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
+import {
+  convertReplicaChat,
+  createPublishedChatSessionHandle,
+} from "@/lib/chats/published-chat-session";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -2175,6 +2179,28 @@ describe("<ChatTile />", () => {
     });
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {
+    renderRestingCopy(
+      createPublishedChatSessionHandle({
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        ownerUserId: "owner-1",
+        title: CHAT_ARTIFACT.name,
+        createdAt: 1,
+        updatedAt: 1,
+        conversion: convertReplicaChat([], []),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    });
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+    expect(
+      screen.queryByText("Reconnecting to the host — sending is paused"),
+    ).toBeNull();
   });
 
   it("keeps resting-copy composer settings local while live settings persist", async () => {

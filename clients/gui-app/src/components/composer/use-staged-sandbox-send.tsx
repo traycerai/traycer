@@ -476,6 +476,7 @@ export function useSetupLineFacts(
         regionLabel: "",
         shapeLabel: "",
         smallerShapeAffordable: false,
+        offeredAgents: catalogue?.offeredAgents ?? null,
       };
     }
     const { shape, configuration } = stage.target;
@@ -506,6 +507,7 @@ export function useSetupLineFacts(
           stageBalanceMc(user, configuration),
           smallest.awakeMcPerHour,
         ),
+      offeredAgents: catalogue.offeredAgents ?? null,
     };
   }, [catalogue, existingPrice, stage, user]);
 }

@@ -1,25 +1,37 @@
 import { useCallback } from "react";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { handPendingSandboxSend } from "@/lib/sandboxes/pending-sandbox-send";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { readStagedWorktreeIntent } from "@/stores/worktree/worktree-intent-staging-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 
-/** Capture a bound chat's send before the ordinary pending driver wakes it. */
+/**
+ * Capture a bound chat's send before the ordinary pending driver wakes it.
+ *
+ * An agent the cloud catalogue says sandboxes don't run is refused here, before
+ * anything is staged, so the sandbox is never woken for it - the same check a
+ * new sandbox's Send makes (`useStagedSendSignInCheck`). The composer's gate
+ * shows that refusal; this is the backstop at the send itself.
+ */
 export function useBoundSandboxSend(input: {
   readonly epicId: string;
   readonly chatId: string;
-  readonly target: Extract<
-    ChatSandboxState,
-    { readonly kind: "resting" }
-  > | null;
+  readonly target: RestingChatSandbox | null;
 }): (submission: ChatComposerSubmitInput) => boolean {
   const { epicId, chatId, target } = input;
+  const offeredAgents = useSandboxCatalogue(target !== null).data
+    ?.offeredAgents;
   return useCallback(
     (submission: ChatComposerSubmitInput): boolean => {
       if (target === null) return false;
+      if (
+        offeredAgents !== undefined &&
+        !offeredAgents.includes(submission.settings.harnessId)
+      )
+        return false;
       const userId = useAuthStore.getState().profile?.userId ?? null;
       const held = Object.values(
         usePendingSandboxSendStore.getState().sends,
@@ -73,6 +85,6 @@ export function useBoundSandboxSend(input: {
         }) !== null
       );
     },
-    [chatId, epicId, target],
+    [chatId, epicId, offeredAgents, target],
   );
 }

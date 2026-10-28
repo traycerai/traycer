@@ -372,6 +372,7 @@ function composerElement() {
       topSpacing="normal"
       topSlot={null}
       suggestedPrompt={undefined}
+      restingSandbox={null}
     />
   );
 }
