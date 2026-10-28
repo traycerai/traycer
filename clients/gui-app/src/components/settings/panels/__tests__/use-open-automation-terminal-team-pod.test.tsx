@@ -36,6 +36,13 @@ const network = vi.hoisted(() => ({
   navigate: vi.fn(),
 }));
 
+// These cases are about the sandboxes-on behaviour. The harness mounts the
+// hook without a `HostRuntimeProvider`, which the verdict's own read would now
+// need: `usePreviewFeature` reads the user record through `useAuthUser`.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null || !network.readyHostIds.has(hostId)

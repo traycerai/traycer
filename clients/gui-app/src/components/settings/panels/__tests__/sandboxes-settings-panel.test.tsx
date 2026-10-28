@@ -150,6 +150,13 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(),
 }));
 
+// These cases are about the sandboxes-on behaviour. The panel is mounted
+// without a `HostRuntimeProvider`, which the verdict's own read would now need:
+// `usePreviewFeature` reads the user record through `useAuthUser`.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
