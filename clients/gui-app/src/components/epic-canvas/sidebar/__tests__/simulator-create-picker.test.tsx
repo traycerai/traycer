@@ -18,6 +18,7 @@ import {
 } from "@traycer/protocol/host/index";
 import type {
   SimulatorHostInstance,
+  SimulatorInstancesResponse,
   SimulatorOpenResponse,
   SimulatorPackState,
   SimulatorState,
@@ -30,6 +31,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { createAppQueryClient } from "@/lib/query-client";
 import { resetSimulatorPendingOpensForTests } from "@/stores/epics/simulator-pending-opens-store";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
@@ -151,11 +153,21 @@ const READY_PACK: SimulatorPackState = {
  */
 const pack: { state: SimulatorPackState } = { state: READY_PACK };
 
+/** The devices this host has booted since the test began. */
+const booted = new Set<string>();
+
 function listNow(): SimulatorState {
   return {
     ...LIST,
     packState: pack.state,
-    simulators: pack.state.kind === "ready" ? DEVICES : [],
+    simulators:
+      pack.state.kind === "ready"
+        ? DEVICES.map((device) =>
+            booted.has(device.simulatorId)
+              ? { ...device, booted: true }
+              : device,
+          )
+        : [],
   };
 }
 
@@ -184,6 +196,29 @@ const RUNNING: SimulatorHostInstance = {
   tasks: [],
   otherTaskCount: 0,
 };
+
+/**
+ * The host's instances, one per booted device, so a boot from the picker moves
+ * this read and `simulator.list` together, as it does on a real machine.
+ */
+function instancesNow(): SimulatorInstancesResponse {
+  return {
+    instances: listNow()
+      .simulators.filter((device) => device.booted)
+      .map((device) =>
+        device.simulatorId === RUNNING.instanceKey
+          ? RUNNING
+          : {
+              ...RUNNING,
+              instanceKey: device.simulatorId,
+              simulatorId: device.simulatorId,
+              name: device.name,
+              version: device.version,
+              drivenByAgent: false,
+            },
+      ),
+  };
+}
 
 const opens: unknown[] = [];
 /** Whether the picker reached the host at all: the read that handshakes it. */
@@ -252,6 +287,7 @@ describe("SimulatorCreatePicker", () => {
     freshQueryClient();
     opens.length = 0;
     reads.list = 0;
+    booted.clear();
     pack.state = READY_PACK;
     world.support = true;
     world.negotiated = { major: 1, minor: 1 };
@@ -266,7 +302,7 @@ describe("SimulatorCreatePicker", () => {
           return listNow();
         },
         "simulator.status": () => statusNow(),
-        "simulator.instances": () => ({ instances: [RUNNING] }),
+        "simulator.instances": () => instancesNow(),
         "config.simulator.set": () => {
           // The host takes the flip and starts fetching the tools.
           pack.state = { kind: "installing", reason: null, progress: 0 };
@@ -274,6 +310,8 @@ describe("SimulatorCreatePicker", () => {
         },
         "simulator.open": (params) => {
           opens.push(params);
+          // The host boots the device the open names, so both reads move.
+          booted.add(params.simulatorId);
           return answer();
         },
       },
@@ -341,6 +379,28 @@ describe("SimulatorCreatePicker", () => {
       expect(typeof requestId).toBe("string");
     }
     expect(new Set(requestIds).size).toBe(3);
+  });
+
+  it("lists a device it just booted once, under Running, when reopened inside the freshness window", async () => {
+    // The production client, for its real 60 s `staleTime`: nothing moves the
+    // clock here, so a read the open did not invalidate is served from cache.
+    queryClient = createAppQueryClient();
+    const user = await openPicker();
+    const cold = await screen.findByTestId("simulator-picker-cold-udid-cold");
+
+    await user.click(within(cold).getByRole("button", { name: "Boot" }));
+    await waitFor(() => expect(opens).toHaveLength(1));
+
+    // The pick closed the picker; reopening it asks both of its reads again.
+    await user.click(screen.getByTestId("add"));
+    await screen.findByTestId("simulator-create-picker");
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("simulator-picker-running-udid-cold"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+    });
   });
 
   it("leaves the off state and lists the cold devices once the switch is on and the pack has installed", async () => {
@@ -432,6 +492,7 @@ describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
     freshQueryClient();
     opens.length = 0;
     reads.list = 0;
+    booted.clear();
     pack.state = READY_PACK;
     world.support = true;
     world.negotiated = { major: 1, minor: 0 };

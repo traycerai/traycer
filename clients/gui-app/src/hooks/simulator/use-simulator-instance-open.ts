@@ -11,7 +11,11 @@ import type {
   SimulatorInstanceChoice,
   SimulatorPlatform,
 } from "@traycer/protocol/host/simulator/schemas";
-import { useHostBinding, useHostDirectory } from "@/lib/host";
+import {
+  useHostBinding,
+  useHostDirectory,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
@@ -43,6 +47,20 @@ export interface SimulatorInstanceOpenArgs {
   readonly instance: SimulatorInstanceChoice;
   readonly place: (ref: SimulatorTileRef) => void;
 }
+
+/**
+ * The reads an open moves, the same pair the power-off / keep-running
+ * `invalidateMethods` sweep: the host's instances, and the DEVICES, whose
+ * `booted` flag is what the + picker's Not running section reads. Without the
+ * second one, a device booted from the picker kept its pre-boot cold row for
+ * the 60 s freshness window - listed under Running and offering Boot at once -
+ * since the instance poll does not touch that read and the pack it follows
+ * never moved.
+ */
+const OPEN_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
+  "simulator.instances",
+  "simulator.list",
+];
 
 interface OpenVariables {
   readonly hostId: string;
@@ -121,12 +139,11 @@ export function useSimulatorInstanceOpen(epicId: string): {
       }
     },
     onSettled: (_data, _error, variables) => {
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          variables.hostId,
-          "simulator.instances",
-        ),
-      });
+      for (const method of OPEN_INVALIDATIONS) {
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(variables.hostId, method),
+        });
+      }
     },
     onError: (error) => {
       if (error instanceof HostRpcError)
