@@ -32,15 +32,20 @@ export type QueueEditIntent = "save" | "steer";
  * `confirming` is a steer the host refused until the person confirms ending
  * the running turn: the confirm dialog asks about it, so nothing about it is
  * told here, applied or not. The record stays in custody until the dialog is
- * answered ({@link withoutQueueEditAwaitingConfirmation}): until then the
+ * answered ({@link answerQueueEditAwaitingConfirmation}): until then the
  * settings it asked for ride on nothing the host has seen.
+ *
+ * `answered` is that steer once the dialog is answered. Its Restart or Cancel
+ * goes out as a frame of its own, so this one is settled and, like
+ * `confirming`, tells nothing - but a text still unanswered keeps the record.
  */
 export type QueueEditFrameOutcome =
   | "pending"
   | "accepted"
   | "rejected"
   | "unconfirmed"
-  | "confirming";
+  | "confirming"
+  | "answered";
 
 /**
  * An edited queued prompt, held from the moment the composer is cleared until
@@ -366,7 +371,9 @@ function settleQueueEditRecord(
       requestedChanges: next.requestedChanges,
     });
   }
-  const landedWhole = next.edit === "accepted" && next.followUp === "accepted";
+  const landedWhole =
+    next.edit === "accepted" &&
+    (next.followUp === "accepted" || next.followUp === "answered");
   const refusedAndAnswered =
     next.edit === "rejected" && next.followUp !== "pending";
   return {
@@ -452,12 +459,14 @@ export function foldQueueEditSteerAwaitingConfirmation(
 }
 
 /**
- * Retire the record whose steer the confirm dialog has just answered: the
- * Restart re-sends the steer and the Cancel saves its settings, each as a
- * frame of its own. Unchanged for an action id that is no record's refused
- * steer.
+ * Settle the steer the confirm dialog has just answered: the Restart re-sends
+ * the steer and the Cancel saves its settings, each as a frame of its own. A
+ * record whose text is already saved is retired; one whose text is still
+ * unanswered stays in custody, since the refusal can arrive first and a later
+ * refusal of the text must still hand it back. Unchanged for an action id that
+ * is no record's refused steer.
  */
-export function withoutQueueEditAwaitingConfirmation(
+export function answerQueueEditAwaitingConfirmation(
   records: QueueEditRecords,
   followUpActionId: string,
 ): QueueEditRecords {
@@ -469,7 +478,9 @@ export function withoutQueueEditAwaitingConfirmation(
   ) {
     return records;
   }
-  return withoutQueueEditRecord(records, record.editActionId);
+  return record.edit === "accepted"
+    ? withoutQueueEditRecord(records, record.editActionId)
+    : withQueueEditRecord(records, { ...record, followUp: "answered" });
 }
 
 /** An image node reduced to the one attribute that survives the host. */
