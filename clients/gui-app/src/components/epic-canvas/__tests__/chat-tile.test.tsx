@@ -2071,6 +2071,37 @@ describe("<ChatTile />", () => {
     },
   );
 
+  it.each([
+    ["before a session handle", null],
+    ["with a handle, before its snapshot", seedDocWithChat],
+  ] as const)(
+    "says a starting sandbox's own line alone, never the host-starting banner, %s",
+    async (_case, seed) => {
+      // An answered, empty directory: the host reads as starting.
+      directoryListTestState.entries = [];
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-p1",
+          hostId: HOST_ID,
+          displayName: "e2e-sbx-p1",
+          state: "starting",
+        }),
+      ];
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seed, "editor");
+      chatHarness.installDeferred();
+      renderChatTile();
+      await advanceLegendListTime(0);
+
+      expect(screen.getAllByText("Starting e2e-sbx-p1 · pending")).toHaveLength(
+        1,
+      );
+      expect(screen.queryByTestId("chat-host-starting-chat-1")).toBeNull();
+      expect(document.body.textContent).not.toContain("Waiting for the host");
+    },
+  );
+
   it.each(["owner", "viewer"] as const)(
     "says a destroyed sandbox's end in one line, with its actions and no composer, to the %s",
     async (access) => {

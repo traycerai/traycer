@@ -15,7 +15,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 /**
  * The classification a chat's footer and send path read, over the real hook.
  * Only its data sources are replaced: the task's projected hosts, the viewer's
- * sandbox list and configurations, the host directory row and the clock.
+ * sandbox list and configurations, and the host directory row.
  */
 
 const NOW = Date.UTC(2026, 9, 27, 12, 0);
@@ -27,7 +27,6 @@ const sources = vi.hoisted(
     sandboxes: SandboxSummary[] | null;
     configurations: SandboxConfigurations;
     entry: HostDirectoryEntry | null;
-    now: number;
   } => ({
     task: { kind: "unknown" },
     sandboxes: [],
@@ -37,7 +36,6 @@ const sources = vi.hoisted(
       complete: true,
     },
     entry: null,
-    now: 0,
   }),
 );
 
@@ -61,10 +59,6 @@ vi.mock(
 );
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => sources.entry,
-}));
-vi.mock("@/lib/relative-time", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/relative-time")>()),
-  useSampledNow: () => sources.now,
 }));
 
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
@@ -105,7 +99,6 @@ beforeEach(() => {
     complete: true,
   };
   sources.entry = null;
-  sources.now = NOW;
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: VIEWER, userName: "V", email: "v@example.com" },
@@ -240,7 +233,7 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toEqual({ kind: "none" });
   });
 
-  it("reads an awake sandbox the transport cannot reach as unreachable, with the minutes since the directory last saw it", () => {
+  it("reads an awake sandbox the transport cannot reach as unreachable, with when the directory last saw it", () => {
     sources.sandboxes = [row({ state: "awake" })];
     const base = remoteEntry(HOST, null);
     const seen: RemoteHostDirectoryEntry = {
@@ -254,17 +247,17 @@ describe("useChatSandboxState", () => {
 
     expect(stateOf(false)).toMatchObject({
       kind: "unreachable",
-      lastContactMinutes: 7,
+      lastSeenAt: NOW - 7 * 60_000 - 20_000,
     });
   });
 
-  it("says no last contact when the directory has none, and nothing at all while reachable", () => {
+  it("says no last sighting when the directory has none, and nothing at all while reachable", () => {
     sources.sandboxes = [row({ state: "awake" })];
     sources.entry = remoteEntry(HOST, null);
 
     expect(stateOf(false)).toMatchObject({
       kind: "unreachable",
-      lastContactMinutes: null,
+      lastSeenAt: null,
     });
     expect(stateOf(true)).toEqual({ kind: "none" });
   });

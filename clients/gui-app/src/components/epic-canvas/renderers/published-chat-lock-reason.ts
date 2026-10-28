@@ -5,8 +5,6 @@
  * file that exports both components and non-components breaks fast refresh for
  * everything importing it. Pure string builders.
  */
-import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
-import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
@@ -34,8 +32,8 @@ export type PublishedCopyRefresh =
  * that this is the last published copy (so they do not assume they are seeing
  * a turn that finished after the host went away).
  *
- * The copy's AGE follows, when the row carries it and the chat's sandbox has
- * not ended: "Published <date>." is passive - it never alarms, and it reads the head that
+ * The copy's AGE follows, when the row carries it: "Published <date>." is
+ * passive and unconditional - it never alarms, and it reads the head that
  * produced the RENDERED transcript, not any later record head. The record head
  * is a signal to re-read, and while that re-read is in flight (or has failed)
  * the `refresh` arm says so in this same footer; the date stays the date of
@@ -79,7 +77,6 @@ export function publishedChatLockReason(input: {
    * name a machine and promise a resume this copy is not waiting on.
    */
   readonly environmentOwned: boolean;
-  readonly sandboxEnd?: TaskSandboxEnd | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -88,15 +85,8 @@ export function publishedChatLockReason(input: {
   /** What is happening about a newer publication, if anything. */
   readonly refresh: PublishedCopyRefresh;
 }): string {
-  const end = input.sandboxEnd ?? null;
-  const parts = [
-    end === null
-      ? publishedCopySentence(input)
-      : taskSandboxEndLine(input.ownerLabel, end),
-  ];
-  // A destroyed sandbox's chat says its end and nothing about the copy's age:
-  // that chat never publishes again.
-  if (end === null && input.publishedAt !== null) {
+  const parts = [publishedCopySentence(input)];
+  if (input.publishedAt !== null) {
     parts.push(`Published ${formatAbsoluteDateTime(input.publishedAt)}.`);
   }
   const refresh = refreshSentence(input.refresh);
@@ -162,14 +152,10 @@ export function replicaChatLockReason(input: {
   readonly ownedByViewer: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly environmentOwned: boolean;
-  readonly sandboxEnd?: TaskSandboxEnd | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
-  const base =
-    input.sandboxEnd === undefined || input.sandboxEnd === null
-      ? replicaCopySentence(input)
-      : taskSandboxEndLine(input.ownerLabel, input.sandboxEnd);
+  const base = replicaCopySentence(input);
   if (input.unreadableCount > 0) {
     return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }

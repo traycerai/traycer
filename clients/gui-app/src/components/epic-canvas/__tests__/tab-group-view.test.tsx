@@ -410,6 +410,12 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
       data-source-owner={props.sourceOwnerUserId}
     />
   ),
+  // Whether a sandbox's own line replaces it is the chat tile's suite's to
+  // pin; here the substitution only has to mount it.
+  SubstitutedCatchingUpBanner: (props: {
+    readonly testId: string;
+    readonly reason: string;
+  }) => <div data-testid={props.testId} data-reason={props.reason} />,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {

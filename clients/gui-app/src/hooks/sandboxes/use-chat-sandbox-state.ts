@@ -13,7 +13,6 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
-import { useSampledNow } from "@/lib/relative-time";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -31,7 +30,6 @@ export function useChatSandboxState(
   const configurations = useSandboxConfigurations();
   const entry = useHostDirectoryEntry(hostId);
   const viewerId = useAuthStore((state) => state.profile?.userId ?? null);
-  const now = useSampledNow();
   if (hostId === null) return { kind: "none" };
   if (task.kind === "ended") return { kind: "destroyed", ended: task.ended };
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
@@ -62,7 +60,7 @@ export function useChatSandboxState(
       : {
           kind: "unreachable",
           sandbox,
-          lastContactMinutes: minutesSinceContact(entry, now),
+          lastSeenAt: lastSeenAt(entry),
         };
   }
   return unsettledSandboxState(sandbox, sandbox.state);
@@ -92,11 +90,12 @@ function unsettledSandboxState(
 }
 
 /**
- * A host the viewer's sandbox list does not hold: a sandbox when the task or
- * the directory names one, not a sandbox when either names it as a person's,
- * and unknown otherwise - a failed, disabled or missing read proves nothing.
+ * A host the viewer's sandbox list does not hold, or a surface that cannot
+ * read the list (a sidebar row): a sandbox when the task or the directory
+ * names one, not a sandbox when either names it as a person's, and unknown
+ * otherwise - a failed, disabled or missing read proves nothing.
  */
-function unlistedHostState(
+export function unlistedHostState(
   task: TaskSandboxHost,
   entry: HostDirectoryEntry | null,
 ): ChatSandboxState {
@@ -111,17 +110,12 @@ function unlistedHostState(
     : { kind: "pending", name: null };
 }
 
-function minutesSinceContact(
-  entry: HostDirectoryEntry | null,
-  now: number,
-): number | null {
+function lastSeenAt(entry: HostDirectoryEntry | null): number | null {
   const seen =
     entry !== null && isRemoteHostDirectoryEntry(entry)
       ? entry.remoteStatus.lastSeenAt
       : null;
   if (seen === null) return null;
   const at = Date.parse(seen);
-  return Number.isFinite(at)
-    ? Math.max(0, Math.floor((now - at) / 60_000))
-    : null;
+  return Number.isFinite(at) ? at : null;
 }

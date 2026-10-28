@@ -1784,7 +1784,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     sandboxSurface.state = {
       kind: "unreachable",
       sandbox: ROW,
-      lastContactMinutes: 4,
+      lastSeenAt: null,
     };
     signInAsOwner();
     mountCopy();
@@ -1985,31 +1985,34 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
     );
   });
 
-  it("keeps a listed resting team sandbox resting, with its footer and its wake, before its configuration resolves", () => {
-    sandboxSurface.sources = {
-      taskHosts: { kind: "none" },
-      sandboxes: [
-        listed({
-          state: "suspended",
-          environmentId: "env-not-loaded",
-          createdBy: { userId: "member-2", displayName: "Dana" },
-        }),
-      ],
-      entry: null,
-    };
-    mountOwnCopy();
+  it.each([
+    ["suspended", "e2e-sbx-p1 is suspended"],
+    ["stopped", "e2e-sbx-p1 is stopped"],
+  ] as const)(
+    "says a listed %s team sandbox's state alone, read-only with no wake, before its configuration resolves",
+    (state, line) => {
+      sandboxSurface.sources = {
+        taskHosts: { kind: "none" },
+        sandboxes: [
+          listed({
+            state,
+            environmentId: "env-not-loaded",
+            createdBy: { userId: "member-2", displayName: "Dana" },
+          }),
+        ],
+        entry: null,
+      };
+      mountOwnCopy();
 
-    expect(chatTileSessionViewCalls.at(-1)?.restingSandbox).toMatchObject({
-      kind: "resting",
-      configuration: null,
-    });
-    expect(
-      screen.getByText(
-        "e2e-sbx-p1 is suspended · your next message resumes it",
-      ),
-    ).toBeTruthy();
-    expect(document.body.textContent).not.toContain("isn't available");
-  });
+      // The composer's place is the state line, so there is no Send to press.
+      expect(chatTileSessionViewCalls.at(-1)?.restingSandbox).toBeUndefined();
+      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+        line,
+      );
+      expect(document.body.textContent).not.toContain("your next message");
+      expect(document.body.textContent).not.toContain("isn't available");
+    },
+  );
 
   it.each([
     [
@@ -2047,6 +2050,94 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
       expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
         line,
       );
+    },
+  );
+});
+
+/**
+ * The unknown line is the state's, never the role's: a team member and a
+ * collaborator looking at a sandbox whose state this device cannot read get
+ * the same line the owner does.
+ */
+describe("PublishedChatTile - an unknown sandbox state, for every role", () => {
+  const TEAM_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: NODE.ownerUserId,
+        ownerKind: "organization",
+        ownerId: "org-1",
+        roomId: "room-team",
+        label: "acme",
+      },
+    ],
+  };
+  const PERSONAL_ONLY_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: "viewer-user",
+        ownerKind: "user",
+        ownerId: "viewer-user",
+        roomId: "room-personal",
+        label: "Personal",
+      },
+    ],
+  };
+
+  it.each([
+    ["a team member", TEAM_ENVIRONMENTS],
+    ["a collaborator", PERSONAL_ONLY_ENVIRONMENTS],
+  ] as const)(
+    "gives %s the unknown line, by the sandbox's name",
+    (_role, list) => {
+      environments.pool = true;
+      environments.list = list;
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "viewer-user",
+          userName: "Viewer",
+          email: "viewer@example.com",
+        },
+        contextMetadata: { userId: "viewer-user", username: "Viewer" },
+      });
+      sandboxSurface.sources = {
+        taskHosts: {
+          kind: "hosts",
+          hosts: [
+            {
+              hostId: "owner-host-1",
+              label: "e2e-sbx-p1",
+              principal: { kind: "team", id: "team-1" },
+              reach: "same_principal",
+              sandboxEnd: null,
+            },
+          ],
+        },
+        sandboxes: null,
+        entry: null,
+      };
+      mockUseHostReachability.mockReturnValue({
+        status: "unreachable",
+        hostLabel: "owner-host-1",
+      });
+      mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+      mockUseChatReplicaRead.mockReturnValue(replicaOk());
+      render(
+        <PublishedChatTile
+          node={NODE}
+          viewTabId="tab-1"
+          tileId="pane-1"
+          isActive
+          epicId="epic-1"
+        />,
+      );
+
+      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+        "e2e-sbx-p1 isn't available — this chat stays readable.",
+      );
+      expect(
+        screen.queryByTestId("published-chat-dead-tile-chat-1"),
+      ).toBeNull();
     },
   );
 });

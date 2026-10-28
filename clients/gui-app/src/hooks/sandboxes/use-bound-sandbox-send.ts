@@ -28,11 +28,7 @@ export function useBoundSandboxSend(input: {
   const catalogue = useSandboxCatalogue(target !== null).data;
   return useCallback(
     (submission: ChatComposerSubmitInput): boolean => {
-      // Without the configuration the wake bills under, nothing is staged and
-      // the draft stays until it resolves.
-      const configuration = target?.configuration ?? null;
-      if (target === null || configuration === null || catalogue === undefined)
-        return false;
+      if (target === null || catalogue === undefined) return false;
       const offeredAgents = catalogue.offeredAgents;
       if (
         offeredAgents !== undefined &&
@@ -63,7 +59,7 @@ export function useBoundSandboxSend(input: {
         hostId: sandbox.hostId,
         sandboxId: sandbox.id,
         name: sandbox.displayName,
-        configuration,
+        configuration: target.configuration,
         verb: sandbox.state === "stopped" ? "start" : "resume",
       });
       return (

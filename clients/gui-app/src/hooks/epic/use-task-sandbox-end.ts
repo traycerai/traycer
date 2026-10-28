@@ -1,5 +1,8 @@
 import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
-import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import {
+  useTaskHostsView,
+  type TaskHostsView,
+} from "@/hooks/epic/use-task-hosts-view";
 
 export interface TaskSandboxEndedHost {
   readonly name: string;
@@ -26,7 +29,14 @@ export function useTaskSandboxHost(
   epicId: string,
   hostId: string | null,
 ): TaskSandboxHost {
-  const taskHosts = useTaskHostsView(epicId);
+  return taskSandboxHostOf(useTaskHostsView(epicId), hostId);
+}
+
+/** {@link useTaskSandboxHost} over a task hosts view already read. */
+export function taskSandboxHostOf(
+  taskHosts: TaskHostsView,
+  hostId: string | null,
+): TaskSandboxHost {
   if (hostId === null || taskHosts.kind !== "hosts") return { kind: "unknown" };
   const host = taskHosts.hosts.find((row) => row.hostId === hostId);
   if (host === undefined) return { kind: "unknown" };

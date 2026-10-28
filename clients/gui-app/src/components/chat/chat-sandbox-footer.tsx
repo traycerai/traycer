@@ -1,11 +1,15 @@
 import type { ReactNode } from "react";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import type {
+  ChatSandboxLine,
+  ChatSandboxState,
+  RestingChatSandbox,
+} from "@/lib/sandboxes/chat-sandbox-state";
+import { useSampledNow } from "@/lib/relative-time";
 import {
   costLine,
   RESTING_STORAGE_CLAUSE,
@@ -20,14 +24,16 @@ import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 
-/** A resting or unreachable sandbox's state line, under its chat. */
+/**
+ * The resolver's footer line under a chat: a resting sandbox whose
+ * configuration is known, or an awake one that cannot be reached.
+ */
 export function ChatSandboxFooter(props: {
-  readonly state: ChatSandboxState;
+  readonly line: ChatSandboxLine | null;
 }): ReactNode {
-  const state = props.state;
-  if (state.kind !== "resting" && state.kind !== "unreachable") return null;
+  if (props.line?.place !== "footer") return null;
+  const state = props.line.state;
   if (state.kind === "unreachable")
     return <UnreachableSandboxFooter state={state} />;
   if (state.sandbox.frozen) return <FrozenSandboxFooter state={state} />;
@@ -36,9 +42,8 @@ export function ChatSandboxFooter(props: {
     sandbox.state === "stopped"
       ? "is stopped · your next message starts it from a cold boot"
       : "is suspended · your next message resumes it";
-  // The money clause waits for the configuration it bills under.
   const price =
-    sandbox.priceMcPerHour === null || state.configuration === null
+    sandbox.priceMcPerHour === null
       ? ""
       : ` · ${costLine(sandbox.priceMcPerHour.awakeMc, state.configuration)}`;
   return (
@@ -53,34 +58,10 @@ export function ChatSandboxFooter(props: {
 }
 
 function FrozenSandboxFooter(props: {
-  readonly state: Extract<ChatSandboxState, { readonly kind: "resting" }>;
+  readonly state: RestingChatSandbox;
 }): ReactNode {
   const { sandbox, configuration } = props.state;
   const viewer = useAuthStore((state) => state.profile?.userId ?? null);
-  // Only a team sandbox's configuration can be unresolved: say its line alone
-  // until the configuration that names its action arrives.
-  if (configuration === null) {
-    return (
-      <p className="shrink-0 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
-        {sandboxTeamFrozenStateLine(sandbox, viewer)}
-      </p>
-    );
-  }
-  return (
-    <FrozenSandboxActions
-      sandbox={sandbox}
-      configuration={configuration}
-      viewer={viewer}
-    />
-  );
-}
-
-function FrozenSandboxActions(props: {
-  readonly sandbox: SandboxSummary;
-  readonly configuration: StageConfiguration;
-  readonly viewer: string | null;
-}): ReactNode {
-  const { sandbox, configuration, viewer } = props;
   const verb = useSandboxVerb(sandbox.id);
   const operation = useSandboxOperation(sandbox.id);
   const pending = operation?.kind === "pending";
@@ -146,7 +127,12 @@ function FrozenSandboxActions(props: {
 function UnreachableSandboxFooter(props: {
   readonly state: Extract<ChatSandboxState, { readonly kind: "unreachable" }>;
 }): ReactNode {
-  const { sandbox, lastContactMinutes } = props.state;
+  const { sandbox, lastSeenAt } = props.state;
+  const now = useSampledNow();
+  const lastContactMinutes =
+    lastSeenAt === null
+      ? null
+      : Math.max(0, Math.floor((now - lastSeenAt) / 60_000));
   const stop = useSandboxVerb(sandbox.id);
   const operation = useSandboxOperation(sandbox.id);
   const pending = operation?.kind === "pending";

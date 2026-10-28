@@ -1,9 +1,9 @@
 import {
-  restingChatSandbox,
-  unknownSandboxLine,
+  resolveChatSandbox,
+  wakeOf,
   type ChatSandboxState,
+  type ChatSandboxView,
 } from "@/lib/sandboxes/chat-sandbox-state";
-import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
@@ -224,14 +224,12 @@ interface PublishedCopyOwnerFacts {
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
   readonly ownerLabel: string;
-  readonly sandboxEnd: TaskSandboxEnd | null;
 }
 
 interface PublishedChatOwner {
   readonly reachability: HostReachability;
   readonly sandboxState: ChatSandboxState;
-  readonly restingSandbox:
-    Extract<ChatSandboxState, { readonly kind: "resting" }> | undefined;
+  readonly sandbox: ChatSandboxView;
   readonly lockFacts: PublishedCopyOwnerFacts;
 }
 
@@ -257,7 +255,11 @@ function usePublishedChatOwner(
   );
   const role = useEpicPermissionRole();
   const editable = role === null || isEditableRole(role);
-  const restingSandbox = restingChatSandbox(sandboxState, editable, ownership);
+  const sandbox = resolveChatSandbox(sandboxState, {
+    ...ownership,
+    reachable: reachability.status === "reachable",
+    canEdit: editable,
+  });
   const ownerRefusesStore = useHostRefusesEpicStore(
     node.ownerHostId.length > 0 ? node.ownerHostId : null,
     node.taskId,
@@ -265,7 +267,7 @@ function usePublishedChatOwner(
   return {
     reachability,
     sandboxState,
-    restingSandbox,
+    sandbox,
     lockFacts: {
       ...ownership,
       ownerIsReachable: reachability.status === "reachable",
@@ -276,8 +278,6 @@ function usePublishedChatOwner(
         node.ownerHostId,
         reachability.hostLabel,
       ),
-      sandboxEnd:
-        sandboxState.kind === "destroyed" ? sandboxState.ended.end : null,
     },
   };
 }
@@ -304,22 +304,16 @@ function copyOwnerLabel(
   }
 }
 
+/** The copy's own sentence, unless the sandbox's one line says it instead. */
 function copyReadOnlyNotice(
   owner: PublishedChatOwner,
   copyNotice: string,
 ): string | null {
-  if (owner.restingSandbox !== undefined) return null;
-  if (owner.sandboxState.kind === "unreachable")
+  const { line, composer } = owner.sandbox;
+  if (composer.kind === "wake") return null;
+  if (line?.place === "slot") return line.text;
+  if (line?.state.kind === "unreachable")
     return "This chat stays readable while its sandbox reconnects.";
-  // The viewer's own sandbox, its state not known yet: never the offline
-  // sentence. A team's or a collaborator's keeps its own sentence, which
-  // claims nothing about the host.
-  if (
-    owner.sandboxState.kind === "pending" &&
-    owner.lockFacts.ownedByViewer &&
-    !owner.lockFacts.environmentOwned
-  )
-    return unknownSandboxLine(owner.sandboxState.name);
   return copyNotice;
 }
 
@@ -333,7 +327,7 @@ function PublishedSandboxStateLine(props: {
 }): ReactNode {
   const state = props.owner.sandboxState;
   const line = chatSandboxStateLine(
-    state,
+    props.owner.sandbox.line,
     state.kind === "destroyed" ? (
       <SandboxEndActions
         epicId={props.epicId}
@@ -568,7 +562,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             tileId={props.tileId}
             isActive={props.isActive}
             currentEpicId={props.epicId}
-            restingSandbox={owner.restingSandbox}
+            restingSandbox={wakeOf(owner.sandbox)}
             readOnlyNotice={copyReadOnlyNotice(
               owner,
               replicaChatLockReason({
@@ -578,7 +572,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             )}
           />
         </PublishedSandboxStateLine>
-        <ChatSandboxFooter state={owner.sandboxState} />
+        <ChatSandboxFooter line={owner.sandbox.line} />
       </div>
     );
   }
@@ -637,7 +631,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             tileId={props.tileId}
             isActive={props.isActive}
             currentEpicId={props.epicId}
-            restingSandbox={owner.restingSandbox}
+            restingSandbox={wakeOf(owner.sandbox)}
             readOnlyNotice={copyReadOnlyNotice(
               owner,
               publishedChatLockReason({
@@ -652,7 +646,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           />
         </PublishedSandboxStateLine>
       </PublishedChatSourceProvider>
-      <ChatSandboxFooter state={owner.sandboxState} />
+      <ChatSandboxFooter line={owner.sandbox.line} />
     </div>
   );
 }
@@ -816,10 +810,9 @@ function PublishedChatDeadTileBanner(props: {
   readonly owner: PublishedChatOwner;
   readonly showsPublishedCopy: boolean;
 }): ReactNode {
-  const { sandboxState, reachability } = props.owner;
-  // A sandbox chat's state footer is its only line, whatever the state, and
-  // one whose state is not known yet borrows nothing from the offline copy.
-  if (sandboxState.kind !== "none") return null;
+  const { sandbox, reachability } = props.owner;
+  // A sandbox chat's one line is its only line, whatever the state.
+  if (sandbox.line !== null) return null;
   if (reachability.status !== "unreachable") return null;
   return (
     <ChatDeadTileBannerContainer
