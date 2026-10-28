@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Lock } from "lucide-react";
-import { ReadOnlyNoticeActionsContext } from "./read-only-notice-actions";
+import { ChatStateLineContext } from "./chat-state-line";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -793,6 +793,17 @@ function ComposerSurface(props: {
 }): ReactNode {
   const { model, layout } = props;
   const tabHostId = useTabHostId();
+  const stateLine = useContext(ChatStateLineContext);
+  if (stateLine !== null) {
+    return (
+      <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
+        <ReadOnlyComposerNotice
+          notice={stateLine.line}
+          actions={stateLine.actions}
+        />
+      </ComposerSlotShell>
+    );
+  }
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
@@ -894,7 +905,10 @@ function ViewerComposerSurface(props: {
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
-        <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
+        <ReadOnlyComposerNotice
+          notice={model.access.readOnlyNotice}
+          actions={null}
+        />
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
@@ -1072,8 +1086,10 @@ function SubagentViewNotice(props: { readonly view: SubagentDockView }) {
   );
 }
 
-function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
-  const actions = useContext(ReadOnlyNoticeActionsContext);
+function ReadOnlyComposerNotice(props: {
+  readonly notice: string | null;
+  readonly actions: ReactNode;
+}) {
   return (
     <div className="flex flex-wrap items-start gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
       {/* The same lock the sidebar row and tab strip mark read-only chats
@@ -1083,7 +1099,7 @@ function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
         {props.notice ??
           "Read-only viewer. The agent owner can send prompts and manage this queue."}
       </span>
-      {actions}
+      {props.actions}
     </div>
   );
 }

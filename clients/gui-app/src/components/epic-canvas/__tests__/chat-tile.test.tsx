@@ -189,6 +189,23 @@ const MOCK_HOST_DIRECTORY = {
 // The directory list the reachability hook reads. `null` leaves the real hook
 // in charge (this file mounts no host binding, so it answers nothing); a case
 // that needs the directory to name a host sets it and `afterEach` clears it.
+// What the task says of the chat's host, when a case sets it; otherwise the
+// real read answers.
+const taskSandboxTestState = vi.hoisted(
+  (): { task: TaskSandboxHost | null } => ({ task: null }),
+);
+vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/epic/use-task-sandbox-end")>();
+  return {
+    ...actual,
+    useTaskSandboxHost: (epicId: string, hostId: string | null) => {
+      const real = actual.useTaskSandboxHost(epicId, hostId);
+      return taskSandboxTestState.task ?? real;
+    },
+  };
+});
+
 const directoryListTestState = vi.hoisted(() => ({
   entries: null as readonly HostDirectoryEntry[] | null,
 }));
@@ -527,6 +544,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
@@ -1740,6 +1758,7 @@ describe("<ChatTile />", () => {
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
     directoryListTestState.entries = null;
+    taskSandboxTestState.task = null;
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -1957,6 +1976,62 @@ describe("<ChatTile />", () => {
     const banner = screen.getByTestId("chat-dead-tile-chat-1");
     expect(banner.textContent).toContain('while "Office Mac" is offline');
   });
+
+  it.each(["owner", "viewer"] as const)(
+    "says a destroyed sandbox's end in one line, with its actions and no composer, to the %s",
+    async (access) => {
+      directoryListTestState.entries = [
+        {
+          hostId: HOST_ID,
+          label: "e2e-sbx-p1",
+          kind: "remote",
+          websocketUrl: "wss://sbx.example.com/rpc",
+          version: "1.0.0",
+          transportDialability: "dialable",
+        },
+      ];
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+      taskSandboxTestState.task = {
+        kind: "ended",
+        ended: {
+          name: "e2e-sbx-p1",
+          end: {
+            state: "destroyed",
+            destroyedAt: new Date(2026, 9, 28, 1, 27).getTime(),
+            cause: "verb",
+            actor: "you",
+            idleMinutes: null,
+          },
+        },
+      };
+      chatHarness.teardown();
+      chatHarness.install(access, []);
+      renderChatTile();
+      await advanceLegendListTime(0);
+      await waitFor(() => {
+        expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+      });
+
+      expect(
+        screen.getAllByText(
+          "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.",
+        ),
+      ).toHaveLength(1);
+      expect(
+        screen.getAllByRole("button", { name: "Continue on another host" }),
+      ).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Details" })).toHaveLength(
+        1,
+      );
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+      expect(screen.queryByText(/Read-only viewer/)).toBeNull();
+    },
+  );
 
   it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot({

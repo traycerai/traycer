@@ -1,3 +1,4 @@
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
@@ -60,9 +61,23 @@ export function useChatSandboxState(
           lastContactMinutes: minutesSinceContact(entry, now),
         };
   }
-  // Creating, resuming, starting, suspending, stopping, destroying: its next
-  // state is not known yet.
-  return { kind: "pending", name: sandbox.displayName };
+  return unsettledSandboxState(sandbox);
+}
+
+/** A listed sandbox neither resting nor awake. */
+function unsettledSandboxState(sandbox: SandboxSummary): ChatSandboxState {
+  switch (sandbox.state) {
+    case "creating":
+    case "resuming":
+    case "starting":
+    case "suspending":
+    case "stopping":
+    case "destroying":
+      return { kind: "moving", sandbox, state: sandbox.state };
+    default:
+      // Destroyed before the task records its end, failed, or released.
+      return { kind: "pending", name: sandbox.displayName };
+  }
 }
 
 /**

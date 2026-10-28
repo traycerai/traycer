@@ -182,11 +182,12 @@ describe("useChatSandboxState", () => {
     "stopping",
     "destroying",
   ] as const)(
-    "reads a %s sandbox as pending, by its name, never as not a sandbox",
+    "reads a %s sandbox as moving, with its row, never as unknown or not a sandbox",
     (state) => {
-      sources.sandboxes = [row({ state })];
+      const sandbox = row({ state });
+      sources.sandboxes = [sandbox];
 
-      expect(stateOf(false)).toEqual({ kind: "pending", name: "e2e-sbx" });
+      expect(stateOf(false)).toEqual({ kind: "moving", sandbox, state });
     },
   );
 

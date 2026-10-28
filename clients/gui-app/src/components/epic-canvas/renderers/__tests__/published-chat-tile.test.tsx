@@ -341,19 +341,25 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
     typeof import("@/components/epic-canvas/renderers/dead-tile-banner")
   >("@/components/epic-canvas/renderers/dead-tile-banner");
   const { useContext } = await import("react");
-  const { ReadOnlyNoticeActionsContext } = await vi.importActual<
-    typeof import("@/components/epic-canvas/renderers/read-only-notice-actions")
-  >("@/components/epic-canvas/renderers/read-only-notice-actions");
+  const { ChatStateLineContext } = await vi.importActual<
+    typeof import("@/components/epic-canvas/renderers/chat-state-line")
+  >("@/components/epic-canvas/renderers/chat-state-line");
   return {
-    // The notice slot as the real composer fills it: the sentence, then any
-    // actions the tile hands that slot.
+    // The composer slot as the real one fills it: a sandbox state line with
+    // its actions when the tile hands one, else the read-only notice.
     ChatTileSessionView: (props: ChatTileSessionViewProps) => {
       chatTileSessionViewCalls.push(props);
-      const actions = useContext(ReadOnlyNoticeActionsContext);
+      const stateLine = useContext(ChatStateLineContext);
       return (
         <div data-testid="chat-tile-session-view">
-          {props.readOnlyNotice}
-          {actions}
+          {stateLine === null ? (
+            props.readOnlyNotice
+          ) : (
+            <>
+              {stateLine.line}
+              {stateLine.actions}
+            </>
+          )}
         </div>
       );
     },
@@ -1738,7 +1744,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
 
     expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
     const footer = screen.getByTestId("chat-tile-session-view");
-    expect(chatTileSessionViewCalls.at(-1)?.readOnlyNotice).toBe(
+    expect(footer.textContent).toBe(
       "e2e-sbx-p3 was destroyed on Oct 28 at 00:55 after resting. Its files are gone; this chat stays readable.",
     );
     // Its actions ride in the same line, for the chat's own owner host.
@@ -1846,9 +1852,9 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
 
     expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
     expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-    const notice = chatTileSessionViewCalls.at(-1)?.readOnlyNotice ?? "";
-    expect(notice).not.toContain("offline");
-    expect(notice).toContain("e2e-sbx-p1");
+    // A known move says what it is, once, never the generic unknown line.
+    const text = screen.getByTestId("chat-tile-session-view").textContent;
+    expect(text).toBe("Stopping e2e-sbx-p1 · pending");
   });
 
   it("draws no offline banner, no Clone and no offline footer after a reload, before the task's hosts answer", () => {

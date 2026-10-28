@@ -3,6 +3,7 @@ import {
   restingChatSandbox,
   type ChatSandboxState,
 } from "@/lib/sandboxes/chat-sandbox-state";
+import { ChatSandboxStateLine } from "./chat-sandbox-state-line";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
@@ -703,11 +704,12 @@ function ChatTileForChat(props: ChatTileProps) {
       lease,
       hasReadySession,
     );
-    // A sandbox's state footer is its line; only a destroyed one, which has
-    // no footer under a live session, says its end here.
+    // A sandbox's state line is its only line. A destroyed one says its end
+    // here only while no session view holds the composer slot that says it.
     if (
       strip === "offline" &&
-      (sandboxState.kind === "none" || sandboxState.kind === "destroyed")
+      (sandboxState.kind === "none" ||
+        (sandboxState.kind === "destroyed" && handle === null))
     ) {
       return (
         <ChatDeadTileBannerWithOffer
@@ -773,22 +775,41 @@ function ChatTileForChat(props: ChatTileProps) {
         providers={providersList.data?.providers ?? []}
         hostId={tabHostId}
       >
-        <ChatTileSessionView
-          handle={handle}
-          node={node}
-          viewTabId={viewTabId}
-          tileId={props.tileId}
-          isActive={isActive}
-          currentEpicId={epicId}
-          restingSandbox={restingChatSandbox(
-            sandboxState,
-            preContentFrame.cloneAllowed,
-            copyFacts,
-          )}
-          readOnlyNotice={liveSandboxReadOnlyNotice(sandboxState, servedAtRest)}
-          isLiveSession
-          preContent={preContentFrame}
-        />
+        <ChatSandboxStateLine
+          state={sandboxState}
+          endActions={
+            sandboxState.kind === "destroyed" ? (
+              <SandboxEndActions
+                epicId={epicId}
+                tabId={viewTabId}
+                chatId={node.id}
+                sourceHostId={tabHostId}
+                sourceOwnerUserId={chatRecord?.userId ?? undefined}
+                ended={sandboxState.ended}
+              />
+            ) : null
+          }
+        >
+          <ChatTileSessionView
+            handle={handle}
+            node={node}
+            viewTabId={viewTabId}
+            tileId={props.tileId}
+            isActive={isActive}
+            currentEpicId={epicId}
+            restingSandbox={restingChatSandbox(
+              sandboxState,
+              preContentFrame.cloneAllowed,
+              copyFacts,
+            )}
+            readOnlyNotice={liveSandboxReadOnlyNotice(
+              sandboxState,
+              servedAtRest,
+            )}
+            isLiveSession
+            preContent={preContentFrame}
+          />
+        </ChatSandboxStateLine>
       </TombstonedProfileProvider>
       <ChatSandboxFooter state={sandboxState} />
     </div>
@@ -969,8 +990,12 @@ function ChatDeadTileBannerWithOffer(
   const continues = continueOffer.eligible && props.reason === "host-offline";
   if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
     return null;
-  // Nothing about a sandbox whose state is not known yet is offline.
-  if (sandboxState.kind === "pending" && props.reason === "host-offline")
+  // Nothing about a sandbox that is moving, or whose state is not known yet,
+  // is offline.
+  if (
+    (sandboxState.kind === "pending" || sandboxState.kind === "moving") &&
+    props.reason === "host-offline"
+  )
     return null;
   if (sandboxState.kind === "destroyed") {
     // A copy's footer already states the end, with these same actions.

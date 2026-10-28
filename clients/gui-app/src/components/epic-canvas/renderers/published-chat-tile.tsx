@@ -50,7 +50,7 @@ import {
   ChatTileSessionView,
   SandboxEndActions,
 } from "./chat-tile";
-import { ReadOnlyNoticeActionsContext } from "./read-only-notice-actions";
+import { ChatSandboxStateLine } from "./chat-sandbox-state-line";
 import { chatTileHostLabel } from "./chat-pre-content";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
@@ -293,6 +293,7 @@ function copyOwnerLabel(
       return state.name ?? "This chat's sandbox";
     case "destroyed":
       return state.ended.name;
+    case "moving":
     case "resting":
     case "unreachable":
       return state.sandbox.displayName;
@@ -318,11 +319,8 @@ function copyReadOnlyNotice(
   return copyNotice;
 }
 
-/**
- * A destroyed sandbox's actions, handed to the one footer line that states
- * its end. Nothing for any other chat.
- */
-function PublishedSandboxEndActions(props: {
+/** The copy's sandbox state line, with a destroyed sandbox's actions. */
+function PublishedSandboxStateLine(props: {
   readonly node: PublishedChatTileRef;
   readonly epicId: string;
   readonly tabId: string;
@@ -330,22 +328,24 @@ function PublishedSandboxEndActions(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const state = props.owner.sandboxState;
-  if (state.kind !== "destroyed") return props.children;
   return (
-    <ReadOnlyNoticeActionsContext
-      value={
-        <SandboxEndActions
-          epicId={props.epicId}
-          tabId={props.tabId}
-          chatId={props.node.chatId}
-          sourceHostId={props.node.ownerHostId}
-          sourceOwnerUserId={props.node.ownerUserId}
-          ended={state.ended}
-        />
+    <ChatSandboxStateLine
+      state={state}
+      endActions={
+        state.kind === "destroyed" ? (
+          <SandboxEndActions
+            epicId={props.epicId}
+            tabId={props.tabId}
+            chatId={props.node.chatId}
+            sourceHostId={props.node.ownerHostId}
+            sourceOwnerUserId={props.node.ownerUserId}
+            ended={state.ended}
+          />
+        ) : null
       }
     >
       {props.children}
-    </ReadOnlyNoticeActionsContext>
+    </ChatSandboxStateLine>
   );
 }
 
@@ -548,7 +548,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           chatId={node.chatId}
           tabId={props.viewTabId}
         />
-        <PublishedSandboxEndActions
+        <PublishedSandboxStateLine
           node={node}
           epicId={props.epicId}
           tabId={props.viewTabId}
@@ -576,7 +576,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
               }),
             )}
           />
-        </PublishedSandboxEndActions>
+        </PublishedSandboxStateLine>
         <ChatSandboxFooter state={owner.sandboxState} />
       </div>
     );
@@ -617,7 +617,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         tabId={props.viewTabId}
       />
       <PublishedChatSourceProvider source={publishedSource}>
-        <PublishedSandboxEndActions
+        <PublishedSandboxStateLine
           node={node}
           epicId={props.epicId}
           tabId={props.viewTabId}
@@ -649,7 +649,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
               }),
             )}
           />
-        </PublishedSandboxEndActions>
+        </PublishedSandboxStateLine>
       </PublishedChatSourceProvider>
       <ChatSandboxFooter state={owner.sandboxState} />
     </div>

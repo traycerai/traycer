@@ -69,7 +69,7 @@ import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state"
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { ReadOnlyNoticeActionsContext } from "@/components/epic-canvas/renderers/read-only-notice-actions";
+import { ChatStateLineContext } from "@/components/epic-canvas/renderers/chat-state-line";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -332,29 +332,33 @@ describe("the composer of a chat on a resting sandbox", () => {
   });
 });
 
-describe("the read-only notice of a destroyed sandbox's chat", () => {
-  it("carries the actions it is handed in its own line", () => {
-    const line =
-      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.";
-    render(
-      <ReadOnlyNoticeActionsContext
-        value={<button type="button">Continue on another host</button>}
-      >
-        <ChatLowerInteractionSurfaces
-          {...props(
-            {
-              isViewer: true,
-              isCopy: true,
-              canAct: false,
-              readOnlyNotice: line,
-            },
-            null,
-          )}
-        />
-      </ReadOnlyNoticeActionsContext>,
-    );
+describe("the composer slot of a destroyed sandbox's chat", () => {
+  it.each([false, true])(
+    "is the one state line with its actions, never a composer (viewer: %s)",
+    (isViewer) => {
+      const line =
+        "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.";
+      render(
+        <ChatStateLineContext
+          value={{
+            line,
+            actions: <button type="button">Continue on another host</button>,
+          }}
+        >
+          <ChatLowerInteractionSurfaces
+            {...props(
+              { isViewer, isCopy: false, canAct: false, readOnlyNotice: line },
+              null,
+            )}
+          />
+        </ChatStateLineContext>,
+      );
 
-    const notice = screen.getByText(line).parentElement;
-    expect(notice?.textContent).toBe(`${line}Continue on another host`);
-  });
+      expect(screen.queryByTestId("composer-stub")).toBeNull();
+      expect(screen.getAllByText(line)).toHaveLength(1);
+      expect(screen.getByText(line).parentElement?.textContent).toBe(
+        `${line}Continue on another host`,
+      );
+    },
+  );
 });
