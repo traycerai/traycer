@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@maschwenk/tsrslint": "0.1.6",
     "@shadcn/lint": "0.1.0",
     "@tanstack/eslint-plugin-query": "catalog:",
     "@tanstack/eslint-plugin-router": "catalog:",
@@ -54,6 +55,7 @@
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
     "postject": "^1.0.0-alpha.6",
+    "tsrs": "0.20.1-ts7.1.0-beta",
     "typescript-eslint": "catalog:",
     "vitest": "^5.0.4",
     "wait-on": "^9.5.1",

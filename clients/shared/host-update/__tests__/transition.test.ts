@@ -149,7 +149,7 @@ describe("decideAttemptClaim - create", () => {
 
   it("makes every OTHER 'activate' birth unconstructible at the type level (Codex #1773)", () => {
     // A COMPILE-TIME pin, and it is a real one: `@traycer-clients/shared`'s
-    // `compile` target is `tsgo --noEmit` over `include: ["."]`, so this file
+    // `compile` target is `tsrs --noEmit` over `include: ["."]`, so this file
     // is type-checked by the repo's own gate. If the union is ever flattened
     // back into two free fields, the directives below become unused and
     // `compile` fails - the pin cannot silently rot into a comment.
