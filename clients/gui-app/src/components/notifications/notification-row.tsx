@@ -393,7 +393,7 @@ function EnvironmentNoticeExtra(props: {
   return (
     <EnvironmentNotificationExtra
       detail={props.detail}
-      onSettingsApplied={() => actions.resolveNotice(props.row)}
+      onSettingsApplied={() => actions.retireNotice(props.row)}
     />
   );
 }
@@ -411,7 +411,7 @@ function SandboxNoticeExtra(props: {
       onDetails={() => props.onActivate(props.row)}
       onDismiss={() => actions.clear(props.row)}
       active={props.row.resolvedAt === null}
-      onExtended={() => actions.resolveNotice(props.row)}
+      onExtended={() => actions.retireNotice(props.row)}
     />
   );
 }
