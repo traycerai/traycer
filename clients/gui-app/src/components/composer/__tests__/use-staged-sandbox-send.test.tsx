@@ -661,8 +661,7 @@ describe("useStagedSandboxSend's setup line", () => {
               mutationKey: sandboxMutationKeys.verb("sbx-1"),
               mutationFn: () => answer.promise,
               onMutate: () => ({
-                userId:
-                  useAuthStore.getState().contextMetadata?.userId ?? null,
+                userId: useAuthStore.getState().contextMetadata?.userId ?? null,
               }),
             })
             .execute(verb);

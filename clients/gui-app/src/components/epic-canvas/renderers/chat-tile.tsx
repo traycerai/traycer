@@ -3,8 +3,8 @@ import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/i
 import {
   resolveChatSandbox,
   wakeOf,
-  type ChatSandboxState,
   type ChatSandboxView,
+  type RestingChatSandbox,
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
 import { ChatStateLineContext } from "./chat-state-line";
@@ -427,10 +427,7 @@ interface ChatTileProps {
 }
 
 interface ChatTileSessionViewProps {
-  readonly restingSandbox?: Extract<
-    ChatSandboxState,
-    { readonly kind: "resting" }
-  >;
+  readonly restingSandbox?: RestingChatSandbox;
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;

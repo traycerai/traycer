@@ -4,7 +4,7 @@ import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
@@ -44,9 +44,7 @@ const OFFERS_PICK: SandboxCatalogue = {
  * sandbox's own wake staged under it. Only the catalogue read is answered.
  */
 
-type Resting = Extract<ChatSandboxState, { kind: "resting" }>;
-
-function resting(state: "suspended" | "stopped"): Resting {
+function resting(state: "suspended" | "stopped"): RestingChatSandbox {
   return {
     kind: "resting",
     sandbox: sandboxSummaryFixture({
@@ -196,6 +194,7 @@ describe("useBoundSandboxSend", () => {
       useStagedSandboxStore.getState().bySurface[
         pendingSendSurfaceKey(send.id)
       ];
+    if (stage === undefined) throw new Error("the send staged no wake");
     expect(stage.target).toMatchObject({ kind: "existing", verb: "resume" });
     const decision = transitionPendingSend(
       pendingSendState(send, "none"),
