@@ -73,11 +73,33 @@ export const hostQueryKeys = {
     ] as const,
   /**
    * One machine's simulator devices and instances, as the palette and the
-   * mobile switcher list them across several machines at once. Under the
-   * host's scope, so a host invalidation sweeps it.
+   * mobile switcher list them across several machines at once.
+   *
+   * Under the `simulator.instances` METHOD scope, not the host's alone, so the
+   * invalidations the simulator mutations already send reach this derived
+   * entry by prefix: the instance open's `onSettled` and the power-off /
+   * keep-running `invalidateMethods` all sweep that method, and power-off
+   * sweeps `simulator.list` - the read's other input - with it. Keyed under
+   * the host scope alone, the entry outlived every one of them for the 60 s
+   * freshness window.
+   *
+   * `simulatorVerbsV11` is the negotiated gate that DECIDED the cached shape:
+   * a `@1.1` host's entry holds `simulator.instances` rows, a `@1.0` host's
+   * holds the stand-in minted from its booted devices. In the key, so a
+   * renegotiation that moves the gate is a different entry rather than a
+   * reinterpretation of this one.
    */
-  simulatorInventory: (hostId: string, epicId: string) =>
-    [...hostQueryKeys.scope(hostId), "simulator.inventory", epicId] as const,
+  simulatorInventory: (
+    hostId: string,
+    epicId: string,
+    simulatorVerbsV11: boolean,
+  ) =>
+    [
+      ...hostQueryKeys.methodScope(hostId, "simulator.instances"),
+      "inventory",
+      epicId,
+      simulatorVerbsV11,
+    ] as const,
   plainTerminals: (hostId: string, scope: PlainTerminalScope) =>
     hostQueryKeys.method<HostRpcRegistry, "terminal.plain.list">(
       hostId,
