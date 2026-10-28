@@ -167,6 +167,7 @@ import {
   mainCheckoutHasCommit,
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { LandingSandboxSendHandoff } from "./landing-sandbox-send-handoff";
 
 export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
@@ -229,16 +230,11 @@ export interface LandingStagedSandboxTaskArgs {
   /**
    * Hands the message to the new task, before it opens: `confirm` once the
    * task is created and attached to the sandbox's team, which lets the sandbox
-   * start; `giveBack` ends the send if either step fails and returns the draft
-   * holding the message again (the task replaced its original draft). `null`
-   * when there was nothing to hand, and nothing is created.
+   * start; `giveBack` returns the message with its stage if setup fails. A
+   * reused source keeps the pending send intact instead of replacing the
+   * newer choice. `null` when there was nothing to hand, and nothing is created.
    */
-  readonly hand: (epicId: string) => {
-    /** The send is still pending, rather than cancelled or returned. */
-    readonly isCurrent: () => boolean;
-    readonly confirm: () => void;
-    readonly giveBack: () => string | null;
-  } | null;
+  readonly hand: (epicId: string) => LandingSandboxSendHandoff | null;
 }
 
 export interface TerminalAgentLaunch {
