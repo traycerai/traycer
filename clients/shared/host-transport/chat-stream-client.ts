@@ -12,6 +12,7 @@ import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subs
 import type { ChatSkeletonResume } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR,
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
   projectChatClientFrameForVersion,
@@ -373,6 +374,16 @@ export class ChatStreamClient {
     // the exact failure this guard exists to prevent.
     const version = this.session.getNegotiatedSchemaVersion();
     return version !== null && version.major === 1 && version.minor >= 5;
+  }
+
+  /** Whether this session lets the host decide queued-steer restart consent. */
+  queuedSteerRestartConfirmationSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return (
+      version !== null &&
+      version.major === 1 &&
+      version.minor >= CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR
+    );
   }
 
   /** Whether THIS session's host can materialize hash-only draft images at send. */

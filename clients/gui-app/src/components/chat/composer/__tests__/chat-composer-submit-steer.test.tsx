@@ -57,6 +57,7 @@ interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  readonly restartConfirmed: boolean;
 }
 
 function acceptSubmit(_input: ChatComposerSubmitInput): boolean {
@@ -90,6 +91,8 @@ describe("useChatComposerSubmit steer drift gate", () => {
     const input = onSubmitMessage.mock.calls[0]?.[0];
     expect(input.deliveryPolicy).toBe("after_safe_point");
     expect(input.contentText).toBe("steer me");
+    // No dialog was shown, so nothing was confirmed.
+    expect(input.restartConfirmed).toBe(false);
   });
 
   it("sends after_safe_point silently when only permissionMode differs", () => {
@@ -174,6 +177,7 @@ describe("useChatComposerSubmit steer drift gate", () => {
       model: "claude-opus",
       profileId: null,
     } satisfies Partial<ChatRunSettings>);
+    expect(input.restartConfirmed).toBe(true);
     expect(result.current.steerConflict.open).toBe(false);
   });
 
