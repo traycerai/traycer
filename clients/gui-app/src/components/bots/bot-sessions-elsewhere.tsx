@@ -22,7 +22,7 @@ export function BotSessionsElsewhere(props: {
         <MonitorUp className="size-4.5" aria-hidden="true" />
       </span>
       <p className="max-w-[48ch] text-ui-sm text-muted-foreground">
-        This view is on the computer running the bot.
+        This view is on the host running the bot.
       </p>
       {onOpenThere === null ? null : (
         <Button

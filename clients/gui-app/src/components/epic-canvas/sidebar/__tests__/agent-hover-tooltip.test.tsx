@@ -181,12 +181,40 @@ vi.mock("@/hooks/use-epic-store", () => ({
       tuiAgents: { byId: {} },
     }),
 }));
+const authStoreMock = vi.hoisted(() => {
+  type Listener = (next: AuthStoreState, previous: AuthStoreState) => void;
+  type AuthStoreState = {
+    status: string;
+    contextMetadata: { userId: string; username: string } | null;
+    cloudVerdictLoss: string | null;
+    shareableTeams: readonly object[];
+  };
+  const state: AuthStoreState = {
+    status: "signed-in",
+    contextMetadata: { userId: "user-1", username: "user-1" },
+    cloudVerdictLoss: null,
+    shareableTeams: [],
+  };
+  const listeners = new Set<Listener>();
+  return {
+    state,
+    subscribe: (listener: Listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+});
 vi.mock("@/stores/auth/auth-store", () => ({
-  useAuthStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      shareableTeams: h.teams,
-      contextMetadata: { userId: "user-1" },
-    }),
+  useAuthStore: Object.assign(
+    function useAuthStoreMock<T>(
+      selector: (state: typeof authStoreMock.state) => T,
+    ): T {
+      return selector({ ...authStoreMock.state, shareableTeams: h.teams });
+    },
+    { subscribe: authStoreMock.subscribe },
+  ),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: h.openTile }),
@@ -594,6 +622,7 @@ function taskHostRow(overrides: Partial<TaskHostRow>): TaskHostRow {
     label: "team-box",
     principal: { kind: "team", id: "team-1" },
     reach: "same_principal",
+    sandboxEnd: null,
     ...overrides,
   };
 }
@@ -915,6 +944,68 @@ describe("AgentHoverTooltip host section", () => {
 
     await userEvent.click(screen.getByRole("button", { name: TASK_FILES }));
     expect(h.setPanel).toHaveBeenCalledWith("tab-1", "artifacts");
+  });
+
+  it("reads a destroyed task-only host as destroyed, with Details, and offers no host actions", async () => {
+    h.taskHosts = tasksView(
+      taskHostRow({
+        sandboxEnd: {
+          state: "destroyed",
+          destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
+          cause: "resting",
+          actor: null,
+          idleMinutes: null,
+        },
+      }),
+    );
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: true,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
+
+    expect(card.textContent).toContain("team-box");
+    expect(card.textContent).toContain("destroyed");
+    expect(within(card).getByRole("button", { name: "Details" })).toBeDefined();
+    expect(within(card).queryByRole("button", { name: TASK_FILES })).toBeNull();
+    expect(card.textContent).not.toContain(reachSentence(REACH_UNNAMED_HOSTS));
+  });
+
+  it("opens the destroyed host's Details with its name, time, cause and actor through a real click", async () => {
+    h.taskHosts = tasksView(
+      taskHostRow({
+        sandboxEnd: {
+          state: "destroyed",
+          destroyedAt: new Date(2026, 9, 27, 6, 21).getTime(),
+          cause: "verb",
+          actor: "Ada",
+          idleMinutes: null,
+        },
+      }),
+    );
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: true,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Details" }),
+    );
+
+    const details = await screen.findByTestId("task-sandbox-end-details");
+    expect(details.textContent).toContain("team-box");
+    expect(details.textContent).toContain(
+      "team-box was destroyed on Oct 27 at 06:21 by Ada. Its files are gone; this chat stays readable.",
+    );
+    // A destroyed host has no sandbox row to open: the viewer's sandbox
+    // details are never asked for.
+    expect(h.openDetails).not.toHaveBeenCalled();
   });
 
   it("names the configuration generically when the viewer is not in the team, and omits the reach sentence for a reachable host", async () => {

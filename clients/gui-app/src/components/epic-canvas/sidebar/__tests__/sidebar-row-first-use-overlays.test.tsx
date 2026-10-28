@@ -1455,7 +1455,9 @@ describe("sidebar row first-use overlays", () => {
     });
     await hovered;
     expect(overlayMounted.tooltipWrapper).toBe(1);
-    expect(screen.getByRole("tooltip").textContent).toMatch(/offline/i);
+    expect(screen.getByRole("tooltip").textContent).toMatch(
+      /Opens read-only from the last published copy/,
+    );
   });
 });
 
@@ -1467,12 +1469,14 @@ const TWO_MACHINES_VIEW: TaskHostsView = {
       label: "This machine",
       principal: { kind: "user", id: USER_ID },
       reach: "same_principal",
+      sandboxEnd: null,
     },
     {
       hostId: "host-b",
       label: "Another machine",
       principal: { kind: "user", id: USER_ID },
       reach: "same_principal",
+      sandboxEnd: null,
     },
   ],
 };

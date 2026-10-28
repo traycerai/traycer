@@ -299,11 +299,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 // The own-login row reads whether a refresh is in flight through
-// `useIsMutating`; the refresh itself is `useRefreshProviders`, stubbed below.
-vi.mock("@tanstack/react-query", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useIsMutating: () => 0 };
-});
+// `useIsMutatingOf`; the refresh itself is `useRefreshProviders`, stubbed below.
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
+}));
 
 // The provider's Limits pick reads the watched host's usage through the layout
 // editor's own scope, which this suite does not stand up, so it is a marker
@@ -2501,6 +2500,24 @@ describe("<ProvidersSettingsPanel />", () => {
         ).toBeDefined();
       });
     });
+  });
+
+  it("says Traycer Inference's switch changes this computer only, on its row alone", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    // OpenCode, ranked first, is selected: its row says nothing of the kind.
+    expect(screen.queryByText(/this computer only/)).toBeNull();
+
+    fireEvent.click(railProviderRow(/Traycer/i, false));
+
+    expect(
+      screen.getByText(
+        "Traycer's managed harness uses the selected OpenCode CLI binary. Turning it on or off changes this computer only.",
+      ),
+    ).toBeDefined();
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {

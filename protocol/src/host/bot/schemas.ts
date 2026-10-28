@@ -787,6 +787,34 @@ export type BotSubscribeOpenRequest = z.infer<
 >;
 
 /**
+ * What the person can do about a failed turn: sign in to the provider, or
+ * nothing here.
+ */
+export const botActivityActionSchema = lazySchema(() =>
+  z.enum(["sign-in", "none"]),
+);
+export type BotActivityAction = z.infer<typeof botActivityActionSchema>;
+
+/**
+ * Why a session is `failed` or `parked`. For `failed`, `summary` is the
+ * turn's error as the transcript draws it (the error row's text, or the
+ * settled card's after a provider fallback), `code` the error row's code,
+ * which a client maps to its own words for a sandbox's refusal as the row
+ * does, and `harnessId` the harness that ran the turn; for `parked`,
+ * `summary` is why the queue is paused, `code` `null`, `harnessId` the
+ * session's harness and `action` `none`.
+ */
+export const botActivityReasonSchema = lazySchema(() =>
+  z.object({
+    summary: z.string().min(1),
+    code: z.string().nullable().default(null),
+    harnessId: z.string().min(1).max(64),
+    action: botActivityActionSchema,
+  }),
+);
+export type BotActivityReason = z.infer<typeof botActivityReasonSchema>;
+
+/**
  * What one of the bot's running chats (the trunk, or a thread's session) is
  * doing, as the bound host sees it (and writes it to the bot's environment
  * room, which every other host serves it from, T65):
@@ -803,6 +831,9 @@ export type BotSubscribeOpenRequest = z.infer<
  * `requestId` names the open post the turn is answering, the latest one
  * delivered to it; `null` for a turn that answers none (a check-in, a
  * notice), and once its post is resolved while the turn runs on.
+ *
+ * `reason` (`bot.subscribe@1.1`) says why the session is `failed` or
+ * `parked`, `null` in every other state and from a host that predates it.
  */
 export const botSessionActivitySchema = lazySchema(() =>
   z.object({
@@ -810,6 +841,7 @@ export const botSessionActivitySchema = lazySchema(() =>
     startedAt: z.number().int().nullable(),
     step: z.string().nullable(),
     requestId: z.string().min(1).nullable(),
+    reason: botActivityReasonSchema.nullable().default(null),
   }),
 );
 export type BotSessionActivity = z.infer<typeof botSessionActivitySchema>;
@@ -838,10 +870,28 @@ export const botActivityTargetSchema = lazySchema(() =>
 export type BotActivityTarget = z.infer<typeof botActivityTargetSchema>;
 
 /**
+ * One of the bot's chats subscribed to its person's notification feed
+ * (`bot.subscribe@1.2`, Tracy Bots T84): the trunk or a thread's session,
+ * keyed as {@link botActivityTargetSchema} keys activity. `everySeconds` is
+ * the digest interval, `null` for a digest on each burst of rows.
+ */
+export const botNotificationSubscriptionSchema = lazySchema(() =>
+  z.object({
+    target: botActivityTargetSchema,
+    attentionOnly: z.boolean(),
+    everySeconds: z.number().int().positive().nullable(),
+  }),
+);
+export type BotNotificationSubscription = z.infer<
+  typeof botNotificationSubscriptionSchema
+>;
+
+/**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
  * re-sent whole whenever the bot row, its task list, a task's last check-in,
- * its open-request count or its conversations' rows change (on the bound
- * host, or in the bot's environment room on any other);
+ * its open-request count, its conversations' rows or its chats' notification
+ * subscriptions change (on the bound host, or in the bot's environment room
+ * on any other);
  * `activity` carries one changed entry of the bot's activity in between;
  * `deleted` ends it (the bot
  * was archived, or the caller lost it). The conversation rows stay
@@ -887,6 +937,16 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
        * the room.
        */
       activity: botActivitySchema.nullable(),
+      /**
+       * The bot's chats subscribed to the person's notification feed
+       * (`bot.subscribe@1.2`), as the bound host holds them; the bot owns
+       * them, so nothing here changes them. `null` from any other host, and
+       * from a host that predates the key.
+       */
+      notificationSubscriptions: z
+        .array(botNotificationSubscriptionSchema)
+        .nullable()
+        .default(null),
       hasBinaryPayload: z.literal(false),
     }),
     /**
@@ -913,6 +973,100 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
 export type BotSubscribeServerFrame = z.infer<
   typeof botSubscribeServerFrameSchema
 >;
+
+// ---- bot.subscribe@1.1, frozen ------------------------------------------ //
+//
+// A hand-written copy of the 1.1 snapshot frame, without
+// `notificationSubscriptions`, so an older peer's re-parse strips it. The
+// frames that did not change at 1.2 are the live ones.
+
+export const botSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      bot: botRecordSchema,
+      tasks: z.array(botTaskEntrySchema),
+      openRequestCount: z.number().int().nonnegative().nullable(),
+      conversationsRevision: z.number().int().nonnegative().nullable(),
+      boundHost: z.object({
+        hostId: hostIdSchema.nullable(),
+        epoch: z.number().int().nonnegative(),
+        isThisHost: z.boolean(),
+      }),
+      activity: botActivitySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("deleted"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
+// ---- bot.subscribe@1.0, frozen ------------------------------------------ //
+//
+// Hand-written copies of the 1.0 activity and frame schemas, without
+// `reason`: a derived copy would track the live schemas, which is what a
+// freeze must not do. `bot.subscribe@1.0` binds these.
+
+const botSessionActivitySchemaV10 = lazySchema(() =>
+  z.object({
+    state: z.enum(["idle", "replying", "parked", "failed"]),
+    startedAt: z.number().int().nullable(),
+    step: z.string().nullable(),
+    requestId: z.string().min(1).nullable(),
+  }),
+);
+
+const botActivitySchemaV10 = lazySchema(() =>
+  z.object({
+    trunk: botSessionActivitySchemaV10.nullable(),
+    threads: z.record(z.string().min(1), botSessionActivitySchemaV10),
+  }),
+);
+
+export const botSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      bot: botRecordSchema,
+      tasks: z.array(botTaskEntrySchema),
+      openRequestCount: z.number().int().nonnegative().nullable(),
+      conversationsRevision: z.number().int().nonnegative().nullable(),
+      boundHost: z.object({
+        hostId: hostIdSchema.nullable(),
+        epoch: z.number().int().nonnegative(),
+        isThisHost: z.boolean(),
+      }),
+      activity: botActivitySchemaV10.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchemaV10.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("deleted"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 
 export const botSubscribeClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [

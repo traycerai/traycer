@@ -20,6 +20,7 @@ import {
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
@@ -287,6 +288,18 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.getTraycerModels,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getTraycerModels.bearerToken");
+      return fetchTraycerModelsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.createSandbox,
     async (_event, bearerToken: unknown, request: unknown) => {
       assertString(bearerToken, "createSandbox.bearerToken");
@@ -302,14 +315,22 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.destroySandbox,
-    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      onlyIfIdle: unknown,
+    ) => {
       assertString(bearerToken, "destroySandbox.bearerToken");
       assertString(sandboxId, "destroySandbox.sandboxId");
+      const idle = onlyIfIdle === undefined ? false : onlyIfIdle;
+      assertBoolean(idle, "destroySandbox.onlyIfIdle");
       return destroySandboxViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
         sandboxId,
+        idle,
       );
     },
   );

@@ -136,6 +136,29 @@ describe("classifyNotificationLifecycle", () => {
     });
   });
 
+  it("places an unread bot answer in attention as its own, last tier, and a read one in recent", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({
+          source: "host",
+          severity: "done",
+          readAt: null,
+          botAnswer: true,
+        }),
+      ),
+    ).toEqual({ section: "attention", tier: "answer" });
+    expect(
+      classifyNotificationLifecycle(
+        input({
+          source: "host",
+          severity: "done",
+          readAt: 50,
+          botAnswer: true,
+        }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
   it("ignores resolvedAt for failure rows (readAt is the gate)", () => {
     expect(
       classifyNotificationLifecycle(
@@ -166,6 +189,18 @@ describe("compareAttentionOrder", () => {
     expect(compareAttentionOrder(newerFailure, olderBlocking)).toBeGreaterThan(
       0,
     );
+  });
+
+  it("orders blocking, then failure, then answer, whatever the timestamps", () => {
+    const rows = [
+      { tier: "answer" as const, createdAt: 3_000, feedId: "host:answer" },
+      { tier: "failure" as const, createdAt: 2_000, feedId: "host:failure" },
+      { tier: "blocking" as const, createdAt: 1_000, feedId: "host:prompt" },
+    ];
+
+    expect(
+      rows.toSorted(compareAttentionOrder).map((row) => row.feedId),
+    ).toEqual(["host:prompt", "host:failure", "host:answer"]);
   });
 
   it("orders newest createdAt first within the same tier", () => {

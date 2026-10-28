@@ -126,7 +126,9 @@ const ALT_LEADER: LeaderState = {
 
 /** The host has a row for the epic and no prompt notification is lit for it. */
 const NO_PROMPT_LIT_INDICATORS: SurfaceNotificationIndicators = {
-  epics: { [EPIC_ID]: EMPTY_NOTIFICATION_INDICATOR_STATE },
+  epics: {
+    [EPIC_ID]: { ...EMPTY_NOTIFICATION_INDICATOR_STATE, unreadCount: 0 },
+  },
   chats: {},
 };
 

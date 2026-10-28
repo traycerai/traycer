@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -13,14 +14,18 @@ const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
 const NOT_ON_HOLD: ReadonlyMap<string, ReactNode> = new Map();
 const NOT_CLAIMED: ReadonlyMap<string, string> = new Map();
 
-type EnvCommit = (oldKey: string, newKey: string, value: string | null) => void;
-type EnvDelete = (key: string) => void;
+type EnvCommit = (
+  oldKey: string,
+  newKey: string,
+  value: string | null,
+) => void | Promise<void>;
+type EnvDelete = (key: string) => void | Promise<void>;
 
 afterEach(() => {
   cleanup();
 });
 
-function renderEditor(input: {
+interface EditorInput {
   readonly overrides: readonly {
     readonly key: string;
     readonly value: string | null;
@@ -28,8 +33,10 @@ function renderEditor(input: {
   readonly credentialRefusal: string | null;
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
-}) {
-  render(
+}
+
+function editorElement(input: EditorInput) {
+  return (
     <EnvOverrideEditor
       overrides={input.overrides}
       disabled={false}
@@ -43,21 +50,32 @@ function renderEditor(input: {
       emptyLabel="No environment variables."
       onCommit={input.onCommit}
       onDelete={input.onDelete}
-    />,
+    />
   );
 }
 
-describe("EnvOverrideEditor", () => {
-  it("stages a new environment variable until the apply button is pressed", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    const onDelete = vi.fn<EnvDelete>();
+function renderEditor(input: EditorInput) {
+  return render(editorElement(input));
+}
 
-    renderEditor({
+describe("EnvOverrideEditor", () => {
+  it("stages a new environment variable until the apply button is pressed, then keeps it as a disabled pending draft until the overrides list it", async () => {
+    let finishRead: () => void = () => {
+      throw new Error("read has not started");
+    };
+    const completedWrite = new Promise<void>((resolve) => {
+      finishRead = resolve;
+    });
+    const onCommit = vi.fn<EnvCommit>(() => completedWrite);
+    const onDelete = vi.fn<EnvDelete>();
+    const input: EditorInput = {
       overrides: [],
       credentialRefusal: null,
       onCommit,
       onDelete,
-    });
+    };
+
+    const view = renderEditor(input);
 
     expect(screen.queryByLabelText("New variable name")).toBeNull();
 
@@ -75,7 +93,37 @@ describe("EnvOverrideEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
     expect(onCommit).toHaveBeenCalledWith("", "OPENAI_API_KEY", "token");
+    // The write was sent but no override lists it yet: the draft stays as
+    // typed, disabled, with nothing offered to send it again.
+    const name = screen.getByLabelText("New variable name");
+    const value = screen.getByLabelText("New variable value");
+    expect(name).toHaveProperty("value", "OPENAI_API_KEY");
+    expect(name).toHaveProperty("disabled", true);
+    expect(value).toHaveProperty("value", "token");
+    expect(value).toHaveProperty("disabled", true);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+
+    // The caller completes after the authoritative read: the draft closes
+    // and the credential-shaped name is a masked saved row.
+    await act(async () => {
+      view.rerender(
+        editorElement({
+          ...input,
+          overrides: [{ key: "OPENAI_API_KEY", value: "token" }],
+        }),
+      );
+      finishRead();
+      await completedWrite;
+    });
     expect(screen.queryByLabelText("New variable name")).toBeNull();
+    expect(screen.getByTestId("env-masked-row").textContent).toContain(
+      "OPENAI_API_KEY",
+    );
+    expect(screen.queryByDisplayValue("token")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Remove OPENAI_API_KEY" }),
+    ).toBeTruthy();
+    expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
   it("discards a staged environment variable without applying it", () => {

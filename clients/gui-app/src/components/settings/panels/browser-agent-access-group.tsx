@@ -26,10 +26,11 @@ const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
 /**
- * Permissions ▸ Browser agent access: whether agents get the in-app browser as
- * a tool. A region of Permissions rather than a row on Browser, because
- * Browser is this app's own browsing and stays with the window, while this is
- * the configuration's.
+ * Permissions ▸ Browser: whether agents get the in-app browser as a tool. A
+ * tab of Permissions (a region below the policy on a team, whose page has no
+ * tabs) rather than a row on the Browser page, because that page is this
+ * app's own browsing and stays with the window, while this is the
+ * configuration's.
  *
  * Read through the host binding `EnvironmentHostBinding` re-provides around
  * it: a Local row's computer, else the window's own host, which

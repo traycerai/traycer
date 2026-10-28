@@ -73,6 +73,7 @@ function Harness(props: HarnessProps) {
       onDragOver={() => undefined}
       onDrop={() => undefined}
       onKeyDown={undefined}
+      interceptKeyDown={null}
       onFocus={() => undefined}
       onBlur={() => undefined}
       onEditorReady={null}

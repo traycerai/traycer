@@ -94,6 +94,12 @@ export interface ComposerToolbarCatalogScope {
    * shows that pick rather than swapping it for one this host can run.
    */
   readonly stagedSurfaceKey: string | null;
+  /**
+   * Whether this composer's send wakes the resting sandbox its chat is bound
+   * to. The send runs there, not on `hostId`, so the toolbar keeps the chat's
+   * own pick, as it does for a staged sandbox.
+   */
+  readonly sendsToRestingSandbox: boolean;
 }
 
 /**
@@ -148,6 +154,7 @@ export function useComposerToolbarStore(
     tuiOnly,
     chatLineCarriesAutoMode,
     stagedSurfaceKey,
+    sendsToRestingSandbox,
   } = catalog;
   const activityEnabled = useSurfaceActivity();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
@@ -285,7 +292,9 @@ export function useComposerToolbarStore(
       stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
   );
   const keepsUnavailablePick =
-    useSandboxHostConfiguration(hostId) !== null || staged;
+    useSandboxHostConfiguration(hostId) !== null ||
+    staged ||
+    sendsToRestingSandbox;
   useEffect(() => {
     store.getState().setCatalog({
       hostId,

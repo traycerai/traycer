@@ -44,6 +44,8 @@ const PRIVATE_COLLECTION_DECISIONS = {
     "bounded by in-flight actions; values reference recovery evidence",
   taskIds: "temporary stop-all frame construction",
   next: "temporary copy of charged state collections",
+  deliveredNoticeActionIds:
+    "temporary copy of the charged delivery notice ledger",
   settledActionIds: "temporary snapshot reconciliation result",
   hiddenQueueItemIds: "temporary queue projection",
   byAction: "temporary draft handoff dedupe map",

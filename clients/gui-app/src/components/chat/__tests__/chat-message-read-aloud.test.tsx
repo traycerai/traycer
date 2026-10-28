@@ -63,6 +63,7 @@ function ReplyBody(props: {
       elapsedStartedAt={0}
       turnHasOnlyAutonomousResumeSegments={false}
       autonomousResumeOwed={false}
+      foldedBackgroundEvents={undefined}
       showCompletionFooter
       pausedDurationMs={0}
       pausedSinceMs={null}

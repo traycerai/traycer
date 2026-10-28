@@ -9,6 +9,7 @@ import {
   useBrowserTabPresentation,
   type BrowserTabPresentation,
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
@@ -52,7 +53,16 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
     return <MobileBrowserCurrentTileBar {...props} tile={props.tile} />;
   }
   if (props.tile.type === "terminal") {
-    return <MobileTerminalCurrentTileBar {...props} tile={props.tile} />;
+    // The terminal control resolves its authority through the tab-scoped host
+    // (`useTabHostId`), exactly as the desktop strip's `TerminalTabItem` does,
+    // and this bar sits outside every tile's own provider - so it binds one
+    // itself. Without it the bar throws above the tile's error boundary, and
+    // every reload re-selects the same terminal tile and throws again.
+    return (
+      <TabHostProvider hostId={props.tile.hostId}>
+        <MobileTerminalCurrentTileBar {...props} tile={props.tile} />
+      </TabHostProvider>
+    );
   }
   return (
     <MobileCurrentTileBarBody

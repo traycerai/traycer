@@ -8,7 +8,10 @@ import {
   getEpicSessionHandleHostId,
 } from "@/lib/registries/epic-session-registry";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
-import { BrowserSessionsHostProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import {
+  BrowserOpenSessionsProvider,
+  BrowserSessionsHostProvider,
+} from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import {
   PaneFocusProbeContext,
   PanePortalContainerContext,
@@ -44,23 +47,28 @@ export function HostedChatSurfaceContextBridge(props: {
               hostClient={environment.services.hostClient}
               scope={{ kind: "epic", epicId: environment.placement.epicId }}
             >
-              <PaneActivationFocusIntentContext.Provider
-                value={environment.paneActivation.focusIntent}
+              <BrowserOpenSessionsProvider
+                epicId={environment.placement.epicId}
+                tabId={environment.placement.viewTabId}
               >
-                <PaneFocusProbeContext.Provider
-                  value={environment.services.isPaneFocusedNow}
+                <PaneActivationFocusIntentContext.Provider
+                  value={environment.paneActivation.focusIntent}
                 >
-                  <PanePortalContainerContext.Provider
-                    value={environment.services.panePortalContainer}
+                  <PaneFocusProbeContext.Provider
+                    value={environment.services.isPaneFocusedNow}
                   >
-                    <TabBodySelectedContext.Provider
-                      value={environment.canvasActivity.tabSelected}
+                    <PanePortalContainerContext.Provider
+                      value={environment.services.panePortalContainer}
                     >
-                      <HostedChatSurfaceBody environment={environment} />
-                    </TabBodySelectedContext.Provider>
-                  </PanePortalContainerContext.Provider>
-                </PaneFocusProbeContext.Provider>
-              </PaneActivationFocusIntentContext.Provider>
+                      <TabBodySelectedContext.Provider
+                        value={environment.canvasActivity.tabSelected}
+                      >
+                        <HostedChatSurfaceBody environment={environment} />
+                      </TabBodySelectedContext.Provider>
+                    </PanePortalContainerContext.Provider>
+                  </PaneFocusProbeContext.Provider>
+                </PaneActivationFocusIntentContext.Provider>
+              </BrowserOpenSessionsProvider>
             </BrowserSessionsHostProvider>
           </PaneVisibilityContext.Provider>
         </PaneSurfaceActivityContext.Provider>

@@ -333,9 +333,7 @@ describe("the detail rows of a pool source", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Install on dev-box" }),
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Repair on ops-box" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Open ops-box" }));
     expect(onRecover.mock.calls.map(([recovery]) => recovery)).toEqual([
       { kind: "install", hostId: "host-dev-box" },
       { kind: "repair", hostId: "host-ops-box" },

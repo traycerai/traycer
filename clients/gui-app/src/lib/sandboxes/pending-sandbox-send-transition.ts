@@ -24,7 +24,7 @@ export type PendingSendBlocker =
   | "stop"
   | "wake";
 export interface PendingSendState {
-  readonly kind: "chat" | "fork" | "terminal";
+  readonly kind: "chat" | "message" | "fork" | "terminal";
   readonly phase: PendingSendPhase;
   readonly blocker: PendingSendBlocker;
 }
@@ -409,11 +409,15 @@ function withdraw(
     };
   const next: PendingSendState = {
     ...state,
-    phase: state.kind === "chat" ? "returned" : "cancelled",
+    phase:
+      state.kind === "chat" || state.kind === "message"
+        ? "returned"
+        : "cancelled",
     blocker: "none",
   };
   const effects: PendingSendEffect[] = [];
-  if (state.kind === "chat") effects.push("return-message");
+  if (state.kind === "chat" || state.kind === "message")
+    effects.push("return-message");
   effects.push("remove");
   return result(next, effects, facts);
 }
@@ -499,7 +503,13 @@ function endedTransition(
 ): PendingSendTransition {
   if (event === "recovery-complete")
     return result(
-      { ...state, phase: state.kind === "chat" ? "returned" : "cancelled" },
+      {
+        ...state,
+        phase:
+          state.kind === "chat" || state.kind === "message"
+            ? "returned"
+            : "cancelled",
+      },
       ["remove"],
       facts,
     );
@@ -534,7 +544,14 @@ function missingClient(
   if (state.phase === "waiting")
     return LATCHED_BLOCKERS.has(state.blocker)
       ? result(state, [], facts)
-      : result({ ...state, blocker: "host" }, ["poll"], facts);
+      : result(
+          {
+            ...state,
+            blocker: state.blocker === "none" ? "host" : state.blocker,
+          },
+          ["poll"],
+          facts,
+        );
   const blocker = LATCHED_BLOCKERS.has(state.blocker)
     ? state.blocker
     : "client";
@@ -574,6 +591,29 @@ function readyHost(
   return result({ ...state, blocker: "none" }, ["prepare"], facts);
 }
 
+/** An awake host can advance readiness, a pending model read, or delivery. */
+function hostCanAdvance(state: PendingSendState): boolean {
+  return (
+    state.blocker === "none" ||
+    state.blocker === "host" ||
+    state.blocker === "model"
+  );
+}
+
+/** Observe held stages without restarting them, and join a run already waking. */
+function observeStage(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  return result(
+    state,
+    hostCanAdvance(state) && !facts.wakeInFlight
+      ? ["run-stage", "poll"]
+      : ["poll"],
+    facts,
+  );
+}
+
 /** Evaluate row facts only for the original account, never a stale list's event label. */
 function observe(
   state: PendingSendState,
@@ -587,8 +627,8 @@ function observe(
       : result(state, ["poll"], facts);
   if (facts.frozen)
     return result({ ...state, blocker: "credits" }, ["poll"], facts);
-  if (state.blocker === "credits" || state.blocker === "settings")
-    return result(state, ["poll"], facts);
+  const held = heldOnPerson(state, facts);
+  if (held !== null) return held;
   if (facts.host === "awake" && !facts.settingsReady)
     return result({ ...state, blocker: "settings" }, ["poll"], facts);
   if (state.blocker === "wake" || state.blocker === "not-sent")
@@ -597,12 +637,27 @@ function observe(
     state.phase === "waiting" &&
     (facts.stageStatus === "staged" || facts.stageStatus === "creating")
   )
-    return result(
-      state,
-      facts.wakeInFlight ? ["poll"] : ["run-stage", "poll"],
-      facts,
-    );
+    return observeStage(state, facts);
   return reachableHost(state, facts);
+}
+
+/**
+ * A credits or settings refusal holds the send for the person. Settings that
+ * didn't apply are said of an awake sandbox only: once it rests, the message
+ * goes back and the next send wakes it, never this one.
+ */
+function heldOnPerson(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition | null {
+  if (state.blocker !== "credits" && state.blocker !== "settings") return null;
+  if (
+    state.blocker === "settings" &&
+    facts.host === "resting" &&
+    withdrawalAllowed(state, facts)
+  )
+    return withdraw(state, facts);
+  return result(state, ["poll"], facts);
 }
 
 /** Reaching a live host can wake, poll or replay; it cannot erase a latched blocker. */
@@ -615,15 +670,20 @@ function reachableHost(
     if (
       !facts.wakeInFlight &&
       !facts.inFlight &&
+      hostCanAdvance(state) &&
       (state.phase === "waiting" || state.phase === "sending")
     )
       effects.push("wake");
-    const blocker = state.blocker === "client" ? "client" : "host";
+    const blocker = state.blocker === "none" ? "host" : state.blocker;
     return result({ ...state, blocker }, effects, facts);
   }
   if (!facts.clientReady && claimed(state)) return missingClient(state, facts);
   if (facts.host !== "awake" || !facts.clientReady)
-    return result({ ...state, blocker: "host" }, ["poll"], facts);
+    return result(
+      { ...state, blocker: state.blocker === "none" ? "host" : state.blocker },
+      ["poll"],
+      facts,
+    );
   if (state.phase === "uncertain" && state.blocker === "client")
     return result(state, ["poll"], facts);
   return readyHost(state, facts);
@@ -636,19 +696,10 @@ function refresh(
   if (state.phase === "unconfirmed") return result(state, [], facts);
   if (
     state.phase === "waiting" &&
-    !LATCHED_BLOCKERS.has(state.blocker) &&
     (facts.stageStatus === "staged" || facts.stageStatus === "creating")
   )
-    return result(
-      state,
-      facts.wakeInFlight ? ["poll"] : ["run-stage", "poll"],
-      facts,
-    );
-  const blocker =
-    state.phase === "waiting" &&
-    (state.blocker === "not-sent" || state.blocker === "wake")
-      ? state.blocker
-      : "host";
+    return observeStage(state, facts);
+  const blocker = state.blocker === "none" ? "host" : state.blocker;
   return result({ ...state, blocker }, ["poll"], facts);
 }
 

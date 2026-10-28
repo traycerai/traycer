@@ -20,7 +20,10 @@
  * surface. The unary is registered `degrade: { kind: "unsupported" }`.
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -237,46 +240,59 @@ export const sandboxEgressSubscribeV10 = defineStreamRpcContract({
   clientFrameSchema: sandboxEgressSubscribeClientFrameSchemaV10,
 });
 
-// ─── `host.sandbox.repairGuestConfiguration@1.0` ────────────────────────────
+// ─── `host.sandbox.repairGuestConfiguration` ────────────────────────────────
+
+// The shipped 1.0 action repairs guest setup only. Keep both wire shapes frozen.
+const sandboxRepairGuestConfigurationRequestSchemaV10 = lazySchema(() =>
+  z.object({}),
+);
+const sandboxRepairGuestConfigurationResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    guestConfigured: z.boolean(),
+    guestConfigFailureReason: z.string().nullable(),
+  }),
+);
+
+/** Optional and off the released floor: a peer without the method negotiates it away. */
+export const sandboxRepairGuestConfigurationV10 = defineRpcContract({
+  method: "host.sandbox.repairGuestConfiguration",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: sandboxRepairGuestConfigurationRequestSchemaV10,
+  responseSchema: sandboxRepairGuestConfigurationResponseSchemaV10,
+});
 
 export const sandboxRepairGuestConfigurationRequestSchema = lazySchema(() =>
-  z.object({}),
+  z.object({ operationId: z.string().min(1).max(128).nullable() }),
 );
 export type SandboxRepairGuestConfigurationRequest = z.infer<
   typeof sandboxRepairGuestConfigurationRequestSchema
 >;
 
-/**
- * The guest configuration's state after the repair, in the words the sandbox
- * row already uses for it (`SandboxSummary.guestConfigured` and
- * `guestConfigFailureReason`): `true` with a `null` reason when the last
- * envelope's configuration was re-applied and refetched, `false` with the
- * failed hop named when it could not be.
- */
+/** Guest facts retain their original meaning; only settingsApplied acknowledges both steps. */
 export const sandboxRepairGuestConfigurationResponseSchema = lazySchema(() =>
-  z.object({
-    guestConfigured: z.boolean(),
-    guestConfigFailureReason: z.string().nullable(),
+  sandboxRepairGuestConfigurationResponseSchemaV10.extend({
+    settingsApplied: z.boolean(),
   }),
 );
 export type SandboxRepairGuestConfigurationResponse = z.infer<
   typeof sandboxRepairGuestConfigurationResponseSchema
 >;
 
-/**
- * Re-applies the sandbox's guest configuration (trust files, hosts aliases,
- * the env layer, git setup) from the last envelope and refetches it: the
- * card's repair action, for a guest whose files an agent removed or whose
- * configuration step failed.
- *
- * Optional v1.0 method, outside `RELEASED_FLOOR_METHOD_NAMES` and registered
- * with `degrade: { kind: "unsupported" }`: a new method NAME is
- * handshake-fatal against a released peer otherwise. Only a sandbox host
- * serves it; any other host refuses the call.
- */
-export const sandboxRepairGuestConfigurationV10 = defineRpcContract({
+/** Re-applies guest setup and environment settings as one retry operation. */
+export const sandboxRepairGuestConfigurationV11 = defineRpcContract({
   method: "host.sandbox.repairGuestConfiguration",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: sandboxRepairGuestConfigurationRequestSchema,
   responseSchema: sandboxRepairGuestConfigurationResponseSchema,
+});
+
+export const sandboxRepairGuestConfigurationUpgradeV10ToV11 = defineUpgradePath<
+  typeof sandboxRepairGuestConfigurationV10,
+  typeof sandboxRepairGuestConfigurationV11
+>({
+  from: sandboxRepairGuestConfigurationV10.schemaVersion,
+  to: sandboxRepairGuestConfigurationV11.schemaVersion,
+  upgradeRequest: () => ({ operationId: null }),
+  // A guest-only answer carries no evidence that environment settings applied.
+  upgradeResponse: (response) => ({ ...response, settingsApplied: false }),
 });

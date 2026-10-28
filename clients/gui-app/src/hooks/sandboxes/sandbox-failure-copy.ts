@@ -20,6 +20,14 @@ import {
   sandboxNotAMemberLine,
 } from "@/components/hosts/sandbox-create-model";
 
+/** Keep the control-plane refusal available to the row and its diagnostics. */
+export class SandboxOperationError extends Error {
+  constructor(readonly failure: SandboxControlFailure) {
+    super(sandboxFailureMessage(failure));
+    this.name = "SandboxOperationError";
+  }
+}
+
 /** `shape_not_offered`'s `reason`, in words. */
 const SHAPE_REASON_COPY: Record<string, string> = {
   "os-not-offered": "That operating system isn't offered yet.",
@@ -44,9 +52,14 @@ function insufficientCreditCopy(
   }
   // Create, resume and start share one gate (an hour of the new rate on top
   // of what is already awake), so the sentence names no verb.
+  let pot = "Your credits";
+  if (failure.creditSource === "team-allowance") pot = "Your team allowance";
+  if (failure.creditSource === "team") pot = "The team's credits";
+  const cover = failure.creditSource === "team-allowance" ? "doesn't" : "don't";
+  const sentence = `${pot} ${cover} cover an hour of this sandbox.`;
   return failure.shortfallMc === null
-    ? "Your credits don't cover an hour of this sandbox."
-    : `Your credits don't cover an hour of this sandbox. Add ${formatCreditsRequired(failure.shortfallMc)} credits and try again.`;
+    ? sentence
+    : `${sentence} Add $${formatCreditsRequired(failure.shortfallMc)} and try again.`;
 }
 
 /** The refusals whose sentence depends on nothing but the code. */
@@ -69,7 +82,7 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_BUSY,
-    "It's in use (an agent turn, a running shell or an open tab), so it stays awake.",
+    "It's in use (an agent turn or a running shell), so it stays awake.",
   ],
   [
     SANDBOX_REFUSAL_CODE_FROZEN,

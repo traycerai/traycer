@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import {
+  sandboxSettingsSteps,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
+import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -16,11 +21,19 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
-import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
+import {
+  sandboxDetailsEntry,
+  type SandboxDetailsExport,
+} from "@/lib/sandboxes/sandbox-details-provider";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
-import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
+import {
+  SANDBOX_LIST_FAILED,
+  sandboxVerbFailureLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   closeSandboxDetails,
@@ -32,7 +45,8 @@ import {
  * Sandboxes row, a failed row, the hover card or a notification. Mounted once
  * at the app root. Cloud-backed: it reads the sandbox list and the cost
  * ledger, so it opens for a host that is offline, and reading it never wakes
- * or spends. It lists nothing it was not opened for.
+ * or spends; an awake sandbox's own host adds its settings delivery. It lists
+ * nothing it was not opened for.
  */
 export function SandboxDetailsDrawerHost(): ReactNode {
   const sandboxId = useSandboxDetailsStore((s) => s.sandboxId);
@@ -97,10 +111,26 @@ function SandboxDetailsBody(props: { readonly sandboxId: string }): ReactNode {
   return <SandboxDetailsSections summary={summary} />;
 }
 
+/**
+ * The export with this view's last failed operation's raw code: Details
+ * shows only its support reference, and the raw code goes here.
+ */
+function withOperationFailure(
+  exported: SandboxDetailsExport,
+  code: string | null,
+): SandboxDetailsExport {
+  if (code === null) return exported;
+  return {
+    ...exported,
+    status: { ...exported.status, "Operation failure code": code },
+  };
+}
+
 function SandboxDetailsSections(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
   const { summary } = props;
+  const operation = useSandboxOperation(summary.id);
   const costs = useSandboxCosts();
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
@@ -147,6 +177,7 @@ function SandboxDetailsSections(props: {
           ))}
         </dl>
       </section>
+      <SandboxSettingsDeliverySection summary={summary} />
       <section
         aria-label="History"
         className="flex flex-col gap-2 border-t border-border/60 px-4 py-4"
@@ -154,6 +185,22 @@ function SandboxDetailsSections(props: {
       >
         <h3 className="text-ui-sm font-medium">History</h3>
         <ol className="flex list-none flex-col gap-1 p-0 text-ui-xs">
+          {operation?.kind === "failed" ? (
+            <li
+              className="space-y-1 wrap-anywhere"
+              data-testid="sandbox-details-operation-failure"
+            >
+              <p>
+                {sandboxVerbFailureLine(
+                  operation.verb,
+                  summary.displayName,
+                  operation.reference,
+                )}
+              </p>
+              <p>{operation.error.message}</p>
+              <p>{`Support reference: ${operation.reference}`}</p>
+            </li>
+          ) : null}
           {entry.history.map((event) => (
             <li
               key={`${event.at}:${event.label}:${event.value}`}
@@ -188,12 +235,55 @@ function SandboxDetailsSections(props: {
           size="sm"
           data-testid="sandbox-details-export"
           onClick={() =>
-            clipboard.copy(JSON.stringify(entry.export(), null, 2))
+            clipboard.copy(
+              JSON.stringify(
+                withOperationFailure(
+                  entry.export(),
+                  operation?.kind === "failed" ? operation.code : null,
+                ),
+                null,
+                2,
+              ),
+            )
           }
         >
           {clipboard.copied ? "Copied" : "Copy diagnostics"}
         </Button>
       </section>
     </>
+  );
+}
+
+/**
+ * What the sandbox's host says of its configuration's settings: what applied
+ * and what didn't, then each setting for an agent sandboxes don't run, apart.
+ * Read only while the sandbox is awake; reading it never wakes one.
+ */
+function SandboxSettingsDeliverySection(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const status = useSandboxSettingsStatus(props.summary).data;
+  if (status === undefined || props.summary.state !== "awake") return null;
+  const steps = sandboxSettingsStepsLine(sandboxSettingsSteps(status.items));
+  const unused = status.items.filter((item) => item.status === "not_used");
+  if (steps.length === 0 && unused.length === 0) return null;
+  return (
+    <section
+      aria-label="Settings delivery"
+      className="flex flex-col gap-2 border-t border-border/60 px-4 py-4"
+      data-testid="sandbox-details-settings-delivery"
+    >
+      <h3 className="text-ui-sm font-medium">Settings delivery</h3>
+      {steps.length === 0 ? null : <p className="text-ui-xs">{steps}</p>}
+      {unused.length === 0 ? null : (
+        <ul className="flex list-none flex-col gap-1 p-0 text-ui-xs text-muted-foreground">
+          {unused.map((item) => (
+            <li key={item.key}>
+              {`${unusedSettingLabel(item.key)} · not used on sandboxes`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

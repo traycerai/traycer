@@ -172,6 +172,7 @@ const MOCK_HOST_DIRECTORY = {
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
+  useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
@@ -183,6 +184,7 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => null,
+  useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),

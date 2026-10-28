@@ -1,19 +1,49 @@
 import { createContext } from "react";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
-import type { ChatBotRepliedPost } from "@/lib/bots/reply-row";
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
  * shows it: how many replies, when the last one landed, whether it has a
- * reply the viewer has not read, whether the bot is answering in it now, and
- * who is in it: the post's writer, and the bot once it has a reply.
+ * reply the viewer has not read and how many, whether the bot is answering in
+ * it now, and who is in it: the post's writer, and the bot once it has a reply.
  */
 export interface ChatBotThreadLine {
   readonly participants: ReadonlyArray<StackedIdentity>;
   readonly replyCount: number;
   readonly lastReplyAt: number | null;
   readonly unread: boolean;
+  /** The viewer's unread notifications of the thread; `null` where the host does not count, and the line draws a dot. */
+  readonly unreadCount: number | null;
   readonly replying: boolean;
+}
+
+/**
+ * A message the bot failed to answer, or whose answer is held: why, and what
+ * a member can do about it: send it to the bot again as it is, on their own
+ * message put its text back in the box to edit and send as a new message
+ * that replaces it, and sign in where that is the fix.
+ */
+export interface ChatBotFailedRequest {
+  /** `failed`: the answer errored; `parked`: it is held and has not started. */
+  readonly state: "failed" | "parked";
+  /** Why, in the words the agent chat's error row uses; `null` when the host gave no reason. */
+  readonly summary: string | null;
+  /** Opens the provider's sign-in on the bot's host; `null` unless signing in is the fix. */
+  readonly signIn: (() => void) | null;
+  /**
+   * Sends it again; `text` is the message's own. `null` where it cannot be
+   * sent again: a host that cannot re-deliver, or a message whose text is not
+   * loaded yet.
+   */
+  readonly retry: ((text: string) => void) | null;
+  /** `true` while a retry of it is being sent. */
+  readonly retrying: boolean;
+  /**
+   * Puts `text`, the message's own, in the box that replaces it; `null` on
+   * a teammate's message, which only its writer can replace, and wherever
+   * Retry is `null`.
+   */
+  readonly edit: ((text: string) => void) | null;
 }
 
 /**
@@ -33,9 +63,8 @@ export interface ChatBotPresentation {
   readonly botTitle: string;
   /**
    * Lands the list on a message by its id: the reply that resolved a
-   * request, or the post a direct reply answers. In the channel only a
-   * direct post's reply is in the list; a thread post's verdict is in its
-   * thread, reached through the thread line.
+   * request. In the channel only a direct post's reply is in the list; a
+   * thread post's verdict is in its thread, reached through the thread line.
    */
   readonly scrollToMessage: ((messageId: string) => void) | null;
   /**
@@ -45,13 +74,6 @@ export interface ChatBotPresentation {
    */
   readonly replyFollowsPost:
     | ((postMessageId: string, replyMessageId: string) => boolean)
-    | null;
-  /**
-   * The post a bot's direct reply answers, by its message id, as the reply's
-   * line names it; `null` when the post is not in the list, and in a thread.
-   */
-  readonly repliedPost:
-    | ((messageId: string) => ChatBotRepliedPost | null)
     | null;
   /**
    * The thread line under a channel post, by the post's message id; `null`
@@ -75,6 +97,17 @@ export interface ChatBotPresentation {
    * nothing can post it.
    */
   readonly chooseOption: ((choice: string) => void) | null;
+  /**
+   * A member's message the bot failed to answer, by its request id and its
+   * writer: why, and its actions, while the session that failed or parked on
+   * it still holds it; `null` for any other request.
+   */
+  readonly failedRequest:
+    | ((
+        requestId: string,
+        senderUserId: string | null,
+      ) => ChatBotFailedRequest | null)
+    | null;
 }
 
 export const ChatBotPresentationContext =

@@ -1791,6 +1791,12 @@ export function landingDraftRememberSynced(
   collectedGeneration: number,
   ownerHostId: string | null,
 ): void {
+  // A drafts listing calls this once per tombstone, and every `setState` here
+  // writes the whole store where local persistence is on (web, mobile).
+  const held = useLandingDraftStore
+    .getState()
+    .drafts.some((draft) => draft.id === draftId);
+  if (!held) return;
   useLandingDraftStore.setState((state) => ({
     drafts: state.drafts.map((draft) => {
       if (draft.id !== draftId) return draft;

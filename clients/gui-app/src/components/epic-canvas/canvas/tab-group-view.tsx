@@ -18,10 +18,12 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
+import {
+  ChatDeadTileBannerContainer,
+  SubstitutedCatchingUpBanner,
+} from "@/components/epic-canvas/renderers/chat-tile";
 import { chatTileHostLabel } from "@/components/epic-canvas/renderers/chat-pre-content";
 import {
-  ChatCatchingUpBanner,
   ChatDeadTileBanner,
   type ChatDeadTileBannerReason,
 } from "@/components/epic-canvas/renderers/dead-tile-banner";
@@ -405,12 +407,10 @@ export const TabGroupView = memo(function TabGroupView(
       if (sidebarNodeId !== null) {
         requestSidebarNodeReveal(tabId, sidebarNodeId);
       }
-      // The Browsers panel lists one host's sessions and simulators, so it is
-      // pinned to the tab's host or the row to reveal may not be listed.
-      if (
-        tab?.type === TILE_KIND_BROWSER_SESSION ||
-        tab?.type === TILE_KIND_SIMULATOR
-      ) {
+      // The Simulators group lists one host's simulators, so it is pinned to
+      // the tab's host or the row to reveal may not be listed. Browser rows
+      // are listed for every device, so a browser tab leaves the pin alone.
+      if (tab?.type === TILE_KIND_SIMULATOR) {
         useSurfaceHostSelectionStore
           .getState()
           .setSelection(tabSurfaceKey("browsers", tabId), tab.hostId);
@@ -1184,7 +1184,9 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           />
         ) : null}
         {catchingUp !== null ? (
-          <ChatCatchingUpBanner
+          <SubstitutedCatchingUpBanner
+            epicId={epicId}
+            ownerHostId={publishedFallbackRef.ownerHostId}
             reason={catchingUp}
             testId={`chat-catching-up-${activeTab.id}`}
           />

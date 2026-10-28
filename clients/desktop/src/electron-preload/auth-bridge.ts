@@ -20,6 +20,7 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
+  TraycerModelsFetchResult,
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxPatchRequest,
@@ -130,6 +131,7 @@ export interface AuthBridgeSurface {
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -137,6 +139,7 @@ export interface AuthBridgeSurface {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult>;
   patchSandbox(
     bearerToken: string,
@@ -280,6 +283,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<SandboxCatalogueFetchResult>,
 
+    getTraycerModels: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTraycerModels,
+        bearerToken,
+      ) as Promise<TraycerModelsFetchResult>,
+
     createSandbox: (bearerToken, request) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.createSandbox,
@@ -287,11 +296,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         request,
       ) as Promise<SandboxCreateFetchResult>,
 
-    destroySandbox: (bearerToken, sandboxId) =>
+    destroySandbox: (bearerToken, sandboxId, onlyIfIdle) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.destroySandbox,
         bearerToken,
         sandboxId,
+        onlyIfIdle,
       ) as Promise<SandboxVerbFetchResult>,
 
     patchSandbox: (bearerToken, sandboxId, request) =>

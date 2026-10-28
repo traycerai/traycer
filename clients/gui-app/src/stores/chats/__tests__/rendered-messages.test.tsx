@@ -5852,7 +5852,7 @@ describe("useRenderedMessages turn.stopped", () => {
 
     // A fatal connection close clears the active turn while the provider may
     // still be running: turn.started exists, its terminal event does not. A
-    // start alone must not fabricate a "Resumed · no response · 0s" footer.
+    // start alone must not fabricate a "No reply · 0s" ending.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -6088,7 +6088,7 @@ describe("useRenderedMessages turn.stopped", () => {
     // The reused turnId completed an attempt BEFORE the notification was
     // persisted, and the provider never started again. That window predates
     // the divider it would prove adopted - the row must stay a footerless
-    // notification instead of rendering "Resumed · no response" with the
+    // notification instead of rendering "No reply" with the
     // stale window's timing.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],

@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV25,
+  type HostNotificationCloudEntryV26,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -11,6 +11,10 @@ import {
   type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
+import {
+  sandboxSettingsFailureLine,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
@@ -34,7 +38,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV25,
+  entry: HostNotificationCloudEntryV26,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -127,11 +131,37 @@ export function formatHostNotificationPresentation(
       return environmentNotificationPresentation(entry.kind, known);
     case "sandbox.notice":
       return sandboxNoticePresentation(known, Date.now());
+    case "notification.hooks.removed":
+      return {
+        title: "Notification hooks removed",
+        body:
+          known?.kind === "notification_hooks_removed"
+            ? notificationHooksRemovedMessage(known.hostName, known.count)
+            : "Review notification hooks on the affected computer.",
+      };
   }
+}
+
+export function notificationHooksRemovedMessage(
+  hostName: string,
+  count: number,
+): string {
+  return count === 1
+    ? `Removed 1 notification hook from ${hostName} because it could send its private data.`
+    : `Removed ${count} notification hooks from ${hostName} because they could send its private data.`;
 }
 
 const SANDBOX_FILES_LINE =
   "Files on this sandbox cannot be recovered; published chats stay readable.";
+
+/** The confirmed event's clock time in the viewer's current time zone. */
+function sandboxEventTime(at: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(at));
+}
 
 /**
  * When a sandbox is destroyed, in the reader's own time zone: `at 10:36`
@@ -140,11 +170,7 @@ const SANDBOX_FILES_LINE =
  */
 export function sandboxDestroyWhen(destroyAt: number, now: number): string {
   const at = new Date(destroyAt);
-  const time = new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(at);
+  const time = sandboxEventTime(destroyAt);
   const today = new Date(now);
   const tomorrow = new Date(
     today.getFullYear(),
@@ -221,14 +247,34 @@ function sandboxNoticePresentation(
         title: `${name} was lost`,
         body: "The provider no longer has it; its files could not be kept.",
       };
-    case "destroyed_by_member":
+    case "destroyed_by_member": {
+      const actor = notice.actorName ?? "A member";
+      if (notice.destroyedAt !== undefined) {
+        const time = sandboxEventTime(notice.destroyedAt);
+        return {
+          title: `${actor} destroyed ${name} at ${time}.`,
+          body: [
+            "Its files are gone.",
+            ...(notice.stoppedAgentTaskTitles ?? []).map(
+              (taskTitle) => `Your agent in ${taskTitle} was stopped.`,
+            ),
+          ].join(" "),
+        };
+      }
       return {
-        title: `${notice.actorName ?? "A member"} destroyed ${name}`,
+        title: `${actor} destroyed ${name}`,
         body: SANDBOX_FILES_LINE,
       };
+    }
     case "manual_rest": {
       const done = notice.verb === "suspend" ? "suspended" : "stopped";
       const confirmed = notice.outcome === "confirmed";
+      if (confirmed && !notice.byYou && notice.confirmedAt !== undefined) {
+        return {
+          title: `${notice.actorName ?? "A member"} ${done} ${name} at ${sandboxEventTime(notice.confirmedAt)}.`,
+          body: "",
+        };
+      }
       let title: string;
       if (notice.byYou) {
         title = confirmed
@@ -267,14 +313,31 @@ function environmentNotificationPresentation(
             ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not in Personal yet`
             : "A computer's move to Personal stopped before it finished",
       };
-    case "environment.apply.failed":
+    case "environment.apply.failed": {
+      const sandbox =
+        known?.kind === "environment_apply_failed" ? known.sandbox : null;
+      if (sandbox !== null && sandbox !== undefined)
+        return {
+          title: sandboxSettingsFailureLine(
+            sandbox.name,
+            sandbox.configurationName,
+            "SBX-0520",
+          ),
+          body: [
+            "Compute is charged while it is awake.",
+            sandboxSettingsStepsLine(sandbox),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        };
       return {
         title: "Setting not applied",
         body:
           known?.kind === "environment_apply_failed"
-            ? `${known.hostName} • ${known.itemKey} could not be applied`
+            ? `${known.hostName} • A setting could not be applied`
             : "A host could not apply a setting",
       };
+    }
     case "team.role.changed":
       return {
         title: "Your role changed",
@@ -436,13 +499,12 @@ function teamNotificationPresentation(
           host.credentialClosed === "done" &&
           host.replacementDelivered === "done",
       ).length;
-      const progress =
-        known.hosts.length === 0
-          ? "Removal complete"
-          : `${done} of ${known.hosts.length} hosts done`;
       return {
         title: "Member removed",
-        body: `${known.memberName} • ${known.teamName} • ${progress}`,
+        body:
+          done === known.hosts.length
+            ? `${known.memberName} is no longer in ${known.teamName}.`
+            : `${known.memberName} • ${known.teamName} • ${done} of ${known.hosts.length} hosts done`,
       };
     }
     case "team.member.joined":
@@ -631,6 +693,7 @@ export function hostOperationKnownCopy(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
@@ -732,6 +795,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -765,6 +829,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -798,6 +863,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -836,6 +902,7 @@ function knownStoppedReason(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -873,6 +940,7 @@ function knownProviderId(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -922,6 +990,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return false;
   }
 }
@@ -957,6 +1026,7 @@ function knownBackgroundWorkRunning(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return false;
   }
 }

@@ -22,6 +22,12 @@ A new tab starts on a blank page. Type in the address bar ("Search or enter a we
 
 New tabs open in a new split by default. To open them in the current pane or in a floating picture-in-picture window, change **Open browser tabs** in [Browser settings](/settings/browser#browser-placement).
 
+### Choose Where A New Tab Runs
+
+When you click a link that opens in Traycer's browser, it uses the host selected under **Show browsers from** in the Browsers panel. With **Follow task host**, it prefers this computer's host; if that host is unavailable, it falls back to the host of the tile you clicked in. An unavailable selected host also falls back to this computer's host first.
+
+The **Add browser** picker lets you choose the device explicitly. It suggests this computer's host when available, otherwise the Task's host. The panel's host filter doesn't change that suggestion.
+
 ## The Browsers Panel
 
 The panel lists the Task's browser tabs on one host. By default that is the Task's host.
@@ -87,7 +93,7 @@ Agents open a private session when you ask them for privacy or isolation.
 
 ## Agents In The Browser
 
-When **Let agents use the in-app browser** is on in [Browser settings](/settings/browser), agents get Traycer's browser as a tool. It is on by default, and it is set per host. When it's off, agents use their own browser tooling instead.
+When **Let agents use the in-app browser** is on in [Permissions → Browser](/settings/permissions#browser), agents get Traycer's browser as a tool. It is on by default, and it is set per host. When it's off, agents use their own browser tooling instead.
 
 - **Watch an agent.** A tab an agent is using shows the robot icon in the Browsers panel, with the tooltip "Driven by" and the agent's name. Click the row to watch the tab, or click the icon to open the agent's chat.
 - **Where agent tabs go.** Tabs an agent opens stay in the Browsers panel without opening on the canvas. To open them like any other browser tab, set **Agent-opened tabs** to **Like any browser tile** in [Browser settings](/settings/browser#agent-opened-tabs).

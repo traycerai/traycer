@@ -20,11 +20,10 @@ export type BotOwner =
     };
 
 /**
- * The bot a surface draws, for its picture, its name's popover and the
- * "managed by" line beside its name: its id (what its colour is hashed
- * from), its current title, its owner (`null` until the environment list
- * names it), and how to open what it is doing under the hood (`null` where
- * nothing can).
+ * The bot a surface draws, for its picture and its name's popover: its id
+ * (what its colour is hashed from), its current title, its owner (`null`
+ * until the environment list names it), and how to open what it is doing
+ * under the hood (`null` where nothing can).
  */
 export interface BotIdentity {
   readonly botId: string;

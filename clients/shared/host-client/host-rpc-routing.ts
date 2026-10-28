@@ -341,6 +341,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.updateReplyMode": "target-host",
   "bot.updateRunSettings": "target-host",
   "bot.updateTitle": "target-host",
+  "browser.catalog.read": "target-host",
   "browser.repl.releaseRealm": "target-host",
   "browser.repl.requestApproval": "target-host",
   "browser.repl.runCell": "target-host",
@@ -419,6 +420,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   // edit it with no host running that configuration. What is about one host
   // (its status, local overrides, setup, review, the move) stays on it.
   "environment.configuration.items": "pool-only",
+  "environment.configuration.revision": "pool-only",
   "environment.configuration.items.delete": "pool-only",
   "environment.configuration.items.put": "pool-only",
   "environment.configuration.mcpServers.delete": "pool-only",
@@ -541,6 +543,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.listTuiAgents": "target-host",
   // The host's local History contribution, from the host that holds it.
   "epic.localHistory.read": "target-host",
+  "epic.mentionArtifacts": "target-host",
   "epic.mentionEpics": "target-host",
   "epic.mentionReviews": "target-host",
   "epic.mentionSpecs": "target-host",

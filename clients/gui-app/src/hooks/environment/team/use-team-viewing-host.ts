@@ -88,6 +88,7 @@ export function useTeamViewingHost(): TeamViewingHost {
     params: { environmentId },
     preflight: cloudVerdictPreflight("environment.host.list"),
     options: {
+      poll: true,
       enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
     },
   });

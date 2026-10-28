@@ -16,6 +16,7 @@ import type {
   ChatQueuedPortForwardItem,
   ChatQueuedTaskCheckinItem,
   ChatQueuedMemoryCurationItem,
+  ChatQueuedNotificationDigestItem,
   ChatQueuedTaskOverdueItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -1471,6 +1472,41 @@ describe("<QueuedMessagePanel />", () => {
     });
   });
 
+  it("renders a notification-digest item as its rows under a Notifications chip, dismissable", () => {
+    renderPanel({
+      queue: queueState([notificationDigestQueuedItem("queue-digest")]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const digestRow = screen.getByTestId("queued-message-row");
+
+    expect(
+      within(digestRow).getByTestId("queued-notification-digest-badge")
+        .textContent,
+    ).toBe("Notifications");
+    // The card replaces the description line: the rows are the content.
+    expect(
+      within(digestRow).getByText("The release run failed"),
+    ).not.toBeNull();
+    expect(within(digestRow).queryByText("Notification digest")).toBeNull();
+    expect(
+      within(digestRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(digestRow).getByRole("button", {
+        name: "Dismiss notification digest",
+      }),
+    );
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-digest",
+      kind: "notification-digest",
+    });
+  });
+
   it("keeps the Memory chip off the other host-authored rows, and theirs off its row", () => {
     renderPanel({
       queue: queueState([
@@ -2241,6 +2277,35 @@ function memoryCurationQueuedItem(
     status: "pending",
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function notificationDigestQueuedItem(
+  queueItemId: string,
+): ChatQueuedNotificationDigestItem {
+  return {
+    kind: "notification-digest",
+    queueItemId,
+    description: "Notification digest",
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+    window: { fromVersion: 0, throughVersion: 1, from: 1, through: 2 },
+    attention: [
+      {
+        notificationId: "n-1",
+        entity: { kind: "task", id: "task-1", title: "Ship the release" },
+        severity: "error",
+        operation: "failed",
+        title: "The release run failed",
+        at: 1,
+        read: false,
+      },
+    ],
+    recent: null,
+    truncated: false,
   };
 }
 

@@ -514,15 +514,7 @@ export function useHostMutation<
             : await args.prepareRequest(mapped, client);
         const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
         const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
-        // THREE branches, and the third is the only one that can carry two
-        // options at once. `requestWithOptions` is reached ONLY for a keyed
-        // dispatch, which keeps every existing mutation on the byte-identical
-        // path it has always taken - and keeps a cast-partial host-client stub
-        // (`Object.assign({} as HostClient, { request, requestWithSignal })`,
-        // which cannot fail at compile) working in the suites that never key a
-        // mutation. A suite that DOES reach a keyed mutation has to stub the
-        // member; there is no version of this that both applies the key and
-        // asks nothing of those stubs.
+        // A keyed dispatch carries both retry identity and version floor.
         const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
           if (idempotencyKey !== null) {
             return client.requestWithOptions(args.method, params, {
@@ -533,19 +525,17 @@ export function useHostMutation<
               // does not declare for the method.
               responseTimeoutMs: null,
               requiredHostMethodVersion: requirement,
-              // No caller cancellation, matching the two branches below. A
-              // mutation's dispatch is not tied to an observer's lifetime here.
               signal: undefined,
             });
           }
-          return requirement === null
-            ? client.request(args.method, params)
-            : client.requestWithSignalRequiringHostMethodVersion(
-                args.method,
-                params,
-                undefined,
-                requirement,
-              );
+          if (requirement !== null)
+            return client.requestWithSignalRequiringHostMethodVersion(
+              args.method,
+              params,
+              undefined,
+              requirement,
+            );
+          return client.request(args.method, params);
         };
         const mapDispatchError = args.mapDispatchError;
         // `.catch` directly on the dispatch, never chained after a `.then`: a

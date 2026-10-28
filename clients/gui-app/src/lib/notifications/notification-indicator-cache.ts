@@ -82,6 +82,77 @@ function invalidateMatchingNotificationIndicators(
     });
 }
 
+/**
+ * Re-asks every host whose cached answer is its whole origin (`complete`).
+ * Such an answer replaces the cloud's count for that origin, so it holds only
+ * while it is current: once the cloud snapshot changes, a host the GUI keeps
+ * no feed of (and so never invalidates on its own frames) would otherwise
+ * mask the cloud rows that reached it since. A partition answer counts
+ * nothing over the cloud, so it is left alone.
+ *
+ * A read still in flight is fenced whatever it held before: its answer may
+ * be a whole origin computed before the snapshot, first read or not. The
+ * queries are chosen once, here, because cancelling reverts a first read to
+ * no data, and the re-ask must still include it.
+ */
+export function invalidateCompleteNotificationIndicators(
+  queryClient: QueryClient,
+): void {
+  const selected = new Set(
+    queryClient.getQueryCache().findAll({
+      predicate: (query) =>
+        notificationsQueryKeys.isIndicatorQuery(query.queryKey) &&
+        (query.state.fetchStatus === "fetching" ||
+          (isRecord(query.state.data) && query.state.data.complete === true)),
+    }),
+  );
+  if (selected.size === 0) return;
+  invalidateMatchingNotificationIndicators(
+    queryClient,
+    { predicate: (query) => selected.has(query) },
+    null,
+  );
+}
+
+/** How long the cloud feed stays quiet before a snapshot burst re-asks the
+ * hosts (`createCompleteNotificationIndicatorsReask`). */
+export const COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS = 300;
+
+export interface CompleteNotificationIndicatorsReask {
+  /** A cloud snapshot was accepted; re-ask once the feed goes quiet. */
+  schedule(): void;
+  dispose(): void;
+}
+
+/**
+ * `invalidateCompleteNotificationIndicators` once per burst of cloud
+ * snapshots, after the last of them. Re-asking on every snapshot cancels each
+ * read the one before restarted, so under a burst a first read could never
+ * settle. Whatever is still in flight, or holds a whole-origin answer, when
+ * the burst ends is re-asked then, so no answer older than the last snapshot
+ * survives it.
+ */
+export function createCompleteNotificationIndicatorsReask(
+  queryClient: QueryClient,
+  quietMs: number,
+): CompleteNotificationIndicatorsReask {
+  let cancelPending: (() => void) | null = null;
+  return {
+    schedule: () => {
+      cancelPending?.();
+      const handle = globalThis.setTimeout(() => {
+        cancelPending = null;
+        invalidateCompleteNotificationIndicators(queryClient);
+      }, quietMs);
+      cancelPending = () => globalThis.clearTimeout(handle);
+    },
+    dispose: () => {
+      cancelPending?.();
+      cancelPending = null;
+    },
+  };
+}
+
 export function clearNotificationIndicatorCaches(
   queryClient: QueryClient,
 ): void {

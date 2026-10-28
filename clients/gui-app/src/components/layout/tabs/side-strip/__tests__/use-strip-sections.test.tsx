@@ -9,7 +9,7 @@ import { createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
   HostNotificationsIndicatorState,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -52,6 +52,7 @@ const NO_FLAGS: HostNotificationsIndicatorState = {
   pendingFork: false,
   unreadFailure: false,
   unreadDone: false,
+  unreadCount: 0,
 };
 
 function epicTab(epicId: string): HeaderTab {
@@ -100,7 +101,7 @@ function cloudRow(input: {
         readonly agentTitle: string;
       }
     | { readonly kind: "agent.stopped"; readonly failed: boolean };
-}): HostNotificationsCloudFeedRowV15 {
+}): HostNotificationsCloudFeedRowV16 {
   const { entryId, at, epicId, entry } = input;
   const chatId = `chat-${entryId}`;
   const base = {

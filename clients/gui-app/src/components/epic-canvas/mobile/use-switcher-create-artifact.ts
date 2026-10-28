@@ -1,16 +1,18 @@
 import { useCallback } from "react";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { useEpicCreateArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
+import {
+  DEFAULT_EPIC_NODE_NAMES,
+  type CreatableArtifactKind,
+} from "@/lib/artifacts/node-display";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export interface SwitcherCreateArtifact {
-  readonly create: (type: MarkdownArtifactKind) => void;
+  readonly create: (type: CreatableArtifactKind) => void;
   readonly isPending: boolean;
 }
 
@@ -34,7 +36,7 @@ export function useSwitcherCreateArtifact(
   const activeHostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
   const create = useCallback(
-    (type: MarkdownArtifactKind) => {
+    (type: CreatableArtifactKind) => {
       createArtifact.mutate(
         {
           epicId,

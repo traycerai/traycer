@@ -175,13 +175,15 @@ export function replicaChatLockReason(input: {
  * reader to wait would be false, and pointing them at a live tab would send
  * them at a button that can do nothing.
  *
- * The reachable arm splits again on WHOSE host the owner is. "lives on <label> ...
- * not available live from this device" describes one machine holding the chat
- * and a second one reading it, so when the owner IS the host serving this
- * read every clause of it turns false at once: it prints the reader's own
- * machine as elsewhere and tells them the thing in front of them is somewhere
- * they are not. What is true there is narrower and says nothing about
- * devices - this host no longer has the live chat.
+ * The reachable arm splits again on WHOSE host the owner is. "lives on <label>"
+ * describes one machine holding the chat and a second one reading it, so
+ * when the owner IS the host serving this read it turns false: it prints the
+ * reader's own machine as elsewhere. What is true there is narrower and says
+ * nothing about devices - this host no longer has the live chat. Neither arm
+ * claims the chat is unavailable live from here: a copy whose reachable owner
+ * holds the chat converts itself into the live tile before anyone reads the
+ * footer, and the copies left on this arm (no local record under that owner)
+ * are described by what IS said, where the chat lives.
  *
  * The unreachable arm stays one sentence for both, because nothing answered:
  * there is no "the host said it isn't here" to report, only a host to wait
@@ -224,7 +226,7 @@ function publishedCopySentence(input: {
   if (input.ownerIsThisHost) {
     return `Showing the last published copy of this agent. Its live history is no longer on this host.`;
   }
-  return `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`;
+  return `Showing the last published copy of this agent, which lives on ${input.ownerLabel}.`;
 }
 
 /** The doc-replica branch's counterpart, splitting the same three ways. */
@@ -256,7 +258,7 @@ function replicaCopySentence(input: {
   if (input.ownerIsThisHost) {
     return `Showing this device's synced copy of this agent. Its live history is no longer on this host.`;
   }
-  return `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`;
+  return `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}.`;
 }
 
 /**

@@ -48,6 +48,7 @@ import type {
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
+  TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   EnvironmentProvidersFetchResult,
@@ -3121,6 +3122,16 @@ export class AuthService {
     return this.runnerHost.getSandboxCatalogue(bearer);
   }
 
+  async getTraycerModels(): Promise<TraycerModelsFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getTraycerModels(bearer);
+  }
+
   async createSandbox(
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult> {
@@ -3133,14 +3144,17 @@ export class AuthService {
     return this.runnerHost.createSandbox(bearer, request);
   }
 
-  async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+  async destroySandbox(
+    sandboxId: string,
+    onlyIfIdle: boolean,
+  ): Promise<SandboxVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       throw new Error("Sign in to destroy this sandbox.");
     }
-    return this.runnerHost.destroySandbox(bearer, sandboxId);
+    return this.runnerHost.destroySandbox(bearer, sandboxId, onlyIfIdle);
   }
 
   async patchSandbox(

@@ -44,6 +44,7 @@ export function useEnvironmentSkillsQuery(
     },
     preflight: cloudVerdictPreflight("environment.configuration.skills.list"),
     options: {
+      poll: true,
       enabled:
         enabled && source.kind === "pool" && viewerId.length > 0 && authorized,
     },

@@ -18,9 +18,11 @@ import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-writ
 import { configMutationKeys, queryKeys } from "@/lib/query-keys";
 import type {
   ShellConfigController,
+  ShellCommandCallbacks,
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for-shell-env-read";
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -212,12 +214,27 @@ export function useRpcShellConfigController(props: {
     [client, hostId, props.pickProgramFile],
   );
 
+  // Invalidation starts the post-write read; success means that read has also
+  // finished, including when structural sharing retains the original array.
+  const afterEnvRead = (
+    callbacks: ShellCommandCallbacks,
+  ): ShellCommandCallbacks => ({
+    onSuccess: () => {
+      void waitForShellEnvRead(
+        queryClient,
+        queryKeys.hostMethodScope(hostId, "config.env.list"),
+      ).then(callbacks.onSuccess, callbacks.onError);
+    },
+    onError: callbacks.onError,
+  });
+
   return {
     config: configQuery.data,
-    configError: configQuery.error,
+    configError: configQuery.error ?? envListQuery.error,
     retryConfig: () => {
       void configQuery.refetch();
       void shellListQuery.refetch();
+      void envListQuery.refetch();
     },
     shells: shellListQuery.data?.shells ?? [],
     refreshShells: () => {
@@ -232,6 +249,8 @@ export function useRpcShellConfigController(props: {
       removeMutation.isPending ||
       revertMutation.isPending,
     envPending:
+      envListQuery.data === undefined ||
+      envListQuery.isError ||
       envSetMutation.isPending ||
       envDeleteMutation.isPending ||
       envRenameMutation.isPending,
@@ -249,7 +268,7 @@ export function useRpcShellConfigController(props: {
     setEnv: (entry, callbacks) =>
       envSetMutation.mutate(
         { ...entry, executableWriteGrant: null },
-        callbacks,
+        afterEnvRead(callbacks),
       ),
     setEnvAsync: async (entry) => {
       await envSetMutation.mutateAsync({
@@ -257,9 +276,10 @@ export function useRpcShellConfigController(props: {
         executableWriteGrant: null,
       });
     },
-    deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
+    deleteEnv: (key, callbacks) =>
+      envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),
     renameEnv: (rename, callbacks) =>
-      envRenameMutation.mutate(rename, callbacks),
+      envRenameMutation.mutate(rename, afterEnvRead(callbacks)),
   };
 }
 

@@ -102,6 +102,7 @@ function snapshot(input: {
     tasks: input.tasks,
     openRequestCount: input.openRequestCount,
     conversationsRevision: null,
+    notificationSubscriptions: null,
     boundHost: { hostId: input.hostId, epoch: 2, isThisHost: input.isThisHost },
     activity: null,
   };

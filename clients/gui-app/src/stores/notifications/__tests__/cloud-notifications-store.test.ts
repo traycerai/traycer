@@ -13,7 +13,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -119,6 +119,39 @@ function cloudPromptRow(
       },
     },
     presentation: { epicTitle: "Epic", chatTitle: "Chat" },
+  };
+}
+
+/** A bot's answer: the unread `done` row that counts toward attention. */
+function cloudBotAnswerRow(
+  entryId: string,
+  createdAt: number,
+): HostNotificationsCloudFeedRowV16 {
+  return {
+    entryId,
+    originHostId: "host-a",
+    coalesceKey: `host.operation.finished:${entryId}`,
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: null,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "bot_thread_verdict",
+        operation: "bot.thread.verdict",
+        title: "Tracy answered",
+        message: "Your question about the release",
+        botId: "bot-1",
+        threadId: "chat-1",
+        replyMessageId: entryId,
+      },
+    },
+    presentation: { epicTitle: null, chatTitle: null },
   };
 }
 
@@ -291,6 +324,24 @@ describe("cloud notifications store", () => {
     ).toEqual(["failure-a"]);
   });
 
+  it("does not target an unread info row that shares a chat with a failure", () => {
+    const info = cloudRow("info-a", 1, "host-a");
+    const failure = cloudFailureRow("failure-a", 2);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [info, failure],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 1,
+    });
+
+    expect(
+      selectCloudEntityReadTargets(
+        useCloudNotificationsStore.getState(),
+        { epicId: "epic-1", chatId: "chat-1" },
+        null,
+      ),
+    ).toEqual(["failure-a"]);
+  });
+
   it("adopts a newer version from a content-identical snapshot", () => {
     const row = cloudRow("entry-a", 1, "host-a");
     useCloudNotificationsStore.getState().applySnapshot({
@@ -435,6 +486,44 @@ describe("cloud notifications store", () => {
     });
   });
 
+  it("removes an unread bot answer from both optimistic summary counts when marked read", () => {
+    const answer = cloudBotAnswerRow("entry-answer", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [answer],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markReadLocally(answer.entryId, 20);
+
+    const cloud = useCloudNotificationsStore.getState();
+    expect(
+      cloud.rows[cloudNotificationFeedId(answer.entryId)]?.entry.readAt,
+    ).toBe(20);
+    expect(cloud.summary).toEqual({
+      totalCount: 1,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
+  it("removes an unread bot answer from both optimistic summary counts during entity-read fan-out", () => {
+    const answer = cloudBotAnswerRow("entry-answer", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [answer],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().beginEntityRead([answer.entryId], 30);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 1,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
   it("moves unresolved needs-action rows out of attention after optimistic mark-all-read", () => {
     const failure = cloudFailureRow("entry-failure", 10);
     const prompt = cloudPromptRow("entry-prompt", 20);
@@ -501,6 +590,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -528,6 +618,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -547,6 +638,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -594,11 +686,12 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
     const base = cloudRow("entry-stalled", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV15 = {
+    const row: HostNotificationsCloudFeedRowV16 = {
       ...base,
       coalesceKey: "environment.move.stalled:host-a",
       entry: {
@@ -631,11 +724,12 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
     const base = cloudRow("entry-notice", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV15 = {
+    const row: HostNotificationsCloudFeedRowV16 = {
       ...base,
       coalesceKey: "sandbox-notice:sbx-1",
       entry: {
@@ -675,6 +769,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       onSnapshot,
     );
@@ -699,6 +794,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       onSnapshot,
     );
@@ -735,6 +831,7 @@ describe("cloud notifications store", () => {
     const closeOld = openCloudNotificationsStream(
       reconnectEngine,
       oldClient,
+      "user-a",
       null,
       null,
     );
@@ -745,6 +842,7 @@ describe("cloud notifications store", () => {
     const closeReplacement = openCloudNotificationsStream(
       reconnectEngine,
       replacementClient,
+      "user-a",
       null,
       null,
     );
@@ -774,5 +872,95 @@ describe("cloud notifications store", () => {
 
     closeOld();
     closeReplacement();
+  });
+  describe("session owner", () => {
+    it("stamps the opening account and clears it on reset", () => {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      expect(useCloudNotificationsStore.getState().accountId).toBe("user-a");
+
+      close();
+      useCloudNotificationsStore.getState().reset();
+
+      expect(useCloudNotificationsStore.getState().accountId).toBeNull();
+    });
+
+    it("opens a different account on a fresh session without the previous account's rows", () => {
+      const oldClient = new ControlledWsStreamClient();
+      const closeOld = openCloudNotificationsStream(
+        reconnectEngine,
+        oldClient,
+        "user-a",
+        null,
+        null,
+      );
+      oldClient.sessions[0].emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [cloudRow("entry-a", 1, "host-a")],
+        summary,
+      });
+      const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+
+      const newClient = new ControlledWsStreamClient();
+      const closeNew = openCloudNotificationsStream(
+        reconnectEngine,
+        newClient,
+        "user-b",
+        null,
+        null,
+      );
+
+      const state = useCloudNotificationsStore.getState();
+      expect(state.accountId).toBe("user-b");
+      expect(state.rows).toEqual({});
+      expect(state.sessionEpoch).toBeGreaterThan(epochBefore);
+
+      oldClient.sessions[0].emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 6,
+        rows: [cloudRow("entry-a-late", 2, "host-a")],
+        summary,
+      });
+      expect(useCloudNotificationsStore.getState().rows).toEqual({});
+      closeOld();
+      closeNew();
+    });
+
+    it("keeps the session when the same account reopens", () => {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+      close();
+
+      const reopened = openCloudNotificationsStream(
+        reconnectEngine,
+        new ControlledWsStreamClient(),
+        "user-a",
+        null,
+        null,
+      );
+
+      expect(useCloudNotificationsStore.getState().sessionEpoch).toBe(
+        epochBefore,
+      );
+      reopened();
+    });
   });
 });

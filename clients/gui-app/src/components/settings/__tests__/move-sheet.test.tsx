@@ -652,7 +652,6 @@ describe("<MoveSheet />", () => {
     await settle();
 
     const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
-    fireEvent.click(within(stays).getByRole("button", { name: "2 items" }));
     const text = stays.textContent;
     expect(text).toContain(detail);
     expect(text.split("github").length - 1).toBe(
@@ -661,6 +660,26 @@ describe("<MoveSheet />", () => {
     expect(text).not.toContain("github · ");
     expect(text).not.toContain("github: ");
     expect(text).toContain("SSH sign-in");
+  });
+
+  it("shows what stays on this computer without a click, while Moves stays folded", async () => {
+    mount({
+      plans: [
+        plan("hash-stays", {
+          moves: [row("PATH", "PATH", null)],
+          staysOnThisComputer: [row("EDITOR", "EDITOR", null)],
+        }),
+      ],
+      acceptAnswers: [ACCEPTED],
+    });
+    await settle();
+
+    expect(
+      screen.getByTestId("move-sheet-staysOnThisComputer").textContent,
+    ).toContain("EDITOR");
+    expect(screen.getByTestId("move-sheet-moves").textContent).not.toContain(
+      "PATH",
+    );
   });
 
   it("opens a section to its items", async () => {
@@ -925,7 +944,6 @@ describe("<MoveSheet />", () => {
     fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
     expect(moves.textContent).not.toContain("TOKEN_X");
     const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
-    fireEvent.click(within(stays).getByRole("button", { name: "1 item" }));
     expect(stays.textContent).toContain("TOKEN_X");
   });
 
@@ -1151,7 +1169,6 @@ describe("<MoveSheet />", () => {
         "EDITOR",
       );
       const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
-      fireEvent.click(within(stays).getByRole("button", { name: "1 item" }));
       const left = within(stays).getByTestId("move-sheet-left-here-row");
       expect(left.textContent).toContain("EDITOR");
       const pressed = within(left).getByRole("button", {
@@ -1183,7 +1200,6 @@ describe("<MoveSheet />", () => {
         ).getByRole("button", { name: "Leave on this computer only" }),
       );
       const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
-      fireEvent.click(within(stays).getByRole("button", { name: "1 item" }));
       fireEvent.click(
         within(stays).getByRole("button", {
           name: "Leave on this computer only",

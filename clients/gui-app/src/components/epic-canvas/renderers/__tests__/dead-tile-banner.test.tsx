@@ -748,6 +748,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     expect(text).toContain("no longer shared with you");
     expect(text).not.toContain("sandbox isn't available");
   });
+
   describe("removed sandbox continue target", () => {
     it("names the sandbox the agent continues on, in the sentence and on the button", () => {
       render(

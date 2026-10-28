@@ -6,7 +6,11 @@
  *
  * Amounts are millicredits; a credit is a dollar, so a price reads `$0.12`.
  */
-import type { SandboxOs } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxLifecycleVerb,
+  SandboxCreditSource,
+  SandboxOs,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -220,21 +224,6 @@ export function needsCreditsRow(priceMcPerHour: number): string {
   return `from ${formatSandboxDollars(priceMcPerHour)} an hour`;
 }
 
-/**
- * The price clause at a zero or short balance; `Add credits ↗` beside it. A
- * team's sandbox is paid from the team's credits, so the clause names them.
- */
-export function addCreditsPriceClause(
-  configuration: SandboxConfigurationCopy,
-  priceMcPerHour: number,
-): string {
-  const credits =
-    configuration.kind === "personal"
-      ? "credits"
-      : `${configuration.teamName} credits`;
-  return `Add ${credits} to start a sandbox · from ${formatSandboxDollars(priceMcPerHour)} an hour while awake`;
-}
-
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
 // ── The consequences block ────────────────────────────────────────────────
@@ -385,15 +374,35 @@ export const USE_THIS_SHAPE = "Use this shape";
 
 // ── Refusals at send ──────────────────────────────────────────────────────
 
+interface SandboxCreditLineOptions {
+  readonly waking: boolean;
+  readonly context: "sentence" | "clause";
+}
+
 /**
  * Short for an hour, Personal: `Not enough credits. $1.20 more starts …`.
  * `null` when the refusal named no amount: the line names none either.
  */
 export function notEnoughCreditsLine(shortfallMc: number | null): string {
+  return notEnoughCreditsText(shortfallMc, {
+    waking: false,
+    context: "sentence",
+  });
+}
+
+/** A refusal without a named pot, built for its caller's sentence context. */
+function notEnoughCreditsText(
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  const { waking, context } = options;
+  const opening =
+    context === "sentence" ? "Not enough credits" : "not enough credits";
   if (shortfallMc === null) {
-    return "Not enough credits to start this sandbox for an hour.";
+    return `${opening} to ${waking ? "wake" : "start"} this sandbox for an hour.`;
   }
-  return `Not enough credits. ${formatSandboxDollarsRequired(shortfallMc)} more starts this sandbox for an hour.`;
+  const action = waking ? "wakes it" : "starts this sandbox";
+  return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
 /** Short for an hour on a team allowance; `null` names no amount. */
@@ -408,6 +417,43 @@ export function teamAllowanceShortLine(
   return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
 }
 
+/**
+ * A spend refusal names the pot checked, with amounts rounded up for top-up.
+ * Sentence/clause context is independent of whether this starts or wakes.
+ */
+export function sandboxCreditShortLine(
+  configuration: SandboxConfigurationCopy,
+  creditSource: SandboxCreditSource | null,
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  const { waking, context } = options;
+  if (creditSource === null || (!waking && creditSource === "personal")) {
+    return notEnoughCreditsText(shortfallMc, options);
+  }
+  const allowance = creditSource === "team-allowance";
+  const whose = context === "sentence" ? "Your" : "your";
+  // The refusal names the pot; the configuration only supplies the team's
+  // name. A refusal from a team pot with no team configuration known (the
+  // directory had no row) still says it was the team's, never the person's.
+  let pot = `${whose} credits`;
+  if (creditSource !== "personal") {
+    if (configuration.kind === "team") {
+      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
+    } else {
+      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
+    }
+  }
+  if (shortfallMc === null) {
+    if (!waking && allowance)
+      return `${pot} is too short to start this sandbox for an hour.`;
+    return `${pot} ${allowance ? "doesn't" : "don't"} cover an hour of this sandbox.`;
+  }
+  const action = waking ? "wakes it" : "starts this sandbox";
+  const amount = formatSandboxDollarsRequired(shortfallMc);
+  return `${pot} ${allowance ? "is" : "are"} short ${amount}. ${amount} more ${action} for an hour.`;
+}
+
 export const COULDNT_VERIFY_BALANCE = "Couldn't verify your balance.";
 
 /** `EU Frankfurt doesn't offer 4 vCPU · 16 GB.` */
@@ -417,13 +463,31 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
-/**
- * A send to an agent that cannot run on the sandbox's configuration:
- * `Sign in to a coding agent to run agents on Personal.`
- */
-export function signInToCodingAgentLine(configuration: string): string {
-  return `Sign in to a coding agent to run agents on ${configuration}.`;
+/** Held while the catalogue says which agents sandboxes run. */
+export const CHECKING_SANDBOX_AGENTS =
+  "Checking which agents run on sandboxes.";
+
+/** The catalogue could not be read, so Send is held until Retry reads it. */
+export const COULDNT_CHECK_SANDBOX_AGENTS =
+  "Couldn't check which agents run on sandboxes.";
+
+export function agentNotOfferedOnSandboxesLine(agent: string): string {
+  return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
+
+/**
+ * The sandbox's own Traycer Inference switch is off. A line that names the
+ * sandbox passes its name; a composer on that sandbox passes `null`.
+ */
+export function traycerOffOnSandboxLine(name: string | null): string {
+  return `Traycer Inference is off on ${name ?? "this sandbox"}, so agents can't run on it.`;
+}
+
+/** The sandbox is up, and no agent the send asked for can run on it. */
+export function agentsCantRunOnSandboxLine(name: string | null): string {
+  return `Agents can't run on ${name ?? "this sandbox"}.`;
+}
+
 /**
  * The new sandbox is up but the send handed to it stopped short:
  * `review-box is ready, but nothing was sent.`
@@ -447,6 +511,22 @@ export const OPEN_TERMINAL = "Open terminal";
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
 export const SANDBOX_READY = "Sandbox ready";
+/** The setup line names the sandbox; a row's button passes `null`. */
+export function stoppingSandboxLine(name: string | null): string {
+  return `Stopping${name === null ? "" : ` ${name}`} · pending`;
+}
+export function stoppedSandboxLine(
+  name: string,
+  savedInDrafts: boolean,
+): string {
+  return `Stopped ${name}. ${returnedSandboxMessageLine(savedInDrafts)}`;
+}
+export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
+  return `Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
+}
+export function couldntStopLine(name: string): string {
+  return `Couldn't stop ${name}`;
+}
 /** The settled line's time to ready: `24 s`. */
 export function readySecondsLabel(seconds: number): string {
   return `${seconds} s`;
@@ -495,21 +575,51 @@ export const COPY_SUPPORT_REFERENCE = "Copy support reference";
 export const DETAILS = "Details";
 export const START_NEW_WORK_ON_ANOTHER_HOST = "Start new work on another host";
 
-/** `payments-ledger is awake, but Acme's settings didn't apply`. */
-export function settingsDidntApplyLine(
-  name: string,
-  configuration: string,
+const ROW_VERB_PENDING: Record<
+  Exclude<SandboxLifecycleVerb, "stop"> | "destroy",
+  string
+> = {
+  start: "Starting · pending",
+  resume: "Resuming · pending",
+  suspend: "Suspending · pending",
+  destroy: "Destroying · pending",
+};
+
+export function sandboxVerbPendingLine(
+  verb: SandboxLifecycleVerb | "destroy",
 ): string {
-  return `${name} is awake, but ${configuration}'s settings didn't apply`;
+  if (verb === "stop") return stoppingSandboxLine(null);
+  return ROW_VERB_PENDING[verb];
 }
+
+export function sandboxVerbFailureLine(
+  verb: SandboxLifecycleVerb | "destroy",
+  name: string,
+  reference: string,
+): string {
+  const sentence =
+    verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
+  return `${sentence} · ${reference}`;
+}
+
 export const COMPUTE_CHARGED_WHILE_AWAKE =
   "Compute is charged while it is awake.";
+
+/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
+export function settingsDidntApplyOnLine(
+  configuration: string,
+  name: string,
+  reference: string,
+): string {
+  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
+}
+
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or attached tab, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────

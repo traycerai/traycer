@@ -440,9 +440,20 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: { providers: [] },
+    isFetching: false,
+    isError: false,
+  }),
+}));
+
 // A fork that stages no sandbox never asks the staged sign-in check anything.
 vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => () => null,
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
 }));
 
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
@@ -451,6 +462,11 @@ import {
   useWorktreeIntentStagingStore,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
+import { contentIsSubmittable } from "@/lib/composer/composer-content";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = directoryEntry(hostId, hostId);
@@ -535,6 +551,7 @@ function forkTarget(
     initialHostId: null,
     onlyHostIds: null,
     stagedSandbox: null,
+    carriesComposerDraft: false,
     ...overrides,
   };
 }
@@ -1752,6 +1769,79 @@ describe("ChatForkDialog cross-host routing", () => {
       sourceChatId: explicitTarget.sourceChatId,
       assistantMessageId: explicitTarget.assistantMessageId,
       sourceOwnerUserId: null,
+    });
+  });
+
+  describe("carrying the source composer's refused message", () => {
+    const REFUSED = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "run it" }] },
+      ],
+    };
+
+    beforeEach(() => {
+      useComposerDraftStore.setState({ drafts: {} });
+      useComposerDraftStore
+        .getState()
+        .replaceDraft("source-chat", REFUSED, null);
+    });
+
+    afterEach(() => {
+      useComposerDraftStore.setState({ drafts: {} });
+    });
+
+    function cloneCreated(chatId: string): void {
+      act(() => {
+        dialogMocks.createMutate.mock.calls[0][1].onSuccess({ chatId });
+      });
+    }
+
+    it("moves the draft to the clone's composer once the clone exists, never sent", async () => {
+      renderDialog(
+        forkTarget({ assistantMessageId: null, carriesComposerDraft: true }),
+        ignoreOpenChange,
+      );
+      fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+
+      await submitFork();
+      expect(readComposerDraftSnapshot("source-chat").content).toEqual(REFUSED);
+
+      cloneCreated("clone-chat");
+
+      expect(readComposerDraftSnapshot("clone-chat").content).toEqual(REFUSED);
+      expect(
+        contentIsSubmittable(readComposerDraftSnapshot("source-chat").content),
+      ).toBe(false);
+    });
+
+    it("leaves the draft where it is when the fork fails or is cancelled", async () => {
+      const onOpenChange = vi.fn<(open: boolean) => void>();
+      renderDialog(
+        forkTarget({ assistantMessageId: null, carriesComposerDraft: true }),
+        onOpenChange,
+      );
+      fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+      await submitFork();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(readComposerDraftSnapshot("source-chat").content).toEqual(REFUSED);
+      expect(
+        contentIsSubmittable(readComposerDraftSnapshot("clone-chat").content),
+      ).toBe(false);
+    });
+
+    it("moves nothing for an ordinary fork", async () => {
+      renderDialog(forkTarget({}), ignoreOpenChange);
+
+      await submitFork();
+      cloneCreated("clone-chat");
+
+      expect(readComposerDraftSnapshot("source-chat").content).toEqual(REFUSED);
+      expect(
+        contentIsSubmittable(readComposerDraftSnapshot("clone-chat").content),
+      ).toBe(false);
     });
   });
 });

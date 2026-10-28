@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   chatTimelineKeySequence,
@@ -84,6 +85,50 @@ describe("computeStableChatTimelineRows", () => {
       turnMessageIds: ["a-first", "a-last", "a-next"],
     };
     expect(computeStableChatTimelineRows([grown], state).result[0]).toBe(grown);
+  });
+
+  it("compares folded background events by content, since every fold pass rebuilds them", () => {
+    const trigger: AutonomousResumeTrigger = {
+      kind: "monitor",
+      title: "watch",
+      status: "completed",
+      live: true,
+      summary: "still running",
+      blockId: "monitor-1",
+      outputFile: null,
+      mcp: null,
+      managedCommand: null,
+    };
+    const original: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      foldedBackgroundEvents: [
+        { key: "a#0", trigger, ending: { kind: "no-reply", elapsedMs: 2_000 } },
+      ],
+    };
+    const state = computeStableChatTimelineRows(
+      [original],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    const rebuilt: ChatMessage = {
+      ...cloneMessage(original),
+      foldedBackgroundEvents: [
+        { key: "a#0", trigger, ending: { kind: "no-reply", elapsedMs: 2_000 } },
+      ],
+    };
+    expect(computeStableChatTimelineRows([rebuilt], state).result[0]).toBe(
+      original,
+    );
+
+    const reEnded: ChatMessage = {
+      ...cloneMessage(original),
+      foldedBackgroundEvents: [
+        { key: "a#0", trigger, ending: { kind: "not-resumed" } },
+      ],
+    };
+    expect(computeStableChatTimelineRows([reEnded], state).result[0]).toBe(
+      reEnded,
+    );
   });
 
   it("produces a new object for a message whose tracked fields changed", () => {

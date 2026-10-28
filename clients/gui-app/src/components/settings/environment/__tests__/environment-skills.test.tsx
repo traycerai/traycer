@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
@@ -907,10 +908,10 @@ describe("A provider's Skills tab on Personal or a team", () => {
           ),
         ),
     ).toEqual([
-      ["scratch", "all projects"],
-      ["shared-one", "all projects"],
-      ["proj-only", "app"],
-      ["wt-only", "app · feature"],
+      ["scratch", "folder on this computer"],
+      ["shared-one", "folder on this computer"],
+      ["proj-only", "folder on this computer · app"],
+      ["wt-only", "folder on this computer · app · feature"],
     ]);
     const add = (entry: string): HTMLElement => {
       const row = within(card).getByText(entry).closest("li");
@@ -2123,5 +2124,305 @@ describe("The Skills page's skills from a source", () => {
         screen.queryByRole("button", { name: "Import from source" }),
       ).toBeNull();
     });
+  });
+});
+
+describe("A provider's skill switch while its own write is in flight", () => {
+  /** The page's own read cadence for the skills list. */
+  const POLL_MS = 5_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The OpenCode family a switch moves as one. */
+  const FAMILY = ["opencode", "traycer", "openrouter", "huggingface"];
+
+  type SetAnswer = {
+    readonly outcome: "saved" | "forbidden" | "refused";
+    readonly revision: string | null;
+    readonly reason: null;
+  };
+  interface Gate {
+    readonly promise: Promise<SetAnswer>;
+    readonly resolve: (answer: SetAnswer) => void;
+    readonly reject: (error: Error) => void;
+  }
+
+  function gate(): Gate {
+    let resolve: Gate["resolve"] = () => undefined;
+    let reject: Gate["reject"] = () => undefined;
+    const promise = new Promise<SetAnswer>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const SAVED: SetAnswer = {
+    outcome: "saved",
+    revision: "rev-2",
+    reason: null,
+  };
+
+  /** The host's own switch state and the write it has been asked to make. */
+  function mountSwitch(providerId: ProviderId, offFor: readonly string[]) {
+    negotiateMethods(SWITCHES);
+    const world: { offFor: readonly string[] } = { offFor };
+    const write = gate();
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+      "environment.configuration.skills.list": () =>
+        listed([{ ...REVIEW, offFor: [...world.offFor] }], "pol-1"),
+      "environment.configuration.skills.setProviders": () => write.promise,
+    });
+    render(<EnvironmentProviderSkillsTab providerId={providerId} />, {
+      wrapper: harness.Wrapper,
+    });
+    const switchOf = (label: string): HTMLElement =>
+      screen.getByRole("switch", { name: `review for ${label}` });
+    const writes = (): number =>
+      harness.paramsOf("environment.configuration.skills.setProviders").length;
+    const listReads = (): number =>
+      harness.paramsOf("environment.configuration.skills.list").length;
+    /** The host's state changes; the page's own poll reads it a cadence later. */
+    const observe = async (next: readonly string[]): Promise<void> => {
+      world.offFor = next;
+      const before = listReads();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_MS);
+      });
+      await waitFor(() => {
+        expect(listReads()).toBeGreaterThan(before);
+      });
+    };
+    const answer = async (result: SetAnswer): Promise<void> => {
+      await act(async () => {
+        write.resolve(result);
+        await Promise.resolve();
+      });
+    };
+    return { harness, write, switchOf, writes, listReads, observe, answer };
+  }
+
+  const click = (element: HTMLElement): void => {
+    fireEvent.click(element);
+  };
+  const on = (element: HTMLElement): boolean =>
+    element.getAttribute("aria-checked") === "true";
+  const disabled = (element: HTMLElement): boolean =>
+    element instanceof HTMLButtonElement && element.disabled;
+
+  it("shows the submitted position at once and holds the switch disabled until a read matches it", async () => {
+    const { switchOf, writes, listReads, observe, answer } = mountSwitch(
+      "claude-code",
+      [],
+    );
+    await screen.findByRole("switch", { name: "review for Claude Code" });
+    expect(on(switchOf("Claude Code"))).toBe(true);
+
+    click(switchOf("Claude Code"));
+
+    // In flight: the position asked for, and no second write possible.
+    expect(on(switchOf("Claude Code"))).toBe(false);
+    expect(disabled(switchOf("Claude Code"))).toBe(true);
+    await waitFor(() => expect(writes()).toBe(1));
+    click(switchOf("Claude Code"));
+    expect(writes()).toBe(1);
+
+    // Accepted, and the read that follows still shows the old state: the
+    // switch must not snap back, and stays disabled.
+    const reads = listReads();
+    await answer(SAVED);
+    await waitFor(() => expect(listReads()).toBeGreaterThan(reads));
+    expect(on(switchOf("Claude Code"))).toBe(false);
+    expect(disabled(switchOf("Claude Code"))).toBe(true);
+
+    // A read that shows it off for this provider: the switch is the host's,
+    // and usable again.
+    await observe(["claude-code"]);
+    await waitFor(() => {
+      expect(disabled(switchOf("Claude Code"))).toBe(false);
+    });
+    expect(on(switchOf("Claude Code"))).toBe(false);
+    expect(writes()).toBe(1);
+  });
+
+  it("holds OpenCode's switch until a read shows the whole family off, not one member", async () => {
+    const { harness, switchOf, observe, answer } = mountSwitch("opencode", []);
+    await screen.findByRole("switch", { name: "review for OpenCode" });
+
+    click(switchOf("OpenCode"));
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.skills.setProviders"),
+      ).toEqual([
+        {
+          environmentId: "env-a",
+          name: "review",
+          offFor: FAMILY,
+          revision: "rev-1",
+        },
+      ]);
+    });
+    await answer(SAVED);
+
+    // Only OpenCode itself reads off: the family has not all moved yet.
+    await observe(["opencode"]);
+    expect(on(switchOf("OpenCode"))).toBe(false);
+    expect(disabled(switchOf("OpenCode"))).toBe(true);
+
+    await observe(FAMILY);
+    await waitFor(() => {
+      expect(disabled(switchOf("OpenCode"))).toBe(false);
+    });
+    expect(on(switchOf("OpenCode"))).toBe(false);
+  });
+
+  it.each([
+    { change: "removed", skills: [BUILT_IN] },
+    {
+      change: "switched for different providers",
+      skills: [{ ...REVIEW, offFor: ["codex"] }, BUILT_IN],
+    },
+  ])(
+    "unlocks the provider card when an accepted skill is $change by another member",
+    async ({ skills }) => {
+      negotiateMethods(SWITCHES);
+      const write = gate();
+      let resolveRead: (
+        answer: EnvironmentConfigurationSkillsListResponseV11,
+      ) => void = () => undefined;
+      let nextRead = new Promise<EnvironmentConfigurationSkillsListResponseV11>(
+        (resolve) => {
+          resolveRead = resolve;
+        },
+      );
+      let readingAfterWrite = false;
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([REVIEW, BUILT_IN], "pol-1"),
+          hostSkills: [],
+        }),
+        "environment.configuration.skills.list": () =>
+          readingAfterWrite ? nextRead : listed([REVIEW, BUILT_IN], "pol-1"),
+        "environment.configuration.skills.setProviders": () => {
+          readingAfterWrite = true;
+          return write.promise;
+        },
+      });
+      render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+      click(
+        await screen.findByRole("switch", { name: "review for Claude Code" }),
+      );
+      const otherSwitch = (): HTMLElement =>
+        screen.getByRole("switch", { name: "find-skills for Claude Code" });
+      expect(disabled(otherSwitch())).toBe(true);
+      await act(async () => {
+        write.resolve(SAVED);
+        await write.promise;
+      });
+      await waitFor(() => expect(harness.queryClient.isMutating()).toBe(0));
+      expect(disabled(otherSwitch())).toBe(true);
+
+      // An unchanged-revision read still holds the submitted position.
+      await act(async () => {
+        resolveRead(listed([REVIEW, BUILT_IN], "pol-1"));
+        await nextRead;
+      });
+      const skillList = {
+        predicate: (query: { readonly queryKey: readonly unknown[] }) =>
+          query.queryKey.includes("environment.configuration.skills.list"),
+      };
+      await waitFor(() =>
+        expect(harness.queryClient.isFetching(skillList)).toBe(0),
+      );
+      expect(disabled(otherSwitch())).toBe(true);
+
+      // The accepted write is superseded before its result reaches the list.
+      nextRead = Promise.resolve({
+        outcome: "listed",
+        revision: "rev-3",
+        policyRevision: "pol-1",
+        skills,
+        deletedBundled: [],
+      });
+      await act(async () => harness.queryClient.refetchQueries(skillList));
+      await waitFor(() => expect(disabled(otherSwitch())).toBe(false));
+      if (skills.some((skill) => skill.name === REVIEW.name)) {
+        expect(
+          on(screen.getByRole("switch", { name: "review for Claude Code" })),
+        ).toBe(true);
+      } else {
+        expect(
+          screen.queryByRole("switch", { name: "review for Claude Code" }),
+        ).toBeNull();
+      }
+      click(otherSwitch());
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.setProviders"),
+        ).toEqual([
+          {
+            environmentId: "env-a",
+            name: "review",
+            offFor: ["claude-code"],
+            revision: "rev-1",
+          },
+          {
+            environmentId: "env-a",
+            name: "find-skills",
+            offFor: ["claude-code"],
+            revision: "rev-3",
+          },
+        ]);
+      });
+    },
+  );
+
+  it.each([
+    { outcome: "refused" as const, line: "Couldn't save these settings." },
+    {
+      outcome: "forbidden" as const,
+      line: "You no longer have access to change these settings.",
+    },
+  ])(
+    "puts the switch back to the host's state and re-enables it when the write is answered $outcome",
+    async ({ outcome, line }) => {
+      const { switchOf, answer } = mountSwitch("claude-code", []);
+      await screen.findByRole("switch", { name: "review for Claude Code" });
+
+      click(switchOf("Claude Code"));
+      expect(on(switchOf("Claude Code"))).toBe(false);
+      await answer({ outcome, revision: null, reason: null });
+
+      await waitFor(() => {
+        expect(on(switchOf("Claude Code"))).toBe(true);
+      });
+      expect(disabled(switchOf("Claude Code"))).toBe(false);
+      expect((await screen.findByRole("status")).textContent).toBe(line);
+    },
+  );
+
+  it("puts the switch back and re-enables it when the write itself fails", async () => {
+    const { switchOf, write } = mountSwitch("claude-code", []);
+    await screen.findByRole("switch", { name: "review for Claude Code" });
+
+    click(switchOf("Claude Code"));
+    expect(on(switchOf("Claude Code"))).toBe(false);
+    await act(async () => {
+      write.reject(new Error("the host could not be reached"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(on(switchOf("Claude Code"))).toBe(true);
+    });
+    expect(disabled(switchOf("Claude Code"))).toBe(false);
   });
 });

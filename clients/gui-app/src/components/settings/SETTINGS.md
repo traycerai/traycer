@@ -15,6 +15,13 @@ This surface is a **real local settings shell**:
 
 When changing the settings surface, update this file in the same change.
 
+Absolute dates and times use `lib/settings/settings-date.ts`: today is
+`08:35`, another day this year is `25 Oct` (or `25 Oct 08:35` when the time
+matters), and another year is `25 Oct 2025`. This includes host installation
+and update details, setup attempts, session dates, provider resets and expiry,
+and billing-period ranges, as well as move history, secret versions and
+Details. Relative descriptions and countdowns keep their existing wording.
+
 ## Structure
 
 ```text
@@ -924,8 +931,9 @@ Account; the rest is the app itself.
   Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
   Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
   Members on a team; a Local row shows only Providers, Permissions, Agents,
-  Model routing, Variables & shells and Secrets. Browser agent access is a
-  region of Permissions, below its tabs. `agent-definitions`,
+  Model routing, Variables & shells and Secrets. Browser agent access is the
+  Browser tab of Permissions (a region below the policy on a team, whose page
+  has no tabs). `agent-definitions`,
   `browser-agent-access` and `machine-setup` are retired
   (`RETIRED_SETTINGS_SECTION_IDS`): the first two redirect to Agents and
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
@@ -1333,7 +1341,7 @@ for an explicit pick through `useScopedHostBinding` - the same
 to the ambient host.
 
 **Permissions is the one host page with an application-scoped region.** Three
-of its four tabs are per machine - the judge is stored on the host, the
+of its five tabs are per machine - the judge is stored on the host, the
 account's rules are read through it, and the decision log is the host's own -
 so the page sits in the Host group and `HostScopeGate` wraps those three tab
 BODIES. The Modes tab is not per machine: "New conversations start in" is one
@@ -1345,7 +1353,9 @@ SELECTED HOST"). This amends, rather than contradicts, the rule above: the row
 used to live on General precisely because it is application scope, and the
 move onto a host page was a user decision (permissions redesign, 2026-09-23),
 so the scope distinction the sidebar group can no longer carry is carried by
-the badge and the note instead.
+the badge and the note instead. The fifth tab, Browser, is the configuration's
+switch, read through the ambient host binding; its group says for itself when
+the host cannot answer, so it sits outside the gate too.
 
 Overview does the same (`host-settings-panel.tsx`), and it mixes the two gate
 styles on purpose because its regions sit on three different capability planes:
@@ -4087,7 +4097,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
-  may do without asking, on every computer and sandbox."
+  may do without asking, on every computer and sandbox running Personal."
   Rules carries **Reset to default**, which saves the empty policy after a
   confirm (the custom rules go; the built-in ones stay). The confirmation
   stays blocked if the current policy cannot be read freshly, its opening
@@ -4095,13 +4105,17 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   search metadata makes no scope claim. Its own page, not rows on Agent selection: that
   page is about which agent gets CHOSEN for a task, and permissions are a
   different question, asked at a different time (a user decision, 2026-09-12).
-  Four tabs, one per question, in this order: **Modes**, **Judge**, **Rules**,
-  **Activity** (`panels/permissions/*-tab.tsx`). The definitions live in
+  Five tabs, one per question, in this order: **Modes**, **Judge**, **Rules**,
+  **Activity** (`panels/permissions/*-tab.tsx`) and **Browser**
+  (`panels/browser-agent-access-group.tsx`). The definitions live in
   `permissions-settings.definitions.ts`: one group per tab, which anchors on
   that tab's TRIGGER, plus contributor groups for everything inside a tab (see
   § Search, "Gated on the SELECTED HOST").
   - **The page is laid out for the scope rule.** Modes is application-scoped and
-    renders with no host at all. Judge, Rules and Activity are per machine, and
+    renders with no host at all. Browser is the configuration's switch, read
+    through the ambient binding `EnvironmentHostBinding` re-provides, and its
+    group answers for itself when the host cannot, so it is not gated either.
+    Judge, Rules and Activity are per machine, and
     `HostScopeGate` wraps each of their BODIES, never the page, so the tab bar
     is always drawn (see "Scope: the organising idea"). Inside the gate, each
     body sits behind `AutoModeHostGate` (`permissions/auto-mode-host-gate.tsx`),
@@ -4747,6 +4761,19 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     truthfully. Activity's Couldn't decide rows use the same three sentences:
     the card's own line for a recorded `auto: ` reason, otherwise the family its
     `failureKind` names; "Fix in Judge" there keys on the kind.
+
+  - **Browser** (`panels/browser-agent-access-group.tsx`, anchor
+    `permissions-tab-browser`) holds the one switch **Let agents use the
+    in-app browser**, read and written through `config.browser.get` /
+    `config.browser.set` on a host pick and through the configuration item
+    `browser_agent_access` on a team. Its words - "browser agent access",
+    "playwright", "mcp" - live on the tab trigger, because the switch's own
+    section (`browser-agent-access.definitions.ts`) is retired and never
+    offered. A team's Permissions has no tabs, so there the same group is a
+    region below the policy (`TeamPermissions`' children), and the tab's
+    anchor sits on that region instead, so a search result still scrolls to
+    the switch. The host page never renders that wrapper: its trigger stays
+    the anchor's one target.
 
 - `Agents` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers), tabs Selection guide and Definitions. Selection

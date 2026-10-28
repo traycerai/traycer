@@ -11,11 +11,11 @@ import {
   hostNotificationsFeedSubscribeV15,
   hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeClientFrameSchemaV15,
-  hostNotificationsSubscribeServerFrameSchemaV16,
-  type HostNotificationEntryV25,
+  hostNotificationsSubscribeServerFrameSchemaV17,
+  type HostNotificationCloudEntryV26,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrameV16,
+  type HostNotificationsSubscribeServerFrameV17,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -43,20 +43,20 @@ export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
 export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 
 /**
- * The feed parses against the NEWEST frame union (`@1.6`), not a released one.
+ * The feed parses against the NEWEST frame union (`@1.7`), not a released one.
  * Stream versions negotiate to `min(client, host)` per method, so a GUI built
- * from this protocol tree lands on `@1.6` against a host built from it too -
+ * from this protocol tree lands on `@1.7` against a host built from it too -
  * and parsing those frames with an older schema would reject any row of a
- * kind that union added (the environments rows at `@1.6`, the secrets rows at
+ * kind that union added (hook removals at `@1.7`, environments at `@1.6`, secrets at
  * `@1.4`), which this store treats as connection corruption and answers with
  * a reconnect into a snapshot carrying the same row. Against an older host the
  * negotiated version drops back, and every older minor's frames are strict
  * subsets of this union and still parse.
  */
-export type HostNotificationFeedEntry = HostNotificationEntryV25;
+export type HostNotificationFeedEntry = HostNotificationCloudEntryV26;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrameV16,
+  HostNotificationsSubscribeServerFrameV17,
   | { readonly kind: "snapshot" }
   | { readonly kind: "partitionSnapshot" }
   | { readonly kind: "upserted" }
@@ -205,7 +205,11 @@ function preserveReadState(
   incoming: HostNotificationFeedEntry,
 ): HostNotificationFeedEntry {
   const readAt = current.readAt;
-  if ("resolvedAt" in current && "resolvedAt" in incoming) {
+  if (
+    "resolvedAt" in current &&
+    current.resolvedAt !== undefined &&
+    "resolvedAt" in incoming
+  ) {
     return { ...incoming, readAt, resolvedAt: current.resolvedAt };
   }
   return { ...incoming, readAt };
@@ -644,14 +648,14 @@ export function openHostNotificationsStream(
         reconnect();
         return;
       }
-      // The `@1.6` union, deliberately: zod STRIPS unknown keys and rejects
+      // The `@1.7` union, deliberately: zod STRIPS unknown keys and rejects
       // unknown discriminants, so parsing through `@1.4` would reject the
       // environments rows this client negotiates for, through `@1.3` the
       // secrets rows, and through `@1.2` the
       // `partitionSnapshot` frame too. The superset parses every minor the
       // client can be served.
       const parsed =
-        hostNotificationsSubscribeServerFrameSchemaV16.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV17.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;

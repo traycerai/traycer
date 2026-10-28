@@ -180,7 +180,7 @@ export interface BrowserSessionsOwner {
   readonly identityKey: string;
 }
 
-interface BrowserSessionsCoordinatorRuntime {
+export interface BrowserSessionsCoordinatorRuntime {
   readonly browserView: BrowserViewBridge | null;
   /**
    * The signed-in user this stream is opened for. Not sent to main, which
@@ -405,14 +405,9 @@ const TAB_PREVIEW_TIMEOUT_MS = 5_000;
 /**
  * Bound on one `attachTab` or `moveTab` ack.
  *
- * `closeTab` is deliberately unbounded and this is not, because the two have
- * different evidence behind them: a close is followed by a `sessionUpdated` or
- * `sessionClosed` frame whatever happens to the ack, while an attach's ONLY
- * answer is the ack - a host that declines to move a tab changes nothing in
- * the inventory. The caller is a tile that fires once on activation and never
- * re-sends, so an unbounded promise here is one that is awaited and never
- * settles. Long enough to cover a dormant tab's wake and a native guest's
- * birth on the far side.
+ * Closes share the bound: an unanswered mutation has an unknown outcome and
+ * must leave the row retryable. Inventory absence cannot substitute for its ACK.
+ * Long enough to cover a dormant tab's wake and a native guest's birth.
  *
  * A move is bounded by the same number for a stronger reason: a reader is
  * watching a disabled button, and the whole cost of a move that never answers
@@ -897,7 +892,7 @@ function createBrowserSessionsCoordinator(args: {
   };
 
   const closeTab = (sessionId: string, tabId: string): Promise<void> =>
-    sendRequest(pendingCloses, null, (requestId) => ({
+    sendRequest(pendingCloses, ATTACH_TAB_TIMEOUT_MS, (requestId) => ({
       kind: "closeTab",
       hasBinaryPayload: false,
       requestId,
@@ -1142,7 +1137,7 @@ function createBrowserSessionsCoordinator(args: {
     owner: args.owner,
     scope: args.scope,
     captureTabPreview,
-    // Starts `connecting`, so there is no failure episode to have swept yet.
+    // Starts connecting, so there is no failure episode to have swept yet.
     sweptSinceFailure: false,
     state: {
       hostId: args.owner.hostId,
@@ -1236,6 +1231,25 @@ function handleActionAck(
   }
 }
 
+type BrowserSessionsMetadataFrame = Extract<
+  BrowserSessionsUxServerFrame,
+  {
+    readonly kind: "viewportState" | "burstStarted" | "burstEnded";
+  }
+>;
+const browserSessionsMetadataKinds: ReadonlySet<string> = new Set([
+  "viewportState",
+  "burstStarted",
+  "burstEnded",
+]);
+
+/** Viewport and burst metadata have separate consumers. */
+function isBrowserSessionsMetadataFrame(
+  frame: BrowserSessionsUxServerFrame,
+): frame is BrowserSessionsMetadataFrame {
+  return browserSessionsMetadataKinds.has(frame.kind);
+}
+
 /**
  * The one router for the frames a renderer may see. Its parameter is the
  * protocol's UX projection, so a jar frame is not merely unhandled here - it
@@ -1256,6 +1270,7 @@ function handleBrowserSessionsFrame(args: {
   readonly presenters: readonly BrowserSessionsPresenter[];
 }): void {
   const frame = args.frame;
+  if (isBrowserSessionsMetadataFrame(frame)) return;
   switch (frame.kind) {
     case "snapshot":
     case "sessionCreated":
@@ -1297,11 +1312,6 @@ function handleBrowserSessionsFrame(args: {
       return;
     case "tabOpened":
       surfaceTabOpenedFrame(frame, args.scope, args.hostId, args.presenters);
-      return;
-    case "viewportState":
-      return;
-    case "burstStarted":
-    case "burstEnded":
       return;
     default: {
       // Unreachable: the union is the protocol's own UX projection, so the

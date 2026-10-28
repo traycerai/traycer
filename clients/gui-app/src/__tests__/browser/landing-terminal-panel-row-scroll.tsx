@@ -89,7 +89,11 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         crossHostMessaging: null,
         sessions: null,
       }),
-      "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      "host.notifications.indicatorState": () => ({
+        epics: {},
+        chats: {},
+        complete: true,
+      }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
       "terminal.list": () => ({ sessions: [], homeCwd: "/home/fixture" }),
     },

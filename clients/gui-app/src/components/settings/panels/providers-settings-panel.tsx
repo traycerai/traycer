@@ -334,7 +334,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   opencode: "OpenCode CLI agent.",
   cursor:
     "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
-  traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
+  traycer:
+    "Traycer's managed harness uses the selected OpenCode CLI binary. Turning it on or off changes this computer only.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
   huggingface:

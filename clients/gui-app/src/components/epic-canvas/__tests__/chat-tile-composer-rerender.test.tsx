@@ -146,6 +146,7 @@ const RUNTIME: ChatLowerRuntimeState = {
   snapshotLoaded: true,
 };
 const ACCESS: ChatLowerAccessState = {
+  isCopy: false,
   isViewer: false,
   canAct: true,
   readOnlyNotice: null,

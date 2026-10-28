@@ -3,10 +3,11 @@ import {
   QueryClient,
   QueryClientProvider,
   queryOptions,
+  useQueries,
   useQuery,
 } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -15,6 +16,9 @@ import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import {
   clearNotificationIndicatorCaches,
+  COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+  createCompleteNotificationIndicatorsReask,
+  invalidateCompleteNotificationIndicators,
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -116,6 +120,177 @@ describe("notification indicator cache invalidation", () => {
     expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false);
   });
 
+  it("invalidates only the cached answers that are a host's whole origin, on any host", () => {
+    const queryClient = new QueryClient();
+    const wholeOriginA = indicatorKey({
+      hostId: "host-a",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-a"],
+    });
+    const wholeOriginB = indicatorKey({
+      hostId: "host-b",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-b"],
+    });
+    const partition = indicatorKey({
+      hostId: "host-b",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-c"],
+    });
+    const unsaid = indicatorKey({
+      hostId: "host-b",
+      userId: "user-a",
+      epicIds: [],
+      chatIds: ["chat-d"],
+    });
+    const unrelated: readonly unknown[] = ["host", "host-b", "host.chat.list"];
+    queryClient.setQueryData(wholeOriginA, {
+      epics: {},
+      chats: {},
+      complete: true,
+    });
+    queryClient.setQueryData(wholeOriginB, {
+      epics: {},
+      chats: {},
+      complete: true,
+    });
+    queryClient.setQueryData(partition, {
+      epics: {},
+      chats: {},
+      complete: false,
+    });
+    queryClient.setQueryData(unsaid, { epics: {}, chats: {}, complete: null });
+    queryClient.setQueryData(unrelated, { complete: true });
+
+    invalidateCompleteNotificationIndicators(queryClient);
+
+    expect(queryClient.getQueryState(wholeOriginA)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(wholeOriginB)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(partition)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(unsaid)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
+  });
+
+  it("fences a read still in flight, first read or not, and leaves an idle partition answer valid", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const firstRead = indicatorKey({
+      hostId: "host-a",
+      userId: "alice",
+      epicIds: [],
+      chatIds: ["chat-a"],
+    });
+    const rereadOfPartition = indicatorKey({
+      hostId: "host-a",
+      userId: "alice",
+      epicIds: [],
+      chatIds: ["chat-b"],
+    });
+    const idlePartition = indicatorKey({
+      hostId: "host-a",
+      userId: "alice",
+      epicIds: [],
+      chatIds: ["chat-c"],
+    });
+    const partitionAnswer: HostNotificationsIndicatorStateResponse = {
+      epics: {},
+      chats: {},
+      complete: false,
+    };
+    queryClient.setQueryData(rereadOfPartition, partitionAnswer);
+    queryClient.setQueryData(idlePartition, partitionAnswer);
+    const requests = new Map<
+      string,
+      Array<Deferred<HostNotificationsIndicatorStateResponse>>
+    >();
+    const ask = (
+      name: string,
+    ): Promise<HostNotificationsIndicatorStateResponse> => {
+      const deferred =
+        createDeferred<HostNotificationsIndicatorStateResponse>();
+      requests.set(name, [...(requests.get(name) ?? []), deferred]);
+      return deferred.promise;
+    };
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useQueries({
+          queries: [
+            queryOptions({
+              queryKey: firstRead,
+              queryFn: () => ask("firstRead"),
+            }),
+            queryOptions({
+              queryKey: rereadOfPartition,
+              queryFn: () => ask("rereadOfPartition"),
+            }),
+            queryOptions({
+              queryKey: idlePartition,
+              queryFn: () => ask("idlePartition"),
+              staleTime: Infinity,
+            }),
+          ],
+        }),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(requests.get("firstRead")).toHaveLength(1);
+      expect(requests.get("rereadOfPartition")).toHaveLength(1);
+    });
+    expect(queryClient.getQueryData(firstRead)).toBeUndefined();
+
+    act(() => {
+      invalidateCompleteNotificationIndicators(queryClient);
+    });
+
+    await waitFor(() => {
+      expect(requests.get("firstRead")).toHaveLength(2);
+      expect(requests.get("rereadOfPartition")).toHaveLength(2);
+    });
+    expect(requests.has("idlePartition")).toBe(false);
+    expect(queryClient.getQueryState(idlePartition)?.isInvalidated).toBe(false);
+
+    const wholeOrigin = (
+      unreadCount: number,
+    ): HostNotificationsIndicatorStateResponse => ({
+      epics: {},
+      chats: {
+        "chat-a": {
+          unreadFailure: false,
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadDone: unreadCount > 0,
+          unreadCount,
+        },
+      },
+      complete: true,
+    });
+    await act(async () => {
+      // Each stale read answers after its re-ask was issued.
+      requests.get("firstRead")?.[1].resolve(wholeOrigin(1));
+      requests.get("firstRead")?.[0].resolve(wholeOrigin(0));
+      requests.get("rereadOfPartition")?.[1].resolve(wholeOrigin(1));
+      requests.get("rereadOfPartition")?.[0].resolve(wholeOrigin(0));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(queryClient.getQueryData(firstRead)).toEqual(wholeOrigin(1));
+      expect(queryClient.getQueryData(rereadOfPartition)).toEqual(
+        wholeOrigin(1),
+      );
+    });
+  });
+
   it("clears all account-scoped indicator caches on identity reset", () => {
     const queryClient = new QueryClient();
     const alice = indicatorKey({
@@ -196,9 +371,11 @@ describe("notification indicator cache invalidation", () => {
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
+            unreadCount: 0,
           },
         },
         chats: {},
+        complete: true,
       });
       requests[1].resolve({
         epics: {
@@ -208,9 +385,11 @@ describe("notification indicator cache invalidation", () => {
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
+            unreadCount: 1,
           },
         },
         chats: {},
+        complete: true,
       });
     });
 
@@ -223,10 +402,117 @@ describe("notification indicator cache invalidation", () => {
             pendingApproval: false,
             pendingInterview: false,
             unreadDone: false,
+            unreadCount: 1,
           },
         },
         chats: {},
+        complete: true,
       });
     });
+  });
+});
+
+const wholeOrigin: HostNotificationsIndicatorStateResponse = {
+  epics: {},
+  chats: {},
+  complete: true,
+};
+
+describe("complete notification indicators re-ask", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A mounted indicator read whose cached answer is a host's whole origin;
+   * `requests` counts the reads the host was asked for. */
+  const wholeOriginKey = indicatorKey({
+    hostId: "host-b",
+    userId: "alice",
+    epicIds: [],
+    chatIds: ["chat-a"],
+  });
+
+  async function mountWholeOriginRead(
+    queryClient: QueryClient,
+  ): Promise<{ readonly requests: Array<string> }> {
+    const requests: Array<string> = [];
+    const key = wholeOriginKey;
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useQuery(
+          queryOptions({
+            queryKey: key,
+            queryFn: () => {
+              requests.push("read");
+              return Promise.resolve(wholeOrigin);
+            },
+            staleTime: Infinity,
+          }),
+        ),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(queryClient.getQueryData(key)).toEqual(wholeOrigin);
+    });
+    expect(requests).toHaveLength(1);
+    return { requests };
+  }
+
+  it("re-asks once after a burst of snapshots inside the quiet window", async () => {
+    const queryClient = new QueryClient();
+    const { requests } = await mountWholeOriginRead(queryClient);
+    const reask = createCompleteNotificationIndicatorsReask(
+      queryClient,
+      COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+    );
+
+    vi.useFakeTimers();
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    // Each snapshot restarted the window, so nothing has been asked yet.
+    expect(requests).toHaveLength(1);
+
+    vi.advanceTimersByTime(1);
+    // Run on past any later timer a stray re-ask would have needed.
+    vi.advanceTimersByTime(
+      COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS * 10,
+    );
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(requests).toHaveLength(2);
+    });
+    reask.dispose();
+  });
+
+  it("asks nothing when disposed before the quiet window elapses", async () => {
+    const queryClient = new QueryClient();
+    const { requests } = await mountWholeOriginRead(queryClient);
+    const reask = createCompleteNotificationIndicatorsReask(
+      queryClient,
+      COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+    );
+
+    vi.useFakeTimers();
+    reask.schedule();
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1);
+    reask.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS);
+
+    expect(requests).toHaveLength(1);
+    expect(queryClient.getQueryState(wholeOriginKey)?.isInvalidated).toBe(
+      false,
+    );
   });
 });

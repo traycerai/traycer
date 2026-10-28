@@ -51,6 +51,7 @@ import type {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
+  fetchTraycerModelsViaHttp,
   fetchSandboxCostsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
@@ -105,6 +106,9 @@ const fetchSandboxCostsViaHttpMock = vi.hoisted(() =>
 );
 const fetchSandboxCatalogueViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxCatalogueViaHttp>(async () => NETWORK_ERROR),
+);
+const fetchTraycerModelsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchTraycerModelsViaHttp>(async () => NETWORK_ERROR),
 );
 const createSandboxViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof createSandboxViaHttp>(async () => NETWORK_ERROR),
@@ -167,6 +171,7 @@ vi.mock(
     listSandboxesViaHttp: listSandboxesViaHttpMock,
     fetchSandboxCostsViaHttp: fetchSandboxCostsViaHttpMock,
     fetchSandboxCatalogueViaHttp: fetchSandboxCatalogueViaHttpMock,
+    fetchTraycerModelsViaHttp: fetchTraycerModelsViaHttpMock,
     createSandboxViaHttp: createSandboxViaHttpMock,
     destroySandboxViaHttp: destroySandboxViaHttpMock,
     patchSandboxViaHttp: patchSandboxViaHttpMock,
@@ -750,6 +755,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.listSandboxes,
           RunnerHostInvoke.getSandboxCosts,
           RunnerHostInvoke.getSandboxCatalogue,
+          RunnerHostInvoke.getTraycerModels,
           RunnerHostInvoke.createSandbox,
           RunnerHostInvoke.destroySandbox,
           RunnerHostInvoke.patchSandbox,
@@ -1157,12 +1163,17 @@ describe("RunnerIpcBridge", () => {
         fetchSandboxCatalogueViaHttpMock,
         [],
       ],
+      [RunnerHostInvoke.getTraycerModels, fetchTraycerModelsViaHttpMock, []],
       [
         RunnerHostInvoke.createSandbox,
         createSandboxViaHttpMock,
         [createRequest],
       ],
-      [RunnerHostInvoke.destroySandbox, destroySandboxViaHttpMock, ["sbx_1"]],
+      [
+        RunnerHostInvoke.destroySandbox,
+        destroySandboxViaHttpMock,
+        ["sbx_1", true],
+      ],
       [
         RunnerHostInvoke.patchSandbox,
         patchSandboxViaHttpMock,

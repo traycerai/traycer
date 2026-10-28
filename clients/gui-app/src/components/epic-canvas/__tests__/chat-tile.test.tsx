@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,13 +42,24 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
 }));
 const workspaceSelectorTestState = vi.hoisted<{
+  hostIds: string[];
+  ownerIds: string[];
   inFlightWorktreeIntent: WorktreeIntent | null;
   isOwnerActive: boolean | null;
   hasActiveTurn: boolean | null;
 }>(() => ({
+  hostIds: [],
+  ownerIds: [],
   inFlightWorktreeIntent: null,
   isOwnerActive: null,
   hasActiveTurn: null,
+}));
+const workspaceRpcTestState = vi.hoisted(() => ({
+  methods: [] as string[],
+  settingsWrites: [] as Array<{
+    readonly hostId: string;
+    readonly chatId: string;
+  }>,
 }));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
@@ -99,12 +112,16 @@ vi.mock(
   () => ({
     HostWorkspaceSelector: (props: {
       readonly surface: {
+        readonly hostId: string;
+        readonly ownerId: string;
         readonly bindingResolved: boolean;
         readonly inFlightWorktreeIntent: WorktreeIntent | null;
         readonly isOwnerActive: boolean;
         readonly hasActiveTurn: boolean;
       };
     }) => {
+      workspaceSelectorTestState.hostIds.push(props.surface.hostId);
+      workspaceSelectorTestState.ownerIds.push(props.surface.ownerId);
       workspaceSelectorTestState.inFlightWorktreeIntent =
         props.surface.inFlightWorktreeIntent;
       workspaceSelectorTestState.isOwnerActive = props.surface.isOwnerActive;
@@ -124,7 +141,31 @@ vi.mock(
 );
 
 const MOCK_HOST_CLIENT = {
-  request: () => new Promise(() => {}),
+  request: (
+    method: string,
+    params: { readonly chatId?: string } | undefined,
+  ) => {
+    workspaceRpcTestState.methods.push(method);
+    if (
+      method === "epic.updateChatRunSettings" &&
+      params?.chatId !== undefined
+    ) {
+      workspaceRpcTestState.settingsWrites.push({
+        hostId: HOST_ID,
+        chatId: params.chatId,
+      });
+      return Promise.resolve({ updated: true });
+    }
+    return new Promise(() => {});
+  },
+  requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    _params: RequestOfMethod<HostRpcRegistry, Method>,
+    _signal: AbortSignal | undefined,
+  ) => {
+    workspaceRpcTestState.methods.push(method);
+    return new Promise<never>(() => {});
+  },
   getActiveHostId: () => HOST_ID,
   // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
   // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
@@ -149,6 +190,42 @@ const MOCK_HOST_DIRECTORY = {
 // The directory list the reachability hook reads. `null` leaves the real hook
 // in charge (this file mounts no host binding, so it answers nothing); a case
 // that needs the directory to name a host sets it and `afterEach` clears it.
+// What the task says of the chat's host, and the viewer's sandbox list, when
+// a case sets them; otherwise the real reads answer.
+const taskSandboxTestState = vi.hoisted(
+  (): { task: TaskSandboxHost | null; sandboxes: SandboxSummary[] | null } => ({
+    task: null,
+    sandboxes: null,
+  }),
+);
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...actual,
+    useSandboxList: () => {
+      const real = actual.useSandboxList();
+      const sandboxes = taskSandboxTestState.sandboxes;
+      return sandboxes === null
+        ? real
+        : { ...real, data: { sandboxes }, isLoading: false };
+    },
+  };
+});
+vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/epic/use-task-sandbox-end")>();
+  return {
+    ...actual,
+    useTaskSandboxHost: (epicId: string, hostId: string | null) => {
+      const real = actual.useTaskSandboxHost(epicId, hostId);
+      return taskSandboxTestState.task ?? real;
+    },
+  };
+});
+
 const directoryListTestState = vi.hoisted(() => ({
   entries: null as readonly HostDirectoryEntry[] | null,
 }));
@@ -180,6 +257,29 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 // runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
 // an unrelated component (~55 tests across these files). Enumeration fails the
 // useful way instead: vitest names the missing export and the module.
+// The cloud catalogue: the real read, unless a test says what it answered.
+const sandboxCatalogueTestState = vi.hoisted(() => ({
+  catalogue: null as SandboxCatalogue | null,
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+      >();
+    return {
+      ...actual,
+      useSandboxCatalogue: (enabled: boolean) => {
+        const result = actual.useSandboxCatalogue(enabled);
+        return sandboxCatalogueTestState.catalogue === null
+          ? result
+          : { ...result, data: sandboxCatalogueTestState.catalogue };
+      },
+    };
+  },
+);
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useOptionalHostClient: () => null,
@@ -418,8 +518,13 @@ import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-co
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  ChatTile,
+  ChatTileSessionView,
+} from "@/components/epic-canvas/renderers/chat-tile";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -443,7 +548,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionStoreHandle,
+  ChatStreamClientHandle,
+} from "@/stores/chats/chat-session-store";
 import type {
   ChatEvent,
   Message,
@@ -478,6 +586,16 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
+import {
+  convertReplicaChat,
+  createPublishedChatSessionHandle,
+} from "@/lib/chats/published-chat-session";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -486,6 +604,17 @@ const CHAT_ARTIFACT = {
   type: "chat" as const,
   name: "Chat 1",
   hostId: HOST_ID,
+};
+const RESTING_COPY_SANDBOX = {
+  kind: "resting" as const,
+  sandbox: sandboxSummaryFixture({
+    id: "sbx-resting-copy",
+    hostId: "owner-sandbox-host",
+    state: "stopped",
+    displayName: "resting-copy",
+  }),
+  configuration: { kind: "personal" as const },
+  wakeChangesPayer: false,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",
@@ -1418,6 +1547,57 @@ function chatTileTestTree(
     readonly hostId: string;
   },
 ) {
+  return chatTileProviders(
+    queryClient,
+    chatVisible ? (
+      <ChatTile node={node} viewTabId="tab-test" tileId="pane-test" isActive />
+    ) : null,
+  );
+}
+
+function chatTileSessionViewTestTree(
+  queryClient: QueryClient,
+  handle: ChatSessionStoreHandle,
+) {
+  return chatTileProviders(
+    queryClient,
+    <ChatTileSessionView
+      handle={handle}
+      node={CHAT_ARTIFACT}
+      viewTabId="tab-resting-copy-test"
+      tileId="pane-resting-copy-test"
+      isActive
+      currentEpicId={EPIC_ID}
+      restingSandbox={RESTING_COPY_SANDBOX}
+      readOnlyNotice={null}
+      isLiveSession={false}
+      preContent={null}
+    />,
+  );
+}
+
+function renderRestingCopy(handle: ChatSessionStoreHandle) {
+  act(() => {
+    handle.store.setState({
+      access: { role: "owner", ownerUserId: "owner-1", canAct: false },
+      worktreeBinding: null,
+      missingWorktreePaths: ["/Users/test/project"],
+    });
+  });
+  workspaceSelectorTestState.hostIds.length = 0;
+  workspaceSelectorTestState.ownerIds.length = 0;
+  workspaceRpcTestState.methods.length = 0;
+  workspaceRpcTestState.settingsWrites.length = 0;
+  usePendingSandboxSendStore.setState({ sends: {} });
+  useStagedSandboxStore.getState().clearAll();
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(chatTileSessionViewTestTree(queryClient, handle));
+}
+
+function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -1438,14 +1618,7 @@ function chatTileTestTree(
             <TooltipProvider>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
                 <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {chatVisible ? (
-                    <ChatTile
-                      node={node}
-                      viewTabId="tab-test"
-                      tileId="pane-test"
-                      isActive
-                    />
-                  ) : null}
+                  {content}
                 </TabHostProvider>
               </TestEpicSessionWrapper>
             </TooltipProvider>
@@ -1592,9 +1765,13 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    workspaceSelectorTestState.hostIds.length = 0;
+    workspaceSelectorTestState.ownerIds.length = 0;
     workspaceSelectorTestState.inFlightWorktreeIntent = null;
     workspaceSelectorTestState.isOwnerActive = null;
     workspaceSelectorTestState.hasActiveTurn = null;
+    workspaceRpcTestState.methods.length = 0;
+    workspaceRpcTestState.settingsWrites.length = 0;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -1619,6 +1796,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
     vi.restoreAllMocks();
@@ -1629,6 +1807,8 @@ describe("<ChatTile />", () => {
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
     directoryListTestState.entries = null;
+    taskSandboxTestState.task = null;
+    taskSandboxTestState.sandboxes = null;
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -1847,6 +2027,137 @@ describe("<ChatTile />", () => {
     expect(banner.textContent).toContain('while "Office Mac" is offline');
   });
 
+  it.each([
+    ["before a session handle", null],
+    ["with a handle, before its snapshot", seedDocWithChat],
+  ] as const)(
+    "says a stopping sandbox's own line, never the dead-host body, %s",
+    async (_case, seed) => {
+      directoryListTestState.entries = [
+        {
+          hostId: HOST_ID,
+          label: "e2e-sbx-p1",
+          kind: "remote",
+          websocketUrl: "wss://sbx.example.com/rpc",
+          version: "1.0.0",
+          transportDialability: "dialable",
+        },
+      ];
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-p1",
+          hostId: HOST_ID,
+          displayName: "e2e-sbx-p1",
+          state: "stopping",
+        }),
+      ];
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seed, "editor");
+      chatHarness.installDeferred();
+      renderChatTile();
+      await advanceLegendListTime(0);
+
+      expect(screen.getAllByText("Stopping e2e-sbx-p1 · pending")).toHaveLength(
+        1,
+      );
+      expect(document.body.textContent).not.toContain("offline");
+    },
+  );
+
+  it.each([
+    ["before a session handle", null],
+    ["with a handle, before its snapshot", seedDocWithChat],
+  ] as const)(
+    "says a starting sandbox's own line alone, never the host-starting banner, %s",
+    async (_case, seed) => {
+      // An answered, empty directory: the host reads as starting.
+      directoryListTestState.entries = [];
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-p1",
+          hostId: HOST_ID,
+          displayName: "e2e-sbx-p1",
+          state: "starting",
+        }),
+      ];
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seed, "editor");
+      chatHarness.installDeferred();
+      renderChatTile();
+      await advanceLegendListTime(0);
+
+      expect(screen.getAllByText("Starting e2e-sbx-p1 · pending")).toHaveLength(
+        1,
+      );
+      expect(screen.queryByTestId("chat-host-starting-chat-1")).toBeNull();
+      expect(document.body.textContent).not.toContain("Waiting for the host");
+    },
+  );
+
+  it.each(["owner", "viewer"] as const)(
+    "says a destroyed sandbox's end in one line, with its actions and no composer, to the %s",
+    async (access) => {
+      directoryListTestState.entries = [
+        {
+          hostId: HOST_ID,
+          label: "e2e-sbx-p1",
+          kind: "remote",
+          websocketUrl: "wss://sbx.example.com/rpc",
+          version: "1.0.0",
+          transportDialability: "dialable",
+        },
+      ];
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+      taskSandboxTestState.task = {
+        kind: "ended",
+        ended: {
+          name: "e2e-sbx-p1",
+          end: {
+            state: "destroyed",
+            destroyedAt: new Date(2026, 9, 28, 1, 27).getTime(),
+            cause: "verb",
+            actor: "you",
+            idleMinutes: null,
+          },
+        },
+      };
+      chatHarness.teardown();
+      chatHarness.install(access, []);
+      renderChatTile();
+      await advanceLegendListTime(0);
+      await waitFor(() => {
+        expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+      });
+
+      expect(
+        screen.getAllByText(
+          "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.",
+        ),
+      ).toHaveLength(1);
+      expect(
+        screen.getAllByRole("button", { name: "Continue on another host" }),
+      ).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Details" })).toHaveLength(
+        1,
+      );
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+      expect(screen.queryByText(/Read-only viewer/)).toBeNull();
+    },
+  );
+
   it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot({
       attached: true,
@@ -2006,6 +2317,146 @@ describe("<ChatTile />", () => {
     }
     expect(messages.length).toBe(1);
     rootState.destroy();
+  });
+
+  it("keeps a resting copy sendable without serving-host workspace access", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+
+    expect(workspaceSelectorTestState.hostIds).toContain(HOST_ID);
+    expect(workspaceSelectorTestState.ownerIds).toContain(CHAT_ARTIFACT.id);
+    await waitFor(() => {
+      expect(workspaceRpcTestState.methods).toContain(
+        "worktree.listBindingsForEpic",
+      );
+      expect(workspaceRpcTestState.methods).toContain("worktree.getBinding");
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+
+    // The send wakes the sandbox only for an agent the catalogue offers.
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+    renderRestingCopy(handle);
+
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+    });
+    expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
+    expect(workspaceSelectorTestState.hostIds).toEqual([]);
+    expect(workspaceSelectorTestState.ownerIds).toEqual([]);
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "worktree.listBindingsForEpic",
+    );
+    expect(workspaceRpcTestState.methods).not.toContain("worktree.getBinding");
+
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    if (!(sendButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send button");
+    }
+    fireEvent.click(sendButton);
+
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.request).toMatchObject({
+      kind: "message",
+      chatId: CHAT_ARTIFACT.id,
+      hostId: RESTING_COPY_SANDBOX.sandbox.hostId,
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {
+    renderRestingCopy(
+      createPublishedChatSessionHandle({
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        ownerUserId: "owner-1",
+        title: CHAT_ARTIFACT.name,
+        createdAt: 1,
+        updatedAt: 1,
+        conversion: convertReplicaChat([], []),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    });
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+    expect(
+      screen.queryByText("Reconnecting to the host — sending is paused"),
+    ).toBeNull();
+  });
+
+  it("keeps resting-copy composer settings local while live settings persist", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+
+    const liveComposer = getFocusedComposerControls();
+    if (liveComposer === null) {
+      throw new Error("expected live composer controls");
+    }
+    act(() => liveComposer.controls.setPermission("supervised"));
+    await waitFor(() => {
+      expect(workspaceRpcTestState.settingsWrites).toContainEqual({
+        hostId: HOST_ID,
+        chatId: CHAT_ARTIFACT.id,
+      });
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    expect(handle.store.getState().currentComposerSettings).toMatchObject({
+      permissionMode: "supervised",
+    });
+    await waitFor(() => expect(__chainCountForTests()).toBe(0));
+    liveTile.unmount();
+
+    renderRestingCopy(handle);
+
+    await waitFor(() => expect(getFocusedComposerControls()).not.toBeNull());
+
+    const copyComposer = getFocusedComposerControls();
+    if (copyComposer === null) {
+      throw new Error("expected resting-copy composer controls");
+    }
+    act(() => copyComposer.controls.setPermission("auto_accept_edits"));
+    expect(handle.store.getState().currentComposerSettings).toMatchObject({
+      permissionMode: "auto_accept_edits",
+    });
+    expect(
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings(EPIC_ID, HOST_ID),
+    ).toMatchObject({ permissionMode: "auto_accept_edits" });
+    expect(__chainCountForTests()).toBe(0);
+    expect(workspaceRpcTestState.settingsWrites).toEqual([]);
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "epic.updateChatRunSettings",
+    );
   });
 
   it("uses the composer send button as the running turn stop control", async () => {
@@ -6500,7 +6951,10 @@ describe("<ChatTile />", () => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
 
         const editor = screen.getByTestId("composer-editor");
-        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        const event = createEvent.keyDown(editor, {
+          key: "ArrowRight",
+          code: "ArrowRight",
+        });
         fireEvent(editor, event);
 
         expect(editor.textContent).toBe(SUGGESTION);
@@ -6513,7 +6967,10 @@ describe("<ChatTile />", () => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
 
         const editor = screen.getByTestId("composer-editor");
-        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        const event = createEvent.keyDown(editor, {
+          key: "ArrowRight",
+          code: "ArrowRight",
+        });
         // One act scope: React commits nothing until it exits, so the paste
         // reaches the live editor while the tile still holds the offer, and
         // the key is handled against that stale offer.

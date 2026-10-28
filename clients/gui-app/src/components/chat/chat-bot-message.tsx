@@ -1,15 +1,15 @@
-import { useContext, type ReactElement, type ReactNode } from "react";
-import { MessageSquareText } from "lucide-react";
-import type {
-  BotAnnouncement,
-  BotAnnouncementKind,
-  ConversationRequest,
+import { Fragment, useContext, type ReactElement, type ReactNode } from "react";
+import { MessageSquareText, Pencil, RotateCcw } from "lucide-react";
+import {
+  isConversationRequestMessageId,
+  type BotAnnouncement,
+  type BotAnnouncementKind,
+  type ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
-import { Badge } from "@/components/ui/badge";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
-import { RetrospectiveSheetReview } from "@/components/settings/move/retrospective-sheet-link";
 import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
 import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -20,14 +20,12 @@ import {
   BotAvatar,
   MemberAvatar,
 } from "@/components/bots/bot-avatars";
-import {
-  BotIdentityTrigger,
-  BotOwnerLine,
-} from "@/components/bots/bot-identity-popover";
+import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   ChatBotPresentationContext,
+  type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
 } from "./chat-bot-presentation-context";
@@ -40,25 +38,29 @@ import { TextSegment } from "./segments/text-segment";
  * Bots, decision 41): the sender's picture, their name and the time, then
  * the text. A member's message carries a jump to the reply that answered it
  * where that reply is not right under it and, in the channel, the line of
- * its thread once the thread has a reply; the bot's row carries the "APP"
- * tag Slack puts beside an app's name, and an announcement its kind on a
- * coloured bar, as Slack draws an app's attachment. A question or a
+ * its thread once the thread has a reply; an announcement carries its kind
+ * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A bot that answers posts
- * itself (reply mode `direct`) replies in the channel, its row naming the
- * post it answers.
+ * itself (reply mode `direct`) replies in the channel, as a plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
  * Slack offers it on every message: a member's post and a question or
  * proposal open their own thread, and a direct reply opens the thread under
  * the post it answers, since a thread hangs off a post or a question, not
- * off a reply. Any other announcement takes no thread.
+ * off a reply. Any other announcement takes no thread. A member's message
+ * the bot failed to answer adds Retry and Edit to them, and says under its
+ * text that it was not answered and why, with the same actions inline.
+ *
+ * Without `hoverActions` the row is drawn as the post a thread opens on, at
+ * the top of the thread panel: the same row, with nothing on hover.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
   readonly presentation: ChatBotPresentation;
+  readonly hoverActions: boolean;
 }): ReactElement {
-  const { message, presentation } = props;
+  const { message, presentation, hoverActions } = props;
   const sentAt = message.sentAt ?? message.createdAt;
   const body = <BotMessageText message={message} />;
   if (message.role === "assistant") {
@@ -68,6 +70,7 @@ export function ChatBotMessage(props: {
         presentation={presentation}
         sentAt={sentAt}
         body={body}
+        hoverActions={hoverActions}
       />
     );
   }
@@ -85,6 +88,7 @@ export function ChatBotMessage(props: {
       : presentation.openThread;
   const replyInThread =
     postId === null || openThread === null ? null : () => openThread(postId);
+  const failed = failedActionsOf(message, presentation);
   return (
     <BotMessageFrame
       avatar={
@@ -96,13 +100,16 @@ export function ChatBotMessage(props: {
         />
       }
       name={name}
-      app={false}
+      bot={false}
       sentAt={sentAt}
       instanceId={message.id}
       testId="bot-member-row"
+      hoverActions={hoverActions}
       replyInThread={replyInThread}
+      failed={failed}
     >
       {body}
+      {failed === null ? null : <UnansweredLine failed={failed} />}
       {message.conversationRequest === undefined ? null : (
         <AnsweredReplyLink
           request={message.conversationRequest}
@@ -122,6 +129,36 @@ export function ChatBotMessage(props: {
 }
 
 /**
+ * Why a member's message the bot failed to answer was not answered, and its
+ * Retry and Edit bound to the message's text; `null` on any other. A held
+ * (parked) answer offers Retry alone, on the line and on hover alike.
+ */
+function failedActionsOf(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation,
+): FailedMessageActions | null {
+  const request = message.conversationRequest;
+  const failed =
+    request === undefined || presentation.failedRequest === null
+      ? null
+      : presentation.failedRequest(
+          request.requestId,
+          message.senderUserId ?? null,
+        );
+  if (failed === null) return null;
+  const { retry, edit } = failed;
+  const parked = failed.state === "parked";
+  return {
+    state: failed.state,
+    summary: failed.summary,
+    onSignIn: parked ? null : failed.signIn,
+    onRetry: retry === null ? null : () => retry(message.content),
+    retrying: failed.retrying,
+    onEdit: parked || edit === null ? null : () => edit(message.content),
+  };
+}
+
+/**
  * The bot's own row: a reply, or an announcement on its coloured bar; a
  * reply's options, and the thread line under a question or proposal once
  * its thread has a reply.
@@ -131,24 +168,23 @@ function BotRow(props: {
   readonly presentation: ChatBotPresentation;
   readonly sentAt: number;
   readonly body: ReactNode;
+  readonly hoverActions: boolean;
 }): ReactElement {
-  const { message, presentation, sentAt, body } = props;
+  const { message, presentation, sentAt, body, hoverActions } = props;
   const announcement = message.announcement ?? null;
-  const repliesTo = message.repliesTo ?? null;
   const { replyInThread, threadLine } = botRowThread(message, presentation);
   return (
     <BotMessageFrame
       avatar={<BotAvatar size="lg" />}
       name={presentation.botTitle}
-      app
+      bot
       sentAt={sentAt}
       instanceId={message.id}
       testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
+      hoverActions={hoverActions}
       replyInThread={replyInThread}
+      failed={null}
     >
-      {repliesTo === null ? null : (
-        <RepliedPostLine postId={repliesTo} presentation={presentation} />
-      )}
       {announcement === null ? (
         body
       ) : (
@@ -204,29 +240,31 @@ function botRowThread(
 }
 
 /**
- * Slack's message frame: picture on the left, name, tag and time on the
- * first line, and whatever the row carries under it. Shared with the thread
- * panel, which draws the post a thread answers above its replies. On a
- * bot's row the picture and the name open the bot's card, and "managed by"
- * names its owner.
+ * Slack's message frame: picture on the left, name and time on the first
+ * line, and whatever the row carries under it. On a bot's row the picture
+ * and the name open the bot's card.
  */
-export function BotMessageFrame(props: {
+function BotMessageFrame(props: {
   readonly avatar: ReactNode;
   readonly name: string;
-  /** A bot's row: the "APP" tag beside its name, and its card and owner. */
-  readonly app: boolean;
+  /** A bot's row: its picture and name open its card. */
+  readonly bot: boolean;
   readonly sentAt: number;
   /** Names the time stamp for the layout editor; a message id. */
   readonly instanceId: string;
   readonly testId: string;
+  /** Whether the row offers its actions on hover; the post a thread opens on does not. */
+  readonly hoverActions: boolean;
   /** Opens the row's thread, from its hover actions; `null` for a row that takes none. */
   readonly replyInThread: (() => void) | null;
+  /** Retry and Edit, among the hover actions of a message the bot failed to answer. */
+  readonly failed: FailedMessageActions | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
   // A bot's card needs the surface's bot; outside one the row is plain.
   const identity = useBotIdentity();
-  const carded = props.app && identity !== null;
+  const carded = props.bot && identity !== null;
   return (
     <div
       data-testid={props.testId}
@@ -263,12 +301,6 @@ export function BotMessageFrame(props: {
           ) : (
             <span className={nameClassName}>{props.name}</span>
           )}
-          {props.app ? (
-            <Badge variant="muted" size="xs">
-              APP
-            </Badge>
-          ) : null}
-          {carded ? <BotOwnerLine /> : null}
           <ChatMessageTimestamp
             timestamp={props.sentAt}
             separated={false}
@@ -277,10 +309,107 @@ export function BotMessageFrame(props: {
         </div>
         {props.children}
       </div>
-      {props.replyInThread === null ? null : (
-        <MessageActions onReplyInThread={props.replyInThread} />
+      {!props.hoverActions ||
+      (props.replyInThread === null &&
+        (props.failed?.onRetry ?? null) === null) ? null : (
+        <MessageActions
+          onReplyInThread={props.replyInThread}
+          failed={props.failed}
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * A failed message's state, why, and its actions, bound to the row; no Retry
+ * or Edit where it cannot be sent again, no Edit on a teammate's, and Sign
+ * in only where signing in is the fix.
+ */
+type FailedMessageActions = {
+  readonly state: ChatBotFailedRequest["state"];
+  readonly summary: string | null;
+  readonly onSignIn: (() => void) | null;
+  readonly onRetry: (() => void) | null;
+  readonly retrying: boolean;
+  readonly onEdit: (() => void) | null;
+};
+
+/**
+ * The line under a message the bot failed to answer, as Slack marks a
+ * message that did not send: "Not answered" and why, then what can be done
+ * about it as text actions. A held answer reads the same way in the warning
+ * colour, with Retry alone.
+ */
+function UnansweredLine(props: {
+  readonly failed: FailedMessageActions;
+}): ReactElement {
+  const { failed } = props;
+  const parked = failed.state === "parked";
+  const actions: ReadonlyArray<{
+    readonly label: string;
+    readonly testId: string;
+    readonly disabled: boolean;
+    readonly onClick: () => void;
+  }> = [
+    ...(failed.onRetry === null
+      ? []
+      : [
+          {
+            label: "Retry",
+            testId: "bot-message-unanswered-retry",
+            disabled: failed.retrying,
+            onClick: failed.onRetry,
+          },
+        ]),
+    ...(failed.onEdit === null
+      ? []
+      : [
+          {
+            label: "Edit",
+            testId: "bot-message-unanswered-edit",
+            disabled: false,
+            onClick: failed.onEdit,
+          },
+        ]),
+    ...(failed.onSignIn === null
+      ? []
+      : [
+          {
+            label: "Sign in",
+            testId: "bot-message-unanswered-sign-in",
+            disabled: false,
+            onClick: failed.onSignIn,
+          },
+        ]),
+  ];
+  return (
+    <p
+      data-testid="bot-message-unanswered"
+      data-state={failed.state}
+      className={cn(
+        "text-ui-xs break-words whitespace-pre-wrap",
+        parked ? "text-warning-foreground" : "text-destructive",
+      )}
+    >
+      {failed.summary === null
+        ? "Not answered"
+        : `Not answered: ${failed.summary}`}
+      {actions.map((action) => (
+        <Fragment key={action.testId}>
+          <span aria-hidden="true">{" · "}</span>
+          <button
+            type="button"
+            data-testid={action.testId}
+            disabled={action.disabled}
+            onClick={action.onClick}
+            className="rounded-sm font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+          >
+            {action.label}
+          </button>
+        </Fragment>
+      ))}
+    </p>
   );
 }
 
@@ -290,31 +419,77 @@ export function BotMessageFrame(props: {
  * which has no hover.
  */
 function MessageActions(props: {
-  readonly onReplyInThread: () => void;
+  readonly onReplyInThread: (() => void) | null;
+  readonly failed: FailedMessageActions | null;
 }): ReactElement {
+  const { onReplyInThread, failed } = props;
   return (
     <div
       data-testid="bot-message-actions"
       className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
     >
-      <TooltipWrapper
-        label="Reply in thread"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Reply in thread"
-          data-testid="bot-message-reply-in-thread"
-          onClick={props.onReplyInThread}
+      {failed === null || failed.onRetry === null ? null : (
+        <>
+          <MessageAction
+            label="Retry"
+            testId="bot-message-retry"
+            disabled={failed.retrying}
+            onClick={failed.onRetry}
+          >
+            <RotateCcw aria-hidden="true" />
+          </MessageAction>
+          {failed.onEdit === null ? null : (
+            <MessageAction
+              label="Edit"
+              testId="bot-message-edit"
+              disabled={false}
+              onClick={failed.onEdit}
+            >
+              <Pencil aria-hidden="true" />
+            </MessageAction>
+          )}
+        </>
+      )}
+      {onReplyInThread === null ? null : (
+        <MessageAction
+          label="Reply in thread"
+          testId="bot-message-reply-in-thread"
+          disabled={false}
+          onClick={onReplyInThread}
         >
           <MessageSquareText aria-hidden="true" />
-        </Button>
-      </TooltipWrapper>
+        </MessageAction>
+      )}
     </div>
+  );
+}
+
+function MessageAction(props: {
+  readonly label: string;
+  readonly testId: string;
+  readonly disabled: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <TooltipWrapper
+      label={props.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={props.label}
+        data-testid={props.testId}
+        disabled={props.disabled}
+        onClick={props.onClick}
+      >
+        {props.children}
+      </Button>
+    </TooltipWrapper>
   );
 }
 
@@ -355,7 +530,7 @@ const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
 };
 
 /**
- * Tracy's message on a computer an earlier version shared is a record, not a
+ * Tracy's message on a host an earlier version shared is a record, not a
  * proposal: it carries the retrospective sheet's link, and is labelled with
  * the Overview's own line.
  */
@@ -425,17 +600,15 @@ function ReplyOptions(props: {
 }
 
 /**
- * An http(s) link opens; a retrospective sheet link is the message's Review
- * action; any other epic-relative path is shown as the path it is.
+ * An http(s) link opens; any other epic-relative path is shown as the path
+ * it is. A retrospective sheet link draws nothing: the record it labels is
+ * history, and the sheet is reached from the host's Overview in Settings.
  */
-function AnnouncementLink(props: { readonly link: string }): ReactElement {
+function AnnouncementLink(props: { readonly link: string }): ReactNode {
   const openLink = useOpenLink();
   const isWebLink = /^https?:\/\//i.test(props.link);
-  const reviewHostId = isWebLink
-    ? null
-    : retrospectiveSheetLinkHostId(props.link);
-  if (reviewHostId !== null) {
-    return <RetrospectiveSheetReview hostId={reviewHostId} />;
+  if (!isWebLink && retrospectiveSheetLinkHostId(props.link) !== null) {
+    return null;
   }
   if (!isWebLink) {
     return (
@@ -455,43 +628,6 @@ function AnnouncementLink(props: { readonly link: string }): ReactElement {
     >
       {props.link}
     </Button>
-  );
-}
-
-/**
- * The post a bot's direct reply answers, above the reply: who wrote it and
- * its first line, a jump back to it. Nothing while the post is not in the
- * list the channel has read.
- */
-function RepliedPostLine(props: {
-  readonly postId: string;
-  readonly presentation: ChatBotPresentation;
-}): ReactNode {
-  const { postId, presentation } = props;
-  const post = presentation.repliedPost?.(postId) ?? null;
-  const scrollToMessage = presentation.scrollToMessage;
-  if (post === null) return null;
-  const label = (
-    <>
-      <span className="font-medium">{post.senderLabel}</span>
-      <span className="truncate">{post.excerpt}</span>
-    </>
-  );
-  const className =
-    "flex w-fit max-w-full min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground";
-  return scrollToMessage === null ? (
-    <div className={className} data-testid="bot-replied-post">
-      {label}
-    </div>
-  ) : (
-    <button
-      type="button"
-      className={cn(className, "rounded-sm hover:text-foreground")}
-      data-testid="bot-replied-post"
-      onClick={() => scrollToMessage(postId)}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -517,7 +653,15 @@ function AnsweredReplyLink(props: {
       : (presentation?.scrollToMessage ?? null);
   const replyId =
     request.resolvedAt === null ? null : request.resolvedByMessageId;
-  if (replyId === null || scrollToMessage === null) return null;
+  // A message the person replaced with an edit was not answered: the new
+  // message carries the request now.
+  if (
+    replyId === null ||
+    scrollToMessage === null ||
+    isConversationRequestMessageId(replyId)
+  ) {
+    return null;
+  }
   if (
     postId !== null &&
     presentation?.replyFollowsPost?.(postId, replyId) === true
@@ -553,8 +697,8 @@ function threadStarted(
 
 /**
  * Slack's line under a post: who is in the thread, "N replies" and when the
- * last one landed, the way into the thread. An unread reply in a thread the
- * viewer took part in shows as a dot and bold count. While the bot is
+ * last one landed, the way into the thread. Unread replies in a thread the
+ * viewer took part in show as their count and a bold "N replies". While the bot is
  * answering in the thread, the line says so in place of when the last reply
  * landed.
  */
@@ -582,7 +726,11 @@ function ThreadLine(props: {
         label="In this thread"
         testId="bot-thread-participants"
       />
-      <ThreadLineCount replies={replies} unread={unread} />
+      <ThreadLineCount
+        replies={replies}
+        unread={unread}
+        unreadCount={line.unreadCount}
+      />
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -592,22 +740,35 @@ function ThreadLine(props: {
   );
 }
 
-/** "N replies", bold behind a dot while one is unread. */
+/**
+ * "N replies", bold behind the unread count while one is unread (a 2 badge
+ * before "5 replies" reads two unread of five), or behind a dot where the
+ * host does not count.
+ */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread } = props;
+  const { replies, unread, unreadCount } = props;
   return (
     <>
-      {unread ? (
-        <span
-          className="size-2 shrink-0 rounded-full bg-primary"
-          data-testid="bot-thread-unread"
-          aria-label="Unread replies"
-          role="img"
+      {unreadCount === null ? (
+        unread && (
+          <span
+            className="size-2 shrink-0 rounded-full bg-primary"
+            data-testid="bot-thread-unread"
+            aria-label="Unread replies"
+            role="img"
+          />
+        )
+      ) : (
+        <UnreadCountBadge
+          count={unreadCount}
+          size="xs"
+          testId="bot-thread-unread-count"
         />
-      ) : null}
+      )}
       {replies === 0 ? null : (
         <span
           className={cn("text-primary", unread ? "font-bold" : "font-semibold")}

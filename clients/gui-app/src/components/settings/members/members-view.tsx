@@ -483,6 +483,7 @@ export function MembersView(props: {
       <RemovePreviewDialog
         open={removing !== null}
         memberName={targetName(removing)}
+        memberEmail={removing?.email ?? null}
         confirmName={removing === null ? "" : memberFirstName(removing)}
         teamName={teamName}
         preview={removePreview}

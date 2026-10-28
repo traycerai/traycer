@@ -70,21 +70,19 @@ describe("InviteAcceptGrant", () => {
     );
   }
 
-  it("shows both acceptance sentences on a paid plan", () => {
+  it("shows the seat line on a paid plan", () => {
     renderAccept(true, () => undefined);
     const seats = screen.getByTestId("invite-accept-seats").textContent;
-    expect(seats).toContain("accepting does not add another");
-    expect(seats).toContain(
-      "Available Traycer credits and your assigned allowance",
+    expect(seats).toBe(
+      "Your seat already counts toward Acme's seats; accepting does not add another.",
     );
   });
 
-  it("shows only the allowance sentence on a free plan", () => {
+  it("shows the spending line on a free plan", () => {
     renderAccept(false, () => undefined);
     const seats = screen.getByTestId("invite-accept-seats").textContent;
-    expect(seats).not.toContain("accepting does not add another");
-    expect(seats).toContain(
-      "Available Traycer credits and your assigned allowance",
+    expect(seats).toBe(
+      "An admin sets how much of Acme's credits you can spend.",
     );
   });
 

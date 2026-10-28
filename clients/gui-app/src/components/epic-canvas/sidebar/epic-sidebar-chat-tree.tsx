@@ -30,6 +30,10 @@ import {
 } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
+import {
+  TaskHostsViewContext,
+  useChatSandboxRowLine,
+} from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
@@ -1302,6 +1306,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         icon={MessagesSquare}
         title="No agents yet."
         description="Add an agent and choose a Chat or Terminal interface."
+        action={null}
         testId="epic-chat-sidebar-empty"
       />
     );
@@ -1311,6 +1316,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         icon={MessagesSquare}
         title="No agents on this device."
         description="Agents on your other devices can't be checked until your sign-in is confirmed. Add an agent to start one here."
+        action={null}
         testId="epic-chat-sidebar-cloud-unchecked-empty"
       />
     );
@@ -1331,6 +1337,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           isChatFilterActive(chatFilter),
           messageHits.state === "empty",
         )}
+        action={null}
         testId="epic-chat-sidebar-search-empty"
       />
     );
@@ -1340,6 +1347,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         icon={MessagesSquare}
         title={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(chatFilter)}
+        action={null}
         testId="epic-chat-sidebar-filter-empty"
       />
     );
@@ -1358,6 +1366,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               icon={Archive}
               title={archiveEmptyState.title}
               description={archiveEmptyState.description}
+              action={null}
               testId="epic-chat-sidebar-archived-empty"
             />
           </m.div>
@@ -1462,38 +1471,40 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
         <TaskHostReachContext value={unreachableHostIds}>
-          <SidebarViewerContext.Provider value={isViewer}>
-            <SidebarSortContext.Provider value={comparator}>
-              <SidebarSortClockContext.Provider value={sortClock}>
-                <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                  {searchOpen &&
-                  !selectionMode &&
-                  surfaceSearchQuery === null ? (
-                    <ChatSearchHeaderInput
-                      tabId={tabId}
-                      resultCount={searchResultCount}
-                    />
-                  ) : null}
-                  {/* One clock for the tree's rows, owner cards and name labels
+          <TaskHostsViewContext value={taskHostsView}>
+            <SidebarViewerContext.Provider value={isViewer}>
+              <SidebarSortContext.Provider value={comparator}>
+                <SidebarSortClockContext.Provider value={sortClock}>
+                  <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                    {searchOpen &&
+                    !selectionMode &&
+                    surfaceSearchQuery === null ? (
+                      <ChatSearchHeaderInput
+                        tabId={tabId}
+                        resultCount={searchResultCount}
+                      />
+                    ) : null}
+                    {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
-                  <HoverCardGroup>
-                    <SidebarContent>
-                      <SidebarGroup className="min-h-0 flex-1">
-                        <SidebarGroupContent
-                          ref={treeRegionRef}
-                          className="flex min-h-0 flex-1 flex-col"
-                          data-testid="epic-chat-tree-region"
-                        >
-                          {panelContent}
-                          {messageHits.node}
-                        </SidebarGroupContent>
-                      </SidebarGroup>
-                    </SidebarContent>
-                  </HoverCardGroup>
-                </SidebarFilterVisibilityContext.Provider>
-              </SidebarSortClockContext.Provider>
-            </SidebarSortContext.Provider>
-          </SidebarViewerContext.Provider>
+                    <HoverCardGroup>
+                      <SidebarContent>
+                        <SidebarGroup className="min-h-0 flex-1">
+                          <SidebarGroupContent
+                            ref={treeRegionRef}
+                            className="flex min-h-0 flex-1 flex-col"
+                            data-testid="epic-chat-tree-region"
+                          >
+                            {panelContent}
+                            {messageHits.node}
+                          </SidebarGroupContent>
+                        </SidebarGroup>
+                      </SidebarContent>
+                    </HoverCardGroup>
+                  </SidebarFilterVisibilityContext.Provider>
+                </SidebarSortClockContext.Provider>
+              </SidebarSortContext.Provider>
+            </SidebarViewerContext.Provider>
+          </TaskHostsViewContext>
         </TaskHostReachContext>
       </SidebarChatSharingContext.Provider>
     </ChatIndicatorHostScopes>
@@ -2889,8 +2900,10 @@ interface ChatRowButtonProps {
  */
 function describeOfflineLockForAria(
   lock: OfflineRowLock | null,
+  sandboxLine: string | null,
 ): string | null {
   if (lock === null) return null;
+  if (sandboxLine !== null) return sandboxLine;
   if (lock.reason === "host-older-than-data") {
     return `on ${lock.hostLabel}, needs a host update, opens read-only`;
   }
@@ -2955,6 +2968,8 @@ function chatRowAriaLabel(input: {
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
   readonly offlineLock: OfflineRowLock | null;
+  /** The owner sandbox's line, which replaces the offline wording. */
+  readonly sandboxLine: string | null;
   readonly ownerNotReachable: boolean;
   readonly sessionState: AgentSessionState | null;
 }): string {
@@ -2962,7 +2977,7 @@ function chatRowAriaLabel(input: {
     input.isArchived ? "archived" : null,
     describeSessionStateForAria(input.sessionState, input.isArchived, true),
     input.sharedWithTask ? "shared with task" : null,
-    describeOfflineLockForAria(input.offlineLock),
+    describeOfflineLockForAria(input.offlineLock, input.sandboxLine),
     input.ownerNotReachable ? TASK_HOST_UNREACHABLE_LINE : null,
   ]
     .filter((part): part is string => part !== null)
@@ -3005,8 +3020,21 @@ type OfflineRowLock = {
   readonly reason: "owner-offline" | "host-older-than-data";
 };
 
-/** The tooltip for {@link OfflineRowLock}, in that promise's own words. */
-function offlineRowLockTooltip(lock: OfflineRowLock): string {
+/** Whether a lock opens a chat's published copy because its owner is out. */
+function opensCopyWhileOwnerOffline(lock: OfflineRowLock | null): boolean {
+  return lock?.access === "published-copy" && lock.reason === "owner-offline";
+}
+
+/**
+ * The tooltip for {@link OfflineRowLock}, in that promise's own words. A
+ * sandbox owner says its own line instead of "offline".
+ */
+function offlineRowLockTooltip(
+  lock: OfflineRowLock,
+  sandboxLine: string | null,
+): string {
+  if (sandboxLine !== null)
+    return `${sandboxLine} Opens read-only from the last published copy.`;
   if (lock.reason === "host-older-than-data") {
     return `Lives on ${lock.hostLabel}, which needs a host update to read this agent. Opens read-only from the last published copy.`;
   }
@@ -3222,6 +3250,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerRefusesStore,
     rowOwnerUserId,
   ]);
+  const sandboxLine = useChatSandboxRowLine(
+    ownerHostId,
+    opensCopyWhileOwnerOffline(offlineLock),
+  );
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       sourceHostId === null
@@ -3363,6 +3395,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         isArchived,
         sharedWithTask: showSharedIndicator,
         offlineLock,
+        sandboxLine,
         ownerNotReachable,
         sessionState: sessionFacet.sessionState,
       })}
@@ -3416,7 +3449,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
             ) : null}
             {offlineLock !== null ? (
               <LazySidebarTooltipWrapper
-                label={offlineRowLockTooltip(offlineLock)}
+                label={offlineRowLockTooltip(offlineLock, sandboxLine)}
                 side={popoverSide}
                 sideOffset={undefined}
                 align={placement?.align}

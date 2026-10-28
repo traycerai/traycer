@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
+import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   SandboxCreateRequest,
   SandboxSummary,
@@ -229,6 +230,8 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
     }),
     userId: null,
     wake,
+    // An older host has no environment.status: the baseline fixtures keep their old reading.
+    readSettings: () => Promise.resolve("unsupported"),
     now: () => clock.now,
     sleep: (ms) => {
       clock.now += ms;
@@ -250,7 +253,7 @@ function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
   return runStagedSandbox(
     surfaceKey,
     fresh,
-    { fallbackName: "fallback-box", taskId: null, resume: false },
+    { taskId: null, resume: false },
     deps,
   );
 }
@@ -294,7 +297,7 @@ describe("runStagedSandbox creating", () => {
       createdByAgentId: null,
       environmentId: null,
       destroyAfterRestingMinutes: 4_320,
-      displayName: "fallback-box",
+      displayName: stageOf().target.name,
     });
     expect(request.clientRequestId).not.toBeNull();
     expect(request.clientRequestId).toBe(stageOf().clientRequestId);
@@ -323,7 +326,7 @@ describe("runStagedSandbox creating", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: "epic-1", resume: false },
+      { taskId: "epic-1", resume: false },
       deps,
     );
 
@@ -453,6 +456,7 @@ describe("runStagedSandbox refusals", () => {
         createSandbox: () => ({
           ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
           shortfallMc: 1_200_000,
+          creditSource: "personal",
         }),
       },
       true,
@@ -463,6 +467,7 @@ describe("runStagedSandbox refusals", () => {
     expect(stageOf().failure).toEqual({
       kind: "credits",
       shortfallMc: 1_200_000,
+      creditSource: "personal",
     });
     expect(stageOf().phase).toBe("creating");
     expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
@@ -562,7 +567,7 @@ describe("runStagedSandbox settling", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: null, resume: false },
+      { taskId: null, resume: false },
       deps,
     );
 
@@ -609,9 +614,133 @@ describe("runStagedSandbox settling", () => {
     expect(stageOf().failure).toEqual({
       kind: "settings",
       code: "SETTINGS_SYNC_FAILED",
+      steps: { applied: [], notApplied: ["Sandbox setup"] },
     });
     expect(stageOf().phase).toBe("creating");
     expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+  });
+
+  describe("with the host's environment status", () => {
+    interface StatusItem {
+      readonly kind: string;
+      readonly key: string;
+      readonly os: string;
+      readonly desiredRevision: number;
+      readonly status: string;
+      readonly code: string;
+      readonly args: Readonly<Record<string, null>>;
+      readonly brokerEnforced: null;
+      readonly minimumHostVersion: null;
+      readonly appliedAs: null;
+    }
+    const item = (kind: string, key: string, status: string): StatusItem => ({
+      kind,
+      key,
+      os: "any",
+      desiredRevision: 3,
+      status,
+      code: "ok",
+      args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+      brokerEnforced: null,
+      minimumHostVersion: null,
+      appliedAs: null,
+    });
+    const statusOf = (
+      receivedRevision: number | null,
+      items: readonly StatusItem[],
+    ) =>
+      environmentStatusResponseSchemaV11.parse({
+        principal: { kind: "personal" },
+        reachability: "connected",
+        bindingGeneration: 1,
+        desiredRevision: receivedRevision,
+        receivedRevision,
+        appliedRevision: receivedRevision,
+        receiptAgeMs: 0,
+        remoteAccess: "on",
+        pendingUploads: [],
+        setup: null,
+        items,
+      });
+    const settleWith = async (
+      answer: StagedSandboxRunDeps["readSettings"],
+    ): Promise<void> => {
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      const { deps } = harness({}, true);
+      await run(false, { ...deps, readSettings: answer });
+    };
+
+    it("fails with the failed step named, never a raw item key, when an MCP server did not apply", async () => {
+      await settleWith(() =>
+        Promise.resolve(
+          statusOf(5, [
+            item("secret", "sec-1", "applied"),
+            item("mcp_server", "github", "failed"),
+          ]),
+        ),
+      );
+
+      expect(stageOf().failure).toMatchObject({
+        kind: "settings",
+        steps: { applied: ["Secrets"], notApplied: ["MCP servers"] },
+      });
+      expect(stageOf().phase).toBe("creating");
+    });
+
+    it("hands off past a key the sandbox does not use: not_used is neither a failure nor a wait", async () => {
+      await settleWith(() =>
+        Promise.resolve(
+          statusOf(5, [
+            item("env_override", "claude:ANTHROPIC_API_KEY", "not_used"),
+            item("variable", "REGION", "applied"),
+          ]),
+        ),
+      );
+
+      expect(stageOf().phase).toBe("handoff");
+      expect(stageOf().failure).toBeNull();
+    });
+
+    it.each([
+      ["a read that failed", () => Promise.resolve(null)],
+      [
+        "a status before the first revision was received",
+        () => Promise.resolve(statusOf(null, [])),
+      ],
+      [
+        "an explicit settings operation still pending",
+        () =>
+          Promise.resolve({
+            ...statusOf(5, [item("variable", "REGION", "applied")]),
+            sandboxSettingsOperationId: null,
+          }),
+      ],
+      [
+        "a status with no principal, though a received revision is cached",
+        () =>
+          Promise.resolve({
+            ...statusOf(5, [item("variable", "REGION", "applied")]),
+            principal: null,
+          }),
+      ],
+      [
+        "an item with a status this app does not know",
+        () =>
+          Promise.resolve(
+            statusOf(5, [item("variable", "REGION", "some_future_status")]),
+          ),
+      ],
+      [
+        "an item still pending",
+        () =>
+          Promise.resolve(statusOf(5, [item("variable", "REGION", "pending")])),
+      ],
+    ])("holds the send on %s, never handing off", async (_name, answer) => {
+      await settleWith(answer);
+
+      expect(stageOf().phase).not.toBe("handoff");
+      expect(stageOf().failure).toMatchObject({ kind: "timed-out" });
+    });
   });
 
   it("fails with the row's code when the sandbox fails after the create was accepted", async () => {
@@ -728,6 +857,31 @@ describe("runStagedSandbox on a resting sandbox", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
       "host-resting",
     );
+  });
+
+  it("keeps the pot a refused wake was checked against, so the line can name it", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      ...RESTING,
+      configuration: { kind: "team", teamId: "team-acme", teamName: "Acme" },
+    });
+    const { deps } = harness({}, false);
+
+    await run(false, {
+      ...deps,
+      wake: () =>
+        Promise.resolve({
+          kind: "credit-gate",
+          shortfallMc: 120,
+          creditSource: "team-allowance",
+          burnMcPerHour: null,
+        }),
+    });
+
+    expect(stageOf().failure).toEqual({
+      kind: "credits",
+      shortfallMc: 120,
+      creditSource: "team-allowance",
+    });
   });
 
   it("wakes a New sandbox that was already created after a failed wake instead of creating it again", async () => {
@@ -1306,14 +1460,25 @@ describe("settleVerdict", () => {
       settleVerdict(
         row({ state: "awake", guestConfigured: false, failureCode: "X" }),
       ),
-    ).toEqual({ kind: "failure", failure: { kind: "settings", code: "X" } });
+    ).toEqual({
+      kind: "failure",
+      failure: {
+        kind: "settings",
+        code: "X",
+        steps: { applied: [], notApplied: ["Sandbox setup"] },
+      },
+    });
     expect(
       settleVerdict(
         row({ state: "awake", guestConfigured: false, failureCode: null }),
       ),
     ).toEqual({
       kind: "failure",
-      failure: { kind: "settings", code: "settings" },
+      failure: {
+        kind: "settings",
+        code: "settings",
+        steps: { applied: [], notApplied: ["Sandbox setup"] },
+      },
     });
   });
 

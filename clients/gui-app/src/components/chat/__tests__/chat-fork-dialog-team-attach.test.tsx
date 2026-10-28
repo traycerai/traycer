@@ -1,3 +1,4 @@
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import {
   act,
   cleanup,
@@ -484,6 +485,7 @@ function forkTarget(): ChatForkDialogTarget {
     initialHostId: TEAM_HOST_ID,
     onlyHostIds: null,
     stagedSandbox: null,
+    carriesComposerDraft: false,
   };
 }
 
@@ -508,7 +510,7 @@ function renderDialog(): void {
       />
     </QueryClientProvider>
   );
-  const view = render(ui(false));
+  const view = render(ui(false), { wrapper: HostRuntimeTestProvider });
   view.rerender(ui(true));
 }
 

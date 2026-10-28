@@ -55,6 +55,9 @@ function sandboxSpies() {
     getSandboxCatalogue: vi.fn<IRunnerHost["getSandboxCatalogue"]>(() =>
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
+    getTraycerModels: vi.fn<IRunnerHost["getTraycerModels"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
     createSandbox: vi.fn<IRunnerHost["createSandbox"]>(() =>
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
@@ -108,15 +111,16 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     ).toBeNull();
   });
 
-  it("answers every one of the ten calls with the unavailable failure and never reaches the runner host", async () => {
+  it("answers every one of the eleven calls with the unavailable failure and never reaches the runner host", async () => {
     const { service, spies } = makeService(REASON);
     const unavailable = { kind: "unavailable", reason: REASON };
 
     expect(await service.listSandboxes()).toEqual(unavailable);
     expect(await service.getSandboxCosts()).toEqual(unavailable);
     expect(await service.getSandboxCatalogue()).toEqual(unavailable);
+    expect(await service.getTraycerModels()).toEqual(unavailable);
     expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
-    expect(await service.destroySandbox("sbx_1")).toEqual(unavailable);
+    expect(await service.destroySandbox("sbx_1", false)).toEqual(unavailable);
     expect(await service.patchSandbox("sbx_1", PATCH_REQUEST)).toEqual(
       unavailable,
     );
@@ -130,6 +134,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(spies.listSandboxes).not.toHaveBeenCalled();
     expect(spies.getSandboxCosts).not.toHaveBeenCalled();
     expect(spies.getSandboxCatalogue).not.toHaveBeenCalled();
+    expect(spies.getTraycerModels).not.toHaveBeenCalled();
     expect(spies.createSandbox).not.toHaveBeenCalled();
     expect(spies.destroySandbox).not.toHaveBeenCalled();
     expect(spies.patchSandbox).not.toHaveBeenCalled();
@@ -150,7 +155,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
       kind: "unavailable",
       reason: REASON,
     });
-    await expect(service.destroySandbox("sbx_1")).resolves.toEqual({
+    await expect(service.destroySandbox("sbx_1", false)).resolves.toEqual({
       kind: "unavailable",
       reason: REASON,
     });
@@ -172,7 +177,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     await expect(service.createSandbox(CREATE_REQUEST)).rejects.toThrow(
       "Sign in to create a sandbox.",
     );
-    await expect(service.destroySandbox("sbx_1")).rejects.toThrow(
+    await expect(service.destroySandbox("sbx_1", false)).rejects.toThrow(
       "Sign in to destroy this sandbox.",
     );
     await expect(service.patchSandbox("sbx_1", PATCH_REQUEST)).rejects.toThrow(

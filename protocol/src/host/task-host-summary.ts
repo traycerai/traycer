@@ -31,15 +31,39 @@ export const taskHostPrincipalSchema: z.ZodType<TaskHostPrincipal> = lazySchema(
  * - `reach` is whether the principal of the host that read the list reaches
  *   this one: the authoritative fact behind "not reachable from this host".
  *
- * No state, cost, payer or route: those need the owner's own authorization,
- * so a reader shows them only from a source it is authorized for.
+ * - `sandboxEnd` is a sandbox's permanent end, authorized by the task read.
+ *   It carries only the time, cause and a displayable actor, never owner-only
+ *   cost, payer or route details.
  */
 export interface TaskHostRow {
   readonly hostId: string;
   readonly label: string | null;
   readonly principal: TaskHostPrincipal;
   readonly reach: AgentReach;
+  readonly sandboxEnd: TaskSandboxEnd | null;
 }
+
+export interface TaskSandboxEnd {
+  readonly state: "destroyed";
+  readonly destroyedAt: number;
+  readonly cause: string;
+  readonly actor: string | null;
+  /**
+   * The idle period the idle pass applied, for an `idle` or `burst-idle`
+   * end; `null` for any other cause and from a server that does not send it.
+   */
+  readonly idleMinutes: number | null;
+}
+
+export const taskSandboxEndSchema: z.ZodType<TaskSandboxEnd> = lazySchema(() =>
+  z.object({
+    state: z.literal("destroyed"),
+    destroyedAt: z.number().int().nonnegative(),
+    cause: z.string().min(1),
+    actor: z.string().nullable(),
+    idleMinutes: z.number().int().positive().nullable().default(null),
+  }),
+);
 
 /** Tolerant: a field a newer server adds is stripped, never refused. */
 export const taskHostRowSchema: z.ZodType<TaskHostRow> = lazySchema(() =>
@@ -48,6 +72,7 @@ export const taskHostRowSchema: z.ZodType<TaskHostRow> = lazySchema(() =>
     label: z.string().nullable(),
     principal: taskHostPrincipalSchema,
     reach: agentReachSchema,
+    sandboxEnd: taskSandboxEndSchema.nullable().default(null),
   }),
 );
 

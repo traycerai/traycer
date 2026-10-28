@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -7,6 +7,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsEntityRef,
@@ -18,7 +19,10 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import {
+  NotificationIndicatorsContext,
+  useSurfaceNotificationIndicatorState,
+} from "@/components/notifications/notification-indicator-context";
 import {
   cloudNotificationFeedId,
   useCloudNotificationsStore,
@@ -167,6 +171,19 @@ interface Harness {
 function createHarness(
   hostResponse: HostNotificationsIndicatorStateResponse,
 ): Harness {
+  return createHarnessAnswering(hostResponse, () => hostResponse);
+}
+
+/** A harness whose host answers each request through `answer`, for a case
+ * where the requests of one surface are not answered alike. */
+function createHarnessAnswering(
+  hostResponse: HostNotificationsIndicatorStateResponse,
+  answer: (
+    params: HostNotificationsIndicatorStateRequestV11,
+  ) =>
+    | HostNotificationsIndicatorStateResponse
+    | Promise<HostNotificationsIndicatorStateResponse>,
+): Harness {
   const queryClient = createAppQueryClient();
   queryClient.setDefaultOptions({
     queries: { ...queryClient.getDefaultOptions().queries, retry: false },
@@ -191,7 +208,7 @@ function createHarness(
         "host.notifications.indicatorState": (params) => {
           requestCount.value += 1;
           requests.push(params);
-          return hostResponse;
+          return answer(params);
         },
         "host.notifications.cloudFeed.markRead": (params) => {
           cloudMarkRead.calls.push(params.entryId);
@@ -223,9 +240,11 @@ function createHarness(
   };
 }
 
+/** The empty partition a host answers while its cloud lane carries its rows. */
 const EMPTY_HOST_RESPONSE: HostNotificationsIndicatorStateResponse = {
   epics: {},
   chats: {},
+  complete: false,
 };
 
 /** Serializes the flags so an assertion names the exact indicator the
@@ -245,6 +264,25 @@ function IndicatorProbe(props: {
   return (
     <span data-testid={props.testId}>
       {lit.length === 0 ? "none" : lit.join(",")}
+    </span>
+  );
+}
+
+/** The chat's unread count as the surface holds it, with the host-only fork
+ * bit that shows the host's answer has been folded in. */
+function CountProbe(props: {
+  readonly chatId: string;
+  readonly testId: string;
+}): ReactNode {
+  const indicators = useContext(NotificationIndicatorsContext);
+  const state = Object.hasOwn(indicators.chats, props.chatId)
+    ? indicators.chats[props.chatId]
+    : undefined;
+  return (
+    <span data-testid={props.testId}>
+      {state === undefined
+        ? "absent"
+        : `${String(state.unreadCount)}${state.pendingFork ? ",pendingFork" : ""}`}
     </span>
   );
 }
@@ -403,6 +441,8 @@ function applyCloudSnapshot(
   rows: ReadonlyArray<HostNotificationsCloudFeedRow>,
   version: number,
 ): void {
+  // The simulated stream was opened for the harness's signed-in user-a.
+  useCloudNotificationsStore.setState({ accountId: "user-a" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
     version,
@@ -694,6 +734,7 @@ describe("mixed-plane notification indicators", () => {
 
   it("keeps a host-derived pending fork lit when its cloud row is marked read", async () => {
     const harness = createHarness({
+      complete: false,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -702,6 +743,7 @@ describe("mixed-plane notification indicators", () => {
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: false,
+          unreadCount: 0,
         },
       },
     });
@@ -811,6 +853,125 @@ describe("mixed-plane notification indicators", () => {
     expect(indicatorText("row-read")).toBe("unread");
   });
 
+  it("keeps the cloud's count for a row on the host's origin while the host answers the empty partition", async () => {
+    const heldByCloud = cloudRow({
+      entryId: "entry-a",
+      originHostId: CONNECTED_HOST_ID,
+      readAt: null,
+    });
+    const harness = createHarness({
+      epics: {},
+      chats: {},
+      complete: false,
+    });
+    applyCloudSnapshot([heldByCloud], 1);
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: <CountProbe chatId={CHAT_ID} testId="count" />,
+    });
+
+    await waitFor(() => {
+      expect(indicatorText("count")).toBe("1");
+    });
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
+    expect(indicatorText("count")).toBe("1");
+  });
+
+  it("counts a notification once when the host answers its whole origin for the same row the cloud snapshot holds", async () => {
+    const heldByBoth = cloudRow({
+      entryId: "entry-a",
+      originHostId: CONNECTED_HOST_ID,
+      readAt: null,
+    });
+    const harness = createHarness({
+      epics: {},
+      chats: {
+        [CHAT_ID]: {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: true,
+          unreadFailure: false,
+          unreadDone: true,
+          unreadCount: 1,
+        },
+      },
+      complete: true,
+    });
+    applyCloudSnapshot([heldByBoth], 1);
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: <CountProbe chatId={CHAT_ID} testId="count" />,
+    });
+
+    await waitFor(() => {
+      expect(indicatorText("count")).toBe("1,pendingFork");
+    });
+  });
+
+  it("keeps the cloud's count for an id whose chunk has not answered, though another chunk said it was the whole origin", async () => {
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${String(index).padStart(4, "0")}`,
+    );
+    const answeredChatId = chatIds[0];
+    const silentChatId = chatIds[chatIds.length - 1];
+    const harness = createHarnessAnswering(EMPTY_HOST_RESPONSE, (params) =>
+      params.chatIds.includes(silentChatId)
+        ? new Promise<HostNotificationsIndicatorStateResponse>(() => undefined)
+        : {
+            epics: {},
+            chats: {
+              [answeredChatId]: {
+                pendingApproval: false,
+                pendingInterview: false,
+                pendingFork: true,
+                unreadFailure: false,
+                unreadDone: false,
+                unreadCount: 0,
+              },
+            },
+            complete: true,
+          },
+    );
+    applyCloudSnapshot(
+      [answeredChatId, silentChatId].map((chatId) => {
+        const row = cloudRow({
+          entryId: `entry-${chatId}`,
+          originHostId: CONNECTED_HOST_ID,
+          readAt: null,
+        });
+        return { ...row, entry: { ...row.entry, chatId } };
+      }),
+      1,
+    );
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds,
+      children: (
+        <>
+          <CountProbe chatId={answeredChatId} testId="answered" />
+          <CountProbe chatId={silentChatId} testId="silent" />
+        </>
+      ),
+    });
+
+    // The answered chunk has landed once its host-only fork bit is drawn.
+    await waitFor(() => {
+      expect(indicatorText("answered")).toBe("1,pendingFork");
+    });
+    // Both would read "0" if the answered chunk's `complete` were taken to
+    // cover every id: it holds no unread record for either chat.
+    expect(indicatorText("silent")).toBe("1");
+  });
+
   it("folds unread app-local failures in alongside the cloud rows", async () => {
     const harness = createHarness(EMPTY_HOST_RESPONSE);
     applyCloudSnapshot([], 1);
@@ -836,6 +997,7 @@ describe("local-mode notification indicators", () => {
   it("still derives from the host response on a methodless host", async () => {
     feedMode.value = "local";
     const harness = createHarness({
+      complete: true,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -844,6 +1006,7 @@ describe("local-mode notification indicators", () => {
           pendingApproval: true,
           pendingInterview: false,
           unreadDone: false,
+          unreadCount: 1,
         },
       },
     });
@@ -875,6 +1038,7 @@ describe("local-mode notification indicators", () => {
   it("does not decorate another host's bound tab with the active host response", async () => {
     feedMode.value = "local";
     const harness = createHarness({
+      complete: true,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -883,6 +1047,7 @@ describe("local-mode notification indicators", () => {
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
+          unreadCount: 1,
         },
       },
     });
@@ -917,6 +1082,7 @@ describe("local-mode notification indicators", () => {
   it("folds unread app-local failures into the host response", async () => {
     feedMode.value = "local";
     const harness = createHarness({
+      complete: true,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -925,6 +1091,7 @@ describe("local-mode notification indicators", () => {
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,
+          unreadCount: 1,
         },
       },
     });

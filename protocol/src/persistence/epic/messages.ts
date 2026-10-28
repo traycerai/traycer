@@ -412,6 +412,25 @@ export const conversationRequestSchema = lazySchema(() =>
 export type ConversationRequest = z.infer<typeof conversationRequestSchema>;
 
 /**
+ * The user row's id for a conversation request: derived, so the request id
+ * a sender holds names the row without an index, and a redelivery of the
+ * same request lands on the same row.
+ */
+const CONVERSATION_REQUEST_MESSAGE_ID_PREFIX = "conversation-request:";
+
+export function conversationRequestMessageId(requestId: string): string {
+  return `${CONVERSATION_REQUEST_MESSAGE_ID_PREFIX}${requestId}`;
+}
+
+/**
+ * Whether `messageId` names a member's request row. A request resolved by
+ * one (`resolvedByMessageId`) was superseded by that message, not answered.
+ */
+export function isConversationRequestMessageId(messageId: string): boolean {
+  return messageId.startsWith(CONVERSATION_REQUEST_MESSAGE_ID_PREFIX);
+}
+
+/**
  * The live user row (`chat.subscribe@1.25`): the frozen pre-conversation
  * shape with the bot-conversation request. ABSENT means "not a conversation
  * request" - every row outside a bot conversation, and every row written

@@ -42,6 +42,7 @@ import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
   type HostNotificationsCloudFeedRow,
+  type HostNotificationsCloudFeedRowV16,
   type HostNotificationsIndicatorStateResponse,
   type HostNotificationsMarkReadRequest,
   type HostNotificationsSubscribeClientFrame,
@@ -77,6 +78,9 @@ interface HostState {
    * the two to disagree sets it, and `useHostClient()` follows it.
    */
   appWideClient: HostClient<HostRpcRegistry> | null;
+  /** Clients for hosts addressed by an explicit id (an indicator read of a
+   * host the notification feed is not served from). */
+  clientsById: Map<string, HostClient<HostRpcRegistry>>;
 }
 
 interface StreamState {
@@ -102,6 +106,7 @@ const hostState = vi.hoisted<HostState>(() => ({
   id: "host-a",
   client: null,
   appWideClient: null,
+  clientsById: new Map(),
 }));
 const streamState = vi.hoisted<StreamState>(() => ({
   client: null,
@@ -253,6 +258,13 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => servingHostFallbackState.boundHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null
+      ? hostState.client
+      : (hostState.clientsById.get(hostId) ?? null),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
@@ -407,6 +419,7 @@ import {
 import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
   __resetAgentActivityStoreForTests,
@@ -922,6 +935,131 @@ function ExplicitNotificationConsumptionProbe(): ReactNode {
   );
 }
 
+const BOT_HOST_ID = "host-b";
+const BOT_THREAD_ID = "thread-1";
+const BOT_THREAD_IDS: ReadonlyArray<string> = [BOT_THREAD_ID];
+const NO_EPIC_IDS: ReadonlyArray<string> = [];
+
+/** What a headless host answers when asked, and what it was asked. */
+interface BotHostAnswers {
+  response: HostNotificationsIndicatorStateResponse;
+  /** When set, the next request answers with this instead, then clears it. */
+  held: Promise<HostNotificationsIndicatorStateResponse> | null;
+  readonly requests: Array<unknown>;
+}
+
+function wholeOriginAnswer(
+  unreadCount: number,
+): HostNotificationsIndicatorStateResponse {
+  return {
+    epics: {},
+    chats: {
+      [BOT_THREAD_ID]: {
+        pendingApproval: false,
+        pendingInterview: false,
+        pendingFork: false,
+        unreadFailure: false,
+        unreadDone: unreadCount > 0,
+        unreadCount,
+      },
+    },
+    complete: true,
+  };
+}
+
+/** A host other than the one the notification feed is served from. */
+function createBotHostClient(
+  answers: BotHostAnswers,
+): HostClient<HostRpcRegistry> {
+  const botHostEntry: HostDirectoryEntry = {
+    ...mockLocalHostEntry,
+    hostId: BOT_HOST_ID,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) => (hostId === BOT_HOST_ID ? botHostEntry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `bot-host-request-${String(answers.requests.length)}`,
+      handlers: {
+        "host.notifications.indicatorState": (params) => {
+          answers.requests.push(params);
+          const held = answers.held;
+          answers.held = null;
+          return held ?? answers.response;
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+  );
+  return spine.createRequesterForHostId(BOT_HOST_ID);
+}
+
+/** A bot's answer on `BOT_HOST_ID`: the unread `done` row its host mints on
+ * the thread's chat. */
+function botVerdictRow(
+  entryId: string,
+  createdAt: number,
+): HostNotificationsCloudFeedRowV16 {
+  return {
+    entryId,
+    originHostId: BOT_HOST_ID,
+    coalesceKey: `host.operation.finished:${entryId}`,
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: null,
+      severity: "done",
+      outcome: "completed",
+      epicId: "bot-1",
+      chatId: BOT_THREAD_ID,
+      payload: {
+        kind: "bot_thread_verdict",
+        operation: "bot.thread.verdict",
+        title: "Tracy answered",
+        message: "Your question about the release",
+        botId: "bot-1",
+        threadId: BOT_THREAD_ID,
+        replyMessageId: entryId,
+      },
+    },
+    presentation: { epicTitle: null, chatTitle: null },
+  };
+}
+
+/** The thread's unread count as a surface bound to `BOT_HOST_ID` shows it. */
+function BotThreadCountProbe(): ReactNode {
+  const indicators = useNotificationIndicators({
+    hostId: BOT_HOST_ID,
+    epicIds: NO_EPIC_IDS,
+    chatIds: BOT_THREAD_IDS,
+    enabled: true,
+  });
+  const state = Object.hasOwn(indicators.chats, BOT_THREAD_ID)
+    ? indicators.chats[BOT_THREAD_ID]
+    : undefined;
+  return (
+    <span data-testid="bot-thread-count">
+      {state === undefined ? "absent" : String(state.unreadCount)}
+    </span>
+  );
+}
+
+function hostIndicatorKey(hostId: string, chatId: string): readonly unknown[] {
+  return [
+    "host",
+    hostId,
+    "host.notifications.indicatorState",
+    { epicIds: [], chatIds: [chatId] },
+    "notifications:indicator-state:alice@example.com",
+  ];
+}
+
 function indicatorKey(
   epicId: string,
   chatId: string,
@@ -981,6 +1119,7 @@ describe("<NotificationsSessionProvider />", () => {
     // only the ones that care about the host client.
     hostState.client = createHostClient([]);
     hostState.appWideClient = null;
+    hostState.clientsById.clear();
     streamState.client = null;
     streamState.cloudFeedSupport = "unsupported";
     streamState.useClientSupport = false;
@@ -3048,6 +3187,7 @@ describe("<NotificationsSessionProvider />", () => {
               pendingApproval: false,
               pendingInterview: false,
               unreadDone: false,
+              unreadCount: 0,
             },
           },
         },
@@ -3612,6 +3752,270 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(readOutcome).toBe("released");
     });
+  });
+
+  it("re-asks the hosts that answered their whole origin when a cloud snapshot arrives, and leaves partition answers standing", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    // Neither host is the one the notification feed is served from.
+    const wholeOrigin = hostIndicatorKey("host-b", "chat-a");
+    const partition = hostIndicatorKey("host-c", "chat-b");
+    const unsaid = hostIndicatorKey("host-c", "chat-c");
+    queryClient.setQueryData(wholeOrigin, {
+      epics: {},
+      chats: {},
+      complete: true,
+    });
+    queryClient.setQueryData(partition, {
+      epics: {},
+      chats: {},
+      complete: false,
+    });
+    queryClient.setQueryData(unsaid, { epics: {}, chats: {}, complete: null });
+
+    act(() => {
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 1,
+          rows: [],
+          summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+        });
+    });
+
+    // The re-ask waits for the snapshot burst to go quiet.
+    await waitFor(() => {
+      expect(queryClient.getQueryState(wholeOrigin)?.isInvalidated).toBe(true);
+    });
+    expect(queryClient.getQueryState(partition)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(unsaid)?.isInvalidated).toBe(false);
+  });
+
+  it("shows a bot's new answer on a thread whose headless host had answered its whole origin with none", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    const botHost: BotHostAnswers = {
+      response: wholeOriginAnswer(0),
+      held: null,
+      requests: [],
+    };
+    hostState.clientsById.set(BOT_HOST_ID, createBotHostClient(botHost));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <BotThreadCountProbe />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    const cloudSession = streamClient.sessionFor(
+      "host.notifications.cloudFeed.subscribe",
+    );
+    const emitCloudSnapshot = (
+      version: number,
+      rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
+    ): void => {
+      act(() => {
+        cloudSession.emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version,
+          rows,
+          summary: {
+            totalCount: rows.length,
+            unreadCount: rows.length,
+            attentionCount: 0,
+          },
+        });
+      });
+    };
+    emitCloudSnapshot(1, []);
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
+    });
+
+    // The host's own answer moves with the verdict; the cloud snapshot is what
+    // reaches this client first, and nothing streams from the headless host.
+    const firstVerdict = botVerdictRow("verdict-1", 2);
+    botHost.response = wholeOriginAnswer(1);
+    const askedBeforeFirstVerdict = botHost.requests.length;
+    emitCloudSnapshot(2, [firstVerdict]);
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
+    });
+    expect(botHost.requests.length).toBeGreaterThan(askedBeforeFirstVerdict);
+
+    botHost.response = wholeOriginAnswer(2);
+    const askedBeforeSecondVerdict = botHost.requests.length;
+    emitCloudSnapshot(3, [firstVerdict, botVerdictRow("verdict-2", 3)]);
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("2");
+    });
+    expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+  });
+
+  it("re-asks a host whose first indicator read was still in flight when a bot's verdict reached the cloud snapshot", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    let releaseFirstRead: (
+      answer: HostNotificationsIndicatorStateResponse,
+    ) => void = () => undefined;
+    const firstRead = new Promise<HostNotificationsIndicatorStateResponse>(
+      (resolve) => {
+        releaseFirstRead = resolve;
+      },
+    );
+    const botHost: BotHostAnswers = {
+      response: wholeOriginAnswer(1),
+      held: firstRead,
+      requests: [],
+    };
+    hostState.clientsById.set(BOT_HOST_ID, createBotHostClient(botHost));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <BotThreadCountProbe />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    // The host's first read is open and has no answer yet: nothing is cached.
+    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(1);
+    });
+
+    act(() => {
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 1,
+          rows: [botVerdictRow("verdict-1", 2)],
+          summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        });
+    });
+    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(2);
+    });
+
+    // The answer computed before the verdict arrives after the re-ask.
+    await act(async () => {
+      releaseFirstRead(wholeOriginAnswer(0));
+      await firstRead;
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
+    });
+  });
+
+  it("re-asks a host once for a burst of cloud snapshots that lands inside the quiet window", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    const botHost: BotHostAnswers = {
+      response: wholeOriginAnswer(0),
+      held: null,
+      requests: [],
+    };
+    hostState.clientsById.set(BOT_HOST_ID, createBotHostClient(botHost));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <BotThreadCountProbe />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
+    });
+    expect(botHost.requests).toHaveLength(1);
+
+    const cloudSession = streamClient.sessionFor(
+      "host.notifications.cloudFeed.subscribe",
+    );
+    const verdicts = [
+      botVerdictRow("verdict-1", 2),
+      botVerdictRow("verdict-2", 3),
+      botVerdictRow("verdict-3", 4),
+    ];
+    // The host's own answer already counts all three verdicts; the cloud
+    // snapshots reach this client one after another, back to back.
+    botHost.response = wholeOriginAnswer(3);
+    act(() => {
+      for (let count = 1; count <= verdicts.length; count += 1) {
+        const rows = verdicts.slice(0, count);
+        cloudSession.emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: count,
+          rows,
+          summary: {
+            totalCount: rows.length,
+            unreadCount: rows.length,
+            attentionCount: 0,
+          },
+        });
+      }
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("3");
+    });
+    expect(botHost.requests).toHaveLength(2);
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {

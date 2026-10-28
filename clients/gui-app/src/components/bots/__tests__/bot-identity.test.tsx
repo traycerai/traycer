@@ -1,9 +1,8 @@
 /**
  * A bot looks like a bot (Tracy Bots, T62): on a bot's channel rows the
  * bot's picture is a squircle and a person's a circle, read from the
- * rendered element's clip; the bot's name carries "managed by" its owner,
- * whose name opens the owner's card; and the bot's card says what it is
- * doing now from the real `useBotActivity` over the real shared
+ * rendered element's clip; a row names no owner, which the bot's card
+ * carries; and the bot's card says what it is doing now from the real `useBotActivity` over the real shared
  * `bot.subscribe` subscription, whose stream the test scripts.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -77,11 +76,11 @@ const PRESENTATION: ChatBotPresentation = {
   botTitle: "Tracy",
   scrollToMessage: null,
   replyFollowsPost: null,
-  repliedPost: null,
   threadLine: null,
   openThread: null,
   openAnnouncementThread: null,
   chooseOption: null,
+  failedRequest: null,
 };
 
 const PERSON: BotOwner = {
@@ -111,6 +110,7 @@ function replying(step: string | null): BotSessionActivity {
     startedAt: Date.now() - 83_500,
     step,
     requestId: "req-1",
+    reason: null,
   };
 }
 
@@ -138,6 +138,7 @@ function snapshot(activity: BotActivity): BotSubscribeServerFrame {
     tasks: [],
     openRequestCount: 0,
     conversationsRevision: 0,
+    notificationSubscriptions: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity,
     hasBinaryPayload: false,
@@ -244,43 +245,22 @@ describe("a bot channel's rows", () => {
   });
 });
 
-describe("the owner line beside a bot's name", () => {
-  it("names a person owner, whose name opens their card", async () => {
+describe("a bot's row and its owner", () => {
+  it("names no owner on the row, and the bot's card names it", async () => {
     const user = userEvent.setup();
     mount([botReply()], PERSON);
 
-    const line = screen.getByTestId("bot-owner-line");
-    expect(line.textContent).toBe("·managed byOlive Owner");
-    await user.click(within(line).getByTestId("bot-owner-name"));
+    const row = screen.getByTestId("bot-reply-row");
+    expect(within(row).queryByTestId("bot-owner-line")).toBeNull();
+    expect(row.textContent).not.toMatch(/managed by/i);
+    expect(row.textContent).not.toContain("Olive Owner");
+    // The avatar and the name say it is a bot; no tag beside it.
+    expect(within(row).queryByText("APP")).toBeNull();
 
-    const card = await screen.findByTestId("bot-owner-card");
-    expect(card.textContent).toContain("Olive Owner");
-    expect(card.textContent).toContain("Owns this bot");
-    expect(avatarShape(within(card).getByTestId("chat-sender-avatar"))).toBe(
-      "circle",
-    );
-  });
+    await user.click(within(row).getByTestId("bot-row-name"));
 
-  it("names a team owner, whose card stacks its members with +N for the rest", async () => {
-    const user = userEvent.setup();
-    mount([botReply()], TEAM);
-
-    await user.click(screen.getByTestId("bot-owner-name"));
-
-    const card = await screen.findByTestId("bot-owner-card");
-    expect(card.textContent).toContain("Acme");
-    expect(card.textContent).toContain("6 members");
-    const stack = within(card).getByTestId("bot-owner-members");
-    expect(within(stack).getAllByTestId("chat-sender-avatar")).toHaveLength(4);
-    expect(
-      within(stack).getByTestId("bot-owner-members-more").textContent,
-    ).toBe("+2");
-  });
-
-  it("is absent until the bot's owner is known", () => {
-    mount([botReply()], null);
-
-    expect(screen.queryByTestId("bot-owner-line")).toBeNull();
+    const card = await screen.findByTestId("bot-profile-card");
+    expect(card.textContent).toContain("Managed by Olive Owner");
   });
 });
 
@@ -309,6 +289,7 @@ describe("the bot's card", () => {
           startedAt: null,
           step: null,
           requestId: null,
+          reason: null,
         },
         hasBinaryPayload: false,
       }),

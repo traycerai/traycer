@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ComposerTopBannerKind } from "@/components/chat/composer/chat-composer-top-banner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
-  isPromptSuggestionAcceptKey,
+  isPromptSuggestionAcceptEvent,
   promptSuggestionAllowed,
   suggestionOfferableWhilePending,
 } from "@/components/chat/composer/prompt-suggestion";
@@ -139,56 +139,132 @@ describe("promptSuggestionAllowed", () => {
   });
 });
 
-const ACCEPT_EVENT = {
+/**
+ * A keydown as the editor hands it over: physical `code` set, because the
+ * binding is matched on the key's position, not its label.
+ */
+function acceptKeyDown(init: KeyboardEventInit): KeyboardEvent {
+  return new KeyboardEvent("keydown", { cancelable: true, ...init });
+}
+
+const ARROW_RIGHT: KeyboardEventInit = {
   key: "ArrowRight",
-  altKey: false,
-  ctrlKey: false,
-  metaKey: false,
-  shiftKey: false,
-  isComposing: false,
+  code: "ArrowRight",
 };
+const TAB: KeyboardEventInit = { key: "Tab", code: "Tab" };
 
-describe("isPromptSuggestionAcceptKey", () => {
-  it("is true for a bare ArrowRight", () => {
-    expect(isPromptSuggestionAcceptKey(ACCEPT_EVENT)).toBe(true);
-  });
-
-  it("is false with altKey held", () => {
-    expect(isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, altKey: true })).toBe(
-      false,
-    );
-  });
-
-  it("is false with ctrlKey held", () => {
+describe("isPromptSuggestionAcceptEvent", () => {
+  it("accepts the bound key - the default → and a rebound Tab alike", () => {
     expect(
-      isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, ctrlKey: true }),
+      isPromptSuggestionAcceptEvent({
+        binding: "arrowright",
+        event: acceptKeyDown(ARROW_RIGHT),
+        pickerOpen: false,
+      }),
+    ).toBe(true);
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "tab",
+        event: acceptKeyDown(TAB),
+        pickerOpen: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stops accepting the old key once rebound", () => {
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "tab",
+        event: acceptKeyDown(ARROW_RIGHT),
+        pickerOpen: false,
+      }),
     ).toBe(false);
   });
 
-  it("is false with metaKey held", () => {
+  it("accepts nothing while the action is unbound", () => {
     expect(
-      isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, metaKey: true }),
+      isPromptSuggestionAcceptEvent({
+        binding: null,
+        event: acceptKeyDown(ARROW_RIGHT),
+        pickerOpen: false,
+      }),
     ).toBe(false);
   });
 
-  it("is false with shiftKey held", () => {
+  it.each([
+    ["shiftKey", { shiftKey: true }],
+    ["altKey", { altKey: true }],
+    ["metaKey", { metaKey: true }],
+    ["ctrlKey", { ctrlKey: true }],
+  ])("does not accept a modified bound key (%s)", (_name, modifier) => {
     expect(
-      isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, shiftKey: true }),
+      isPromptSuggestionAcceptEvent({
+        binding: "tab",
+        event: acceptKeyDown({ ...TAB, ...modifier }),
+        pickerOpen: false,
+      }),
     ).toBe(false);
   });
 
-  it("is false while composing an IME candidate", () => {
+  it("yields to an open mention or slash picker", () => {
     expect(
-      isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, isComposing: true }),
+      isPromptSuggestionAcceptEvent({
+        binding: "tab",
+        event: acceptKeyDown(TAB),
+        pickerOpen: true,
+      }),
     ).toBe(false);
   });
 
-  it.each(["Enter", "ArrowLeft", "ArrowUp", "ArrowDown", " "])(
-    "is false for another key (%s)",
-    (key) => {
-      expect(isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, key })).toBe(false);
-    },
-  );
+  it("yields to a key something earlier already took", () => {
+    const event = acceptKeyDown(ARROW_RIGHT);
+    event.preventDefault();
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "arrowright",
+        event,
+        pickerOpen: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not accept on OS key-repeat", () => {
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "arrowright",
+        event: acceptKeyDown({ ...ARROW_RIGHT, repeat: true }),
+        pickerOpen: false,
+      }),
+    ).toBe(false);
+  });
+
+  // AltGr+Q types @ on a German layout and reaches the event as Ctrl+Alt+Q
+  // with AltGraph set; a person bound to mod+alt+q must still get their @.
+  it("does not accept an AltGr chord that types a character", () => {
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "mod+alt+q",
+        event: acceptKeyDown({
+          key: "@",
+          code: "KeyQ",
+          ctrlKey: true,
+          altKey: true,
+          modifierAltGraph: true,
+        }),
+        pickerOpen: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not accept while composing an IME candidate", () => {
+    expect(
+      isPromptSuggestionAcceptEvent({
+        binding: "arrowright",
+        event: acceptKeyDown({ ...ARROW_RIGHT, isComposing: true }),
+        pickerOpen: false,
+      }),
+    ).toBe(false);
+  });
 });
 
 type PendingActionKind = PendingChatAction["action"];

@@ -164,6 +164,8 @@ function mockHostClientKey(client: MockHostClient): string {
 }
 
 const queryMock = vi.hoisted(() => ({
+  /** The cloud catalog's Traycer models, read for a sandbox refusal only. */
+  cloudTraycerModels: undefined as ReadonlyArray<ModelOption> | undefined,
   harnesses: [] as HarnessOption[],
   catalogHarnesses: [] as CatalogHarness[],
   selectedModelsByHarness: new Map<string, ReadonlyArray<ModelOption>>(),
@@ -518,6 +520,15 @@ function catalogHarnessesForRender(): CatalogHarness[] {
   }));
 }
 
+// The picker's cloud read of Traycer's models, made only when a sandbox
+// refusal opens it.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({
+    data: queryMock.cloudTraycerModels,
+    error: null,
+    isPending: false,
+  }),
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // The real hook resolves the app-wide default host's client via
   // `useHostBinding()`; this suite renders the picker without a
@@ -686,6 +697,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import {
   HarnessModelPicker,
   type HarnessModelPickerEmbedding,
+  type OpenForHarness,
 } from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
@@ -712,6 +724,9 @@ import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundat
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import { resetActiveModelPickerForTests } from "@/lib/commands/active-model-picker-registry";
+import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { sandboxAgentNotOfferedNotice } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
@@ -1024,6 +1039,7 @@ function installClaudeCatalog(models: ReadonlyArray<ModelOption>): void {
 }
 
 interface RenderPickerInput {
+  readonly openForHarnessRef?: RefObject<OpenForHarness | null>;
   readonly selection?: HarnessModelSelection;
   readonly reasoning?: ReasoningLevel;
   readonly serviceTier?: ServiceTier;
@@ -1038,6 +1054,7 @@ interface RenderPickerInput {
   readonly tuiOnly?: boolean;
   readonly lockedHarnessId?: ProviderId | null;
   readonly disabled?: boolean;
+  readonly registerActivation?: boolean;
   readonly activityEnabled?: boolean;
   readonly createProfileHostId?: string | null;
   readonly profileAdmission?: ReadonlyMap<
@@ -1116,6 +1133,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          openForHarnessRef={resolvedInput.openForHarnessRef}
           labelDisplay="responsive"
           store={store}
           maxModeContext={resolvedInput.maxModeContext ?? { kind: "none" }}
@@ -1124,7 +1142,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
-          registerActivation={false}
+          registerActivation={resolvedInput.registerActivation ?? false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
           profileAdmission={resolvedInput.profileAdmission ?? null}
@@ -1184,6 +1202,7 @@ async function openPickerByTriggerName(
 describe("<HarnessModelPicker />", () => {
   beforeEach(() => {
     installCatalog();
+    queryMock.cloudTraycerModels = undefined;
     queryMock.harnessesLoading = false;
     queryMock.harnessesError = null;
     queryMock.catalogHarnessesLoading = false;
@@ -1223,10 +1242,103 @@ describe("<HarnessModelPicker />", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     cleanup();
+    resetActiveModelPickerForTests();
     resetPaneActivationFocusIntentsForTests();
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
+  });
+
+  it("opens on a harness's models from outside without changing the selected agent", async () => {
+    const traycer: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      id: "traycer",
+      label: "Traycer",
+      modes: ["gui"],
+    };
+    const models = [
+      model({
+        harnessId: "traycer",
+        slug: "traycer-model",
+        label: "Traycer test model",
+      }),
+    ];
+    queryMock.harnesses.push(traycer);
+    queryMock.catalogHarnesses.push(catalogHarness(traycer, models));
+    queryMock.selectedModelsByHarness.set("traycer", models);
+    const selection: HarnessModelSelection = {
+      ...defaultSelection(),
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+    };
+    const openRef: RefObject<OpenForHarness | null> = { current: null };
+    const harness = renderPicker({ selection, openForHarnessRef: openRef });
+
+    act(() => openRef.current?.("traycer", null));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Search Traycer models" }),
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByRole("tab", { name: "Traycer" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("option", { name: /Traycer test model/ }),
+    ).not.toBeNull();
+    expect(harness.store.getState().values.selection).toEqual(selection);
+  });
+
+  it("opens a sandbox refusal's Choose a model on what sandboxes offer: Traycer's cloud models, never this host's Claude or Codex", async () => {
+    const traycer: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      id: "traycer",
+      label: "Traycer",
+      modes: ["gui"],
+    };
+    const models = [
+      model({
+        harnessId: "traycer",
+        slug: "traycer-model",
+        label: "Traycer test model",
+      }),
+    ];
+    queryMock.harnesses.push(traycer);
+    // This host lists Traycer with nothing to run; the rows are the cloud's.
+    queryMock.catalogHarnesses.push(catalogHarness(traycer, []));
+    queryMock.cloudTraycerModels = models;
+    const selection: HarnessModelSelection = {
+      harnessId: "codex",
+      modelSlug: "gpt-5.5",
+      profileId: null,
+    };
+    const harness = pickerHarness({ selection, registerActivation: true });
+    render(
+      <>
+        {harness.element(false, undefined)}
+        <ComposerHostNotice
+          notice={sandboxAgentNotOfferedNotice("codex", ["traycer"], {})}
+          onDismiss={() => undefined}
+        />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose a model" }));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Search Traycer models" }),
+    ).not.toBeNull();
+    const rail = screen.getByRole("tablist", { name: "Model providers" });
+    expect(within(rail).getAllByRole("tab")).toEqual([
+      within(rail).getByRole("tab", { name: /^Traycer\b/ }),
+    ]);
+    expect(
+      screen.getByRole("option", { name: /Traycer test model/ }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("option", { name: /GPT-5\.5/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Claude Opus/ })).toBeNull();
+    expect(harness.store.getState().values.selection).toEqual(selection);
   });
 
   it("shows the selected harness, effort, fast mode, profile, and shortcut in the trigger tooltip", async () => {

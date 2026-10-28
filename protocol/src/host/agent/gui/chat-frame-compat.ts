@@ -173,6 +173,15 @@ export const CHAT_SUBSCRIBE_TASK_OVERDUE_MINOR = 27;
 export const CHAT_SUBSCRIBE_MEMORY_CURATION_MINOR = 35;
 
 /**
+ * The first minor whose queue may carry a `notification-digest` item (a
+ * digest of the person's notification feed, waiting on the personal bot chat
+ * that subscribed to it, Tracy Bots T84). Same posture as the constants
+ * above: the host omits the item, and the queue events that name it, from
+ * every peer below this minor.
+ */
+export const CHAT_SUBSCRIBE_NOTIFICATION_DIGEST_MINOR = 39;
+
+/**
  * The first minor whose `tool_call` block and `tool_call.completed` event may
  * carry `agentMessageDelivery` (where a cross-host send stands). A literal for
  * the reason the constants above are. The host deletes the key by name from

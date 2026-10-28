@@ -1,11 +1,15 @@
 import type { HostListItem } from "@traycer/protocol/host/host-status";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abbreviateIdentifier,
   deriveAboutThisHost,
 } from "@/components/settings/panels/host-overview-installation-model";
 
 const NOW_MS = Date.parse("2026-09-24T12:00:00Z");
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function item(
   lastSeenAt: string | null,
@@ -43,6 +47,20 @@ describe("abbreviateIdentifier", () => {
 });
 
 describe("deriveAboutThisHost", () => {
+  it("uses the Settings date for when the host was added to the account", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12));
+    const view = deriveAboutThisHost({
+      item: item(null, {
+        createdAt: new Date(2026, 9, 24, 8, 35).toISOString(),
+      }),
+      live: false,
+      nowMs: Date.now(),
+    });
+
+    expect(view.addedToAccount).toBe("24 Oct");
+  });
+
   it("lets live override lastSeenAt", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T09:00:00Z", {}),
