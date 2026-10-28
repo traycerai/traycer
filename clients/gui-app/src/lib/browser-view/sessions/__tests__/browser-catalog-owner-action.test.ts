@@ -91,11 +91,13 @@ describe("closing a Browsers panel row on a device whose stream already ended", 
       throw new Error(`no stream was started again: ${await settled}`);
     }
     restarted.emit(SNAPSHOT, null);
-    await Promise.resolve();
-    const request = restarted.sentFrames.find(
-      (frame) => frame.kind === "closeTab",
-    );
-    if (request === undefined) throw new Error("no closeTab was sent");
+    const request = await vi.waitFor(() => {
+      const frame = restarted.sentFrames.find(
+        (sent) => sent.kind === "closeTab",
+      );
+      if (frame === undefined) throw new Error("no closeTab was sent");
+      return frame;
+    });
     restarted.emit(
       {
         kind: "actionAck",
