@@ -235,7 +235,7 @@ describe("the Mobile simulators opener sub-page", () => {
     const running = items.find((item) => item.label === "iPhone 16");
 
     act(() => {
-      void running?.run();
+      void running?.run(CTX);
     });
 
     await waitFor(() => expect(host.opens).toHaveLength(1));
@@ -277,7 +277,7 @@ describe("the Mobile simulators opener sub-page", () => {
     const items = await rows();
 
     act(() => {
-      void items.find((item) => item.label === "iPad Air")?.run();
+      void items.find((item) => item.label === "iPad Air")?.run(CTX);
     });
 
     await waitFor(() => expect(host.opens).toHaveLength(1));
