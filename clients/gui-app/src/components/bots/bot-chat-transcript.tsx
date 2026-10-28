@@ -77,10 +77,12 @@ export type BotTranscriptSurface =
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
       /** Opens a post's thread; `null` where threads cannot be opened. */
       readonly openThread: ((postMessageId: string) => void) | null;
-      /** Opens the thread under a question, a proposal or a direct post; `null` where threads cannot be opened. */
+      /** Opens the thread under a question, a proposal, a direct post or, where `answer`, a direct reply; `null` where threads cannot be opened. */
       readonly openAnnouncementThread:
-        | ((announcementId: string) => void)
+        | ((announcementId: string, answer: boolean) => void)
         | null;
+      /** Whether a direct reply of the bot opens its own thread. */
+      readonly answerThreads: boolean;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
       /** A post the bot failed to answer, by its request id and writer, and what can be done about it. */
@@ -531,6 +533,7 @@ function BotChatTranscriptBody(props: {
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
+        answerThreads: false,
         chooseOption: surface.chooseOption,
         failedRequest: surface.failedRequest,
       };
@@ -544,6 +547,7 @@ function BotChatTranscriptBody(props: {
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
+      answerThreads: surface.answerThreads,
       chooseOption: surface.chooseOption,
       failedRequest: surface.failedRequest,
     };

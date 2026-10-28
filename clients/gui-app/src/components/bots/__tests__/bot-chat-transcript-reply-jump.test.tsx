@@ -464,6 +464,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       threadLine: () => null,
       openThread: null,
       openAnnouncementThread,
+      answerThreads: false,
       chooseOption,
       failedRequest: () => null,
       intro: { botTitle: "Release Bot", directive: null },
@@ -482,7 +483,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, false);
   });
 
   it("draws a question's options as buttons that cannot be clicked in the channel", () => {
@@ -538,6 +539,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       threadLine: () => null,
       openThread: vi.fn(),
       openAnnouncementThread: vi.fn(),
+      answerThreads: false,
       chooseOption,
       failedRequest: () => null,
       intro: { botTitle: "Release Bot", directive: null },

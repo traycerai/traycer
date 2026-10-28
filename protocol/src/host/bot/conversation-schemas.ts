@@ -77,11 +77,15 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      */
     threadId: z.string().min(1).max(36).nullable().default(null),
     /**
-     * A reply under a `question` or `proposal` announcement of `conversationId`
-     * (decision 55), or under a member's post its bot answered at the top
-     * level (a `direct` post): the message opens, or joins, the thread hung
-     * off that row, as its first request when it opens it. `null` (or absent)
-     * otherwise; never set with `threadId`.
+     * A reply under a row of `conversationId` that roots a thread: a
+     * `question` or `proposal` announcement (decision 55), a member's post
+     * its bot answered at the top level (a `direct` post), or the bot's
+     * direct answer to such a post (decision 114), whose thread is its own
+     * and not the post's. The message opens, or joins, the thread hung off
+     * that row, as its first request when it opens it. Only a bound host
+     * whose `bot.thread.list` names `"answer"` in `threadAnchors.kinds` takes a
+     * reply under a direct answer. `null` (or absent) otherwise; never set
+     * with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
     /**
@@ -202,7 +206,8 @@ export const botThreadListRequestSchema = lazySchema(() =>
 );
 export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 
-export const botThreadListResponseSchema = lazySchema(() =>
+/** `bot.thread.list@1.0`'s response, frozen by hand: without `threadAnchors`. */
+export const botThreadListResponseSchemaV10 = lazySchema(() =>
   z.object({
     threads: z.array(botThreadSummarySchema),
     /**
@@ -211,6 +216,46 @@ export const botThreadListResponseSchema = lazySchema(() =>
      * its threads'.
      */
     trunkCostUsd: z.number().nonnegative().nullable(),
+  }),
+);
+
+/**
+ * The `threadAnchors` value naming the bot's direct answer in the channel
+ * (decision 114): a member's reply under one opens the answer's own thread.
+ */
+export const BOT_THREAD_ANCHOR_ANSWER = "answer";
+
+/**
+ * The channel rows, beyond a member's post, a question, a proposal and a
+ * direct post, under which one binding of the bot opens a thread when a
+ * member replies. They hold for that binding only: a client compares
+ * `hostId` and `epoch` with the bot's binding as it knows it, and reads
+ * none while they differ.
+ */
+export const botThreadAnchorsSchema = lazySchema(() =>
+  z.object({
+    /** The bound host that said them. */
+    hostId: z.string().min(1).max(255),
+    /** The bot's epoch on that host when it said them. */
+    epoch: z.number().int().nonnegative(),
+    /**
+     * `"answer"` ({@link BOT_THREAD_ANCHOR_ANSWER}) is the bot's direct
+     * answer. A value a client does not know is ignored.
+     */
+    kinds: z.array(z.string().min(1).max(64)).max(16),
+  }),
+);
+export type BotThreadAnchors = z.infer<typeof botThreadAnchorsSchema>;
+
+export const botThreadListResponseSchema = lazySchema(() =>
+  botThreadListResponseSchemaV10.extend({
+    /**
+     * `bot.thread.list@1.1`: the rows the bot's bound host opens a thread
+     * under. `null` when it has not said, as a host that predates the minor
+     * and one whose room values are not written yet: a reply under such a
+     * row is then refused.
+     */
+    threadAnchors: botThreadAnchorsSchema.nullable(),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

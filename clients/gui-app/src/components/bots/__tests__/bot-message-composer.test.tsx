@@ -67,6 +67,7 @@ function composer(edit: BotComposerEdit | null): ReactNode {
       conversationId="conversation-channel"
       threadId={null}
       announcementId={null}
+      sendable
       placeholder="Message Tracy"
       label="Message Tracy"
       testId="bot-channel-composer"

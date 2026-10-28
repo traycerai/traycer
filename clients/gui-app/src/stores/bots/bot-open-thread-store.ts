@@ -3,16 +3,24 @@ import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/con
 
 /**
  * The thread open beside a bot's channel, by the message it hangs off: a
- * member's post, or one of the bot's questions or proposals.
+ * member's post, one of the bot's questions or proposals, or one of its
+ * direct replies.
  */
 export interface BotOpenThread {
   readonly anchorMessageId: string;
   /**
    * The thread opens with the first reply under its anchor, sent with the
-   * anchor's id: the bot's question or proposal, or a post the bot answered
-   * in the channel (reply mode `direct`). `false` for a post's own thread.
+   * anchor's id: the bot's question, proposal or direct reply, or a post the
+   * bot answered in the channel (reply mode `direct`). `false` for a post's
+   * own thread.
    */
   readonly announcement: boolean;
+  /**
+   * The anchor is the bot's direct reply, whose own thread only a bound host
+   * that names it among its thread anchors opens: its box sends only while
+   * the bot's binding does.
+   */
+  readonly answer: boolean;
   /**
    * The person's post that opened the thread as its send was accepted, which
    * the channel knows before the thread list or the channel's own row does.

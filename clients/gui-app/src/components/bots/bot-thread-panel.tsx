@@ -40,19 +40,40 @@ import { cn } from "@/lib/utils";
  * The open post's thread as the channel's thread list has it: listed; not
  * listed yet but known by its id, as a thread the person's post opened as it
  * was sent is until the next read; not listed yet, as a just-posted thread
- * opened from its row is; not opened yet, a question, proposal or direct
- * post nobody has replied under; or unknown, because the read failed.
+ * opened from its row is; not opened yet, a question, proposal, direct post
+ * or direct reply nobody has replied under; or unknown, because the read
+ * failed.
+ *
+ * `sendable` says whether a thread with a box takes a send - a reply, a
+ * picked option, a retry or an edit: `false` while its post is the bot's
+ * direct reply and the bot's binding does not open a thread under one. The
+ * box and its draft stay.
  */
 export type BotThreadPanelThread =
-  | { readonly kind: "listed"; readonly thread: BotThreadSummary }
+  | {
+      readonly kind: "listed";
+      readonly thread: BotThreadSummary;
+      /**
+       * The list's last read failed, and this is what it returned before:
+       * Retry reads it again. `null` while it has not failed.
+       */
+      readonly retry: (() => void) | null;
+      readonly sendable: boolean;
+    }
   | {
       readonly kind: "posted";
       readonly threadId: string;
       /** The list's read failed: Retry reads it again. `null` while it has not. */
       readonly retry: (() => void) | null;
+      readonly sendable: boolean;
     }
   | { readonly kind: "pending" }
-  | { readonly kind: "unopened" }
+  | {
+      readonly kind: "unopened";
+      /** As for `posted`: the box and its draft stay through a failed read. */
+      readonly retry: (() => void) | null;
+      readonly sendable: boolean;
+    }
   | { readonly kind: "failed"; readonly retry: () => void };
 
 /**
@@ -285,75 +306,114 @@ function originPresentation(
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
+    answerThreads: false,
     chooseOption: null,
     failedRequest,
   };
 }
 
-/** Under the post: the thread, a box that starts one, or why neither shows. */
+/** A thread state that has a box under it. */
+type BoxedThread = Exclude<
+  BotThreadPanelThread,
+  { readonly kind: "pending" | "failed" }
+>;
+
+/**
+ * Under the post: the thread, a box that starts one, or why neither shows.
+ * The box is one element in one place for a listed thread, one known by its
+ * id and one nobody has started, so the list moving the thread between them
+ * - a read that lists it, or one that drops it while the bot's binding moves
+ * - keeps what the person typed and where they were typing.
+ */
 function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   const { thread } = props;
-  // One element for both, so the list catching up remounts nothing.
-  if (thread.kind === "listed") {
-    return (
-      <KnownThread
-        {...props}
-        threadId={thread.thread.threadId}
-        conversationId={thread.thread.conversationId}
-        listed={thread.thread}
-        retry={null}
-      />
-    );
+  // A failed message of the thread, put back in the box by its Edit. It
+  // stays the box's edit while the list drops the thread and lists it again,
+  // so what is sent still replaces that message: the host takes the
+  // replacement under the post as it does in the thread.
+  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
+  const endEdit = useCallback(() => setEdit(null), []);
+  if (thread.kind === "pending" || thread.kind === "failed") {
+    return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
   }
-  if (thread.kind === "posted") {
-    return (
-      <KnownThread
-        {...props}
-        threadId={thread.threadId}
-        listed={null}
-        retry={thread.retry}
-      />
-    );
-  }
-  if (thread.kind === "unopened") {
-    return (
-      <UnopenedThread
-        botId={props.botId}
-        conversationId={props.conversationId}
-        announcementId={props.originMessageId}
-        sendFailure={props.sendFailure}
-      />
-    );
-  }
-  return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
-}
-
-/** A question, proposal or direct post nobody has replied under yet. */
-function UnopenedThread(props: {
-  readonly botId: string;
-  readonly conversationId: string;
-  readonly announcementId: string;
-  readonly sendFailure: BotSendFailure;
-}): ReactNode {
+  const box = boxOf(thread, props.originMessageId, props.conversationId);
   return (
-    <BotMessageComposer
-      botId={props.botId}
-      conversationId={props.conversationId}
-      threadId={null}
-      announcementId={props.announcementId}
-      placeholder="Reply…"
-      label="Reply in a new thread"
-      testId="bot-thread-composer"
-      failure={props.sendFailure}
-      edit={null}
-      onEditEnd={noEdit}
-      onSent={keepOpenThread}
-    />
+    <>
+      {box.threadId === null ? (
+        <ThreadListReadFailure retry={thread.retry} />
+      ) : (
+        <KnownThread
+          {...props}
+          threadId={box.threadId}
+          conversationId={box.conversationId}
+          listed={thread.kind === "listed" ? thread.thread : null}
+          retry={thread.retry}
+          sendable={thread.sendable}
+          onEdit={setEdit}
+        />
+      )}
+      <BotMessageComposer
+        botId={props.botId}
+        conversationId={box.conversationId}
+        threadId={box.threadId}
+        announcementId={box.announcementId}
+        sendable={thread.sendable}
+        placeholder="Reply…"
+        label={edit === null ? box.label : IN_THREAD_LABEL}
+        testId="bot-thread-composer"
+        failure={props.sendFailure}
+        edit={edit}
+        onEditEnd={endEdit}
+        onSent={keepOpenThread}
+      />
+    </>
   );
 }
 
-/** A box that never edits: a thread nobody has replied in has nothing to edit. */
-function noEdit(): void {}
+/**
+ * The box's name where what it sends goes into the thread: a thread whose id
+ * is known, and an edit, which replaces a message of the thread wherever the
+ * list has the thread.
+ */
+const IN_THREAD_LABEL = "Reply in the thread";
+
+/**
+ * Where the box sends: into a thread whose id is known, or under a post
+ * nobody has replied under, as the first reply that opens its thread.
+ */
+function boxOf(
+  thread: BoxedThread,
+  originMessageId: string,
+  conversationId: string,
+): {
+  readonly conversationId: string;
+  readonly threadId: string | null;
+  readonly announcementId: string | null;
+  readonly label: string;
+} {
+  if (thread.kind === "unopened") {
+    return {
+      conversationId,
+      threadId: null,
+      announcementId: originMessageId,
+      label: "Reply in a new thread",
+    };
+  }
+  if (thread.kind === "listed") {
+    return {
+      conversationId: thread.thread.conversationId,
+      threadId: thread.thread.threadId,
+      announcementId: null,
+      label: IN_THREAD_LABEL,
+    };
+  }
+  return {
+    conversationId,
+    threadId: thread.threadId,
+    announcementId: null,
+    label: IN_THREAD_LABEL,
+  };
+}
 
 /**
  * A reply sent from the panel leaves open the thread it was sent in, and its
@@ -364,20 +424,23 @@ function keepOpenThread(): boolean {
 }
 
 /**
- * The rule and reply count, the replies and the box of a thread whose id is
- * known. A thread with no reply yet draws neither the count nor room for
- * replies, so its box follows the post; a listed one's transcript stays
- * subscribed with nothing drawn while it connects, and takes the room once
- * a reply is listed. A thread the list has not returned yet (`listed:
- * null`) has no replies to read, and still says the bot is replying and
- * takes a reply; a failed read of the list says so where the replies go,
- * with Retry, and keeps the box as it is.
+ * The rule and reply count, the replies and the replying line of a thread
+ * whose id is known, above the panel's box. A thread with no reply yet draws
+ * neither the count nor room for replies, so the box follows the post; a
+ * listed one's transcript stays subscribed with nothing drawn while it
+ * connects, and takes the room once a reply is listed. A thread the list
+ * has not returned yet (`listed: null`) has no replies to read, and still
+ * says the bot is replying. A failed read of the list says so above the
+ * replies, with Retry, and leaves what the list last returned in place.
  */
 function KnownThread(
   props: Omit<ThreadPanelBodyProps, "thread"> & {
     readonly threadId: string;
     readonly listed: BotThreadSummary | null;
     readonly retry: (() => void) | null;
+    readonly sendable: boolean;
+    /** Edit on a failed message: its text goes in the panel's box. */
+    readonly onEdit: (edit: BotComposerEdit) => void;
   },
 ): ReactNode {
   const {
@@ -389,8 +452,10 @@ function KnownThread(
     threadId,
     listed,
     retry,
+    sendable,
     resolveMember,
     sendFailure,
+    onEdit,
   } = props;
   const client = useTabHostClient();
   const { mutate: send, isPending: sending } =
@@ -404,8 +469,6 @@ function KnownThread(
     (requestId: string) => failedOn(activity, requestId),
     [activity],
   );
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
   const failedRequest = useBotFailedRequest({
     client,
     hostId,
@@ -414,41 +477,57 @@ function KnownThread(
     conversationId,
     threadId,
     failedOn: failedInThread,
-    onEdit: setEdit,
+    onEdit,
     failure: sendFailure,
   });
+  // A thread that takes no send says a failed message with neither Retry nor
+  // Edit, as a host that cannot re-deliver does.
+  const failedRequestShown = useMemo(
+    () =>
+      sendable
+        ? failedRequest
+        : (requestId: string, senderUserId: string | null) => {
+            const failed = failedRequest(requestId, senderUserId);
+            return failed === null
+              ? null
+              : { ...failed, retry: null, edit: null };
+          },
+    [failedRequest, sendable],
+  );
   // A reply's option, clicked, is the person's next message in the thread:
-  // offered only while no earlier pick is still being sent, and a pick that
-  // fails says so where a failed message does.
+  // offered only while no earlier pick is still being sent and the thread
+  // takes a send, and a pick that fails says so where a failed message does.
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
-      chooseOption: sending
-        ? null
-        : (choice: string) => {
-            clearSendFailure();
-            send(
-              {
-                botId,
-                conversationId,
-                text: choice,
-                threadId,
-                announcementId: null,
-                redeliver: null,
-                supersedes: null,
-              },
-              { onError: failSend },
-            );
-          },
-      failedRequest,
+      chooseOption:
+        sending || !sendable
+          ? null
+          : (choice: string) => {
+              clearSendFailure();
+              send(
+                {
+                  botId,
+                  conversationId,
+                  text: choice,
+                  threadId,
+                  announcementId: null,
+                  redeliver: null,
+                  supersedes: null,
+                },
+                { onError: failSend },
+              );
+            },
+      failedRequest: failedRequestShown,
     }),
     [
       botId,
       clearSendFailure,
       conversationId,
       failSend,
-      failedRequest,
+      failedRequestShown,
       send,
+      sendable,
       sending,
       threadId,
     ],
@@ -468,9 +547,8 @@ function KnownThread(
           <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
         </div>
       ) : null}
-      {listed === null ? (
-        <ThreadListReadFailure retry={retry} />
-      ) : (
+      <ThreadListReadFailure retry={retry} />
+      {listed === null ? null : (
         <div
           className={cn("flex min-h-0 flex-col", hasReplies && "flex-1")}
           data-testid="bot-thread-replies"
@@ -492,19 +570,6 @@ function KnownThread(
         botTitle={botTitle}
         activity={activity}
         testId="bot-thread-replying-strip"
-      />
-      <BotMessageComposer
-        botId={botId}
-        conversationId={conversationId}
-        threadId={threadId}
-        announcementId={null}
-        placeholder="Reply…"
-        label="Reply in the thread"
-        testId="bot-thread-composer"
-        failure={sendFailure}
-        edit={edit}
-        onEditEnd={endEdit}
-        onSent={keepOpenThread}
       />
     </>
   );
