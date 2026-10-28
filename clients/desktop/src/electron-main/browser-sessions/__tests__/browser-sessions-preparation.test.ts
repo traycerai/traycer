@@ -211,13 +211,14 @@ describe("main-owned browser.sessions streams held by preparation and UI", () =>
     harness.emitted.length = 0;
 
     registry.open("window-1", KEY);
-    await settle();
+    await vi.waitFor(() => {
+      expect(harness.clients).toHaveLength(2);
+    });
 
     expect(eventKinds(harness.emitted)).toEqual(["status"]);
     expect(harness.emitted[0]?.envelope.event).toMatchObject({
       lifecycle: "connecting",
     });
-    expect(harness.clients).toHaveLength(2);
     expect(session.closed).toBe(true);
   });
 
