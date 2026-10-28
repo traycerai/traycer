@@ -11,18 +11,32 @@ import {
   pendingSend,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  pendingSandboxSendFacts,
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  pendingSendState,
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 
 const catalogue = vi.hoisted(() => ({
   data: undefined as SandboxCatalogue | undefined,
 }));
 
-// The cloud catalogue: which agents sandboxes run. Unanswered (an older
-// server, or a read that failed) unless a test says otherwise.
+// The cloud catalogue: which agents sandboxes run. It offers the picked agent
+// unless a test says otherwise.
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: catalogue.data }),
 }));
+
+const OFFERS_PICK: SandboxCatalogue = {
+  providers: [],
+  offeredAgents: [PICKED_SETTINGS.harnessId],
+};
 
 /**
  * Sending into a chat whose sandbox rests hands the message to the existing
@@ -60,7 +74,7 @@ function pendingSends() {
 }
 
 beforeEach(() => {
-  catalogue.data = undefined;
+  catalogue.data = OFFERS_PICK;
   usePendingSandboxSendStore.setState({ sends: {} });
   useStagedSandboxStore.setState({ bySurface: {} });
 });
@@ -147,6 +161,52 @@ describe("useBoundSandboxSend", () => {
 
     expect(pendingSends()).toEqual([]);
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("refuses when the catalogue couldn't be read: nothing is recorded or staged, so nothing wakes", () => {
+    catalogue.data = undefined;
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: resting("suspended"),
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(false);
+
+    expect(pendingSends()).toEqual([]);
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("sends when an older server's catalogue names no agents, and the pending driver runs the wake", () => {
+    catalogue.data = { providers: [] };
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: resting("suspended"),
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(true);
+
+    const [send] = pendingSends();
+    const stage =
+      useStagedSandboxStore.getState().bySurface[
+        pendingSendSurfaceKey(send.id)
+      ];
+    expect(stage.target).toMatchObject({ kind: "existing", verb: "resume" });
+    const decision = transitionPendingSend(
+      pendingSendState(send, "none"),
+      "observe",
+      pendingSandboxSendFacts(send.id, {
+        ...UNKNOWN_PENDING_SEND_FACTS,
+        stageStatus: stage.phase,
+        wakeInFlight: false,
+      }),
+    );
+    expect(decision.effects).toContain("run-stage");
   });
 
   it("sends nothing and stages nothing without a resting target", () => {

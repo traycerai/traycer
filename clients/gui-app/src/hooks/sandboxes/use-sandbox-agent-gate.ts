@@ -9,6 +9,7 @@ import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-que
 import {
   sandboxAgentNotOfferedNotice,
   sandboxAgentSecondaryActions,
+  sandboxAgentsUncheckedNotice,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -150,19 +151,27 @@ const CHECKING_OFFERED_AGENTS: SandboxAgentGate = {
  * composer can read is the one the send runs on, and the sandbox itself
  * answers nothing until it is awake. The cloud catalogue decides here, before
  * any wake: an agent sandboxes don't offer is refused, and an offered one
- * passes, leaving its readiness to the woken sandbox. Inert while `resting`
- * is false.
+ * passes, leaving its readiness to the woken sandbox. So does every agent when
+ * an older server's catalogue names none. A read that ended with no catalogue
+ * holds Send with Retry, since a pass would wake the sandbox unchecked.
+ *
+ * Read whenever the chat rests, focused or not, so a pane that never asked is
+ * not mistaken for one whose read failed. Inert while `resting` is false.
  */
 export function useRestingSandboxAgentGate(input: {
   readonly resting: boolean;
   readonly harnessId: GuiHarnessId | null;
-  readonly active: boolean;
 }): SandboxAgentGate {
-  const catalogue = useSandboxCatalogue(input.active && input.resting);
+  const catalogue = useSandboxCatalogue(input.resting);
   if (!input.resting || input.harnessId === null) return NOT_BLOCKED;
-  if (catalogue.data === undefined && catalogue.isFetching)
-    return CHECKING_OFFERED_AGENTS;
-  const offeredAgents = catalogue.data?.offeredAgents;
+  if (catalogue.data === undefined) {
+    if (catalogue.isFetching) return CHECKING_OFFERED_AGENTS;
+    const notice = sandboxAgentsUncheckedNotice(() => {
+      void catalogue.refetch();
+    });
+    return { blocked: true, hint: notice.message, notice };
+  }
+  const offeredAgents = catalogue.data.offeredAgents;
   if (offeredAgents === undefined || offeredAgents.includes(input.harnessId))
     return NOT_BLOCKED;
   return notOfferedGate(input.harnessId, offeredAgents, {});

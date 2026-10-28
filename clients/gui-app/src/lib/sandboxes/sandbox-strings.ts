@@ -467,6 +467,10 @@ export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 export const CHECKING_SANDBOX_AGENTS =
   "Checking which agents run on sandboxes.";
 
+/** The catalogue could not be read, so Send is held until Retry reads it. */
+export const COULDNT_CHECK_SANDBOX_AGENTS =
+  "Couldn't check which agents run on sandboxes.";
+
 export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }

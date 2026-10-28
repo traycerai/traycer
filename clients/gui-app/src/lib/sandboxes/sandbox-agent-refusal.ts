@@ -11,7 +11,9 @@ import {
 import {
   agentNotOfferedOnSandboxesLine,
   CHOOSE_ANOTHER_HOST,
+  COULDNT_CHECK_SANDBOX_AGENTS,
   OPEN_TERMINAL_INSTEAD,
+  RETRY,
 } from "@/lib/sandboxes/sandbox-strings";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
@@ -22,6 +24,23 @@ export function stagedSandboxCheckingNotice(
 ): ComposerHostNoticeState | null {
   const notice = stage === null ? null : check(stage);
   return notice?.pending === true ? notice : null;
+}
+
+/**
+ * The catalogue read ended with nothing to go on - failed, timed out or never
+ * allowed - so which agents sandboxes run is unknown. That is never permission:
+ * Send is held, nothing is created or woken, and Retry reads the catalogue
+ * again. A catalogue that answered without naming its agents (an older server)
+ * is an answer, not this.
+ */
+export function sandboxAgentsUncheckedNotice(
+  onRetry: () => void,
+): ComposerHostNoticeState {
+  return {
+    kind: "refused",
+    message: COULDNT_CHECK_SANDBOX_AGENTS,
+    action: { label: RETRY, onAction: onRetry },
+  };
 }
 
 export interface SandboxAgentRemedies {

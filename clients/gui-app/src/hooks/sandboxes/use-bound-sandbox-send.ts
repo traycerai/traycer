@@ -13,8 +13,11 @@ import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-s
  *
  * An agent the cloud catalogue says sandboxes don't run is refused here, before
  * anything is staged, so the sandbox is never woken for it - the same check a
- * new sandbox's Send makes (`useStagedSendSignInCheck`). The composer's gate
- * shows that refusal; this is the backstop at the send itself.
+ * new sandbox's Send makes (`useStagedSendSignInCheck`). So is every send while
+ * there is no catalogue to check against (still reading, or a read that
+ * failed); an older server's catalogue that names no agents lets it through.
+ * The composer's gate shows those refusals; this is the backstop at the send
+ * itself.
  */
 export function useBoundSandboxSend(input: {
   readonly epicId: string;
@@ -22,11 +25,11 @@ export function useBoundSandboxSend(input: {
   readonly target: RestingChatSandbox | null;
 }): (submission: ChatComposerSubmitInput) => boolean {
   const { epicId, chatId, target } = input;
-  const offeredAgents = useSandboxCatalogue(target !== null).data
-    ?.offeredAgents;
+  const catalogue = useSandboxCatalogue(target !== null).data;
   return useCallback(
     (submission: ChatComposerSubmitInput): boolean => {
-      if (target === null) return false;
+      if (target === null || catalogue === undefined) return false;
+      const offeredAgents = catalogue.offeredAgents;
       if (
         offeredAgents !== undefined &&
         !offeredAgents.includes(submission.settings.harnessId)
@@ -85,6 +88,6 @@ export function useBoundSandboxSend(input: {
         }) !== null
       );
     },
-    [chatId, epicId, offeredAgents, target],
+    [catalogue, chatId, epicId, target],
   );
 }

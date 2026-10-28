@@ -13,7 +13,13 @@
  * hands it.
  */
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
@@ -32,6 +38,7 @@ const answers = vi.hoisted(() => ({
   providers: [] as ReadonlyArray<ProviderCliState>,
   catalogue: undefined as SandboxCatalogue | undefined,
   catalogueFetching: false,
+  refetchCatalogue: vi.fn(),
   submit: null as {
     readonly sendDisabled: boolean;
     readonly sendDisabledHint: string | null;
@@ -85,6 +92,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
     data: answers.catalogue,
     isFetching: answers.catalogueFetching,
+    refetch: answers.refetchCatalogue,
   }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
@@ -324,6 +332,7 @@ beforeEach(() => {
   answers.providers = [];
   answers.catalogue = OFFERS_TRAYCER;
   answers.catalogueFetching = false;
+  answers.refetchCatalogue.mockClear();
   answers.submit = null;
 });
 
@@ -428,6 +437,32 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
       screen.getByText("Checking which agents run on sandboxes."),
     ).toBeTruthy();
     expect(submitted().sendDisabled).toBe(true);
+  });
+
+  it("holds Send when the catalogue couldn't be read, and Retry reads it again", () => {
+    answers.catalogue = undefined;
+    answers.catalogueFetching = false;
+
+    mountComposer(seed("codex"));
+
+    expect(
+      screen.getByText("Couldn't check which agents run on sandboxes."),
+    ).toBeTruthy();
+    expect(submitted()).toMatchObject({
+      sendDisabled: true,
+      sendDisabledHint: "Couldn't check which agents run on sandboxes.",
+    });
+    fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+    expect(answers.refetchCatalogue).toHaveBeenCalledOnce();
+  });
+
+  it("lets the pick send when an older server's catalogue names no agents", () => {
+    answers.catalogue = { providers: [] };
+
+    mountComposer(seed("codex"));
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    expect(submitted().sendDisabled).toBe(false);
   });
 
   it("clears the refusal as soon as the pick moves to an offered agent", () => {

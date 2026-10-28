@@ -21,6 +21,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   sandboxAgentNotOfferedNotice,
+  sandboxAgentsUncheckedNotice,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
@@ -53,6 +54,10 @@ export function useStagedSendSignInCheck(
   const openLink = useOpenLink();
   const offeredAgents = catalogue.data?.offeredAgents;
   const pending = catalogue.data === undefined && catalogue.isFetching;
+  // A read that ended with no catalogue is not permission: creating or waking
+  // for an agent nobody checked is the cost this gate exists to prevent.
+  const unread = catalogue.data === undefined && !catalogue.isFetching;
+  const refetchCatalogue = catalogue.refetch;
   const checkWithUser = useCallback(
     (
       stage: StagedSandbox,
@@ -112,6 +117,10 @@ export function useStagedSendSignInCheck(
           message: CHECKING_SANDBOX_AGENTS,
           action: null,
         };
+      if (unread)
+        return sandboxAgentsUncheckedNotice(() => {
+          void refetchCatalogue();
+        });
       if (offeredAgents === undefined || offeredAgents.includes(harnessId))
         return null;
       return sandboxAgentNotOfferedNotice(harnessId, offeredAgents, {
@@ -127,6 +136,8 @@ export function useStagedSendSignInCheck(
       openLink,
       harnessId,
       pending,
+      unread,
+      refetchCatalogue,
       offeredAgents,
       onChooseModel,
       onOpenTerminalInstead,

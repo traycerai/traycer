@@ -345,11 +345,7 @@ function useAgentRunGate(input: {
     harnessId,
     active: focused,
   });
-  const restingAgentGate = useRestingSandboxAgentGate({
-    resting,
-    harnessId,
-    active: focused,
-  });
+  const restingAgentGate = useRestingSandboxAgentGate({ resting, harnessId });
   const sandboxAgentGate = resting ? restingAgentGate : liveAgentGate;
   return {
     hint: packGate.hint ?? sandboxAgentGate.hint,

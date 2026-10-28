@@ -626,12 +626,15 @@ describe("useStagedSendSignInCheck", () => {
     });
   });
 
-  it("lets a failed catalogue request fall back to the sandbox host", () => {
+  it("refuses a staged send when the catalogue couldn't be read, offering Retry", () => {
     answers.catalogue = undefined;
     answers.catalogueError = true;
 
-    expect(checkFor("claude")(stageIn({ kind: "personal" }))).toBeNull();
-    expect(answers.refetchCatalogue).not.toHaveBeenCalled();
+    expect(checkFor("claude")(stageIn({ kind: "personal" }))).toMatchObject({
+      kind: "refused",
+      message: "Couldn't check which agents run on sandboxes.",
+      action: { label: "Retry" },
+    });
   });
 
   it("allows a picked agent present in the catalogue regardless of desktop auth", () => {

@@ -121,6 +121,7 @@ const testState = vi.hoisted(() => ({
   editContent: null as ComposerBodyProps["onDocumentChange"] | null,
   catalogue: { providers: [] } as SandboxCatalogue | undefined,
   catalogueFetching: false,
+  refetchCatalogue: vi.fn(),
   openModelPicker: vi.fn(),
   clearEditor: vi.fn(),
   /** The agent the person picked, as the toolbar holds it raw. */
@@ -580,6 +581,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
     data: testState.catalogue,
     isFetching: testState.catalogueFetching,
     isError: false,
+    refetch: testState.refetchCatalogue,
   }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
@@ -680,6 +682,7 @@ afterEach(() => {
   testState.refetchAuthUser.mockReset();
   testState.catalogue = { providers: [] };
   testState.catalogueFetching = false;
+  testState.refetchCatalogue.mockClear();
   testState.openModelPicker.mockClear();
   testState.clearEditor.mockClear();
   vi.mocked(useLandingDraftStore.getState().setDraftContent).mockClear();
@@ -1697,6 +1700,35 @@ describe("LandingComposer direct submit gate", () => {
         Object.values(usePendingSandboxSendStore.getState().sends),
       ).toHaveLength(1);
     });
+
+    it.each([
+      ["new", NEW_STAGE],
+      ["existing", EXISTING_RESUME],
+    ] as const)(
+      "refuses the %s stage when the catalogue couldn't be read: nothing is created or woken, the draft stays, and Retry reads it again",
+      async (_kind, target) => {
+        testState.catalogue = undefined;
+        testState.catalogueFetching = false;
+        useStagedSandboxStore.getState().stage("landing:window-test", target);
+
+        await sendFromComposer();
+
+        expect(screen.getByRole("alert").textContent).toContain(
+          "Couldn't check which agents run on sandboxes.",
+        );
+        expect(testState.startTask).not.toHaveBeenCalled();
+        expect(testState.submit).not.toHaveBeenCalled();
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+        expect(readStagedSandbox("landing:window-test")).toMatchObject({
+          target,
+          phase: "staged",
+          clientRequestId: null,
+        });
+
+        fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+        expect(testState.refetchCatalogue).toHaveBeenCalledOnce();
+      },
+    );
 
     it("lets a legacy server without offeredAgents create the sandbox and defer readiness to its host", async () => {
       useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
