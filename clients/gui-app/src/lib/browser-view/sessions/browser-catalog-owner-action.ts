@@ -65,13 +65,13 @@ export async function runBrowserCatalogOwnerAction<T>(args: {
     runtime: args.runtime,
     createIfMissing: true,
   });
-  // The coordinator may be one another surface keeps mounted, whose stream
-  // already ended. Nothing else re-asks a `closed` one, so every action on
-  // this device would fail at once until that surface unmounted.
-  const current = browserSessionsCoordinatorState(key);
-  if (current?.lifecycle === "failed" || current?.lifecycle === "closed")
-    current.retry();
   try {
+    // The coordinator may be one another surface keeps mounted, whose stream
+    // already ended. Nothing else re-asks a `closed` one, so every action on
+    // this device would fail at once until that surface unmounted.
+    const current = browserSessionsCoordinatorState(key);
+    if (current?.lifecycle === "failed" || current?.lifecycle === "closed")
+      current.retry();
     const state = await readyOwner(key);
     assertSignedIn(args.runtime.userId);
     return await args.action(state);
