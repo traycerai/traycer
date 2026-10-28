@@ -3,6 +3,7 @@ import {
   QueryClient,
   QueryClientProvider,
   queryOptions,
+  useQueries,
   useQuery,
 } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -169,6 +170,123 @@ describe("notification indicator cache invalidation", () => {
     expect(queryClient.getQueryState(partition)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(unsaid)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
+  });
+
+  it("fences a read still in flight, first read or not, and leaves an idle partition answer valid", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const firstRead = indicatorKey({
+      hostId: "host-a",
+      userId: "alice",
+      epicIds: [],
+      chatIds: ["chat-a"],
+    });
+    const rereadOfPartition = indicatorKey({
+      hostId: "host-a",
+      userId: "alice",
+      epicIds: [],
+      chatIds: ["chat-b"],
+    });
+    const idlePartition = indicatorKey({
+      hostId: "host-a",
+      userId: "alice",
+      epicIds: [],
+      chatIds: ["chat-c"],
+    });
+    const partitionAnswer: HostNotificationsIndicatorStateResponse = {
+      epics: {},
+      chats: {},
+      complete: false,
+    };
+    queryClient.setQueryData(rereadOfPartition, partitionAnswer);
+    queryClient.setQueryData(idlePartition, partitionAnswer);
+    const requests = new Map<
+      string,
+      Array<Deferred<HostNotificationsIndicatorStateResponse>>
+    >();
+    const ask = (
+      name: string,
+    ): Promise<HostNotificationsIndicatorStateResponse> => {
+      const deferred =
+        createDeferred<HostNotificationsIndicatorStateResponse>();
+      requests.set(name, [...(requests.get(name) ?? []), deferred]);
+      return deferred.promise;
+    };
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useQueries({
+          queries: [
+            queryOptions({
+              queryKey: firstRead,
+              queryFn: () => ask("firstRead"),
+            }),
+            queryOptions({
+              queryKey: rereadOfPartition,
+              queryFn: () => ask("rereadOfPartition"),
+            }),
+            queryOptions({
+              queryKey: idlePartition,
+              queryFn: () => ask("idlePartition"),
+              staleTime: Infinity,
+            }),
+          ],
+        }),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(requests.get("firstRead")).toHaveLength(1);
+      expect(requests.get("rereadOfPartition")).toHaveLength(1);
+    });
+    expect(queryClient.getQueryData(firstRead)).toBeUndefined();
+
+    act(() => {
+      invalidateCompleteNotificationIndicators(queryClient);
+    });
+
+    await waitFor(() => {
+      expect(requests.get("firstRead")).toHaveLength(2);
+      expect(requests.get("rereadOfPartition")).toHaveLength(2);
+    });
+    expect(requests.has("idlePartition")).toBe(false);
+    expect(queryClient.getQueryState(idlePartition)?.isInvalidated).toBe(false);
+
+    const wholeOrigin = (
+      unreadCount: number,
+    ): HostNotificationsIndicatorStateResponse => ({
+      epics: {},
+      chats: {
+        "chat-a": {
+          unreadFailure: false,
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadDone: unreadCount > 0,
+          unreadCount,
+        },
+      },
+      complete: true,
+    });
+    await act(async () => {
+      // Each stale read answers after its re-ask was issued.
+      requests.get("firstRead")?.[1].resolve(wholeOrigin(1));
+      requests.get("firstRead")?.[0].resolve(wholeOrigin(0));
+      requests.get("rereadOfPartition")?.[1].resolve(wholeOrigin(1));
+      requests.get("rereadOfPartition")?.[0].resolve(wholeOrigin(0));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(queryClient.getQueryData(firstRead)).toEqual(wholeOrigin(1));
+      expect(queryClient.getQueryData(rereadOfPartition)).toEqual(
+        wholeOrigin(1),
+      );
+    });
   });
 
   it("clears all account-scoped indicator caches on identity reset", () => {

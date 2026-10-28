@@ -89,18 +89,27 @@ function invalidateMatchingNotificationIndicators(
  * no feed of (and so never invalidates on its own frames) would otherwise
  * mask the cloud rows that reached it since. A partition answer counts
  * nothing over the cloud, so it is left alone.
+ *
+ * A read still in flight is fenced whatever it held before: its answer may
+ * be a whole origin computed before the snapshot, first read or not. The
+ * queries are chosen once, here, because cancelling reverts a first read to
+ * no data, and the re-ask must still include it.
  */
 export function invalidateCompleteNotificationIndicators(
   queryClient: QueryClient,
 ): void {
-  invalidateMatchingNotificationIndicators(
-    queryClient,
-    {
+  const selected = new Set(
+    queryClient.getQueryCache().findAll({
       predicate: (query) =>
         notificationsQueryKeys.isIndicatorQuery(query.queryKey) &&
-        isRecord(query.state.data) &&
-        query.state.data.complete === true,
-    },
+        (query.state.fetchStatus === "fetching" ||
+          (isRecord(query.state.data) && query.state.data.complete === true)),
+    }),
+  );
+  if (selected.size === 0) return;
+  invalidateMatchingNotificationIndicators(
+    queryClient,
+    { predicate: (query) => selected.has(query) },
     null,
   );
 }

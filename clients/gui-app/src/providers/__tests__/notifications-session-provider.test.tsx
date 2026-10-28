@@ -943,6 +943,8 @@ const NO_EPIC_IDS: ReadonlyArray<string> = [];
 /** What a headless host answers when asked, and what it was asked. */
 interface BotHostAnswers {
   response: HostNotificationsIndicatorStateResponse;
+  /** When set, the next request answers with this instead, then clears it. */
+  held: Promise<HostNotificationsIndicatorStateResponse> | null;
   readonly requests: Array<unknown>;
 }
 
@@ -983,7 +985,9 @@ function createBotHostClient(
       handlers: {
         "host.notifications.indicatorState": (params) => {
           answers.requests.push(params);
-          return answers.response;
+          const held = answers.held;
+          answers.held = null;
+          return held ?? answers.response;
         },
       },
     }),
@@ -3813,6 +3817,7 @@ describe("<NotificationsSessionProvider />", () => {
     streamState.cloudFeedSupport = "supported";
     const botHost: BotHostAnswers = {
       response: wholeOriginAnswer(0),
+      held: null,
       requests: [],
     };
     hostState.clientsById.set(BOT_HOST_ID, createBotHostClient(botHost));
@@ -3876,6 +3881,72 @@ describe("<NotificationsSessionProvider />", () => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("2");
     });
     expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+  });
+
+  it("re-asks a host whose first indicator read was still in flight when a bot's verdict reached the cloud snapshot", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    let releaseFirstRead: (
+      answer: HostNotificationsIndicatorStateResponse,
+    ) => void = () => undefined;
+    const firstRead = new Promise<HostNotificationsIndicatorStateResponse>(
+      (resolve) => {
+        releaseFirstRead = resolve;
+      },
+    );
+    const botHost: BotHostAnswers = {
+      response: wholeOriginAnswer(1),
+      held: firstRead,
+      requests: [],
+    };
+    hostState.clientsById.set(BOT_HOST_ID, createBotHostClient(botHost));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <BotThreadCountProbe />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    // The host's first read is open and has no answer yet: nothing is cached.
+    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(1);
+    });
+
+    act(() => {
+      streamClient
+        .sessionFor("host.notifications.cloudFeed.subscribe")
+        .emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 1,
+          rows: [botVerdictRow("verdict-1", 2)],
+          summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        });
+    });
+    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(2);
+    });
+
+    // The answer computed before the verdict arrives after the re-ask.
+    await act(async () => {
+      releaseFirstRead(wholeOriginAnswer(0));
+      await firstRead;
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
+    });
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {
