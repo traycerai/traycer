@@ -485,6 +485,7 @@ function forkTarget(): ChatForkDialogTarget {
     initialHostId: TEAM_HOST_ID,
     onlyHostIds: null,
     stagedSandbox: null,
+    carriesComposerDraft: false,
   };
 }
 

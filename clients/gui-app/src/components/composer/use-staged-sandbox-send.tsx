@@ -33,7 +33,6 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
-import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -396,9 +395,6 @@ export function useStagedSandboxSend(input: {
   );
 
   const facts = useSetupLineFacts(stage);
-  const providersOpener = useConfigurationProvidersOpener(
-    stage?.target.configuration.kind === "team",
-  );
 
   const stop = useCallback((): void => {
     if (surfaceKey === null || stage === null) return;
@@ -438,7 +434,6 @@ export function useStagedSandboxSend(input: {
             applyingError: newHost.applyingError,
             onStop: stop,
             onOpenTerminal: newHost.onOpenTerminal,
-            onOpenProviders: providersOpener(stage.target.configuration),
           }}
         />
         <StagedStopFailure stage={stage} onRetry={stop} />

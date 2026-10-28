@@ -475,8 +475,17 @@ export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
 
-export function enableSandboxInferenceLine(configuration: string): string {
-  return `Turn on Traycer Inference in ${configuration}'s Providers to run agents on sandboxes.`;
+/**
+ * The sandbox's own Traycer Inference switch is off. A line that names the
+ * sandbox passes its name; a composer on that sandbox passes `null`.
+ */
+export function traycerOffOnSandboxLine(name: string | null): string {
+  return `Traycer Inference is off on ${name ?? "this sandbox"}, so agents can't run on it.`;
+}
+
+/** The sandbox is up, and no agent the send asked for can run on it. */
+export function agentsCantRunOnSandboxLine(name: string | null): string {
+  return `Agents can't run on ${name ?? "this sandbox"}.`;
 }
 
 /**

@@ -42,7 +42,6 @@ const ACTIONS: SandboxSetupLineActions = {
   onRepairSetup: null,
   onStop,
   onOpenTerminal: null,
-  onOpenProviders: null,
 };
 
 function facts(smallerShapeAffordable: boolean): SandboxSetupLineFacts {
@@ -138,6 +137,7 @@ describe("withdrawing a message from every refusal or failure", () => {
     { kind: "unavailable" },
     { kind: "refused", message: "Try another region" },
     { kind: "no-provider" },
+    { kind: "traycer-off" },
     { kind: "agent-not-offered", harnessId: "codex" },
     { kind: "agent-setup-failed", detail: "Install failed" },
     { kind: "not-sent" },
@@ -177,7 +177,6 @@ describe("withdrawing a message from every refusal or failure", () => {
             ...ACTIONS,
             onCancel,
             onOpenTerminal,
-            onOpenProviders: vi.fn(),
             onChooseModel: vi.fn(),
           }}
           withdrawalAllowed
@@ -398,29 +397,55 @@ describe("SandboxSetupLine's agent refusals", () => {
     expect(onChooseModel).toHaveBeenCalledOnce();
   });
 
-  it("uses Traycer Inference setup copy and keeps Personal's Providers available", () => {
-    const onOpenProviders = vi.fn();
-    const line = mountRefusal(
-      { kind: "personal" },
+  // Traycer Inference is the sandbox's own switch, which no Settings page
+  // reaches: the line names it and links no Providers, on a team's sandbox as
+  // on Personal's. Choose a model leads every agent refusal.
+  it.each([
+    [
+      "its Traycer Inference is off",
+      { kind: "traycer-off" },
+      "Traycer Inference is off on api-refactor, so agents can't run on it.",
+    ],
+    [
+      "Traycer Inference is on and still runs nothing",
       { kind: "no-provider" },
-      false,
-      { ...ACTIONS, onOpenProviders, onOpenTerminal: vi.fn() },
-    );
+      "Agents can't run on api-refactor.",
+    ],
+    [
+      "the agent's install failed",
+      { kind: "agent-setup-failed", detail: "Install failed" },
+      "Install failed",
+    ],
+  ] as const)(
+    "names the sandbox when %s, choosing a model before the exits, with no Providers link",
+    (_label, failure, sentence) => {
+      for (const configuration of [
+        { kind: "personal" },
+        { kind: "team", teamId: "team-9", teamName: "Acme" },
+      ] as const) {
+        const onChooseModel = vi.fn();
+        const line = mountRefusal(configuration, failure, false, {
+          ...ACTIONS,
+          onOpenTerminal: vi.fn(),
+          onChooseModel,
+        });
 
-    expect(line.textContent).toContain(
-      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
-    );
-    expect(buttonLabels(line)).toEqual([
-      "Open Personal's Providers",
-      "Open terminal instead",
-      "Choose another host",
-      "Cancel the message",
-    ]);
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Open Personal's Providers" }),
-    );
-    expect(onOpenProviders).toHaveBeenCalledOnce();
-  });
+        expect(line.textContent).toContain(sentence);
+        expect(line.textContent).not.toContain("Providers");
+        expect(buttonLabels(line)).toEqual([
+          "Choose a model",
+          "Open terminal instead",
+          "Choose another host",
+          "Cancel the message",
+        ]);
+        fireEvent.click(
+          within(line).getByRole("button", { name: "Choose a model" }),
+        );
+        expect(onChooseModel).toHaveBeenCalledOnce();
+        cleanup();
+      }
+    },
+  );
 });
 
 describe("SandboxSetupLine's failed start", () => {

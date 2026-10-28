@@ -88,6 +88,9 @@ vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
     notice: null,
   }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: { sandboxes: [] } }),
+}));
 
 vi.mock("@/hooks/chats/use-chat-prestart-runtime", () => ({
   useChatPrestartRuntime: () => ({ mutate: captured.mutate }),
@@ -147,6 +150,7 @@ vi.mock("@/lib/layout-overrides", () => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ fileDrops: {} }),
+  useRunnerHostOrNull: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({}),
@@ -542,9 +546,9 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
   });
 });
 
-describe("ChatComposer on a sandbox host without Traycer Inference", () => {
+describe("ChatComposer on a sandbox host whose Traycer Inference setup failed", () => {
   const SENTENCE =
-    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+    "Traycer Inference setup failed - not enough disk space. Free some space, then retry.";
 
   function refusal(message: string, onAction: () => void) {
     return {
@@ -590,13 +594,15 @@ describe("ChatComposer on a sandbox host without Traycer Inference", () => {
     view.rerender(composerElement());
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
 
-    captured.agentNotice = refusal(
-      "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
-      vi.fn(),
-    );
+    captured.agentNotice = {
+      kind: "refused",
+      message:
+        "Traycer Inference is off on this sandbox, so agents can't run on it.",
+      action: null,
+    };
     view.rerender(composerElement());
     expect(screen.getByTestId("composer-host-notice").textContent).toContain(
-      "in Acme's Providers",
+      "Traycer Inference is off on this sandbox",
     );
   });
 });
