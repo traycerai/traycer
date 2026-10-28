@@ -8,7 +8,9 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  environmentConfigurationGuideGetUpgradeV10ToV11,
   environmentConfigurationGuideGetV10,
+  environmentConfigurationGuideGetV11,
   environmentConfigurationGuideResetV10,
   environmentConfigurationGuideSetV10,
   environmentConfigurationItemsDeleteV10,
@@ -35,12 +37,15 @@ import {
 import {
   environmentHostBindV10,
   environmentHostListV10,
+  environmentHostListV11,
   environmentHostReadV10,
   environmentListUpgradeV10ToV11,
   environmentListV10,
   environmentListV11,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
+  environmentInvitationsAcceptV10,
+  environmentInvitationsListV10,
   environmentMembersSeatsV10,
   environmentMembersRemovePreviewV10,
   environmentMembersRemoveV10,
@@ -50,10 +55,14 @@ import {
   type EnvironmentMembersResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
 import {
+  ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX,
   environmentMoveAcceptV10,
+  environmentMoveItemChoiceKey,
   environmentMovePlanUpgradeV10ToV11,
+  environmentMovePlanUpgradeV11ToV12,
   environmentMovePlanV10,
   environmentMovePlanV11,
+  environmentMovePlanV12,
   environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
@@ -180,11 +189,11 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
       expect(entry.degrade).toEqual({ kind: "unsupported" });
       expect(entry[1].versions[0].contract).toBe(contract);
     }
-    // read and bind stay at @1.0; host.list grew an @1.1 MINOR, members @1.1
-    // and @1.2.
+    // read and bind stay at @1.0; host.list grew @1.1 and @1.2 MINORs,
+    // members @1.1 and @1.2.
     expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(0);
     expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(0);
-    expect(hostRpcRegistry["environment.host.list"][1].latestMinor).toBe(1);
+    expect(hostRpcRegistry["environment.host.list"][1].latestMinor).toBe(2);
     expect(hostRpcRegistry["environment.members"][1].latestMinor).toBe(2);
   });
 });
@@ -436,6 +445,57 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
         request,
       ),
     ).toEqual(request);
+  });
+
+  it("upgrades environment.host.list@1.1 to @1.2: every host has not said whether it has a Local row", () => {
+    const host = {
+      hostId: "host-1",
+      hostLabel: "studio",
+      hostPlatform: "darwin-arm64",
+      enrolledByUserId: "user-1",
+      kind: "personal",
+      boundAt: 1_700_000_000_000,
+      reachable: true,
+      lastReportedAt: 1_700_000_000_000,
+      applied: [],
+    };
+    const response = environmentHostListV11.responseSchema.parse({
+      hosts: [host, { ...host, hostId: "host-2" }],
+    });
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.host.list"],
+        ONE_ONE,
+        ONE_TWO,
+        response,
+      ),
+    ).toEqual({
+      hosts: [
+        { ...host, hasLocalRow: null },
+        { ...host, hostId: "host-2", hasLocalRow: null },
+      ],
+    });
+  });
+
+  it("keeps hasLocalRow on an @1.2 host, and a @1.1 caller's reparse drops it", () => {
+    const v11 =
+      hostRpcRegistry["environment.host.list"][1].versions[1].contract;
+    const v12 =
+      hostRpcRegistry["environment.host.list"][1].versions[2].contract;
+    const host = {
+      hostId: "host-1",
+      hostLabel: "studio",
+      hostPlatform: "darwin-arm64",
+      enrolledByUserId: "user-1",
+      kind: "personal",
+      boundAt: 1_700_000_000_000,
+      reachable: true,
+      lastReportedAt: 1_700_000_000_000,
+      applied: [],
+    };
+    const answer = { hosts: [{ ...host, hasLocalRow: true }] };
+    expect(v12.responseSchema.parse(answer)).toEqual(answer);
+    expect(v11.responseSchema.parse(answer)).toEqual({ hosts: [host] });
   });
 
   it("parses an @1.1 host with null enroller and bind time, which @1.0 rejects, and rejects an unknown apply state", () => {
@@ -1050,6 +1110,39 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     badResponse: { seats: { used: -1, total: 5 } },
   },
   {
+    method: "environment.invitations.list",
+    contract: environmentInvitationsListV10,
+    request: {},
+    badRequest: "list",
+    response: {
+      invitations: [
+        {
+          environmentId: TEAM.environmentId,
+          teamName: "Acme",
+          role: "editor",
+          paidPlan: true,
+        },
+      ],
+    },
+    badResponse: {
+      invitations: [
+        {
+          environmentId: TEAM.environmentId,
+          teamName: "Acme",
+          role: "editor",
+        },
+      ],
+    },
+  },
+  {
+    method: "environment.invitations.accept",
+    contract: environmentInvitationsAcceptV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: { environmentId: "" },
+    response: { outcome: "accepted" },
+    badResponse: { outcome: "declined" },
+  },
+  {
     method: "environment.members.noticeSeen",
     contract: environmentMembersNoticeSeenV10,
     request: { environmentId: TEAM.environmentId },
@@ -1070,11 +1163,13 @@ describe("the environments redesign's new @1.0 methods", () => {
         "1",
       ]);
       expect(entry[1].latestMinor).toBe(
-        wire.method === "environment.move.plan" ||
-          wire.method === "environment.move.stopPreview" ||
-          wire.method === "environment.configuration.mcpServers.put"
-          ? 1
-          : 0,
+        wire.method === "environment.move.plan"
+          ? 2
+          : wire.method === "environment.move.stopPreview" ||
+              wire.method === "environment.configuration.mcpServers.put" ||
+              wire.method === "environment.configuration.guide.get"
+            ? 1
+            : 0,
       );
       expect(entry[1].versions[0].contract).toBe(wire.contract);
       expect(entry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
@@ -1229,6 +1324,51 @@ describe("the environments redesign's new @1.0 methods", () => {
         guideDiffers: true,
       }).guideDiffers,
     ).toBe(true);
+  });
+
+  it("opens environment.move.plan@1.2 as the line's latest, upgrading a @1.1 answer with personalHoldsSecrets and itemChoices false", () => {
+    const line = hostRpcRegistry["environment.move.plan"][1];
+    expect(line.latestMinor).toBe(2);
+    expect(line.versions[2].contract).toBe(environmentMovePlanV12);
+    expect(line.versions[2].upgradeFromPreviousVersion).toBe(
+      environmentMovePlanUpgradeV11ToV12,
+    );
+    const v11 = environmentMovePlanV11.responseSchema.parse({
+      planHash: "h1",
+      planRevision: 0,
+      hostVersion: "1.39.0",
+      disclosureVersion: 1,
+      rows: {
+        moves: [MOVE_ROW],
+        staysOnThisComputer: [],
+        alreadyInPersonal: [],
+        differsMasked: [],
+        looksLikeAKey: [],
+      },
+    });
+    const upgraded = environmentMovePlanUpgradeV11ToV12.upgradeResponse(v11);
+    expect(upgraded.personalHoldsSecrets).toBe(false);
+    expect(upgraded.itemChoices).toBe(false);
+    expect(upgraded.rows.moves).toEqual([MOVE_ROW]);
+    const parsed = environmentMovePlanV12.responseSchema.parse(v11);
+    expect(parsed.personalHoldsSecrets).toBe(false);
+    expect(parsed.itemChoices).toBe(false);
+    const answered = environmentMovePlanV12.responseSchema.parse({
+      ...v11,
+      personalHoldsSecrets: true,
+      itemChoices: true,
+    });
+    expect(answered.personalHoldsSecrets).toBe(true);
+    expect(answered.itemChoices).toBe(true);
+  });
+
+  it("sends a Moves row's choice under item:<kind>:<key>", () => {
+    const key = environmentMoveItemChoiceKey("variable", "X");
+    expect(key).toBe("item:variable:X");
+    expect(key.startsWith(ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX)).toBe(true);
+    expect(
+      environmentMoveItemChoiceKey("env_override", "claude-code:A_B"),
+    ).toBe("item:env_override:claude-code:A_B");
   });
 
   it("opens environment.move.stopPreview@1.1 with origin and usedBy on each row that needs a choice", () => {
@@ -1495,5 +1635,73 @@ describe("the environments redesign's new @1.0 methods", () => {
         at(ENVIRONMENT_POLICY_MAX_BYTES + 1),
       ).success,
     ).toBe(false);
+  });
+});
+
+describe("environment.configuration.guide.get@1.1", () => {
+  const ONE_ZERO = { major: 1, minor: 0 } as const;
+  const ONE_ONE = { major: 1, minor: 1 } as const;
+  const line = hostRpcRegistry["environment.configuration.guide.get"][1];
+
+  it("registers the @1.1 contract as the latest minor, gated on the caller's projection", () => {
+    expect(line.latestMinor).toBe(1);
+    expect(line.versions[1].contract).toBe(environmentConfigurationGuideGetV11);
+    expect(line.versions[1].upgradeFromPreviousVersion).toBe(
+      environmentConfigurationGuideGetUpgradeV10ToV11,
+    );
+    expect(line.versions[1].responseGrowthProjectionGated).toBe(true);
+  });
+
+  it("parses the unset arm with its revision, and rejects an unset arm without one or with an empty one", () => {
+    expect(
+      environmentConfigurationGuideGetV11.responseSchema.parse({
+        outcome: "unset",
+        revision: "r0",
+      }),
+    ).toEqual({ outcome: "unset", revision: "r0" });
+    for (const bad of [
+      { outcome: "unset" },
+      { outcome: "unset", revision: "" },
+      { outcome: "absent", revision: "r0" },
+    ]) {
+      expect(
+        environmentConfigurationGuideGetV11.responseSchema.safeParse(bad)
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it("does not parse the unset arm as an @1.0 answer", () => {
+    expect(
+      environmentConfigurationGuideGetV10.responseSchema.safeParse({
+        outcome: "unset",
+        revision: "r0",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("upgrades an @1.0 answer and request unchanged", () => {
+    const ok = environmentConfigurationGuideGetV10.responseSchema.parse({
+      outcome: "ok",
+      text: "Prefer small models.",
+      revision: "r1",
+    });
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.configuration.guide.get"],
+        ONE_ZERO,
+        ONE_ONE,
+        ok,
+      ),
+    ).toEqual(ok);
+    const request = { environmentId: TEAM.environmentId };
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["environment.configuration.guide.get"],
+        ONE_ZERO,
+        ONE_ONE,
+        request,
+      ),
+    ).toEqual(request);
   });
 });

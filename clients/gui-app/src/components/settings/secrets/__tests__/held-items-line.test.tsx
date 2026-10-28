@@ -20,8 +20,19 @@ vi.mock("@/hooks/environment/use-environment-reads", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
+// The directory lists only hosts this window can dial; the account's host
+// options name the rest.
+const names = vi.hoisted(
+  (): {
+    directory: { label: string } | null;
+    options: { hostId: string; name: string }[];
+  } => ({ directory: null, options: [] }),
+);
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ label: "MacBook Pro" }),
+  useHostDirectoryEntry: () => names.directory,
+}));
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({ hosts: names.options }),
 }));
 vi.mock("@/components/settings/move/retrospective-session", () => ({
   RetrospectiveSession: () => null,
@@ -50,6 +61,8 @@ function renderLine(): void {
 
 beforeEach(() => {
   reads.entries = [];
+  names.directory = { label: "MacBook Pro" };
+  names.options = [];
 });
 
 afterEach(cleanup);
@@ -74,6 +87,28 @@ describe("<HeldItemsLine />", () => {
 
     expect(screen.getByTestId("held-items-line-mac").textContent).toBe(
       "1 command from MacBook Pro is on hold until you choose · Review it",
+    );
+  });
+
+  it("names a host the directory does not list from the account's host list", () => {
+    names.directory = null;
+    names.options = [{ hostId: "studio", name: "Studio Mac" }];
+    reads.entries = [entry("TOKEN", "credential_like_value", "studio")];
+    renderLine();
+
+    expect(screen.getByTestId("held-items-line-studio").textContent).toBe(
+      "1 value from Studio Mac is on hold until you choose · Review it",
+    );
+  });
+
+  it("calls a host nothing names another computer, never leaves the name blank", () => {
+    names.directory = null;
+    names.options = [{ hostId: "studio", name: "" }];
+    reads.entries = [entry("TOKEN", "credential_like_value", "studio")];
+    renderLine();
+
+    expect(screen.getByTestId("held-items-line-studio").textContent).toBe(
+      "1 value from another computer is on hold until you choose · Review it",
     );
   });
 });

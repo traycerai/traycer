@@ -1,4 +1,7 @@
-import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
+import {
+  isEpicArtifactKind,
+  isMarkdownArtifactKind,
+} from "@/lib/artifacts/node-display";
 import {
   useCallback,
   useEffect,
@@ -23,6 +26,7 @@ import {
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { resolveTabTitle } from "@/lib/browser-view/browser-tab-display";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
@@ -79,7 +83,11 @@ import {
 } from "@/stores/composer/mention-pick-memory-store";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
-import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import {
+  terminalSessionLabel,
+  type TaskHomeDirectory,
+} from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 import type {
@@ -205,6 +213,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     { kind: "epic", epicId: epicIdOrEmpty },
   );
   const terminalSessions = terminalListQuery.data?.sessions;
+  const readiness = useReactiveHostReadiness(hostClient);
+  const taskHome = useTaskHomeDirectory(currentEpicId, readiness.hostId);
   const epicTerminalEntries = useMemo<
     ReadonlyArray<EpicTerminalMentionEntry>
   >(() => {
@@ -214,8 +224,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     return epicTerminalMentionEntriesFromSessions(
       terminalSessions,
       currentEpicId,
+      taskHome,
     );
-  }, [terminalSessions, currentEpicId]);
+  }, [terminalSessions, currentEpicId, taskHome]);
 
   // Browser tabs are sourced live from the same coordinator the canvas/sidebar
   // browser surfaces read - no host RPC of its own, so this needs no
@@ -251,7 +262,6 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // just the canvas host's coordinator: a tab on another host is still
   // mentionable, as snapshot-only context (spec decision #10). Only tabs on
   // the chat's OWN host keep the drive token.
-  const readiness = useReactiveHostReadiness(hostClient);
   const hostDirectory = useHostDirectory();
   const hostLabelOf = useCallback(
     (candidateHostId: string): string | null =>
@@ -298,6 +308,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // artifact of the epic they're working in. Unlike chats, the artifact mention
   // providers don't query-filter downstream, so filter by the (debounced) query
   // here to stay consistent with the cloud list.
+  //
+  // `epic.mentionArtifacts` is optional on the host (unsupported-degrade). A
+  // host that predates it answers DOWNGRADE_UNSUPPORTED, which would read as
+  // the whole Artifacts list failing, and its prompt converter cannot resolve
+  // an html, canvas or file mention either. Such a host offers the markdown
+  // kinds only, from both the cloud requests and this local set.
+  const supportsArtifactIndex = useHostSupportsMethod(
+    readiness.hostId,
+    "epic.mentionArtifacts",
+  );
   const localArtifactEntries = useMemo<
     ReadonlyArray<EpicMentionArtifactSuggestion>
   >(() => {
@@ -305,13 +325,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       return EMPTY_ARTIFACT_ENTRIES;
     }
     const state = handle.store.getState();
-    return buildCurrentEpicArtifactMentionEntries(
+    const entries = buildCurrentEpicArtifactMentionEntries(
       state.artifacts,
       currentEpicId,
       state.epic.title,
       debouncedQuery,
     );
-  }, [active, handle, currentEpicId, debouncedQuery]);
+    return supportsArtifactIndex
+      ? entries
+      : entries.filter((entry) => isMarkdownArtifactKind(entry.artifactType));
+  }, [active, handle, currentEpicId, debouncedQuery, supportsArtifactIndex]);
 
   // Gated on `active`: while the picker is closed this composer holds no
   // tasks-cache subscription at all, so background cache ticks can't recompute
@@ -427,9 +450,21 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const epicRequests = useMemo<ReadonlyArray<MentionEpicRequest>>(
     () =>
       active && cloudAuthorized
-        ? mentionProviderRegistry.epicRequests(step, debouncedRequestContext)
+        ? mentionProviderRegistry
+            .epicRequests(step, debouncedRequestContext)
+            .filter(
+              (request) =>
+                supportsArtifactIndex ||
+                request.method !== "epic.mentionArtifacts",
+            )
         : EMPTY_EPIC_REQUESTS,
-    [active, cloudAuthorized, debouncedRequestContext, step],
+    [
+      active,
+      cloudAuthorized,
+      debouncedRequestContext,
+      step,
+      supportsArtifactIndex,
+    ],
   );
 
   const {
@@ -1016,10 +1051,11 @@ export function epicAgentMentionEntriesFromEpic(
 export function epicTerminalMentionEntriesFromSessions(
   sessions: ReadonlyArray<CanonicalTerminalSessionInfo>,
   epicId: string,
+  taskHome: TaskHomeDirectory | null,
 ): ReadonlyArray<EpicTerminalMentionEntry> {
   const entries = sessions.flatMap((session) => {
     if (!isVisibleEpicTerminalSession(session, epicId)) return [];
-    return [buildTerminalMentionEntry(session, epicId)];
+    return [buildTerminalMentionEntry(session, epicId, taskHome)];
   });
   return entries.length === 0 ? EMPTY_TERMINAL_ENTRIES : entries;
 }
@@ -1254,6 +1290,7 @@ function useBrowserTabMentionEntries(args: {
 function buildTerminalMentionEntry(
   session: CanonicalTerminalSessionInfo,
   epicId: string,
+  taskHome: TaskHomeDirectory | null,
 ): EpicTerminalMentionEntry {
   return {
     kind: "epic-terminal",
@@ -1261,7 +1298,7 @@ function buildTerminalMentionEntry(
     token: `terminal:${epicId}/${session.sessionId}`,
     epicId,
     terminalId: session.sessionId,
-    label: terminalSessionLabel(session),
+    label: terminalSessionLabel(session, taskHome),
     // The chip's tooltip and the row's secondary line: where this shell is.
     description: session.cwd,
     cwd: session.cwd,
@@ -1286,8 +1323,7 @@ function localArtifactSuggestion(
   epicTitle: string,
   label: string,
 ): EpicMentionArtifactSuggestion | null {
-  // The composer protocol still has mention arms only for Markdown artifacts.
-  if (!isMarkdownArtifactKind(artifact.kind)) return null;
+  if (!isEpicArtifactKind(artifact.kind)) return null;
   // Mirrors the host resolver's id/token format so a current-epic artifact
   // returned by BOTH the cloud list and the local store de-dupes to one entry.
   const common = {
@@ -1310,6 +1346,12 @@ function localArtifactSuggestion(
       return { kind: "epic-artifact", artifactType: "story", ...common };
     case "review":
       return { kind: "epic-artifact", artifactType: "review", ...common };
+    case "html":
+      return { kind: "epic-artifact", artifactType: "html", ...common };
+    case "canvas":
+      return { kind: "epic-artifact", artifactType: "canvas", ...common };
+    case "file":
+      return { kind: "epic-artifact", artifactType: "file", ...common };
   }
 }
 

@@ -19,8 +19,21 @@ import {
 } from "@/lib/query-keys/providers-native-query-keys";
 import type { McpScopeTarget } from "@/components/settings/panels/provider-mcp-scope-picker";
 import { useProviderNativeScope } from "@/components/settings/panels/use-provider-native-scope";
+import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { Button } from "@/components/ui/button";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import {
+  providerDisplayName,
+  providerIdToGuiHarnessId,
+} from "@/lib/provider-ordering";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { AddToConfigurationButton } from "./add-to-configuration-button";
-import { onHostOnlyHeading, onHostScopePhrase } from "./mcp-skills-copy";
+import {
+  onHostOnlyHeading,
+  onHostOnlyServersLine,
+  onHostOnlyServersLink,
+  onHostScopePhrase,
+} from "./mcp-skills-copy";
 import { useConfigurationName } from "./mcp-servers-model";
 
 /** One place on the viewing host a provider keeps entries by itself. */
@@ -166,6 +179,89 @@ export function OnHostOnlyServers(props: {
       providerId={props.providerId}
       entries={entries}
     />
+  );
+}
+
+/** The servers the providers hold by themselves, and the first that holds one. */
+interface OnHostServerCount {
+  readonly count: number;
+  readonly providerId: ProviderId | null;
+}
+
+/**
+ * The line under an empty MCP servers page: how many servers the providers
+ * hold in their own global settings on this computer that are not the
+ * configuration's, and the provider tab that lists them. Drawn only when the
+ * viewing host is this window's own computer, and only when there is one.
+ */
+export function OnHostOnlyServersLine(props: {
+  readonly providers: readonly ProviderId[];
+  readonly environmentNames: readonly string[];
+}): ReactNode {
+  const scope = useTeamViewingHost();
+  const windowHostId = usePersonalHostScope().hostId;
+  const name = useConfigurationName();
+  const found = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "providers.list",
+    readonly string[],
+    OnHostServerCount
+  >({
+    client: useHostClient(),
+    cacheKeyIdentity: "on-host-mcp-count",
+    requests: props.providers.map((providerId) => ({
+      method: "providers.list",
+      params: nativeMcpListParams({
+        providerId,
+        scope: "global",
+        workspaceRoot: null,
+      }),
+    })),
+    options: { staleTime: 30_000, poll: false },
+    mapResponse: ({ response }) =>
+      mapProvidersListToMcpServers({ response }).servers.map(
+        (server) => server.name,
+      ),
+    combine: (results) => {
+      const environmentNames = new Set(props.environmentNames);
+      const own = results.map((result) =>
+        (result.data ?? []).filter(
+          (serverName) => !environmentNames.has(serverName),
+        ),
+      );
+      const first = own.findIndex((serverNames) => serverNames.length > 0);
+      return {
+        count: new Set(own.flat()).size,
+        providerId: first === -1 ? null : (props.providers[first] ?? null),
+      };
+    },
+  });
+  const host = scope.viewingHost;
+  if (
+    host === null ||
+    host.hostId !== windowHostId ||
+    found.count === 0 ||
+    found.providerId === null
+  )
+    return null;
+  const providerId = found.providerId;
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      {onHostOnlyServersLine(found.count, name)} ·{" "}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        onClick={() => {
+          const focus = useProvidersFocusStore.getState();
+          focus.setFocusHarnessId(providerIdToGuiHarnessId(providerId));
+          focus.setFocusTab("mcp");
+          navigateToSettingsSection("providers");
+        }}
+      >
+        {onHostOnlyServersLink(found.count, providerDisplayName(providerId))}
+      </Button>
+    </p>
   );
 }
 

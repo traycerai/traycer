@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { altLabel, modLabel, shiftLabel } from "@/lib/keybindings/platform";
+import { setMobileApp } from "@/lib/mobile-app";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
@@ -18,6 +19,7 @@ const DEFAULT_INNER_WIDTH = window.innerWidth;
 
 afterEach(() => {
   cleanup();
+  setMobileApp(false);
   window.innerWidth = DEFAULT_INNER_WIDTH;
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
@@ -201,5 +203,18 @@ describe("<OpeningBehaviorPanel /> search targets", () => {
       },
       container,
     );
+  });
+
+  // The Links group and the modifier legend hide in the installed app, where
+  // every web link opens in the phone's own browser; tile placement stays.
+  it("hides the Links group and modifier legend in the installed mobile app", () => {
+    setMobileApp(true);
+    render(<OpeningBehaviorPanel />);
+
+    expect(screen.queryByRole("combobox", { name: "Open links" })).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "Open new tiles" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/flips the choice/)).toBeNull();
   });
 });

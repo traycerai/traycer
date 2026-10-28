@@ -374,6 +374,91 @@ describe("detailed rate-limit formatting", () => {
     );
     expect(human).toContain("monthly: 4% used [ok]");
   });
+
+  it("renders one line per Kimi window the backend served, in 5-hour, weekly, monthly order", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "kimi",
+        available: true,
+        fiveHour: {
+          usedPercent: 12,
+          resetsAt: CAPTURED_AT,
+          durationMinutes: 300,
+        },
+        weekly: {
+          usedPercent: 40,
+          resetsAt: CAPTURED_AT,
+          durationMinutes: 10_080,
+        },
+        monthly: { usedPercent: 4, resetsAt: null, durationMinutes: null },
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    expect(
+      formatAgentProviderProfileRateLimitsResponse(
+        { kind: "ambient" },
+        response,
+      ),
+    ).toBe(
+      [
+        "Rate limits for provider 'kimi' [--profile ambient], captured 2026-07-13T09:30:00.000Z:",
+        "5-hour: 12% used, resets 2026-07-13T09:30:00.000Z, 300m window",
+        "weekly: 40% used, resets 2026-07-13T09:30:00.000Z, 10080m window",
+        "monthly: 4% used",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves a Kimi window the plan does not carry out instead of printing it as unknown", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "kimi",
+        available: true,
+        fiveHour: null,
+        weekly: { usedPercent: 40, resetsAt: null, durationMinutes: null },
+        monthly: null,
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    const human = formatAgentProviderProfileRateLimitsResponse(
+      { kind: "ambient" },
+      response,
+    );
+
+    expect(human).toBe(
+      [
+        "Rate limits for provider 'kimi' [--profile ambient], captured 2026-07-13T09:30:00.000Z:",
+        "weekly: 40% used",
+      ].join("\n"),
+    );
+  });
+
+  it("says no limits were reported for a Kimi snapshot with no windows", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "kimi",
+        available: true,
+        fiveHour: null,
+        weekly: null,
+        monthly: null,
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    expect(
+      formatAgentProviderProfileRateLimitsResponse(
+        { kind: "ambient" },
+        response,
+      ),
+    ).toBe(
+      [
+        "Rate limits for provider 'kimi' [--profile ambient], captured 2026-07-13T09:30:00.000Z:",
+        "no limits reported",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("configure formatting", () => {

@@ -3,7 +3,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
+import { MessageSquareShare } from "lucide-react";
+import { ToolbarActionButton } from "@/editor-core/toolbar/toolbar-action-button";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
 import { resolveQuoteChatTargets } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
@@ -163,21 +164,24 @@ export function CanvasAnnotationAction(props: {
           open={menuOpen}
           onOpenChange={setMenuOpen}
           trigger={
-            <Button
-              size="xs"
-              variant="ghost"
+            <ToolbarActionButton
+              label="Send to chat"
+              tooltip={null}
+              className="tc-editor-toolbar-action"
               disabled={mutation.isPending || targets.length === 0}
-              aria-label="Add to chat"
-            >
-              {mutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : null}
-              {attached === null ? "+ Chat" : "Added to chat"}
-            </Button>
+              onMouseDown={(event) => event.preventDefault()}
+              icon={
+                mutation.isPending ? (
+                  <AgentSpinningDots
+                    className={undefined}
+                    testId={undefined}
+                    variant={undefined}
+                  />
+                ) : (
+                  <MessageSquareShare className="size-4" aria-hidden="true" />
+                )
+              }
+            />
           }
         />
       </div>

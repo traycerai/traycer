@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { Bot, Clock, ListFilter, Search, Server, Workflow } from "lucide-react";
 import type {
+  SandboxAutomationResponse,
   SandboxCatalogue,
+  SandboxListResponse,
   SandboxCost,
   SandboxSummary,
+  UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
 import { SandboxDestroyAllIdleDialog } from "@/components/hosts/sandbox-confirm-dialogs";
+import { SandboxSessionPillBadge } from "@/components/hosts/sandbox-reported-sessions";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
+import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   useSandboxConfigurations,
@@ -42,14 +50,23 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsEvidence,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
+import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
 import {
+  AUTOMATIONS_RELEASED_LINE,
   SANDBOX_KIND_FILTER_LABEL,
   SANDBOX_PUBLIC_STATE_LABEL,
   SANDBOX_ROW_FILTER_NONE,
   SANDBOX_STARTER_FILTER_LABEL,
   SANDBOX_STATE_FILTER_LABEL,
+  automationsShapeLine,
   rowInConfiguration,
   sandboxClockLine,
   sandboxDestroyAllIdleOffered,
@@ -62,11 +79,14 @@ import {
   sandboxPublicState,
   sandboxRowKind,
   sandboxRowMatches,
+  sandboxSessionPills,
   sandboxSessionsLine,
   sandboxShapeAndCostLine,
   sandboxStartedByLabel,
   sandboxTeamUsageUrl,
   sortSandboxRows,
+  unstartedAutomationsMatches,
+  type SandboxSessionReport,
   type SandboxKindFilter,
   type SandboxPageConfiguration,
   type SandboxPublicState,
@@ -236,32 +256,52 @@ function useConfigurationStageShape(configuration: SandboxPageConfiguration): {
 // ── The list ────────────────────────────────────────────────────────────────
 
 /**
- * Today's total for the configuration's rows, and the viewer's share of it:
- * Personal's rows are all the viewer's; a team's share is the viewer's whole
- * share less their Personal rows, which holds while they are in one team.
+ * Today's total for the configuration, and the viewer's share of it, as the
+ * server totals each configuration's day: sandboxes destroyed today count,
+ * which the listed rows no longer carry. Personal is every environment that
+ * is none of the viewer's teams'.
+ *
+ * A server before those totals: the configuration's rows summed. Personal's
+ * rows are all the viewer's; a team's share is the viewer's whole share less
+ * their Personal rows, which holds while they are in one team.
  */
 function todayFigures(input: {
   readonly configuration: SandboxPageConfiguration;
   readonly rows: readonly SandboxSummary[];
-  readonly costs: readonly SandboxCost[] | null;
+  readonly costs: UserSandboxCost | null;
   readonly personalTodayMc: number;
-  readonly yoursMc: number | null;
-  readonly teamCount: number;
+  readonly teamEnvironmentIds: ReadonlySet<string>;
 }): { readonly todayMc: number | null; readonly yoursMc: number | null } {
   if (input.costs === null) return { todayMc: null, yoursMc: null };
+  const days = input.costs.todayByEnvironment;
+  if (days.length > 0) {
+    const { configuration } = input;
+    const ours = days.filter((day) =>
+      configuration.kind === "team"
+        ? day.environmentId === configuration.environmentId
+        : !input.teamEnvironmentIds.has(day.environmentId),
+    );
+    return {
+      todayMc: ours.reduce((sum, day) => sum + day.todayMillicredits, 0),
+      yoursMc: ours.reduce((sum, day) => sum + day.todayYoursMillicredits, 0),
+    };
+  }
   const ids = new Set(input.rows.map((row) => row.id));
-  const todayMc = input.costs
+  const todayMc = input.costs.sandboxes
     .filter((cost) => ids.has(cost.sandboxId))
     .reduce((sum, cost) => sum + cost.todayMillicredits, 0);
   if (input.configuration.kind === "personal") {
     return { todayMc, yoursMc: todayMc };
   }
-  if (input.yoursMc === null || input.teamCount !== 1) {
+  if (input.teamEnvironmentIds.size !== 1) {
     return { todayMc, yoursMc: null };
   }
   return {
     todayMc,
-    yoursMc: Math.max(0, input.yoursMc - input.personalTodayMc),
+    yoursMc: Math.max(
+      0,
+      input.costs.todayYoursMillicredits - input.personalTodayMc,
+    ),
   };
 }
 
@@ -286,31 +326,24 @@ function useScrollRevealedRow(
   }, [highlighted, highlightedShown, reveals]);
 }
 
-function SandboxListSection(props: {
-  readonly configuration: SandboxPageConfiguration;
-  readonly teamEnvironmentIds: ReadonlySet<string>;
-  readonly teamsComplete: boolean;
-  readonly revealSandboxId: string | null;
-}): ReactNode {
-  const { configuration } = props;
-  useRefreshSandboxCosts();
-  const list = useSandboxList();
-  const costs = useSandboxCosts();
-  const unavailable = useSandboxControlUnavailableReason();
-  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+/**
+ * The list's filter and highlighted row. A notification's row is revealed
+ * despite any filter: the filter clears, the row scrolls into view and is
+ * highlighted. Adjusted while rendering (not in an effect), then the request
+ * is consumed so the same row can be asked for again. `reveals` counts them:
+ * one scroll per reveal, even of the row revealed last time.
+ */
+function useRevealedSandboxFilter(reveal: string | null): {
+  readonly filter: SandboxRowFilter;
+  readonly setFilter: (filter: SandboxRowFilter) => void;
+  readonly highlighted: string | null;
+  readonly reveals: number;
+} {
   const [filter, setFilter] = useState<SandboxRowFilter>(
     SANDBOX_ROW_FILTER_NONE,
   );
   const [highlighted, setHighlighted] = useState<string | null>(null);
-  const [destroyAllOpen, setDestroyAllOpen] = useState(false);
-
-  // A notification's row is revealed despite any filter: the filter clears,
-  // the row scrolls into view and is highlighted.
-  // Adjusted while rendering (not in an effect), then the request is
-  // consumed so the same row can be asked for again.
-  const reveal = props.revealSandboxId;
   const [revealed, setRevealed] = useState<string | null>(null);
-  // One scroll per reveal, even of the row revealed last time.
   const [reveals, setReveals] = useState(0);
   if (reveal !== revealed) {
     setRevealed(reveal);
@@ -323,8 +356,92 @@ function SandboxListSection(props: {
   useEffect(() => {
     if (reveal !== null) clearSandboxReveal();
   }, [reveal]);
+  return { filter, setFilter, highlighted, reveals };
+}
+
+/**
+ * Whether the configuration's Automations host is listed before its first
+ * shell creates it: offered, with no sandbox or pod yet, and no Automations
+ * row among the configuration's own.
+ */
+function automationsUnstarted(input: {
+  readonly rows: readonly SandboxSummary[] | null;
+  readonly automation: SandboxAutomationResponse | null;
+  readonly configuration: SandboxPageConfiguration;
+  readonly environmentId: string | null;
+}): boolean {
+  const { rows, automation } = input;
+  if (rows === null || automation === null) return false;
+  return (
+    automation.available &&
+    automation.sandbox === null &&
+    automation.pods.length === 0 &&
+    (input.configuration.kind === "personal" || input.environmentId !== null) &&
+    !rows.some((row) => row.kind === "automation")
+  );
+}
+
+/**
+ * Keep positions until membership or a public state changes. Only ids and
+ * states are retained: reports, costs and sessions still render fresh data.
+ * The configuration-keyed list owns this order for as long as it is open.
+ */
+function useOrderedSandboxRows(
+  rows: readonly SandboxSummary[] | null,
+): readonly SandboxSummary[] {
+  const [order, setOrder] = useState<
+    readonly { readonly id: string; readonly state: SandboxPublicState }[]
+  >([]);
+  if (rows === null) return [];
+
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  if (
+    order.length !== rows.length ||
+    order.some((entry) => {
+      const row = rowsById.get(entry.id);
+      return row === undefined || sandboxPublicState(row) !== entry.state;
+    })
+  ) {
+    const sorted = sortSandboxRows(rows);
+    setOrder(
+      sorted.map((row) => ({ id: row.id, state: sandboxPublicState(row) })),
+    );
+    return sorted;
+  }
+
+  return order.flatMap(({ id }) => {
+    const row = rowsById.get(id);
+    return row === undefined ? [] : [row];
+  });
+}
+
+interface SandboxListSectionProps {
+  readonly configuration: SandboxPageConfiguration;
+  readonly teamEnvironmentIds: ReadonlySet<string>;
+  readonly teamsComplete: boolean;
+  readonly revealSandboxId: string | null;
+}
+
+function SandboxListSection(props: SandboxListSectionProps): ReactNode {
+  const { configuration } = props;
+  useRefreshSandboxCosts();
+  const list = useSandboxList();
+  const costs = useSandboxCosts();
+  const unavailable = useSandboxControlUnavailableReason();
+  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const { filter, setFilter, highlighted, reveals } = useRevealedSandboxFilter(
+    props.revealSandboxId,
+  );
+  const [destroyAllTargets, setDestroyAllTargets] = useState<
+    readonly SandboxSummary[] | null
+  >(null);
 
   const allRows = list.data?.sandboxes ?? null;
+  // The configuration's Automations host before its first shell creates it:
+  // listed all the same, released, so it can be opened from here.
+  const automationEnvironmentId =
+    configuration.kind === "team" ? configuration.environmentId : null;
+  const automation = useSandboxAutomation(automationEnvironmentId).data ?? null;
   const configurationRows = useMemo(() => {
     if (allRows === null) return null;
     // Personal's rows are told apart from a team's only once every team's
@@ -334,17 +451,18 @@ function SandboxListSection(props: {
       rowInConfiguration(row, configuration, props.teamEnvironmentIds),
     );
   }, [allRows, configuration, props.teamEnvironmentIds, props.teamsComplete]);
-  const shown = useMemo(
-    () =>
-      configurationRows === null
-        ? []
-        : sortSandboxRows(
-            configurationRows.filter((row) =>
-              sandboxRowMatches(row, filter, viewerUserId),
-            ),
-          ),
-    [configurationRows, filter, viewerUserId],
+  const orderedRows = useOrderedSandboxRows(configurationRows);
+  const shown = orderedRows.filter((row) =>
+    sandboxRowMatches(row, filter, viewerUserId),
   );
+  const unstartedAutomations = automationsUnstarted({
+    rows: configurationRows,
+    automation,
+    configuration,
+    environmentId: automationEnvironmentId,
+  });
+  const unstartedShown =
+    unstartedAutomations && unstartedAutomationsMatches(filter);
   useScrollRevealedRow(highlighted, shown, reveals);
   const personalTodayMc = useMemo(() => {
     const data = costs.data ?? null;
@@ -375,46 +493,50 @@ function SandboxListSection(props: {
       configuration={configuration}
     />
   );
-  if (configurationRows === null || configurationRows.length === 0) {
-    return gate;
+  const destroyDialog = (
+    <SandboxDestroyAllIdleDialog
+      targets={destroyAllTargets ?? []}
+      open={destroyAllTargets !== null}
+      onOpenChange={(open) => {
+        if (!open) setDestroyAllTargets(null);
+      }}
+    />
+  );
+  if (
+    configurationRows === null ||
+    (configurationRows.length === 0 && !unstartedAutomations)
+  ) {
+    return (
+      <>
+        {gate}
+        {destroyDialog}
+      </>
+    );
   }
   const figures = todayFigures({
     configuration,
     rows: configurationRows,
-    costs: costs.data?.sandboxes ?? null,
+    costs: costs.data ?? null,
     personalTodayMc,
-    yoursMc: costs.data?.todayYoursMillicredits ?? null,
-    teamCount: props.teamEnvironmentIds.size,
+    teamEnvironmentIds: props.teamEnvironmentIds,
   });
   const summary = sandboxFilterSummary(
     filter,
-    shown.length,
-    configurationRows.length,
+    shown.length + (unstartedShown ? 1 : 0),
+    configurationRows.length + (unstartedAutomations ? 1 : 0),
   );
-  const destroyAllTargets = sandboxDestroyAllIdleOffered(filter)
-    ? shown.map((row) => ({ sandboxId: row.id, name: row.displayName }))
-    : [];
+  const destroyAllOffered = sandboxDestroyAllIdleOffered(filter);
+  const idleTargets = shown.filter((row) => row.kind !== "automation");
   return (
     <section aria-label="Sandboxes" data-testid="sandboxes-list">
       <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0 space-y-1">
-          <h2 className="text-ui font-medium">
-            {configuration.kind === "team"
-              ? `${configuration.teamName}'s sandboxes`
-              : "Your sandboxes"}
-          </h2>
-          <p
-            className="text-ui-xs text-muted-foreground"
-            data-testid="sandboxes-list-header"
-          >
-            {summary ??
-              `${sandboxListHeader({
-                rows: configurationRows,
-                todayMc: figures.todayMc,
-                todayYoursMc: figures.yoursMc,
-              })}.`}
-          </p>
-        </div>
+        <SandboxListHeading
+          configuration={configuration}
+          summary={summary}
+          rows={configurationRows}
+          unstartedAutomations={unstartedAutomations}
+          figures={figures}
+        />
         <div className="flex min-w-0 items-center gap-2">
           <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
             <Search
@@ -433,13 +555,14 @@ function SandboxListSection(props: {
             />
           </div>
           <SandboxFilterMenu filter={filter} onChange={setFilter} />
-          {destroyAllTargets.length === 0 ? null : (
+          {!destroyAllOffered ? null : (
             <Button
               type="button"
               variant="destructive"
               size="sm"
               data-testid="sandboxes-destroy-all-idle"
-              onClick={() => setDestroyAllOpen(true)}
+              disabled={idleTargets.length === 0}
+              onClick={() => setDestroyAllTargets(idleTargets)}
             >
               Destroy all idle
             </Button>
@@ -451,6 +574,7 @@ function SandboxListSection(props: {
           <SandboxListRow
             key={row.id}
             summary={row}
+            list={list}
             configuration={configuration}
             cost={
               costs.data?.sandboxes.find((cost) => cost.sandboxId === row.id) ??
@@ -460,13 +584,53 @@ function SandboxListSection(props: {
             highlighted={row.id === highlighted}
           />
         ))}
+        {unstartedShown ? (
+          <UnstartedAutomationsRow
+            configuration={configuration}
+            teamEnvironmentId={automationEnvironmentId}
+          />
+        ) : null}
       </ul>
-      <SandboxDestroyAllIdleDialog
-        targets={destroyAllTargets}
-        open={destroyAllOpen}
-        onOpenChange={setDestroyAllOpen}
-      />
+      {destroyDialog}
     </section>
+  );
+}
+
+/**
+ * The list's title, and the line under it: the filter's summary while one
+ * applies, else the configuration's rows and today's spend.
+ */
+function SandboxListHeading(props: {
+  readonly configuration: SandboxPageConfiguration;
+  readonly summary: string | null;
+  readonly rows: readonly SandboxSummary[];
+  readonly unstartedAutomations: boolean;
+  readonly figures: {
+    readonly todayMc: number | null;
+    readonly yoursMc: number | null;
+  };
+}): ReactNode {
+  const { configuration, figures } = props;
+  return (
+    <div className="min-w-0 space-y-1">
+      <h2 className="text-ui font-medium">
+        {configuration.kind === "team"
+          ? `${configuration.teamName}'s sandboxes`
+          : "Your sandboxes"}
+      </h2>
+      <p
+        className="text-ui-xs text-muted-foreground"
+        data-testid="sandboxes-list-header"
+      >
+        {props.summary ??
+          `${sandboxListHeader({
+            rows: props.rows,
+            unstartedAutomations: props.unstartedAutomations,
+            todayMc: figures.todayMc,
+            todayYoursMc: figures.yoursMc,
+          })}.`}
+      </p>
+    </div>
   );
 }
 
@@ -732,6 +896,7 @@ const STATE_BADGE: Record<
   awake: "success",
   suspended: "muted",
   stopped: "muted",
+  destroying: "info",
   frozen: "warning",
   failed: "destructive",
 };
@@ -747,26 +912,98 @@ function KindTile(props: { readonly summary: SandboxSummary }): ReactNode {
   }
 }
 
+/**
+ * The configuration's Automations host before its first shell creates it:
+ * a released row whose `Open terminal` creates and starts it. Rename and
+ * Details come with the row once it exists.
+ */
+function UnstartedAutomationsRow(props: {
+  readonly configuration: SandboxPageConfiguration;
+  readonly teamEnvironmentId: string | null;
+}): ReactNode {
+  const open = useOpenAutomationTerminal({
+    existing: null,
+    teamEnvironmentId: props.teamEnvironmentId,
+  });
+  return (
+    <li
+      data-state="suspended"
+      data-testid="sandboxes-row-automations-unstarted"
+      className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div className="flex min-w-0 gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
+          <Workflow className="size-4" aria-hidden />
+        </div>
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="text-ui-sm font-medium text-foreground wrap-anywhere"
+              data-testid="sandboxes-row-name"
+            >
+              Automations
+            </span>
+            <Badge variant="muted" data-testid="sandboxes-row-state">
+              {SANDBOX_PUBLIC_STATE_LABEL.suspended}
+            </Badge>
+            <Badge variant="muted">Automations</Badge>
+          </div>
+          <p className="text-ui-sm text-muted-foreground wrap-anywhere">
+            {automationsShapeLine(props.configuration)}
+          </p>
+          <p
+            className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
+            data-testid="sandboxes-row-clock"
+          >
+            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>{AUTOMATIONS_RELEASED_LINE}</span>
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={open.starting}
+          data-testid="sandbox-row-open-terminal"
+          onClick={open.run}
+        >
+          {open.starting ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Open terminal
+        </Button>
+      </div>
+    </li>
+  );
+}
+
 function SandboxListRow(props: {
   readonly summary: SandboxSummary;
+  readonly list: UseQueryResult<SandboxListResponse | null>;
   readonly configuration: SandboxPageConfiguration;
   readonly cost: SandboxCost | null;
   readonly viewerUserId: string | null;
   readonly highlighted: boolean;
 }): ReactNode {
   const { summary, configuration, viewerUserId } = props;
+  const settings = useSandboxSettingsStatus(summary);
+  const settingsFailed = sandboxSettingsFailed(settings.data?.items ?? []);
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
   const sessions = useSandboxSessionReport(summary.hostId, awake);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
-  // The control plane says awake and the host does not answer: Stop is the
-  // way to end its meter without the guest.
-  const unreachable =
-    awake &&
-    summary.guestConfigured !== false &&
-    sessions.failed &&
-    sessions.report.kind !== "live";
+  const unreachable = useSandboxRowUnreachable(
+    summary,
+    sessions.failed && sessions.report.kind !== "live",
+    props.list,
+  );
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
@@ -808,7 +1045,7 @@ function SandboxListRow(props: {
             {keptBy === null ? null : <Badge variant="muted">{keptBy}</Badge>}
           </div>
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
-            {sandboxShapeAndCostLine(summary, configuration)}
+            {sandboxShapeAndCostLine(summary, configuration, viewerUserId)}
           </p>
           <p
             className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
@@ -817,7 +1054,9 @@ function SandboxListRow(props: {
             <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             <span>
               {sandboxClockLine({
-                summary,
+                summary: settingsFailed
+                  ? { ...summary, guestConfigured: false }
+                  : summary,
                 configuration,
                 cost: props.cost,
                 wakeString: wake,
@@ -827,19 +1066,21 @@ function SandboxListRow(props: {
               })}
             </span>
           </p>
+          {awake && (settingsFailed || summary.guestConfigured === false) ? (
+            <div className="text-ui-xs text-muted-foreground">
+              <p>Compute is charged while it is awake.</p>
+              <p>
+                {sandboxSettingsStepsLine(
+                  sandboxSettingsEvidence(
+                    settings.data?.items ?? [],
+                    props.summary.guestConfigured,
+                  ),
+                )}
+              </p>
+            </div>
+          ) : null}
           {awake && !unreachable ? (
-            <p
-              className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
-              data-testid="sandboxes-row-sessions"
-            >
-              {sessions.report.kind === "live" && sessions.report.busy ? (
-                <span
-                  aria-hidden
-                  className="size-1.5 shrink-0 rounded-full bg-success"
-                />
-              ) : null}
-              {sandboxSessionsLine(sessions.report, now)}
-            </p>
+            <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>
       </div>
@@ -852,7 +1093,35 @@ function SandboxListRow(props: {
           configuration,
           viewerUserId,
         )}
+        settingsFailed={settingsFailed}
       />
     </li>
+  );
+}
+
+function SandboxRowSessions(props: {
+  readonly report: SandboxSessionReport;
+  readonly now: number;
+}): ReactNode {
+  return (
+    <p
+      className="flex items-center gap-1.5 text-ui-xs text-muted-foreground"
+      data-testid="sandboxes-row-sessions"
+    >
+      {props.report.kind === "live" && props.report.busy ? (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full bg-success"
+        />
+      ) : null}
+      {sandboxSessionsLine(props.report, props.now)}
+      {sandboxSessionPills(props.report).map((pill) => (
+        <SandboxSessionPillBadge
+          key={pill.key}
+          pill={pill}
+          testId="sandboxes-row-session-pill"
+        />
+      ))}
+    </p>
   );
 }

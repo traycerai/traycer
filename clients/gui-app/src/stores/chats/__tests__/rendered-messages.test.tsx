@@ -5852,7 +5852,7 @@ describe("useRenderedMessages turn.stopped", () => {
 
     // A fatal connection close clears the active turn while the provider may
     // still be running: turn.started exists, its terminal event does not. A
-    // start alone must not fabricate a "Resumed · no response · 0s" footer.
+    // start alone must not fabricate a "No reply · 0s" ending.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
       events: [
@@ -6088,7 +6088,7 @@ describe("useRenderedMessages turn.stopped", () => {
     // The reused turnId completed an attempt BEFORE the notification was
     // persisted, and the provider never started again. That window predates
     // the divider it would prove adopted - the row must stay a footerless
-    // notification instead of rendering "Resumed · no response" with the
+    // notification instead of rendering "No reply" with the
     // stale window's timing.
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1"), assistant],
@@ -7853,4 +7853,206 @@ describe("useRenderedMessages: the working row is built from the pending turn", 
 
     expect(workingRow(result.current)?.elapsedStartedAt).toBe(1234);
   });
+});
+
+describe("useRenderedMessages: object artifact creation cards", () => {
+  type AssistantBlock = Extract<
+    Message,
+    { role: "assistant" }
+  >["blocks"][number];
+
+  function commandBlockAt(blockId: string, timestamp: number): AssistantBlock {
+    return {
+      type: "command",
+      blockId,
+      command: "bun test",
+      cwd: "/repo",
+      exitCode: 0,
+      status: "completed",
+      timestamp,
+      backgroundTask: null,
+      stopped: false,
+    };
+  }
+
+  function artifactBlockAt(
+    blockId: string,
+    timestamp: number,
+    kind: "html" | "canvas" | "spec",
+    operation: "create" | "update",
+  ): AssistantBlock {
+    return {
+      type: "artifact_operation",
+      blockId,
+      status: "completed",
+      timestamp,
+      operation,
+      kind,
+      artifactId: `${blockId}-artifact`,
+      title: blockId,
+      beforeHash: null,
+      afterHash: null,
+    };
+  }
+
+  function segmentOrder(blocks: AssistantBlock[]): string[] {
+    const { result } = renderRenderedMessages({
+      messages: [{ ...assistantMessage("turn-1", 2000), blocks }],
+    });
+    return (result.current[0]?.segments ?? []).map((segment) => {
+      if (segment.kind === "artifact_operation")
+        return `card:${segment.artifactKind}`;
+      if (segment.kind === "text") return `text:${segment.markdown}`;
+      return segment.kind;
+    });
+  }
+
+  it("places an HTML creation card right after the activity that preceded it, before the closing reply", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("t1", 2001, "Working"),
+        commandBlockAt("c1", 2002),
+        plainTextBlock("t2", 2005, "Done"),
+        artifactBlockAt("a1", 2003, "html", "create"),
+      ]),
+    ).toEqual(["text:Working", "command", "card:html", "text:Done"]);
+  });
+
+  it("keeps canvas cards in creation order after the same activity", () => {
+    expect(
+      segmentOrder([
+        commandBlockAt("c1", 2001),
+        plainTextBlock("t1", 2005, "Done"),
+        artifactBlockAt("a1", 2002, "html", "create"),
+        artifactBlockAt("a2", 2002, "canvas", "create"),
+      ]),
+    ).toEqual(["command", "card:html", "card:canvas", "text:Done"]);
+  });
+
+  it("leaves non-object and non-create cards in place", () => {
+    expect(
+      segmentOrder([
+        commandBlockAt("c1", 2001),
+        plainTextBlock("t1", 2002, "Done"),
+        artifactBlockAt("a1", 2003, "spec", "create"),
+        artifactBlockAt("a2", 2004, "html", "update"),
+      ]),
+    ).toEqual(["command", "text:Done", "card:spec", "card:html"]);
+  });
+
+  function readToolBlockAt(
+    blockId: string,
+    timestamp: number,
+  ): Extract<AssistantBlock, { type: "tool_call" }> {
+    return {
+      type: "tool_call",
+      blockId,
+      toolName: "read_file",
+      ...toolCallInputFields("read_file", { path: "/repo/src/app.ts" }),
+      error: null,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      agentMessageDelivery: null,
+      artifact: null,
+      mcpApp: null,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      stopped: false,
+      status: "completed",
+      timestamp,
+      startedAt: timestamp,
+      endedAt: timestamp,
+      imageResults: [],
+    };
+  }
+
+  it("anchors a card after the last preceding block of any kind, so a closing reply that streamed before the create is still last", () => {
+    expect(
+      segmentOrder([
+        readToolBlockAt("r1", 10),
+        plainTextBlock("w1", 20, "writing"),
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("a1", 30, "html", "create"),
+      ]),
+    ).toEqual(["tool", "text:writing", "card:html", "text:closing"]);
+  });
+
+  it("anchors a card after text when only text precedes it (a hidden Write has no tool block)", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("w1", 20, "writing"),
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("a1", 30, "html", "create"),
+      ]),
+    ).toEqual(["text:writing", "card:html", "text:closing"]);
+  });
+
+  it("puts a card with no preceding block before the final text", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("a1", 30, "html", "create"),
+      ]),
+    ).toEqual(["card:html", "text:closing"]);
+  });
+
+  it("places a legacy terminal-sweep card after the last activity before the closing text, not by its drain timestamp", () => {
+    expect(
+      segmentOrder([
+        commandBlockAt("c1", 10),
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("artifact-create-sweep:x", 900, "html", "create"),
+      ]),
+    ).toEqual(["command", "card:html", "text:closing"]);
+  });
+
+  it("puts a legacy terminal-sweep card before the final text when no activity precedes it", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("artifact-create-sweep:x", 900, "canvas", "create"),
+      ]),
+    ).toEqual(["card:canvas", "text:closing"]);
+  });
+
+  it("keeps an on-time canvas create after the text that preceded it when closing text follows", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("w1", 20, "writing"),
+        artifactBlockAt("a1", 30, "canvas", "create"),
+        plainTextBlock("t-final", 40, "closing"),
+      ]),
+    ).toEqual(["text:writing", "card:canvas", "text:closing"]);
+  });
+  it.each([
+    ["completed", "completed", 100],
+    ["still running", "streaming", 60],
+  ] as const)(
+    "keeps a card created mid-tool after that tool when the tool's timestamp advanced past it (%s)",
+    (_name, status, advancedTimestamp) => {
+      const tool = {
+        ...readToolBlockAt("r1", advancedTimestamp),
+        startedAt: 20,
+        status,
+        endedAt: status === "completed" ? advancedTimestamp : null,
+      };
+      expect(
+        segmentOrder([
+          plainTextBlock("w1", 10, "writing"),
+          tool,
+          plainTextBlock("t-final", 110, "closing"),
+          artifactBlockAt("a1", 50, "html", "create"),
+          artifactBlockAt("a2", 50, "canvas", "create"),
+        ]),
+      ).toEqual([
+        "text:writing",
+        "tool",
+        "card:html",
+        "card:canvas",
+        "text:closing",
+      ]);
+    },
+  );
 });

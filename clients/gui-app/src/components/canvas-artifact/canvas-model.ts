@@ -7,6 +7,9 @@ import type {
 
 export const CANVAS_LOCAL_ORIGIN = Symbol("canvas-local");
 export const LIVE_BOARD_LIMIT = 8;
+/** The selection/board inspector is parked, not removed: the panels stay in
+ * the tree behind this flag until the inspector earns its place in the UI. */
+export const CANVAS_INSPECTOR_ENABLED: boolean = false;
 export const BOARD_HEADER_HEIGHT = 36;
 export type CanvasTool =
   | "select"
@@ -78,6 +81,22 @@ export function canvasPageItems(
     }),
     notes: Object.entries(snapshot.notes).filter(([, note]) => onPage(note)),
   };
+}
+/** The boards fullscreen steps through: the reading order, pages included. */
+export function fullscreenBoardSequence(
+  snapshot: CanvasLayoutSnapshot,
+): readonly string[] {
+  return snapshot.order.filter((path) => Object.hasOwn(snapshot.boards, path));
+}
+/** The board one step before or after `path` in the reading order. */
+export function adjacentFullscreenBoard(
+  snapshot: CanvasLayoutSnapshot,
+  path: string,
+  direction: -1 | 1,
+): string | null {
+  const sequence = fullscreenBoardSequence(snapshot);
+  const index = sequence.indexOf(path);
+  return index < 0 ? null : (sequence[index + direction] ?? null);
 }
 /** The page's boards nearest the centre, the ones worth a live frame. */
 export function selectLiveBoards(

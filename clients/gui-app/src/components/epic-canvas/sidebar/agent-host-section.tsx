@@ -4,7 +4,9 @@ import type {
   SandboxMember,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
+import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
@@ -18,6 +20,11 @@ import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import {
+  sandboxConfigurationOf,
+  useSandboxConfigurations,
+  type SandboxConfigurations,
+} from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { useSampledNow } from "@/lib/relative-time";
@@ -48,7 +55,9 @@ import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
   SANDBOX_PUBLIC_STATE_LABEL,
   sandboxMemberName,
+  sandboxHostActivityLine,
   sandboxPublicState,
+  sandboxSessionKinds,
   sandboxShapeLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { cn } from "@/lib/utils";
@@ -115,7 +124,10 @@ function TaskHostSection(props: {
             {configuration}
           </Badge>
         )}
-        {principal.kind === "team" ? (
+        {props.host.sandboxEnd !== null ? (
+          <span className="text-muted-foreground">destroyed</span>
+        ) : null}
+        {principal.kind === "team" && props.host.sandboxEnd === null ? (
           <span className="text-muted-foreground">
             {hoverTaskConfiguration(configuration)}
           </span>
@@ -129,7 +141,16 @@ function TaskHostSection(props: {
       {others.length === 0 ? null : (
         <p className="text-muted-foreground">{hoverAlsoInTask(others)}</p>
       )}
-      <HostFilesAction hostId={null} />
+      {props.host.sandboxEnd === null ? (
+        <HostFilesAction hostId={null} />
+      ) : (
+        <TaskSandboxEndDetails
+          ended={{
+            name: props.host.label ?? "This sandbox",
+            end: props.host.sandboxEnd,
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -153,19 +174,21 @@ function AuthorizedHostSection(props: {
   const owner = registry.data?.hosts.find(
     (host) => host.hostId === sandbox.hostId,
   )?.owner;
-  let configuration: string | null = null;
-  if (owner?.kind === "team") configuration = owner.name;
-  else if (owner?.kind === "user" || sandbox.environmentId === null)
-    configuration = "Personal";
+  const configurations = useSandboxConfigurations();
+  const configuration = hoverConfiguration(sandbox, owner, configurations);
   const awake = sandbox.state === "awake" && !sandbox.frozen;
   return (
     <section className="space-y-1 px-3 py-2 text-ui-xs" aria-label={HOST_LABEL}>
       <p className="font-medium text-muted-foreground">{HOST_LABEL}</p>
-      <HostHeading
-        sandbox={sandbox}
-        configuration={configuration}
-        awake={awake}
-      />
+      <HostHeading sandbox={sandbox} awake={awake} />
+      {configuration === null ? null : (
+        <p
+          className="text-muted-foreground"
+          data-testid="agent-host-configuration"
+        >
+          {configuration}
+        </p>
+      )}
       <HostIdentityLine
         sandbox={sandbox}
         epicId={props.epicId}
@@ -192,9 +215,34 @@ function AuthorizedHostSection(props: {
   );
 }
 
+/**
+ * The configuration the sandbox runs under, the line under its name: the
+ * account's record of the host's owner, else the sandbox's own environment,
+ * read against the person's teams (Personal once every team has answered and
+ * none is its). `null` only while that is still unread.
+ */
+function hoverConfiguration(
+  sandbox: SandboxSummary,
+  owner: HostOwnerPrincipal | undefined,
+  configurations: SandboxConfigurations,
+): string | null {
+  if (owner?.kind === "team") return owner.name;
+  if (owner?.kind === "user" || sandbox.environmentId === null) {
+    return "Personal";
+  }
+  const configuration = sandboxConfigurationOf(
+    sandbox,
+    configurations.configurations,
+  );
+  if (configuration?.kind === "team") return configuration.teamName;
+  return configurations.complete &&
+    !configurations.teamEnvironmentIds.has(sandbox.environmentId)
+    ? "Personal"
+    : null;
+}
+
 function HostHeading(props: {
   readonly sandbox: SandboxSummary;
-  readonly configuration: string | null;
   readonly awake: boolean;
 }): ReactNode {
   const { sandbox } = props;
@@ -208,11 +256,6 @@ function HostHeading(props: {
         )}
       />
       <span className="font-medium break-words">{sandbox.displayName}</span>
-      {props.configuration === null ? null : (
-        <Badge size="xs" variant="muted">
-          {props.configuration}
-        </Badge>
-      )}
       <span className="text-muted-foreground">
         {SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(sandbox)]}
         {props.awake && sandbox.priceMcPerHour !== null
@@ -502,8 +545,14 @@ function HostActivity(props: {
     ),
   ];
   const more = Math.max(0, count - here.length - runningTerminals.length);
+  const hostWide = sandboxHostActivityLine(
+    sandboxSessionKinds(status.data?.sessions ?? null),
+  );
   return (
     <div className="text-muted-foreground">
+      {hostWide === null ? null : (
+        <p data-testid="agent-host-activity">{hostWide}</p>
+      )}
       {names.length === 0 ? null : <p>{names.join(", ")}</p>}
       {more > 0 ? <p>{hoverMoreSessions(more)}</p> : null}
     </div>

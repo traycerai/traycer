@@ -563,6 +563,27 @@ describe("ChatStreamClient protocol capability getters", () => {
       client.close();
     },
   );
+
+  it.each([
+    [{ major: 1, minor: 38 }, false],
+    [{ major: 1, minor: 39 }, true],
+    [null, false],
+    [{ major: 2, minor: 0 }, false],
+  ] as const)(
+    "reports queued-steer restart confirmation from this session's negotiated version (%j)",
+    (version, expected) => {
+      const { wsStreamClient } = stubClientAtVersion(version);
+      const client = new ChatStreamClient({
+        wsStreamClient,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: makeNoopCallbacks(() => undefined),
+      });
+
+      expect(client.queuedSteerRestartConfirmationSupported()).toBe(expected);
+      client.close();
+    },
+  );
 });
 
 describe("ChatStreamClient", () => {

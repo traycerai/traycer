@@ -16,14 +16,15 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
+  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
@@ -31,11 +32,22 @@ import type {
   useStagedSandboxHandoff,
   useStagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
+import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -59,29 +71,6 @@ const gateState = vi.hoisted(() => ({
   blockedIds: new Set<string>(),
 }));
 
-/** A prompt whose image is held by hash: its bytes are read before a send. */
-const HASH_IMAGE_CONTENT: JsonContent = {
-  type: "doc",
-  content: [
-    {
-      type: "paragraph",
-      content: [
-        {
-          type: "imageAttachment",
-          attrs: {
-            id: "img-1",
-            fileName: "shot.png",
-            mimeType: "image/png",
-            size: 4,
-            hash: "1122334455667788990011223344556677889900112233445566778899aabbcc",
-          },
-        },
-        { type: "text", text: "look at this" },
-      ],
-    },
-  ],
-};
-
 // The image's bytes come from the composer's image store, read per test.
 const imageStore = vi.hoisted(() => ({
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
@@ -93,6 +82,25 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => ({
     typeof import("@/lib/composer/landing-image-store")
   >()),
   getImageBytes: imageStore.getImageBytes,
+}));
+
+// The gates' own reads are covered by their hook tests; here the modal's use
+// of their answers is what is under test.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({
+    blocked: testState.agentGateNotice !== null,
+    hint:
+      testState.agentGateNotice === null
+        ? null
+        : testState.agentGateNotice.message,
+    notice: testState.agentGateNotice,
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => ({
+    check: () => testState.stagedNotice,
+    beforeSend: testState.beforeStagedSend,
+  }),
 }));
 
 vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => {
@@ -128,6 +136,13 @@ type StagedSendInput = Parameters<typeof useStagedSandboxSend>[0];
 type StagedHandoffInput = Parameters<typeof useStagedSandboxHandoff>[0];
 
 const testState = vi.hoisted(() => ({
+  /** What the modal hands its workspace controls to stage a sandbox with. */
+  sandboxStaging: null as SandboxStagingSurface | null,
+  /** What a sandbox host's agent gate says about the agent picked. */
+  agentGateNotice: null as ComposerHostNoticeState | null,
+  /** What the staged send's catalogue check says: `null` lets it through. */
+  stagedNotice: null as ComposerHostNoticeState | null,
+  beforeStagedSend: vi.fn<() => Promise<ComposerHostNoticeState | null>>(),
   /** Whether a sandbox is staged: the staged send then takes the Start. */
   staged: false,
   /** How many sends or Starts reached the staged send's intercept. */
@@ -149,6 +164,12 @@ const testState = vi.hoisted(() => ({
       readonly initialTurnStarted: boolean;
     }>
   >(() => Promise.resolve({ initialTurnStarted: false })),
+  attachEnvironment: vi.fn<
+    (input: {
+      readonly epicId: string;
+      readonly teamId: string;
+    }) => Promise<{ readonly attached: true }>
+  >(() => Promise.resolve({ attached: true })),
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   /** The editor's @/slash menu dismissal. */
@@ -211,6 +232,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
         "div",
         { "data-testid": "composer-body-mock" },
         props.topBanner,
+        props.workspaceControls,
         React.createElement(
           Popover,
           { open: testState.toolbarPopoverOpen },
@@ -289,6 +311,19 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   }),
 }));
 
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutateAsync: testState.attachEnvironment,
+    }),
+  }),
+);
+
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({
     isPending: false,
@@ -304,6 +339,17 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
+    // The raw pick; `selection` above is what this host's catalog shows.
+    values: {
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-6.1-sol",
+        profileId: null,
+      },
+      permission: "supervised",
+      reasoning: "high",
+      serviceTier: "",
+    },
     selectedModel: null,
     permission: "supervised",
     reasoning: "medium",
@@ -385,7 +431,7 @@ vi.mock(
               terminalLaunch,
               sendTaken: true,
             });
-            store.begin(input.surfaceKey, false, Date.now());
+            store.begin(input.surfaceKey, false, Date.now(), false);
             return true;
           },
           line: null,
@@ -461,7 +507,6 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
     hint: null,
@@ -480,7 +525,14 @@ vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
 }));
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
-  () => ({ ActiveHostWorkspaceControls: () => null }),
+  () => ({
+    ActiveHostWorkspaceControls: (props: {
+      readonly sandboxStaging: SandboxStagingSurface | null;
+    }) => {
+      testState.sandboxStaging = props.sandboxStaging;
+      return null;
+    },
+  }),
 );
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useEpicImageFetcher: () => vi.fn(),
@@ -556,6 +608,10 @@ function expectUnavailableNotice(): void {
 }
 
 beforeEach(() => {
+  testState.beforeStagedSend.mockReset();
+  testState.beforeStagedSend.mockImplementation(() =>
+    Promise.resolve(testState.stagedNotice),
+  );
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
@@ -565,7 +621,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.getState().setSignedOut();
   testState.createChat.mockClear();
+  testState.attachEnvironment.mockReset();
+  testState.attachEnvironment.mockResolvedValue({ attached: true });
   testState.createTerminalAgent.mockClear();
   testState.onSubmitted.mockClear();
   testState.dismissSuggestion.mockClear();
@@ -576,6 +635,9 @@ afterEach(() => {
   testState.workspaceReady = true;
   testState.stagedSendInput = null;
   testState.stagedHandoffInput = null;
+  testState.agentGateNotice = null;
+  testState.stagedNotice = null;
+  testState.sandboxStaging = null;
   testState.bodyMounts = 0;
   testState.bodyUnmounts = 0;
   testState.editorContent = null;
@@ -583,9 +645,24 @@ afterEach(() => {
   imageStore.getImageBytes.mockResolvedValue(undefined);
   testState.toolbarPopoverOpen = false;
   useStagedSandboxStore.setState({ bySurface: {} });
+  usePendingSandboxSendStore.setState({ sends: {} });
   useNewConversationModalOpenStore.getState().close();
   testState.catalogHostId = null;
   testState.providers = undefined;
+  // A case's answer stays on the shared toolbar store until it is unset.
+  testState.toolbarStore?.setState({
+    catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
+    values: {
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-6.1-sol",
+        profileId: null,
+      },
+      permission: "supervised",
+      reasoning: "high",
+      serviceTier: "",
+    },
+  });
   gateState.blockedIds.clear();
   useNewConversationModalStore.getState().resetForTests();
 });
@@ -650,39 +727,435 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
   });
 });
 
-describe("new-conversation modal's send on a staged sandbox", () => {
-  it("lets a staged sandbox take a send though this host's workspace folder is unresolved", () => {
-    // The sandbox starts empty: the chip reads Empty sandbox and the
-    // workspace controls are hidden.
-    testState.workspaceReady = false;
-    testState.staged = true;
+const SANDBOX_SURFACE = newConversationSurfaceKey("epic-1");
+
+const NEW_SANDBOX: StagedSandboxTarget = {
+  kind: "new",
+  configuration: { kind: "personal" },
+  shape: {
+    os: "linux",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: null,
+    region: "us-east",
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  },
+  name: "",
+  wakeString: null,
+};
+
+const TEAM_SANDBOX: StagedSandboxTarget = {
+  ...NEW_SANDBOX,
+  configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+};
+
+function onlyPendingSend() {
+  const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+  expect(sends).toHaveLength(1);
+  return sends[0];
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("new-conversation modal refusals at Send", () => {
+  const SENTENCE =
+    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+
+  function refusal(onAction: () => void, message: string, label: string) {
+    return {
+      kind: "refused" as const,
+      message,
+      action: { label, onAction },
+    };
+  }
+
+  it("refuses an agent that cannot run on the sandbox host with the Providers link, creating nothing and keeping the draft", () => {
+    const openProviders = vi.fn();
+    testState.agentGateNotice = refusal(
+      openProviders,
+      SENTENCE,
+      "Open Personal's Providers",
+    );
     renderModal();
-    const surfaceKey = testState.stagedSendInput?.surfaceKey ?? null;
-    if (surfaceKey === null) throw new Error("expected a staging surface");
+
     act(() => {
-      useStagedSandboxStore.getState().stage(surfaceKey, {
-        kind: "new",
-        configuration: { kind: "personal" },
-        shape: {
-          os: "linux",
-          cpus: 2,
-          memoryMb: 4096,
-          diskMb: null,
-          region: "us-east",
-          idleMinutes: 30,
-          destroyAfterRestingMinutes: null,
-        },
-        name: "",
-        wakeString: null,
-      });
+      testState.bodySubmit?.();
+    });
+
+    const notice = screen.getByTestId("composer-host-notice");
+    expect(notice.textContent).toContain(SENTENCE);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(draftSurvived()).toBe(true);
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+    expect(openProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a staged send when its requested agent is not offered, before any create or wake", async () => {
+    const chooseModel = vi.fn();
+    testState.stagedNotice = refusal(
+      chooseModel,
+      "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      "Choose a model",
+    );
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
 
     act(() => {
       testState.bodySubmit?.();
     });
 
-    expect(testState.intercepts).toBe(1);
+    expect(
+      (await screen.findByTestId("composer-host-notice")).textContent,
+    ).toContain(
+      "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+    );
     expect(testState.createChat).not.toHaveBeenCalled();
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+      [],
+    );
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      phase: "staged",
+      clientRequestId: null,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose a model" }));
+    expect(chooseModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the same staged send over when the agent is signed in", async () => {
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
+    });
+
+    act(() => {
+      testState.bodySubmit?.();
+    });
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    await waitFor(() =>
+      expect(
+        Object.keys(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1),
+    );
+  });
+});
+
+describe("new-conversation modal's send on a staged sandbox", () => {
+  it("keeps a changed selection while the staged Send check is pending", async () => {
+    const checked = deferred<ComposerHostNoticeState | null>();
+    testState.beforeStagedSend.mockReturnValue(checked.promise);
+    renderModal();
+    act(() =>
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX),
+    );
+    act(() => testState.bodySubmit?.());
+    expect(testState.beforeStagedSend).toHaveBeenCalledOnce();
+    act(() =>
+      testState.toolbarStore?.setState({
+        values: {
+          selection: {
+            harnessId: "claude",
+            modelSlug: "opus",
+            profileId: null,
+          },
+          permission: "supervised",
+          reasoning: "high",
+          serviceTier: "",
+        },
+      }),
+    );
+    await act(async () => {
+      checked.resolve(null);
+      await checked.promise;
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+    expect(draftSurvived()).toBe(true);
+  });
+
+  it("attaches a team-staged chat before handing its draft to the sandbox", async () => {
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+
+    await act(async () => {
+      attach.resolve({ attached: true });
+      await attach.promise;
+    });
+    await waitFor(() => {
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches a team-staged terminal request before taking the stage", async () => {
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+    });
+    const openTerminalInstead = testState.sandboxStaging?.openTerminalInstead;
+    if (openTerminalInstead === null || openTerminalInstead === undefined) {
+      throw new Error("expected the modal to offer Open terminal instead");
+    }
+
+    act(() => {
+      openTerminalInstead();
+    });
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+
+    await act(async () => {
+      attach.resolve({ attached: true });
+      await attach.promise;
+    });
+    await waitFor(() => {
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "terminal" },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the staged chat and draft when its team attachment is refused", async () => {
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    await act(async () => {
+      attach.reject(
+        new HostRpcError({
+          code: "FORBIDDEN",
+          message: "This task cannot be attached to that team.",
+          requestId: "request-attach-refused",
+          method: "epic.attachEnvironment",
+          fatalDetails: null,
+        }),
+      );
+      await attach.promise.catch(() => undefined);
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the staged chat and draft when the account changes during attachment", async () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "modal-user", userName: "Modal", email: "modal@example.com" },
+        { userId: "modal-user", username: "Modal" },
+        [],
+      );
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    act(() => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "other-user",
+          userName: "Other",
+          email: "other@example.com",
+        },
+        { userId: "other-user", username: "Other" },
+        [],
+      );
+    });
+    await act(async () => {
+      attach.resolve({ attached: true });
+      await attach.promise;
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it("hands the send to this task and closes, though this host's workspace folder is unresolved", async () => {
+    // The sandbox starts empty: the chip reads Empty sandbox and the
+    // workspace controls are hidden.
+    testState.workspaceReady = false;
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
+    });
+
+    act(() => {
+      testState.bodySubmit?.();
+    });
+
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.intercepts).toBe(0);
+    await waitFor(() => expect(testState.onSubmitted).toHaveBeenCalledTimes(1));
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+    });
+    // The stage went with it, under the send's own key.
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toBeNull();
+    expect(
+      readStagedSandbox(pendingSendSurfaceKey(onlyPendingSend().id)),
+    ).not.toBeNull();
+  });
+
+  // The toolbar shows Claude here: the pick is Codex · GPT-6.1-Sol · High.
+  it.each([
+    [
+      "a suspended sandbox",
+      {
+        kind: "existing",
+        hostId: "host-a",
+        sandboxId: "sbx-1",
+        name: "build-box",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      },
+    ],
+    [
+      "a stopped sandbox",
+      {
+        kind: "existing",
+        hostId: "host-a",
+        sandboxId: "sbx-1",
+        name: "build-box",
+        configuration: { kind: "personal" },
+        verb: "start",
+      },
+    ],
+    ["a new sandbox", NEW_SANDBOX],
+  ] as const)(
+    "sends to %s on the model the person picked, not the one the toolbar shows",
+    async (_label, target) => {
+      renderModal();
+      act(() => {
+        useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, target);
+      });
+
+      act(() => {
+        testState.bodySubmit?.();
+      });
+
+      await waitFor(() =>
+        expect(onlyPendingSend().settings).toMatchObject({
+          harnessId: "codex",
+          model: "gpt-6.1-sol",
+          reasoningEffort: "high",
+        }),
+      );
+    },
+  );
+
+  it("opens a terminal on the staged sandbox from Open terminal instead, with no agent sent", () => {
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
+    });
+    const openTerminalInstead = testState.sandboxStaging?.openTerminalInstead;
+    if (openTerminalInstead === null || openTerminalInstead === undefined) {
+      throw new Error("expected the modal to offer Open terminal instead");
+    }
+
+    act(() => {
+      openTerminalInstead();
+    });
+
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "terminal" },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+    // The stage is the same one: its create key travels with it.
+    expect(
+      readStagedSandbox(pendingSendSurfaceKey(onlyPendingSend().id)),
+    ).toMatchObject({ target: NEW_SANDBOX });
   });
 
   it("drops the folders picked on the old host before the resubmit on the new one", () => {
@@ -715,7 +1188,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
 });
 
 describe("new-conversation modal's terminal Start on a staged sandbox", () => {
-  it("creates no terminal agent here, then launches it on the new host with what that host offers, across a close and reopen", () => {
+  it("creates no terminal agent here, then launches it on the new host as the person put it together, across a close and reopen", () => {
     useNewConversationModalStore
       .getState()
       .setComposerMode("epic-1", "terminal");
@@ -786,8 +1259,8 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     expect(testState.createTerminalAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         harnessId: "claude",
-        model: "sonnet",
-        reasoningEffort: "medium",
+        model: "old-host-model",
+        reasoningEffort: "high",
         terminalAgentArgs: "--resume",
         profileId: null,
       }),
@@ -795,7 +1268,7 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
   });
 });
 
-describe("new-conversation modal host while a staged sandbox boots", () => {
+describe("new-conversation modal host while a staged sandbox boots a terminal agent", () => {
   const SURFACE = newConversationSurfaceKey("epic-1");
 
   function host(active: boolean) {
@@ -830,8 +1303,11 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     });
   }
 
-  /** Opens the modal, stages a sandbox and sends: the boot begins. */
+  /** Opens the modal, stages a sandbox and starts a terminal agent: the boot begins. */
   function sendOnStagedSandbox(): void {
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode("epic-1", "terminal");
     setOpen(true, null);
     act(() => {
       testState.installEditor?.();
@@ -850,16 +1326,16 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
       });
     });
     act(() => {
-      testState.bodySubmit?.();
+      testState.bodyStartTerminal?.(terminalLaunch("claude"), "host-a");
     });
-    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.createTerminalAgent).not.toHaveBeenCalled();
   }
 
   function bodies(): HTMLElement[] {
     return screen.queryAllByTestId("composer-body-mock");
   }
 
-  it("sends from the closed modal once the sandbox is ready, then lets the body go", () => {
+  it("launches from the closed modal once the sandbox is ready, then lets the body go", () => {
     renderHost();
     sendOnStagedSandbox();
 
@@ -871,21 +1347,10 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     expect(testState.bodyMounts).toBe(1);
     expect(bodies()).toHaveLength(0);
 
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        createdHostId: "host-a",
-        phase: "handoff",
-      });
-    });
-    // The new host's catalog answers: the hidden body's resubmit runs.
-    act(() => {
-      testState.catalogHostId = "host-a";
-      testState.toolbarStore?.setState({
-        catalog: { hostId: "host-a", harnesses: [], modelsLoaded: true },
-      });
-    });
+    // The new host answers: the hidden body's launch runs.
+    handOff(true);
 
-    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    expect(testState.createTerminalAgent).toHaveBeenCalledTimes(1);
     expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
     // Reopening now is a fresh body: the old one was released with the stage.
     setOpen(true, null);
@@ -912,7 +1377,7 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     ).toBe(shown[0]);
   });
 
-  it("keeps the send through a tab switch, and releases the body when the stage is cleared", () => {
+  it("keeps the Start through a tab switch, and releases the body when the stage is cleared", () => {
     const view = renderHost();
     sendOnStagedSandbox();
 
@@ -931,7 +1396,7 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     });
     setOpen(true, null);
     expect(testState.bodyMounts).toBe(2);
-    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.createTerminalAgent).not.toHaveBeenCalled();
   });
 
   /** The stage hands off; the new host's catalog answers when `answer`. */
@@ -951,49 +1416,18 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     if (!answer) return;
     act(() => {
       testState.catalogHostId = "host-a";
+      testState.providers = [{ providerId: "claude-code", profiles: [] }];
       testState.toolbarStore?.setState({
-        catalog: { hostId: "host-a", harnesses: [], modelsLoaded: true },
+        catalog: {
+          hostId: "host-a",
+          harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsLoaded: true,
+        },
       });
     });
   }
 
-  it("sends an image held by hash from the closed modal once its bytes are read, keeping the body until the create goes out", async () => {
-    testState.editorContent = HASH_IMAGE_CONTENT;
-    const read: { resolve: ((bytes: Uint8Array) => void) | null } = {
-      resolve: null,
-    };
-    imageStore.getImageBytes.mockReturnValue(
-      new Promise<Uint8Array>((resolve) => {
-        read.resolve = resolve;
-      }),
-    );
-    renderHost();
-    sendOnStagedSandbox();
-    setOpen(false, null);
-
-    handOff(true);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(testState.createChat).not.toHaveBeenCalled();
-    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toMatchObject({
-      phase: "handoff",
-      failure: null,
-    });
-    expect(testState.bodyUnmounts).toBe(0);
-
-    await act(async () => {
-      read.resolve?.(new Uint8Array([9, 8, 7, 6]));
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(testState.createChat).toHaveBeenCalledTimes(1);
-    });
-    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
-    expect(testState.bodyUnmounts).toBe(1);
-  });
-
-  it("closes its @/slash menu when it hides with the send still booting", () => {
+  it("closes its @/slash menu when it hides with the Start still booting", () => {
     renderHost();
     sendOnStagedSandbox();
     expect(testState.dismissSuggestion).not.toHaveBeenCalled();
@@ -1055,7 +1489,7 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
   });
 
-  it("holds a request filed while the send is handed off, and keeps it open after the send", () => {
+  it("holds a request filed while the Start is handed off, and keeps it open after the launch", () => {
     renderHost();
     sendOnStagedSandbox();
     setOpen(false, null);
@@ -1065,14 +1499,14 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
 
     handOff(true);
 
-    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    expect(testState.createTerminalAgent).toHaveBeenCalledTimes(1);
     expect(useNewConversationModalOpenStore.getState().request).toBe(filed);
     expect(
       screen.getByTestId("epic-sidebar-new-conversation-modal"),
     ).toBeDefined();
   });
 
-  it("drops the automatic send when its tab closes before the resubmit, keeping the draft", async () => {
+  it("drops the automatic launch when its tab closes before the resubmit, keeping the draft", async () => {
     const view = renderHost();
     sendOnStagedSandbox();
     setOpen(false, null);
@@ -1087,7 +1521,7 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     });
 
     expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
-    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.createTerminalAgent).not.toHaveBeenCalled();
     expect(draftSurvived()).toBe(true);
   });
 

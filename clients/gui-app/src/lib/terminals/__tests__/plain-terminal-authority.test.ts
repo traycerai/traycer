@@ -545,7 +545,41 @@ describe("plain terminal title selector", () => {
       },
     },
   ])("keeps semantic state distinct for $name", ({ projection, expected }) => {
-    expect(selectPlainTerminalViewModel(projection)).toMatchObject(expected);
+    expect(selectPlainTerminalViewModel(projection, null)).toMatchObject(
+      expected,
+    );
+  });
+
+  it("names a terminal in the task's own directory by its host", () => {
+    const taskHome = { epicId: "epic-7", hostName: "e2e-sbx-p1" };
+    const inHome = terminal({
+      manualTitle: null,
+      currentCwd: "/home/traycer/.traycer/epics/epic-7",
+      activeProcessName: null,
+    });
+    expect(selectPlainTerminalViewModel(inHome, taskHome).displayTitle).toBe(
+      "e2e-sbx-p1",
+    );
+    expect(
+      selectPlainTerminalViewModel(
+        terminal({
+          manualTitle: null,
+          currentCwd: "/home/traycer/.traycer/epics/epic-7",
+          activeProcessName: "vim",
+        }),
+        taskHome,
+      ).displayTitle,
+    ).toBe("e2e-sbx-p1 · vim");
+    expect(
+      selectPlainTerminalViewModel(
+        terminal({
+          manualTitle: null,
+          currentCwd: "/work/repo",
+          activeProcessName: null,
+        }),
+        taskHome,
+      ).displayTitle,
+    ).toBe("repo · New Terminal");
   });
 });
 

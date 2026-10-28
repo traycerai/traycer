@@ -17,7 +17,8 @@ import {
   sandboxShapeProblem,
 } from "@/lib/sandboxes/sandbox-pricing";
 import {
-  addCreditsPriceClause,
+  notEnoughCreditsLine,
+  teamAllowanceShortLine,
   audienceClause,
   costLine,
   moveClause,
@@ -333,16 +334,18 @@ export interface StagePrice {
   readonly exact: boolean;
 }
 
-/** A size's awake price an hour from a region's per-unit rates. */
+/**
+ * A size's awake price an hour from a region's per-unit rates, by the
+ * server's own rule, so it is the rate the row is billed at: vCPU and memory
+ * only (disk is the resting rate), rounded up.
+ */
 function ratedAwakeMcPerHour(
   rates: SandboxCataloguePricing,
   size: { readonly cpus: number; readonly memoryMb: number },
-  diskMb: number,
 ): number {
-  return Math.round(
+  return Math.ceil(
     (size.cpus * rates.vcpuHourMillicredits +
-      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits +
-      (diskMb / MB_PER_GIB) * rates.diskGbHourMillicredits) *
+      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits) *
       rates.multiplier,
   );
 }
@@ -384,11 +387,7 @@ export function stageSmallestShape(
       awakeMcPerHour:
         region.pricing === null
           ? region.fromPriceMcPerHour.awakeMc
-          : ratedAwakeMcPerHour(
-              region.pricing,
-              smallestRung,
-              smallestRung.diskMb,
-            ),
+          : ratedAwakeMcPerHour(region.pricing, smallestRung),
     };
   }
   const bounds = provider.shape;
@@ -422,9 +421,8 @@ export function stagePrice(
       exact: smallest.isStaged,
     };
   }
-  const diskMb = shape.diskMb ?? provider.shape.diskDefaultMb;
   return {
-    awakeMcPerHour: ratedAwakeMcPerHour(rates, shape, diskMb),
+    awakeMcPerHour: ratedAwakeMcPerHour(rates, shape),
     exact: true,
   };
 }
@@ -466,6 +464,9 @@ export interface ConsequencesInput {
   readonly configuration: StageConfiguration;
   readonly price: StagePrice | null;
   readonly needsCredits: boolean;
+  readonly shortfallMc?: number | null;
+  /** A team sandbox this action wakes, before the viewer takes over payment. */
+  readonly wakingName?: string | null;
   readonly audience: StageAudience;
   /**
    * A host of another configuration the task already holds, named, or
@@ -494,14 +495,23 @@ export interface ConsequenceClause {
 /** The price clause, never collapsed: a price is not a disclosure. */
 export function priceClause(input: ConsequencesInput): ConsequenceClause {
   const copy = stageConfigurationCopy(input.configuration);
-  if (input.price === null) {
-    return { kind: "price", text: unpricedCostLine(copy) };
-  }
   if (input.needsCredits) {
     return {
       kind: "price",
-      text: addCreditsPriceClause(input.price.awakeMcPerHour),
+      text:
+        copy.kind === "team"
+          ? teamAllowanceShortLine(copy.teamName, input.shortfallMc ?? null)
+          : notEnoughCreditsLine(input.shortfallMc ?? null),
     };
+  }
+  if (input.wakingName && copy.kind === "team") {
+    return {
+      kind: "price",
+      text: `Waking ${input.wakingName} uses your ${copy.teamName} allowance and makes you the payer.`,
+    };
+  }
+  if (input.price === null) {
+    return { kind: "price", text: unpricedCostLine(copy) };
   }
   const line = costLine(input.price.awakeMcPerHour, copy);
   return { kind: "price", text: input.price.exact ? line : `from ${line}` };

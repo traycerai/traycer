@@ -16,7 +16,13 @@ import type {
   BotSubscribeServerFrame,
 } from "@traycer/protocol/host/bot/schemas";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
-import { useBotActivity } from "@/hooks/bots/use-bot-activity";
+import {
+  botWorkingOf,
+  failedOn,
+  failedOnRequest,
+  replyingSessionOf,
+  useBotActivity,
+} from "@/hooks/bots/use-bot-activity";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
 
@@ -50,12 +56,14 @@ const REPLYING: BotSessionActivity = {
   startedAt: 1_760_000_000_000,
   step: "Ran bun test",
   requestId: "req-1",
+  reason: null,
 };
 const FAILED: BotSessionActivity = {
   state: "failed",
   startedAt: null,
   step: null,
   requestId: "req-2",
+  reason: null,
 };
 
 function snapshot(activity: BotActivity | null): BotSubscribeServerFrame {
@@ -236,5 +244,106 @@ describe("useBotActivity", () => {
     act(() => tab.session.emit(activityFrame({ kind: "trunk" }, REPLYING)));
 
     expect(tab.current()).toBeNull();
+  });
+});
+
+describe("replyingSessionOf and botWorkingOf", () => {
+  const IDLE: BotSessionActivity = {
+    state: "idle",
+    startedAt: null,
+    step: null,
+    requestId: null,
+    reason: null,
+  };
+  const LATER: BotSessionActivity = {
+    ...REPLYING,
+    startedAt: 2_000,
+    step: "later",
+  };
+  const EARLIER: BotSessionActivity = {
+    ...REPLYING,
+    startedAt: 1_000,
+    step: "earlier",
+  };
+
+  it("names the trunk's turn before a thread's, and the earliest-started of several threads", () => {
+    expect(replyingSessionOf({ trunk: LATER, threads: { a: EARLIER } })).toBe(
+      LATER,
+    );
+    expect(
+      replyingSessionOf({ trunk: IDLE, threads: { a: LATER, b: EARLIER } }),
+    ).toBe(EARLIER);
+    expect(
+      replyingSessionOf({
+        trunk: null,
+        threads: { a: { ...REPLYING, startedAt: null }, b: EARLIER },
+      }),
+    ).toBe(EARLIER);
+  });
+
+  it("is null while nothing replies, a failed or parked session included", () => {
+    expect(replyingSessionOf(null)).toBeNull();
+    expect(
+      replyingSessionOf({ trunk: IDLE, threads: { a: FAILED } }),
+    ).toBeNull();
+  });
+
+  it("says working for any replying session, idle once the trunk is known and none replies, and unknown otherwise", () => {
+    expect(botWorkingOf({ trunk: null, threads: { a: EARLIER } })).toBe(true);
+    expect(botWorkingOf({ trunk: IDLE, threads: { a: IDLE } })).toBe(false);
+    expect(botWorkingOf({ trunk: null, threads: {} })).toBeNull();
+    expect(botWorkingOf(null)).toBeNull();
+  });
+});
+
+describe("failedOn and failedOnRequest", () => {
+  const PARKED: BotSessionActivity = {
+    state: "parked",
+    startedAt: null,
+    step: null,
+    requestId: "req-3",
+    reason: null,
+  };
+
+  it.each([
+    ["failed", FAILED],
+    ["parked", PARKED],
+  ])(
+    "holds a %s session to the request it carries, and to no other",
+    (_state, session) => {
+      expect(failedOn(session, session.requestId ?? "")).toBe(session);
+      expect(failedOn(session, "req-other")).toBeNull();
+    },
+  );
+
+  it("offers nothing on a session that is replying, idle, or unknown, even on its request", () => {
+    expect(failedOn(REPLYING, "req-1")).toBeNull();
+    expect(failedOn({ ...PARKED, state: "idle" }, "req-3")).toBeNull();
+    expect(failedOn(null, "req-3")).toBeNull();
+  });
+
+  it("offers nothing on a parked session that carries no request", () => {
+    const parkedWithNone: BotSessionActivity = { ...PARKED, requestId: null };
+
+    expect(failedOn(parkedWithNone, "req-3")).toBeNull();
+    expect(
+      failedOnRequest({ trunk: parkedWithNone, threads: {} }, "req-3"),
+    ).toBeNull();
+  });
+
+  it("finds the session holding a parked request, on the trunk or on any thread", () => {
+    expect(failedOnRequest({ trunk: PARKED, threads: {} }, "req-3")).toBe(
+      PARKED,
+    );
+    expect(
+      failedOnRequest(
+        { trunk: null, threads: { a: REPLYING, b: PARKED } },
+        "req-3",
+      ),
+    ).toBe(PARKED);
+    expect(
+      failedOnRequest({ trunk: null, threads: { a: FAILED } }, "req-3"),
+    ).toBeNull();
+    expect(failedOnRequest(null, "req-3")).toBeNull();
   });
 });

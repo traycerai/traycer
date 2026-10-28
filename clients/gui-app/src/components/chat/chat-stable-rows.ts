@@ -1,4 +1,7 @@
-import type { ChatMessage } from "@/stores/composer/chat-store";
+import type {
+  BackgroundEventEnding,
+  ChatMessage,
+} from "@/stores/composer/chat-store";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 
 /**
@@ -122,6 +125,12 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
     b.turnHasOnlyAutonomousResumeSegments,
   autonomousResumeOwed: (a, b) =>
     a.autonomousResumeOwed === b.autonomousResumeOwed,
+  // Rebuilt by every fold pass, so compared by content, like `turnMessageIds`.
+  foldedBackgroundEvents: (a, b) =>
+    sameFoldedBackgroundEvents(
+      a.foldedBackgroundEvents,
+      b.foldedBackgroundEvents,
+    ),
   turnId: (a, b) => a.turnId === b.turnId,
   manualRungAnchorId: (a, b) => a.manualRungAnchorId === b.manualRungAnchorId,
   routingSettledNoticeId: (a, b) =>
@@ -140,6 +149,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
   // A member's picture can resolve after the row first painted.
   senderAvatarUrl: (a, b) => a.senderAvatarUrl === b.senderAvatarUrl,
+  senderUserId: (a, b) => a.senderUserId === b.senderUserId,
   // The row-level request state is carried by reference from the open
   // message, so a resolve arrives as a new object and identity is enough.
   conversationRequest: (a, b) =>
@@ -167,6 +177,34 @@ function sameMessageIds(
     return false;
   }
   return a.every((id, index) => id === b[index]);
+}
+
+function sameFoldedBackgroundEvents(
+  a: ChatMessage["foldedBackgroundEvents"],
+  b: ChatMessage["foldedBackgroundEvents"],
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) {
+    return false;
+  }
+  return a.every((event, index) => {
+    const other = b[index];
+    return (
+      event.key === other.key &&
+      event.trigger === other.trigger &&
+      sameBackgroundEventEnding(event.ending, other.ending)
+    );
+  });
+}
+
+function sameBackgroundEventEnding(
+  a: BackgroundEventEnding,
+  b: BackgroundEventEnding,
+): boolean {
+  if (a.kind === "no-reply") {
+    return b.kind === "no-reply" && a.elapsedMs === b.elapsedMs;
+  }
+  return a.kind === b.kind;
 }
 
 /** Shallow field comparison - avoids the cost of a deep equality check. */
@@ -235,6 +273,21 @@ function isTranscriptListRowUnchanged(
   if (a.ordinal !== b.ordinal) return false;
   if (a.kind === "hydrated") {
     if (b.kind !== "hydrated") return false;
+    if (a.part === null || b.part === null) {
+      // One side splits and the other does not: the row changed shape, so it
+      // is never unchanged however its fields compare.
+      if (a.part !== b.part) return false;
+      return isChatMessageUnchanged(a.model, b.model);
+    }
+    if (a.part.index !== b.part.index || a.part.count !== b.part.count) {
+      return false;
+    }
+    // A part is compared on the WHOLE turn, not on its own slice of segments.
+    // `buildChatActivityTimeline` has whole-turn inputs - the question tools an
+    // interview later in the turn suppresses, the trailing group it marks
+    // active, the routing notice a part away from its error - so a later
+    // segment can change what an EARLIER part draws, and a slice comparison
+    // would freeze that part's body. See `assistant-turn-parts.ts`.
     return isChatMessageUnchanged(a.model, b.model);
   }
   if (b.kind !== "placeholder") return false;

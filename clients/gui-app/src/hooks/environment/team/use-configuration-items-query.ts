@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -20,15 +21,15 @@ export type ConfigurationItem = ResponseOfMethod<
 
 /**
  * Page-specific projections share one configuration read and its CAS
- * invalidation. The read goes to the surface's own host, which forwards it on
- * the viewer's session; the server pool does not serve it.
+ * invalidation. The read uses the pool in a pool build and the surface's
+ * host otherwise, on the viewer's session.
  */
 export function useConfigurationItemsQuery<Data>(
   page: string,
   mapItems: (items: readonly ConfigurationItem[]) => Data,
 ): UseQueryResult<Data, HostRpcError> {
   const source = useConfigurationSource();
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),

@@ -1,6 +1,29 @@
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
+import { QueryClient } from "@tanstack/react-query";
+import { AuthService } from "@/lib/auth/auth-service";
+import { HostDirectoryService } from "@/lib/host";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT } from "@traycer/protocol/host/sandbox-control";
+import { runStagedSandbox } from "@/lib/sandboxes/staged-sandbox-run";
+import {
+  handPendingSandboxSend,
+  endPendingSandboxSend,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  PICKED_SETTINGS,
+  MESSAGE_CONTENT,
+} from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  openLandingStagedTerminal,
+  type StagedSandboxRunner,
+} from "@/components/composer/use-staged-sandbox-send";
 import {
   act,
   cleanup,
@@ -11,14 +34,18 @@ import {
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
+  SandboxCreateRequest,
   SandboxCatalogue,
   SandboxCatalogueProvider,
+  SandboxCost,
+  UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   useSandboxStaging,
   type SandboxStagingTask,
   type SandboxStaging,
 } from "@/components/composer/use-sandbox-staging";
+import { ConsequencesBlock } from "@/components/composer/consequences-block";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type {
   HostScopeOption,
@@ -50,6 +77,7 @@ const mocks = vi.hoisted(() => ({
   user: null as AuthenticatedUser | null,
   catalogue: null as SandboxCatalogue | null,
   defaults: {} as Record<string, SandboxConfigurationDefaults>,
+  costs: null as UserSandboxCost | null,
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
 }));
 
@@ -59,8 +87,30 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
+  useSandboxCosts: () => ({ data: mocks.costs }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => (key: string) => mocks.defaults[key] ?? null,
+}));
+// The open task's chats name the agent that created an agent sandbox.
+vi.mock("@/hooks/use-epic-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-epic-store")>()),
+  useMaybeEpicStore: (
+    selector: (state: unknown) => unknown,
+    _fallback: unknown,
+  ) =>
+    selector({
+      chats: {
+        byId: {
+          "agent-26": {
+            id: "agent-26",
+            title: "Create Sandbox e2e-sbx-agent26",
+          },
+        },
+      },
+      tuiAgents: { byId: {} },
+    }),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -191,9 +241,14 @@ function Harness(props: {
     surface:
       props.surfaceKey === null
         ? null
-        : { surfaceKey: props.surfaceKey, task: null },
+        : {
+            surfaceKey: props.surfaceKey,
+            task: null,
+            openTerminalInstead: null,
+          },
     memoryHostId: MEMORY_HOST,
     hosts: props.hosts,
+    forkOnNew: null,
   });
   useEffect(() => {
     latest = result;
@@ -225,8 +280,10 @@ beforeEach(() => {
   );
   mocks.catalogue = CATALOGUE;
   mocks.defaults = {};
+  mocks.costs = null;
   mocks.openSettings.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
+  usePendingSandboxSendStore.setState({ sends: {} });
   useSandboxShapeMemoryStore.setState({
     byHost: {},
     lastConfigurationByHost: {},
@@ -241,6 +298,114 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+});
+
+describe("a staged name at create", () => {
+  async function createFromStage(
+    action: "send" | "terminal" | "pending-terminal",
+  ): Promise<SandboxCreateRequest> {
+    const runnerHost = createFakeRunnerHost({});
+    const auth = new AuthService({ runnerHost });
+    const directory = new HostDirectoryService({
+      runnerHost,
+      remoteFetcher: null,
+      onRegistryPollTick: null,
+      authContextId: null,
+      credentialGeneration: null,
+      localHostIdSeeder: () => Promise.resolve(null),
+    });
+    const create = vi
+      .spyOn(auth, "createSandbox")
+      .mockResolvedValue(
+        refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      );
+    const client = new QueryClient();
+    let completed = Promise.resolve();
+    let pendingId: string | null = null;
+    const runner: StagedSandboxRunner = (surfaceKey, fresh, request) => {
+      completed = runStagedSandbox(surfaceKey, fresh, request, {
+        auth,
+        directory,
+        queryClient: client,
+        userId: null,
+        wake: () => Promise.resolve(false),
+        readSettings: () => Promise.resolve("unsupported"),
+        now: Date.now,
+        sleep: () => Promise.resolve(),
+      });
+    };
+    try {
+      if (action === "terminal") openLandingStagedTerminal(SURFACE, runner);
+      else {
+        pendingId = handPendingSandboxSend({
+          fromSurfaceKey: SURFACE,
+          epicId: "epic-1",
+          request:
+            action === "pending-terminal"
+              ? { kind: "terminal" }
+              : { kind: "chat", parentId: null, placement: null },
+          content: MESSAGE_CONTENT,
+          text: action === "pending-terminal" ? "" : "a different message name",
+          settings: PICKED_SETTINGS,
+          epicConfirmed: true,
+          now: Date.now(),
+        });
+        if (pendingId === null) throw new Error("expected a handed stage");
+        runner(pendingSendSurfaceKey(pendingId), true, {
+          taskId: "epic-1",
+          resume: false,
+        });
+      }
+      await completed;
+      expect(create).toHaveBeenCalledTimes(1);
+      return create.mock.calls[0][0];
+    } finally {
+      if (pendingId !== null) endPendingSandboxSend(pendingId);
+      directory.dispose();
+      auth.dispose();
+      client.clear();
+      create.mockRestore();
+    }
+  }
+
+  it.each([
+    { action: "terminal", reselect: false },
+    { action: "terminal", reselect: true },
+    { action: "pending-terminal", reselect: true },
+  ] as const)(
+    "$action keeps the applied typed name (reselect New: $reselect)",
+    async ({ action, reselect }) => {
+      mount([LAPTOP]);
+      act(() => staging().composer.onPickNew("personal"));
+      act(() => staging().composer.onOpenShape("personal"));
+      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+        target: { value: "typed-terminal-box" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Use this shape" }));
+      if (reselect) act(() => staging().composer.onPickNew("personal"));
+
+      const request = await createFromStage(action);
+
+      expect(request.displayName).toBe("typed-terminal-box");
+    },
+  );
+
+  it.each(["send", "terminal", "pending-terminal"] as const)(
+    "%s uses the generated name shown in the untouched stage's shape sheet",
+    async (action) => {
+      mount([LAPTOP]);
+      act(() => staging().composer.onPickNew("personal"));
+      act(() => staging().composer.onOpenShape("personal"));
+      const name = screen.getByRole<HTMLInputElement>("textbox", {
+        name: "Name",
+      }).value;
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const request = await createFromStage(action);
+
+      expect(name).toMatch(/^sandbox-[a-z0-9]{4}$/);
+      expect(request.displayName).toBe(name);
+    },
+  );
 });
 
 describe("useSandboxStaging New rows", () => {
@@ -260,6 +425,70 @@ describe("useSandboxStaging New rows", () => {
     expect(composer.newRows[0].subLine).toContain("2 vCPU");
   });
 
+  describe("sub-line, from a catalogue pricing its 2 vCPU · 4 GB shape at $0.21", () => {
+    const PRICED_CATALOGUE: SandboxCatalogue = {
+      providers: [
+        {
+          ...PROVIDER,
+          shapes: [
+            { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true },
+            { cpus: 4, memoryMb: 8192, diskMb: 20480, default: false },
+          ],
+          regions: [
+            {
+              id: "us-east",
+              label: "US East",
+              fromPriceMcPerHour: {
+                awakeMc: 210,
+                suspendedMc: 4,
+                stoppedMc: 2,
+              },
+              pricing: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    function withBalances(personalCredits: number, teamCredits: number): void {
+      mocks.catalogue = PRICED_CATALOGUE;
+      mocks.user = userWith(
+        userSubscription({
+          totalPlanCredits: personalCredits,
+          consumedFromPlan: 0,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [teamSubscription(teamCredits)],
+      );
+    }
+
+    it("names the OS and the full price, and whose credits, at a short balance", () => {
+      withBalances(0, 0);
+      const { composer } = mount([LAPTOP]);
+
+      expect(composer.newRows[0].subLine).toBe(
+        "Linux · 2 vCPU · 4 GB · from $0.21 an hour · uses your credits",
+      );
+      expect(composer.newRows[1].subLine).toBe(
+        "Linux · 2 vCPU · 4 GB · from $0.21 an hour · uses your acme credits",
+      );
+    });
+
+    it("names the OS and the exact price while awake when funded", () => {
+      withBalances(1_000, 1_000);
+      const { composer } = mount([LAPTOP]);
+
+      expect(composer.newRows[0].subLine).toBe(
+        "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your credits",
+      );
+      expect(composer.newRows[1].subLine).toBe(
+        "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your acme credits",
+      );
+    });
+  });
+
   it("stages a new sandbox in the default shape and remembers the configuration", () => {
     const { composer } = mount([LAPTOP]);
 
@@ -273,7 +502,6 @@ describe("useSandboxStaging New rows", () => {
         kind: "new",
         configuration: { kind: "personal" },
         shape: DEFAULT_SHAPE,
-        name: "",
         wakeString: WAKE_STRING_MEMORY,
       },
     });
@@ -372,7 +600,7 @@ describe("useSandboxStaging New rows", () => {
     const { composer } = mount([LAPTOP]);
     act(() => composer.onPickNew("personal"));
     act(() => {
-      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now());
+      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
     });
     expect(staging().composer.stagedBusy).toBe(true);
 
@@ -424,7 +652,7 @@ describe("useSandboxStaging New rows", () => {
 });
 
 describe("useSandboxStaging In this task", () => {
-  it("lists the task's hosts but never an agent's burst sandbox, Automations, or a teammate's team sandbox", () => {
+  it("lists every host the task uses, an agent's burst sandbox included, but never Automations", () => {
     const burst = sandboxHost(
       "box-burst",
       {
@@ -450,8 +678,7 @@ describe("useSandboxStaging In this task", () => {
       },
       null,
     );
-    // The Yours and Started groups' rule: a teammate's team sandbox stays on
-    // the team's page, even when the task ran on it.
+    // A teammate's team sandbox the task ran on is a host it uses.
     const teammates = sandboxHost(
       "team-box",
       {
@@ -465,20 +692,23 @@ describe("useSandboxStaging In this task", () => {
       teamOwnedItem(),
     );
     const task: SandboxStagingTask = {
+      epicId: "epic-1",
       hosts: [AWAKE, burst, automations, teammates].map((host) => ({
         hostId: host.hostId,
         label: host.name,
         principal: { kind: "user", id: "u1" },
         reach: "same_principal",
+        sandboxEnd: null,
       })),
       groups: [],
       collaborators: null,
     };
     function InTask() {
       const result = useSandboxStaging({
-        surface: { surfaceKey: SURFACE, task },
+        surface: { surfaceKey: SURFACE, task, openTerminalInstead: null },
         memoryHostId: MEMORY_HOST,
         hosts: [LAPTOP, AWAKE, burst, automations, teammates],
+        forkOnNew: null,
       });
       useEffect(() => {
         latest = result;
@@ -489,6 +719,63 @@ describe("useSandboxStaging In this task", () => {
 
     expect(staging().composer.inThisTask?.map((host) => host.hostId)).toEqual([
       "box-awake",
+      "box-burst",
+      "team-box",
+    ]);
+  });
+});
+
+describe("useSandboxStaging sandbox rows' lines", () => {
+  function cost(sandboxId: string, todayMillicredits: number): SandboxCost {
+    return {
+      sandboxId,
+      currentRateMillicreditsPerHour: 0,
+      state: "awake",
+      frozen: false,
+      charged: {
+        computeMillicredits: 0,
+        storageMillicredits: 0,
+        sinceCreatedAt: 0,
+      },
+      pendingMillicredits: 0,
+      segments: [],
+      todayMillicredits,
+      todayAwakeMs: null,
+      history: [],
+    };
+  }
+
+  function lineOf(host: HostScopeOption): readonly string[] {
+    return mount([LAPTOP, host]).composer.subLinesFor(host.hostId);
+  }
+
+  it("says whose a Personal sandbox is and what it cost today", () => {
+    mocks.costs = {
+      sandboxes: [cost("sbx-box-awake", 30)],
+      awakeBurnMillicreditsPerHour: 0,
+      todayYoursMillicredits: 30,
+      todayByEnvironment: [],
+    };
+
+    expect(lineOf(AWAKE)).toEqual(["Personal · $0.03 today"]);
+  });
+
+  it("names the team on a team sandbox's line", () => {
+    mocks.costs = {
+      sandboxes: [cost("sbx-team-box", 50)],
+      awakeBurnMillicreditsPerHour: 0,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    const awakeTeamBox = sandboxHost(
+      "team-box",
+      { state: "awake" },
+      teamOwnedItem(),
+    );
+
+    expect(lineOf(awakeTeamBox)).toEqual([
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+      "acme · $0.05 today",
     ]);
   });
 });
@@ -512,6 +799,36 @@ describe("useSandboxStaging host picks", () => {
       },
     });
     expect(staging().composer.stagedLabel).toContain("suspended");
+  });
+
+  it("reads the suspended label until the wake is ticked, then 'awake' as the stage moves past booting", () => {
+    const { composer } = mount([LAPTOP, SUSPENDED]);
+    act(() => composer.onPickHost(SUSPENDED));
+    const store = useStagedSandboxStore.getState();
+    store.begin(SURFACE, false, Date.now(), false);
+    store.report(SURFACE, { step: "booting", stepAt: Date.now() });
+    expect(staging().composer.stagedLabel).toBe(
+      "box-suspended · suspended, resumes on send",
+    );
+
+    act(() => store.report(SURFACE, { step: "applying", stepAt: Date.now() }));
+    expect(staging().composer.stagedLabel).toBe("box-suspended · awake");
+
+    act(() =>
+      store.report(SURFACE, { step: "delivering", stepAt: Date.now() }),
+    );
+    expect(staging().composer.stagedLabel).toBe("box-suspended · awake");
+  });
+
+  it("reads 'awake' for a started sandbox once its stage is at its handoff", () => {
+    const { composer } = mount([LAPTOP, STOPPED]);
+    act(() => composer.onPickHost(STOPPED));
+    const store = useStagedSandboxStore.getState();
+    store.begin(SURFACE, false, Date.now(), false);
+
+    act(() => store.report(SURFACE, { phase: "handoff", step: "delivering" }));
+
+    expect(staging().composer.stagedLabel).toBe("box-stopped · awake");
   });
 
   it("stages a stopped sandbox to start", () => {
@@ -578,6 +895,124 @@ describe("useSandboxStaging host picks", () => {
     act(() => staging().composer.onPickHost(SUSPENDED));
 
     expect(readStagedSandbox(SURFACE)?.target.kind).toBe("existing");
+  });
+});
+
+describe("useSandboxStaging In this task, agent sandboxes the task's hosts omit", () => {
+  function agentSandbox(
+    hostId: string,
+    createdByTaskId: string,
+  ): HostScopeOption {
+    return sandboxHost(
+      hostId,
+      {
+        state: "awake",
+        summary: sandboxSummaryFixture({
+          id: `sbx-${hostId}`,
+          hostId,
+          burst: true,
+          idleMinutes: 30,
+          createdByTaskId,
+          createdByAgentId: "agent-26",
+        }),
+      },
+      null,
+    );
+  }
+
+  function InTask(props: { readonly hosts: readonly HostScopeOption[] }) {
+    const result = useSandboxStaging({
+      surface: {
+        surfaceKey: SURFACE,
+        // The task's hosts list is empty of every sandbox here: none owns a
+        // chat on the task yet.
+        task: { epicId: "epic-1", hosts: [], groups: [], collaborators: null },
+        openTerminalInstead: null,
+      },
+      memoryHostId: MEMORY_HOST,
+      hosts: props.hosts,
+      forkOnNew: null,
+    });
+    useEffect(() => {
+      latest = result;
+    }, [result]);
+    return null;
+  }
+
+  it("lists the agent sandbox created for the task, with who created it and when it goes", () => {
+    const mine = agentSandbox("box-agent26", "epic-1");
+    render(<InTask hosts={[LAPTOP, mine]} />);
+
+    expect(staging().composer.inThisTask?.map((host) => host.hostId)).toEqual([
+      "box-agent26",
+    ]);
+    expect(staging().composer.subLinesFor("box-agent26")).toEqual([
+      "Agent sandbox · created by Create Sandbox e2e-sbx-agent26 · destroys itself after 30 idle min",
+    ]);
+  });
+
+  it("leaves out an agent sandbox created for another task", () => {
+    const theirs = agentSandbox("box-other", "epic-other");
+    render(<InTask hosts={[LAPTOP, theirs]} />);
+
+    expect(staging().composer.inThisTask).toEqual([]);
+  });
+});
+
+describe("useSandboxStaging a staged resting sandbox's block", () => {
+  const PRICED = { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 };
+
+  function pricedHost(
+    hostId: string,
+    state: "suspended" | "stopped",
+    item: HostListItem | null,
+  ): HostScopeOption {
+    return sandboxHost(
+      hostId,
+      {
+        state,
+        summary: sandboxSummaryFixture({
+          id: `sbx-${hostId}`,
+          hostId,
+          state,
+          priceMcPerHour: PRICED,
+        }),
+      },
+      item,
+    );
+  }
+
+  function stagedPrice(host: HostScopeOption): string {
+    const { composer } = mount([LAPTOP, host]);
+    act(() => composer.onPickHost(host));
+    const { consequences } = staging();
+    if (consequences === null) throw new Error("nothing was staged");
+    render(
+      <ConsequencesBlock
+        input={consequences}
+        onMoveFirst={null}
+        onOpenTerminalInstead={null}
+      />,
+    );
+    return screen.getByTestId("consequences-price").textContent;
+  }
+
+  it("prices a suspended Personal sandbox from its own row", () => {
+    expect(stagedPrice(pricedHost("box-suspended", "suspended", null))).toBe(
+      "$0.21 an hour while awake · uses your credits",
+    );
+  });
+
+  it("prices a stopped Personal sandbox from its own row", () => {
+    expect(stagedPrice(pricedHost("box-stopped", "stopped", null))).toBe(
+      "$0.21 an hour while awake · uses your credits",
+    );
+  });
+
+  it("names the team on a team sandbox's price", () => {
+    expect(
+      stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
+    ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
   });
 });
 

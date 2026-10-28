@@ -354,9 +354,12 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
     );
     if (staleEpicIds.length > 0) {
       useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
-      tabCommandCoordinator.handleEpicAccessLoss(staleEpicIds);
+      tabCommandCoordinator.handleEpicAccessLoss(
+        staleEpicIds,
+        props.run.userId,
+      );
     }
-  }, [confirmedAbsentEpicIds, locallyProtectedEpicIds]);
+  }, [confirmedAbsentEpicIds, locallyProtectedEpicIds, props.run.userId]);
 
   return null;
 }

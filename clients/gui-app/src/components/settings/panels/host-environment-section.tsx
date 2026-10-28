@@ -6,13 +6,20 @@ import type { ReactNode } from "react";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
+
+/** A computer whose own settings are not in Personal yet (it has a Local row). */
+const RUNS_OWN_SETTINGS = "Runs its own settings, not in Personal yet";
 
 /**
  * Which configuration THIS host runs, as a fact rather than a control:
- * `Runs Personal`, or `Runs Acme` for a host an earlier build bound to a
- * team. A team cannot hold a computer in this version, so there is nothing
+ * `Runs Personal`, `Runs Acme` for a host an earlier build bound to a
+ * team, or `Runs its own settings, not in Personal yet` on a computer with a
+ * Local row (the Environment dropdown's rule), whatever it is bound to. A team cannot hold a computer in this version, so there is nothing
  * to pick here.
  *
  * A sandbox shows nothing: its configuration is settled by who pays for it,
@@ -34,18 +41,40 @@ export function HostEnvironmentSection(props: {
     scope.hostId,
     usable && !sandbox && support === true,
   );
+  const status = useEnvironmentStatusRead(
+    scope.client,
+    scope.hostId,
+    usable && !sandbox,
+  );
+  const version =
+    useHostNegotiatedMethodVersions(
+      scope.hostId === null ? NO_HOSTS : [scope.hostId],
+      "environment.status",
+    ).get(scope.hostId ?? "") ?? null;
   if (!usable || sandbox || support !== true || binding.data === undefined) {
     return null;
   }
+  const local =
+    scope.hostId !== null &&
+    status.data !== null &&
+    localPickerRow(
+      { hostId: scope.hostId, name: scope.hostLabel },
+      status.data,
+      version,
+    ) !== null;
   return (
     <p
       className="mb-4 shrink-0 text-ui-md font-semibold text-foreground"
       data-testid="host-environment-section"
     >
-      Runs {runsLabel(binding.data.environment)}
+      {local
+        ? RUNS_OWN_SETTINGS
+        : `Runs ${runsLabel(binding.data.environment)}`}
     </p>
   );
 }
+
+const NO_HOSTS: readonly string[] = [];
 
 function runsLabel(environment: EnvironmentDescriptor): string {
   return environment.ownerKind === "user" ? "Personal" : environment.label;

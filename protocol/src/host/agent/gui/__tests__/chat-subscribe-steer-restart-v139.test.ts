@@ -46,7 +46,7 @@ const rejectedAck = {
   reason: "Steering this message ends the current turn.",
   code: "QUEUE_STEER_RESTART_UNCONFIRMED",
   backgroundStopTaskIds: [],
-  steerRestartReasons: ["images", "skills"],
+  steerRestartReasons: ["settings", "images"],
 } as const;
 
 describe("chat.subscribe@1.39 registration", () => {
@@ -93,10 +93,19 @@ describe("actionAck steer restart reasons", () => {
   it("1.39 reads every reason; 1.38 has no such key", () => {
     expect(
       chatSubscribeV139.serverFrameSchema.parse(rejectedAck),
-    ).toMatchObject({ steerRestartReasons: ["images", "skills"] });
+    ).toMatchObject({ steerRestartReasons: ["settings", "images"] });
     expect(
       chatSubscribeV138.serverFrameSchema.parse(rejectedAck),
     ).not.toHaveProperty("steerRestartReasons");
+  });
+
+  it("1.39 still decodes the published slash_command and skills members", () => {
+    expect(
+      chatSubscribeV139.serverFrameSchema.parse({
+        ...rejectedAck,
+        steerRestartReasons: ["slash_command", "skills"],
+      }),
+    ).toMatchObject({ steerRestartReasons: ["slash_command", "skills"] });
   });
 
   it("1.39 refuses a reason outside the vocabulary", () => {
@@ -118,6 +127,6 @@ describe("actionAck steer restart reasons", () => {
     expect(onV111).not.toHaveProperty("cause");
     expect(
       projectChatActionAckForVersion(ack, { major: 1, minor: 39 }),
-    ).toMatchObject({ steerRestartReasons: ["images", "skills"] });
+    ).toMatchObject({ steerRestartReasons: ["settings", "images"] });
   });
 });

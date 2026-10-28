@@ -39,11 +39,12 @@ import {
   cleanup,
   fireEvent,
   queries,
-  render,
+  render as rtlRender,
   screen,
   waitFor,
   within,
   type BoundFunctions,
+  type RenderResult,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -55,6 +56,17 @@ import {
   vi,
   type Mock,
 } from "vitest";
+
+function render(ui: ReactNode): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return rtlRender(ui, {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 // Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
 function selectTab(name: string): void {
@@ -228,10 +240,9 @@ const providerMocks = vi.hoisted(() => {
 
 // The optional "Reset provider settings" capability. `unsupportedMethods` is
 // what a host that predates `providers.settingsFile.*` would not advertise;
-// the status hook and the reset mutation are stubbed at their module seams
-// (this suite renders without a `QueryClientProvider`, like every other data
-// hook it uses). The hooks' own behavior - the request, the toast, the refetch
-// - is held by `provider-settings-reset-action.test.tsx`.
+// the status hook and reset mutation are stubbed at their module seams. The
+// reset hooks' own behavior - the request, toast, and refetch - is held by
+// `provider-settings-reset-action.test.tsx`.
 type ResetSettingsFileMutate = (
   variables: Record<string, never>,
   options: { readonly onSettled: () => void },
@@ -281,22 +292,17 @@ vi.mock(
 );
 
 // The auto-judge row the panel now renders reaches TanStack Query for the
-// harness catalog and the set-judge mutation. This suite renders the panel
-// without a `QueryClientProvider` (every other data hook it uses is mocked at
-// this same seam), and the row is not what any test here asserts, so both go
-// the same way. `use-gui-harness-catalog` is stubbed with only the member this
-// subtree calls.
+// harness catalog and the set-judge mutation. The row is not what any test
+// here asserts, so the catalog is stubbed at its query seam.
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
 }));
 
 // The own-login row reads whether a refresh is in flight through
-// `useIsMutating`, which needs a `QueryClientProvider` this suite does not
-// mount; the refresh itself is `useRefreshProviders`, stubbed below.
-vi.mock("@tanstack/react-query", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useIsMutating: () => 0 };
-});
+// `useIsMutatingOf`; the refresh itself is `useRefreshProviders`, stubbed below.
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
+}));
 
 // The provider's Limits pick reads the watched host's usage through the layout
 // editor's own scope, which this suite does not stand up, so it is a marker
@@ -407,7 +413,7 @@ vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
 
 // The candidates table's failed-pack arm reaches `providers.ensurePack`, which
 // goes through TanStack Query. Mocked here alongside the other provider
-// mutations so this panel test keeps rendering without a QueryClientProvider.
+// mutations so this panel test stays focused on its provider controls.
 // `AddProviderProfileDialog` also reaches this through the login flow, which
 // calls `mutateAsync` before a retried start - see the `*ForClient` variant.
 vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => {
@@ -461,9 +467,8 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
 }));
 
 // The panel's profile controls use a host-scoped TanStack mutation in
-// production. This legacy panel harness intentionally has no QueryClient;
-// keep its provider-detail coverage focused on rendering and the existing
-// provider mutations while the dedicated hook suite covers cache behavior.
+// production. Keep this suite focused on rendering and the existing provider
+// mutations while the dedicated hook suite covers cache behavior.
 vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
   useProvidersSetProfileEnabledForClient: () => ({
     mutate: providerMocks.setProfileEnabledMutate,
@@ -759,8 +764,8 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
-// MCP Project scope resolves workspaces via host query; this harness has no
-// QueryClient, so stub a stable empty host-resolved set.
+// MCP Project scope resolves workspaces via host query; stub a stable empty
+// host-resolved set because workspace rows are not under test here.
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => ({
     folders: [],
@@ -769,9 +774,8 @@ vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   }),
 }));
 
-// Same reason: the MCP scope picker can add a workspace folder, and the real
-// action hook opens with `useQueryClient()` - which THROWS, not degrades, with
-// no provider above it. Every host hook in this file is stubbed the same way.
+// The MCP scope picker can add a workspace folder; its action hook is
+// unrelated to the provider panel, so keep it stubbed here.
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   useWorkspaceFolderActionsForClient: () => ({
     isPreparing: false,
@@ -838,6 +842,19 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
     isError: false,
     isFetching: false,
     refetch: () => Promise.resolve({}),
+  }),
+}));
+
+// A provider's Env tab reads the secrets that set its variables and writes
+// through a host-scoped mutation; neither is about these cases, and both open
+// with `useQueryClient()`.
+vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
+  useSecretClaimedNames: () => new Map<string, string>(),
+}));
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: () => ({
+    mutate: () => {},
+    isPending: false,
   }),
 }));
 
@@ -1677,6 +1694,27 @@ vi.mock(
     ),
   }),
 );
+
+// The panel's LocalRowNote owns the move affordance, which has its own suite.
+// Keep its status read independent of the host runtime and real environment
+// queries in this providers-focused harness.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/environment/use-environment-reads", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-reads")
+    >();
+  return {
+    ...actual,
+    useEnvironmentStatusRead: () => ({
+      supported: null,
+      data: null,
+      isError: false,
+    }),
+  };
+});
 
 // This file draws the Providers page of a Local row: the computer's own tabs.
 // The cases for Personal's MCP and Skills tabs set their own pick.
@@ -2926,7 +2964,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Variables")).toBeDefined();
     expect(screen.getByDisplayValue("OPENAI_API_KEY")).toBeDefined();
     expect(
-      screen.getByText(/Applied when Traycer spawns the OpenCode/),
+      screen.getByText(
+        /Set for OpenCode each time it starts, on this computer only\./,
+      ),
     ).toBeDefined();
   });
 
@@ -4218,7 +4258,7 @@ describe("<ProvidersSettingsPanel />", () => {
       }),
     ).toBeDefined();
     const ownLoginRow = screen
-      .getByText("Codex's own login on dev-box · works on this computer only")
+      .getByText("works on this computer only")
       .closest('[data-slot="profile-summary-actions"]');
     if (!(ownLoginRow instanceof HTMLElement)) {
       throw new Error("Expected own-login row");
@@ -4313,9 +4353,7 @@ describe("<ProvidersSettingsPanel />", () => {
       );
       openProfilesTab();
       const row = screen
-        .getByText(
-          "Claude Code's own login on windows-test-machine · works on this computer only",
-        )
+        .getByText("works on this computer only")
         .closest('[data-slot="profile-summary-actions"]');
       if (!(row instanceof HTMLElement))
         throw new Error("Expected own-login row");
@@ -4855,11 +4893,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getAllByText("Codex's own login on dev-box").length,
     ).toBeGreaterThan(0);
-    expect(
-      screen.getByText(
-        "Codex's own login on dev-box · works on this computer only",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("works on this computer only")).toBeDefined();
     expect(screen.queryByText("Pro")).toBeNull();
     expect(screen.queryByText("c•••@e…")).toBeNull();
     expect(

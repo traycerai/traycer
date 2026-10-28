@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -27,6 +27,12 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
+import {
+  ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
+  isAttachEnvironmentUnsupported,
+  useEpicAttachmentClient,
+  useEpicAttachEnvironment,
+} from "@/hooks/epic/use-epic-attach-environment-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import {
   authorizesCloudCapability,
@@ -91,6 +97,7 @@ import {
 } from "@/lib/composer/image-atoms";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
 import {
   resolveDraftImageBytes,
   type DraftImageByteTarget,
@@ -209,6 +216,31 @@ export interface LandingTerminalAgentArgs {
   readonly settled: ((dispatched: boolean) => void) | null;
 }
 
+/** A send to a staged sandbox, which opens its task at once. */
+export interface LandingStagedSandboxTaskArgs {
+  /** The caller-owned draft the task replaces, or null. */
+  readonly draftId: string | null;
+  /** As `LandingComposerSubmitArgs.owner`. */
+  readonly owner: LandingOwnerTeam | null;
+  /** The sandbox's team, independent of the task's placement and owner. */
+  readonly sandboxTeamId: string | null;
+  /** The message, as the task's first prompt. */
+  readonly text: string;
+  /**
+   * Hands the message to the new task, before it opens: `confirm` once the
+   * task is created and attached to the sandbox's team, which lets the sandbox
+   * start; `giveBack` ends the send if either step fails and returns the draft
+   * holding the message again (the task replaced its original draft). `null`
+   * when there was nothing to hand, and nothing is created.
+   */
+  readonly hand: (epicId: string) => {
+    /** The send is still pending, rather than cancelled or returned. */
+    readonly isCurrent: () => boolean;
+    readonly confirm: () => void;
+    readonly giveBack: () => string | null;
+  } | null;
+}
+
 export interface TerminalAgentLaunch {
   readonly harnessId: TuiHarnessId;
   readonly model: string | null;
@@ -232,6 +264,15 @@ export interface LandingComposerActions {
   readonly selectTerminalAgent: (
     args: LandingTerminalAgentArgs,
   ) => LandingPlacementRefusal | null;
+  readonly startTaskOnStagedSandbox: (
+    args: LandingStagedSandboxTaskArgs,
+  ) => LandingPlacementRefusal | null;
+  /**
+   * Whether the composer's placement can take a task now. A staged sandbox
+   * provides a host of its own, so a send staged where none can (no host, or
+   * only a resting one) starts the sandbox first and sends on it.
+   */
+  readonly placementAdmitsTask: () => boolean;
   /**
    * Whether a create started here is still running.
    *
@@ -310,9 +351,8 @@ interface FinalizeLandingSubmissionInput {
  * `target` is the composer's resolved placement (selection model §54), and it
  * is the ONLY host any create below touches: the epic create, its folded chat
  * seed, and the terminal-agent chain all run on `target.client`, whose host
- * identity is re-validated at the top of each action. There is deliberately no
- * `useHostClient()` here - resolving the app-wide client would let the chip
- * name one machine while the create landed on another.
+ * identity is re-validated at the top of each action. A staged sandbox's team
+ * attachment alone may use another personal host; it never changes placement.
  */
 export function useLandingComposerActions(
   target: LandingPlacementTarget,
@@ -320,6 +360,9 @@ export function useLandingComposerActions(
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createEpic = useEpicCreateForClient(target.client);
+  const attachClient = useEpicAttachmentClient(target.client);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
     target.resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -1377,33 +1420,12 @@ export function useLandingComposerActions(
       // navigates BEFORE the host round-trip, so the session provider mounts
       // while only the create host can ever serve the epic.
       markEpicCreatedThisSession(epicId, hostId);
-      const replaced =
-        workspaceContext.draftId === null
-          ? null
-          : tabCommandCoordinator.replaceDraftWithEpic({
-              draftId: workspaceContext.draftId,
-              epicId,
-              epicTabId: tabId,
-              epicName: epicTitle,
-            });
-      if (replaced === null) {
-        activateTabIntent(
-          navigate,
-          openExactEpicTabIntent({
-            epicId,
-            tabId,
-            name: epicTitle,
-            focus: undefined,
-          }),
-          undefined,
-        );
-      } else {
-        navigateToTabIntent(
-          navigate,
-          existingEpicTabIntent({ epicId, tabId, focus: undefined }),
-          undefined,
-        );
-      }
+      openEpicBeforeCreate(navigate, {
+        epicId,
+        tabId,
+        epicTitle,
+        draftId: workspaceContext.draftId,
+      });
 
       // Create the epic, then the tui-agent off the navigation critical
       // path. Chaining preserves the host ordering the blocking flow
@@ -1591,15 +1613,119 @@ export function useLandingComposerActions(
     [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],
   );
 
+  const startTaskOnStagedSandbox = useCallback(
+    (args: LandingStagedSandboxTaskArgs): LandingPlacementRefusal | null => {
+      const placement = resolveAdmittedPlacement();
+      if (placement.kind === "refused") {
+        return { message: placement.message };
+      }
+      const ownerRefusal = refuseTeamOwner(args.owner, placement.hostId);
+      if (ownerRefusal !== null) return ownerRefusal;
+      const attachTeamId =
+        args.sandboxTeamId !== null && args.sandboxTeamId !== args.owner?.teamId
+          ? args.sandboxTeamId
+          : null;
+      if (attachTeamId !== null && attachClient === null) {
+        return { message: ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY };
+      }
+      const hostId = placement.hostId;
+      const epicId = uuidv4();
+      const handed = args.hand(epicId);
+      if (handed === null) return null;
+      const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
+      const tabId = uuidv4();
+      // The task opens at once, with no agent yet: its first one is created
+      // on the sandbox once the agent the person asked for is ready there.
+      // The task itself lives on this placement, as an in-task agent on
+      // another host does, so the marker below names it.
+      markEpicCreatedThisSession(epicId, hostId);
+      openEpicBeforeCreate(navigate, {
+        epicId,
+        tabId,
+        epicTitle: "",
+        draftId: args.draftId,
+      });
+      const sameAccount = (): boolean =>
+        (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
+      // A create or attachment refusal returns the only message copy. An
+      // attachment refusal leaves the already-created task on its placement.
+      const giveBack = (): void => {
+        if (!sameAccount() || !handed.isCurrent()) return;
+        const draftId = handed.giveBack();
+        if (draftId !== null) openLandingDraft(navigate, draftId);
+      };
+      const refused = (): void => {
+        if (!sameAccount()) return;
+        unmarkEpicCreatedThisSession(epicId);
+        giveBack();
+      };
+      void createLandingEpic({
+        epicId,
+        hostId,
+        title: "",
+        initialUserPrompt: args.text,
+        // The sandbox starts empty: the agent's first turn fetches the code.
+        workspaceFolders: [],
+        workspaceFolderInfoByPath: {},
+        now: Date.now(),
+        // Discarded, as the terminal-agent create's is: this create seeded
+        // no folders, so there is nothing to recover.
+        captureSeedRecovery: () => undefined,
+        chat: null,
+        owner: epicCreateOwnerFor(args.owner),
+      })
+        .then(async (response) => {
+          if (!sameAccount()) return;
+          // A refusal resolves; `useEpicCreateForClient` says why.
+          if (response.refusal !== undefined) {
+            refused();
+            return;
+          }
+          markEpicCreatedThisSession(epicId, hostId);
+          if (!handed.isCurrent()) return;
+          // The task stays on its placement, with its chosen owner. Its team
+          // sandbox may serve it only after this personal-host attachment.
+          if (attachTeamId !== null) {
+            try {
+              await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
+            } catch (error) {
+              if (!isAttachEnvironmentUnsupported(error)) {
+                giveBack();
+                return;
+              }
+            }
+          }
+          if (sameAccount() && handed.isCurrent()) handed.confirm();
+        }, refused)
+        .catch(() => undefined);
+      return null;
+    },
+    [
+      attachClient,
+      attachEnvironmentAsync,
+      createLandingEpic,
+      navigate,
+      resolveAdmittedPlacement,
+    ],
+  );
+
+  const placementAdmitsTask = useCallback(
+    (): boolean => resolveAdmittedPlacement().kind !== "refused",
+    [resolveAdmittedPlacement],
+  );
+
   return useMemo(
     () => ({
       submit,
       selectTerminalAgent,
+      startTaskOnStagedSandbox,
+      placementAdmitsTask,
       // The upload phase counts. It runs BEFORE `epic.create` is dispatched, so
       // without it the composer would report itself idle for the whole of a
       // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
       isPending:
         createEpic.isPending ||
+        attachEnvironment.isPending ||
         terminalAgentCreate.isPending ||
         attachmentUpload !== null,
       // The upload burst's position, for the composer to render beside its
@@ -1608,11 +1734,57 @@ export function useLandingComposerActions(
     }),
     [
       attachmentUpload,
+      attachEnvironment.isPending,
       createEpic.isPending,
+      placementAdmitsTask,
       selectTerminalAgent,
+      startTaskOnStagedSandbox,
       submit,
       terminalAgentCreate.isPending,
     ],
+  );
+}
+
+/**
+ * Opens a task's tab before its create returns: in place of the draft that
+ * started it when that draft has a tab, else as a new tab.
+ */
+function openEpicBeforeCreate(
+  navigate: UseNavigateResult<string>,
+  input: {
+    readonly epicId: string;
+    readonly tabId: string;
+    readonly epicTitle: string;
+    readonly draftId: string | null;
+  },
+): void {
+  const { epicId, tabId, epicTitle } = input;
+  const replaced =
+    input.draftId === null
+      ? null
+      : tabCommandCoordinator.replaceDraftWithEpic({
+          draftId: input.draftId,
+          epicId,
+          epicTabId: tabId,
+          epicName: epicTitle,
+        });
+  if (replaced === null) {
+    activateTabIntent(
+      navigate,
+      openExactEpicTabIntent({
+        epicId,
+        tabId,
+        name: epicTitle,
+        focus: undefined,
+      }),
+      undefined,
+    );
+    return;
+  }
+  navigateToTabIntent(
+    navigate,
+    existingEpicTabIntent({ epicId, tabId, focus: undefined }),
+    undefined,
   );
 }
 
@@ -2007,7 +2179,7 @@ function clearConsumedLandingWorktreeIntent(
  * nothing can answer. Every other surface leaves such a node hash-only on
  * purpose - see `draft-image-inlining.ts`.
  */
-async function resolveBase64ByHash(
+export async function resolveBase64ByHash(
   hashes: ReadonlyArray<string>,
   target: DraftImageByteTarget,
 ): Promise<Map<string, string>> {

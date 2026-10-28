@@ -1,7 +1,7 @@
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { McpScopeTarget } from "@/components/settings/panels/provider-mcp-scope-picker";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   ProviderMcpServer,
@@ -33,7 +33,7 @@ export function negotiateMethodsOn(
   recordNegotiatedHostManifest(hostId, { ...methods });
 }
 
-export const reachableHost: EnvironmentHostRecordV11 = {
+export const reachableHost: EnvironmentHostRecordV12 = {
   hostId: "host-a",
   hostLabel: "Mac mini",
   hostPlatform: "darwin",
@@ -42,6 +42,7 @@ export const reachableHost: EnvironmentHostRecordV11 = {
   boundAt: 1,
   reachable: true,
   lastReportedAt: 1,
+  hasLocalRow: false,
   applied: [],
 };
 

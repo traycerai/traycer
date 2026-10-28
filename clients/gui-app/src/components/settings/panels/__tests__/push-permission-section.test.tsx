@@ -7,14 +7,17 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   IPushPermissionHost,
   PushPermissionState,
+  PushSeverity,
 } from "@traycer-clients/shared/platform/runner-host";
 import { PushPermissionSection } from "@/components/settings/panels/push-permission-section";
 import { createAppQueryClient } from "@/lib/query-client";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
 interface PushPermissionDouble {
@@ -30,6 +33,18 @@ interface PushPermissionDouble {
   readonly fireChange: () => void;
   /** Lets a deferred `openSettings()` finish, ending the pending state. */
   readonly resolveOpenSettings: () => void;
+  /** Each `setMutedSeverities` call's set, in call order. */
+  readonly setCalls: PushSeverity[][];
+  /** What the phone has stored for the current account. */
+  readonly setStoredMuted: (next: readonly PushSeverity[]) => void;
+  /** The account the phone answers for, like its login session. */
+  readonly setAccount: (accountId: string) => void;
+  /** Holds every `getMutedSeverities` unresolved until `releaseReads()`. */
+  readonly holdReads: () => void;
+  readonly releaseReads: () => void;
+  /** Holds the next `setMutedSeverities` unresolved until `releaseSet()`. */
+  readonly holdNextSet: () => void;
+  readonly releaseSet: () => void;
 }
 
 /**
@@ -56,6 +71,13 @@ function createPushPermissionDouble(options: {
   const openSettingsGate = new Promise<void>((resolve) => {
     releaseOpenSettings = resolve;
   });
+  const setCalls: PushSeverity[][] = [];
+  const mutedByAccount = new Map<string, readonly PushSeverity[]>();
+  let account = "user-a";
+  let readGate: Promise<void> | null = null;
+  let releaseReadGate: () => void = () => undefined;
+  let setGate: Promise<void> | null = null;
+  let releaseSetGate: () => void = () => undefined;
   const host: IPushPermissionHost = {
     get: () => {
       calls.get += 1;
@@ -73,6 +95,18 @@ function createPushPermissionDouble(options: {
       calls.openSettings += 1;
       if (options.deferOpenSettings) return openSettingsGate;
       return Promise.resolve();
+    },
+    getMutedSeverities: async () => {
+      const readFor = account;
+      if (readGate !== null) await readGate;
+      return mutedByAccount.get(readFor) ?? [];
+    },
+    // Like the phone: store the set, then say "re-read" through `onChange`.
+    setMutedSeverities: async (set) => {
+      setCalls.push([...set]);
+      if (setGate !== null) await setGate;
+      mutedByAccount.set(account, [...set]);
+      for (const handler of Array.from(handlers)) handler();
     },
     onChange: (handler) => {
       handlers.add(handler);
@@ -94,6 +128,30 @@ function createPushPermissionDouble(options: {
     },
     resolveOpenSettings: () => {
       releaseOpenSettings();
+    },
+    setCalls,
+    setStoredMuted: (next) => {
+      mutedByAccount.set(account, next);
+    },
+    setAccount: (accountId) => {
+      account = accountId;
+    },
+    holdReads: () => {
+      readGate = new Promise<void>((resolve) => {
+        releaseReadGate = resolve;
+      });
+    },
+    releaseReads: () => {
+      releaseReadGate();
+      readGate = null;
+    },
+    holdNextSet: () => {
+      setGate = new Promise<void>((resolve) => {
+        releaseSetGate = resolve;
+      });
+    },
+    releaseSet: () => {
+      releaseSetGate();
     },
   };
 }
@@ -291,7 +349,7 @@ describe("<PushPermissionSection />", () => {
     // Built on the REAL app query client: its 60s `staleTime` is the whole
     // point. The `onChange` subscription is disposed while this row is
     // unmounted, so nothing invalidates in between - leave a person to change
-    // the switch in the OS Settings app between two visits to Sounds
+    // the switch in the OS Settings app between two visits to Alerts
     // and a cached answer would show them "Off · Open Settings" on a phone
     // where push is already on.
     const permission = doubleFor("denied");
@@ -349,5 +407,255 @@ describe("<PushPermissionSection />", () => {
       ).toBe(false);
     });
     expect(screen.queryByTestId("push-permission-action-spinner")).toBeNull();
+  });
+});
+
+const SWITCH_LABELS = ["Needs action", "Failure", "Done", "Info"] as const;
+
+function severitySwitch(label: string): HTMLElement {
+  return screen.getByRole("switch", { name: `${label} push notifications` });
+}
+
+function allSwitches(): HTMLElement[] {
+  return SWITCH_LABELS.map(severitySwitch);
+}
+
+function isChecked(element: HTMLElement): boolean {
+  return element.getAttribute("aria-checked") === "true";
+}
+
+function signInAs(userId: string): void {
+  act(() => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId, userName: userId, email: `${userId}@example.com` },
+        { userId, username: userId },
+        [],
+      );
+  });
+}
+
+describe("<PushPermissionSection /> severity switches", () => {
+  beforeEach(() => {
+    signInAs("user-a");
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  it("draws no switches where the shell has no OS push permission", () => {
+    renderSection(null);
+
+    expect(screen.queryAllByRole("switch")).toEqual([]);
+  });
+
+  it.each<PushPermissionState>(["prompt", "denied"])(
+    "keeps every switch disabled while the permission is %s",
+    async (initial) => {
+      const permission = doubleFor(initial);
+      renderSection(permission.host);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+          initial,
+        );
+      });
+      for (const element of allSwitches()) {
+        expect(element.hasAttribute("disabled")).toBe(true);
+      }
+    },
+  );
+
+  it("keeps every switch disabled when the permission read failed", async () => {
+    const permission = createPushPermissionDouble({
+      initial: "granted",
+      requestResolvesWith: "granted",
+      getRejectsWith: "permission read failed",
+      deferOpenSettings: false,
+    });
+    renderSection(permission.host);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+        "error",
+      );
+    });
+    for (const element of allSwitches()) {
+      expect(element.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("enables all four switches once granted and loaded, checked when nothing is muted", async () => {
+    renderSection(doubleFor("granted").host);
+
+    await waitFor(() => {
+      for (const element of allSwitches()) {
+        expect(element.hasAttribute("disabled")).toBe(false);
+      }
+    });
+    for (const element of allSwitches()) {
+      expect(isChecked(element)).toBe(true);
+    }
+  });
+
+  it("shows a muted severity unchecked and the rest checked", async () => {
+    const permission = doubleFor("granted");
+    permission.setStoredMuted(["done"]);
+    renderSection(permission.host);
+
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Done"))).toBe(false);
+    });
+    expect(isChecked(severitySwitch("Needs action"))).toBe(true);
+    expect(isChecked(severitySwitch("Failure"))).toBe(true);
+    expect(isChecked(severitySwitch("Info"))).toBe(true);
+  });
+
+  it("sends the full new set once on a toggle, then shows the stored value", async () => {
+    const permission = doubleFor("granted");
+    permission.setStoredMuted(["done"]);
+    renderSection(permission.host);
+    await waitFor(() => {
+      expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(severitySwitch("Failure"));
+
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Failure"))).toBe(false);
+    });
+    expect(permission.setCalls).toHaveLength(1);
+    expect([...permission.setCalls[0]].sort()).toEqual(["done", "failure"]);
+    expect(isChecked(severitySwitch("Done"))).toBe(false);
+  });
+
+  it("holds the switches disabled and unchanged while a set is pending", async () => {
+    const permission = doubleFor("granted");
+    renderSection(permission.host);
+    await waitFor(() => {
+      expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(false);
+    });
+    permission.holdNextSet();
+
+    fireEvent.click(severitySwitch("Failure"));
+
+    await waitFor(() => {
+      expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(true);
+    });
+    for (const label of SWITCH_LABELS) {
+      expect(screen.getByText(label)).toBeTruthy();
+      expect(severitySwitch(label).hasAttribute("disabled")).toBe(true);
+    }
+    // Not yet stored, so not yet shown as changed.
+    expect(isChecked(severitySwitch("Failure"))).toBe(true);
+
+    permission.releaseSet();
+
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Failure"))).toBe(false);
+    });
+    expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(false);
+  });
+
+  async function switchToAccountB(
+    permission: PushPermissionDouble,
+  ): Promise<void> {
+    permission.holdReads();
+    permission.setAccount("user-b");
+    signInAs("user-b");
+    act(() => {
+      permission.fireChange();
+    });
+    await waitFor(() => {
+      for (const element of allSwitches()) {
+        expect(element.hasAttribute("disabled")).toBe(true);
+      }
+    });
+  }
+
+  it("never shows the previous account's answer as editable after an identity switch", async () => {
+    const permission = doubleFor("granted");
+    permission.setStoredMuted(["done"]);
+    renderSection(permission.host);
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Done"))).toBe(false);
+    });
+    expect(severitySwitch("Done").hasAttribute("disabled")).toBe(false);
+
+    await switchToAccountB(permission);
+    permission.releaseReads();
+
+    await waitFor(() => {
+      for (const element of allSwitches()) {
+        expect(element.hasAttribute("disabled")).toBe(false);
+      }
+    });
+    for (const element of allSwitches()) {
+      expect(isChecked(element)).toBe(true);
+    }
+  });
+
+  it("submits the new account's set when toggled after an identity switch", async () => {
+    const permission = doubleFor("granted");
+    permission.setStoredMuted(["done"]);
+    renderSection(permission.host);
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Done"))).toBe(false);
+    });
+    await switchToAccountB(permission);
+    permission.releaseReads();
+    await waitFor(() => {
+      expect(severitySwitch("Failure").hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(severitySwitch("Failure"));
+
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Failure"))).toBe(false);
+    });
+    expect(permission.setCalls).toEqual([["failure"]]);
+  });
+
+  it("keeps the switches disabled on a remount under another account until that account's read lands", async () => {
+    const permission = doubleFor("granted");
+    permission.setStoredMuted(["done"]);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const first = renderSectionWith(permission.host, queryClient);
+    await waitFor(() => {
+      expect(isChecked(severitySwitch("Done"))).toBe(false);
+    });
+    first.unmount();
+
+    permission.holdReads();
+    permission.setAccount("user-b");
+    signInAs("user-b");
+    renderSectionWith(permission.host, queryClient);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
+        "granted",
+      );
+    });
+    for (const element of allSwitches()) {
+      expect(element.hasAttribute("disabled")).toBe(true);
+    }
+
+    permission.releaseReads();
+
+    await waitFor(() => {
+      for (const element of allSwitches()) {
+        expect(element.hasAttribute("disabled")).toBe(false);
+      }
+    });
+    for (const element of allSwitches()) {
+      expect(isChecked(element)).toBe(true);
+    }
   });
 });

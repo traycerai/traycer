@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -18,9 +19,13 @@ import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
  * starts (`startSandboxWake`), so a tab opened on a host a pick is
  * already waking joins that wake. A frozen sandbox is refused at once with the
  * typed `SANDBOX_FROZEN` refusal, instead of a dial that would wait out relay
- * timeouts.
+ * timeouts. The wake is recorded under the tile's `gesture` (Open terminal,
+ * Open files).
  */
-export function useSandboxWakeForOpenedTile(hostId: string): void {
+export function useSandboxWakeForOpenedTile(
+  hostId: string,
+  gesture: SandboxVerbGesture | null,
+): void {
   const entry = useHostDirectoryEntry(hostId);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
@@ -40,6 +45,6 @@ export function useSandboxWakeForOpenedTile(hostId: string): void {
     if (!known || firedRef.current) return;
     firedRef.current = true;
     // No row of its own: the directory entry says whether it asks.
-    if (needsWake) void startSandboxWake(queryClient, binding, hostId);
-  }, [binding, hostId, known, needsWake, queryClient]);
+    if (needsWake) void startSandboxWake(queryClient, binding, hostId, gesture);
+  }, [binding, gesture, hostId, known, needsWake, queryClient]);
 }

@@ -1,7 +1,8 @@
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import { SandboxCard } from "@/components/hosts/sandbox-card";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useIsMutating, useMutation } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -560,10 +561,10 @@ export function HostOverviewPanel(props: {
   // component and a remounted `useMutation` observer starts idle even while
   // the bridge respawn it armed is still in flight - `forceRestart.isPending`
   // would read false and reopen every lifecycle write the gate exists to
-  // exclude. `useIsMutating` counts pending mutations in the shared cache
+  // exclude. `useIsMutatingOf` counts pending mutations in the shared cache
   // under this key, which survives any number of remounts.
   const forceRestartInFlight =
-    useIsMutating({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
+    useIsMutatingOf({ mutationKey: runnerMutationKeys.hostRestart() }) > 0;
   // The live local host at the instant of a CLICK, not as of the last committed
   // render. A host identity change arrives as a store update, so a press
   // processed against the previous render would compare stale against stale and

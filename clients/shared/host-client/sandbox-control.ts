@@ -14,12 +14,14 @@ import {
   type SandboxAutomationOpenTarget,
   type SandboxAutomationResponse,
   type SandboxCatalogue,
+  type SandboxCreditSource,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
   type SandboxLifecycleVerb,
   type SandboxListResponse,
   type SandboxPatchRequest,
   type SandboxSummary,
+  type SandboxVerbGesture,
   type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import { composeRequestAbort } from "../auth/request-abort";
@@ -81,6 +83,7 @@ export type SandboxControlFailure =
       /** The code's own detail (`shape_not_offered`'s bound, the gate's verdict). */
       readonly reason: string | null;
       readonly shortfallMc: number | null;
+      readonly creditSource?: SandboxCreditSource | null;
       readonly newRateMcPerHour: number | null;
       readonly currentAwakeBurnMcPerHour: number | null;
       /** A server-composed sentence for the person, shown verbatim. */
@@ -281,6 +284,7 @@ function failureOf(status: number, body: unknown): SandboxControlFailure {
       code: refusal.data.code,
       reason: refusal.data.reason ?? null,
       shortfallMc: refusal.data.shortfallMc ?? null,
+      creditSource: refusal.data.creditSource ?? null,
       newRateMcPerHour: refusal.data.newRateMcPerHour ?? null,
       currentAwakeBurnMcPerHour: refusal.data.currentAwakeBurnMcPerHour ?? null,
       message: refusal.data.message ?? null,
@@ -495,17 +499,22 @@ export async function createSandboxViaHttp(
 /**
  * `DELETE /api/sandboxes/:id`: `200` destroyed, `202` still destroying (both
  * `ok`; the list shows the rest), `404 sandbox_not_found` when it is already
- * gone, which the caller decides how to read.
+ * gone, which the caller decides how to read. `onlyIfIdle` asks the server
+ * to refuse unless its state CAS still starts from suspended or stopped.
  */
 export async function destroySandboxViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   proxyToken: string | null,
   sandboxId: string,
+  onlyIfIdle: boolean,
 ): Promise<SandboxVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
-    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
+    sandboxesUrl(
+      serverBaseUrl,
+      `/${sandboxId}${onlyIfIdle ? "?onlyIfIdle=true" : ""}`,
+    ),
     {
       method: "DELETE",
       body: null,
@@ -585,6 +594,10 @@ export async function keepSandboxViaHttp(
  * {@link SANDBOX_VERB_FETCH_TIMEOUT_MS}: a wake passes what is left of its
  * budget, so a request that outlives the wake is aborted with it rather than
  * left to land a verb in a transition a retry has started.
+ *
+ * `gesture` is what the verb came from when it was not its own menu item
+ * (Open terminal, Send, Open files), recorded on the operation it starts;
+ * `null` sends no body.
  */
 export async function runSandboxVerbViaHttp(
   serverBaseUrl: string,
@@ -592,6 +605,7 @@ export async function runSandboxVerbViaHttp(
   proxyToken: string | null,
   sandboxId: string,
   verb: SandboxLifecycleVerb,
+  gesture: SandboxVerbGesture | null,
   timeoutMs: number,
 ): Promise<SandboxLifecycleVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
@@ -599,7 +613,7 @@ export async function runSandboxVerbViaHttp(
     sandboxesUrl(serverBaseUrl, `/${sandboxId}/${verb}`),
     {
       method: "POST",
-      body: null,
+      body: gesture === null ? null : JSON.stringify({ gesture }),
       timeoutMs: Math.min(
         Math.max(timeoutMs, 0),
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
@@ -677,6 +691,7 @@ export type SandboxWakeOutcome =
   | {
       readonly kind: "credit-gate";
       readonly shortfallMc: number | null;
+      readonly creditSource?: SandboxCreditSource | null;
       readonly burnMcPerHour: number | null;
     }
   | { readonly kind: "wake-not-available" }
@@ -892,6 +907,7 @@ function outcomeOfWakeFailure(
     return {
       kind: "credit-gate",
       shortfallMc: failure.shortfallMc,
+      creditSource: failure.creditSource ?? null,
       burnMcPerHour: failure.currentAwakeBurnMcPerHour,
     };
   }

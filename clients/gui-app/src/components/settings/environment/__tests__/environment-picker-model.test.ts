@@ -145,7 +145,7 @@ describe("environmentPickerModel", () => {
     principal: { kind: "personal" },
   });
 
-  it("names the hosts running Personal, leaving out a computer that has a Local row", () => {
+  it("gives a computer that has a Local row its own row", () => {
     const model = environmentPickerModel({
       hosts: [
         { hostId: "a", name: "MacBook Pro" },
@@ -167,15 +167,7 @@ describe("environmentPickerModel", () => {
       ]),
       windowHostId: "a",
     });
-    expect(model.personalSubtitle).toBe(
-      "your settings · on MacBook Pro, dev-box and 1 more",
-    );
     expect(model.localRows.map((row) => row.hostId)).toEqual(["old"]);
-    expect(model.runningPersonal).toEqual([
-      { hostId: "a", name: "MacBook Pro" },
-      { hostId: "b", name: "dev-box" },
-      { hostId: "c", name: "nas" },
-    ]);
   });
 
   it("defaults to the Local row only for this window's own host", () => {

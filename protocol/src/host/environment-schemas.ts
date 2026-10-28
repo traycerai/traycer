@@ -269,6 +269,8 @@ export type EnvironmentPlaneState = z.infer<typeof environmentPlaneStateSchema>;
  */
 export const environmentStatusResponseSchemaV11 = lazySchema(() =>
   environmentStatusResponseSchema.extend({
+    /** Current sandbox apply operation; absent on older hosts, null while unknown or applying. */
+    sandboxSettingsOperationId: z.string().min(1).nullable().optional(),
     consent: z
       .object({ acceptedAt: z.number(), planHash: z.string().min(1) })
       .nullable()
@@ -1387,20 +1389,22 @@ export type EnvironmentSecretsConsentRequestV11 = z.infer<
  * that held it (a host, the broker's current, old and held copies) and whether
  * its removal there is `requested` or `confirmed`. Never a value.
  */
+const environmentSecretRemovalTargetSchema = lazySchema(() =>
+  z.object({
+    target: z.enum(["host", "broker_current", "broker_old", "broker_held"]),
+    hostId: z.string().min(1).nullable(),
+    hostName: z.string().nullable(),
+    state: z.enum(["requested", "confirmed"]),
+    at: z.number(),
+  }),
+);
+
 export const environmentSecretRemovalSchema = lazySchema(() =>
   z.object({
     outcome: z.enum(["revoked", "cleanup_requested", "destroyed"]),
     revokedAt: z.number(),
     destroyedAt: z.number().nullable(),
-    targets: z.array(
-      z.object({
-        target: z.enum(["host", "broker_current", "broker_old", "broker_held"]),
-        hostId: z.string().min(1).nullable(),
-        hostName: z.string().nullable(),
-        state: z.enum(["requested", "confirmed"]),
-        at: z.number(),
-      }),
-    ),
+    targets: z.array(environmentSecretRemovalTargetSchema),
   }),
 );
 export type EnvironmentSecretRemoval = z.infer<
@@ -1428,6 +1432,66 @@ export const environmentSecretsListResponseSchemaV11 = lazySchema(() =>
 );
 export type EnvironmentSecretsListResponseV11 = z.infer<
   typeof environmentSecretsListResponseSchemaV11
+>;
+
+/**
+ * `list@1.2`'s row: `@1.1`'s plus the names a computer running the
+ * configuration sets the secret's value under. `variables` are the
+ * configuration's variable names (Variables & shells); `providerVariables`
+ * are names in one provider's env (a provider's Env tab), by provider id.
+ * The desktop shows such a name as the secret's, never as a plain value.
+ */
+export const environmentSecretSchemaV12 = lazySchema(() =>
+  environmentSecretSchema.extend({
+    variables: z.array(z.string().min(1)),
+    providerVariables: z.array(
+      z.object({ providerId: z.string().min(1), name: z.string().min(1) }),
+    ),
+  }),
+);
+export type EnvironmentSecretV12 = z.infer<typeof environmentSecretSchemaV12>;
+
+export const environmentSecretsListRequestSchemaV12 =
+  environmentSecretsListRequestSchemaV11;
+export type EnvironmentSecretsListRequestV12 = z.infer<
+  typeof environmentSecretsListRequestSchemaV12
+>;
+
+/**
+ * `list@1.2`'s removal: `@1.1`'s, each target with `failedAt`, when a host
+ * that still holds a copy last said it could not delete it (it tries again
+ * by itself), else null. An authn that predates it sends none: null.
+ */
+export const environmentSecretRemovalSchemaV12 = lazySchema(() =>
+  environmentSecretRemovalSchema.extend({
+    targets: z.array(
+      environmentSecretRemovalTargetSchema.extend({
+        failedAt: z.number().nullable().default(null),
+      }),
+    ),
+  }),
+);
+export type EnvironmentSecretRemovalV12 = z.infer<
+  typeof environmentSecretRemovalSchemaV12
+>;
+
+/** `list@1.2`'s answer: `@1.1`'s, its rows with their names, its removals with their failures. */
+export const environmentSecretsListResponseSchemaV12 = lazySchema(() =>
+  environmentSecretsListResponseSchemaV11.extend({
+    secrets: z.array(environmentSecretSchemaV12),
+    removed: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          removal: environmentSecretRemovalSchemaV12,
+        }),
+      )
+      .default([]),
+  }),
+);
+export type EnvironmentSecretsListResponseV12 = z.infer<
+  typeof environmentSecretsListResponseSchemaV12
 >;
 
 export const environmentSecretsVersionsResponseSchemaV11 = lazySchema(() =>

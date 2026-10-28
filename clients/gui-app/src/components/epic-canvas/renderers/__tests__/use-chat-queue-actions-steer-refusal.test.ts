@@ -1,15 +1,16 @@
 /**
  * `use-chat-queue-actions.ts`'s steer refusal routing: a queued steer the host
  * refused until the person confirms ending the turn is asked about in the tile
- * that sent it, and only there. Two panes on one chat share one store, and an
- * unfocused pane renders no dialog, so a refusal claimed by the wrong pane is
- * a question nobody sees.
+ * that sent it while that tile lives. Closing it releases the question for one
+ * surviving or newly opened tile. Two panes on one chat share one store, and
+ * an unfocused pane renders no dialog, so a live owner's question stays there.
  */
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, type RenderHookResult } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatActiveTurn,
+  ChatQueueSteerRestartReason,
   ChatQueuedPromptItem,
   ChatRunSettings,
   ChatSubscribeClientFrame,
@@ -18,6 +19,7 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 
 import {
   useChatQueueActions,
+  type ChatQueueActionsResult,
   type ChatQueueActionsInput,
 } from "@/components/epic-canvas/renderers/use-chat-queue-actions";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
@@ -293,11 +295,20 @@ function queuedRow(): ChatQueuedPromptItem {
 }
 
 /** A store whose stream this test drives, open on a running turn with one queued row. */
-function openRunningChat(): {
+function openRunningChat(): OpenRunningChat {
+  return openRunningChatOn(false);
+}
+
+interface OpenRunningChat {
   readonly handle: ChatSessionStoreHandle;
   readonly callbacks: ChatStreamCallbacks;
   readonly sent: ChatSubscribeClientFrame[];
-} {
+}
+
+/** Same chat, on a session that does or does not negotiate restart confirmation. */
+function openRunningChatOn(
+  restartConfirmationSupported: boolean,
+): OpenRunningChat {
   const sent: ChatSubscribeClientFrame[] = [];
   const stream: { callbacks: ChatStreamCallbacks | null } = { callbacks: null };
   const handle = createChatSessionStore({
@@ -318,6 +329,8 @@ function openRunningChat(): {
         },
         sameTurnSteeringProtocolSupported: () => true,
         draftBlobBridgeSupported: () => true,
+        queuedSteerRestartConfirmationSupported: () =>
+          restartConfirmationSupported,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -380,6 +393,7 @@ function ack(
     readonly clientActionId: string;
     readonly action: "queueEdit" | "queueSteerNow";
     readonly refusedUnconfirmed: boolean;
+    readonly steerRestartReasons?: ReadonlyArray<ChatQueueSteerRestartReason>;
   },
 ): void {
   callbacks.onActionAck({
@@ -396,7 +410,9 @@ function ack(
     code: input.refusedUnconfirmed ? "QUEUE_STEER_RESTART_UNCONFIRMED" : null,
     backgroundStopTaskIds: [],
     token: null,
-    ...(input.refusedUnconfirmed ? { steerRestartReasons: ["harness"] } : {}),
+    ...(input.refusedUnconfirmed
+      ? { steerRestartReasons: [...(input.steerRestartReasons ?? ["harness"])] }
+      : {}),
   });
 }
 
@@ -489,6 +505,337 @@ describe("answering a held steer refusal", () => {
     expect(queueSettingsUpdate).toHaveBeenCalledWith("queue-1", OTHER_SETTINGS);
   });
 
+  it("lets a surviving pane decline a closed initiator's refused queue edit steer", async () => {
+    const { handle, callbacks, sent } = openRunningChat();
+    const tileA = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+    const tileB = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(
+          handle,
+          "tile-b",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+        chatActions: fakeChatActions({
+          queueSettingsUpdate: (queueItemId, settings) =>
+            handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+        }),
+      }),
+    );
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+
+    await act(async () => {
+      tileA.unmount();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      ack(callbacks, {
+        clientActionId: editId,
+        action: "queueEdit",
+        refusedUnconfirmed: false,
+      });
+      ack(callbacks, {
+        clientActionId: steerId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: true,
+      });
+    });
+
+    expect(tileB.result.current.steerRestart.open).toBe(true);
+
+    act(() => {
+      tileB.result.current.steerRestart.onOpenChange(false);
+    });
+
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        kind: "queueSettingsUpdate",
+        queueItemId: "queue-1",
+        settings: OTHER_SETTINGS,
+      }),
+    );
+  });
+
+  it("transfers a refusal that arrived while its initiator was live to a surviving pane", async () => {
+    const { handle, callbacks, sent } = openRunningChat();
+    const tileA = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+    const tileB = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(
+          handle,
+          "tile-b",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+        chatActions: fakeChatActions({
+          queueSettingsUpdate: (queueItemId, settings) =>
+            handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+        }),
+      }),
+    );
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+
+    act(() => {
+      ack(callbacks, {
+        clientActionId: editId,
+        action: "queueEdit",
+        refusedUnconfirmed: false,
+      });
+      ack(callbacks, {
+        clientActionId: steerId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: true,
+      });
+    });
+    expect(tileA.result.current.steerRestart.open).toBe(true);
+    expect(tileB.result.current.steerRestart.open).toBe(false);
+
+    await act(async () => {
+      tileA.unmount();
+      await Promise.resolve();
+    });
+
+    expect(tileB.result.current.steerRestart.open).toBe(true);
+    act(() => {
+      tileB.result.current.steerRestart.onOpenChange(false);
+    });
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        kind: "queueSettingsUpdate",
+        queueItemId: "queue-1",
+        settings: OTHER_SETTINGS,
+      }),
+    );
+  });
+
+  it("lets a later pane decline an initiator's refusal after it closes without survivors", async () => {
+    const { handle, callbacks, sent } = openRunningChat();
+    const tileA = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+
+    await act(async () => {
+      tileA.unmount();
+      await Promise.resolve();
+    });
+    act(() => {
+      ack(callbacks, {
+        clientActionId: editId,
+        action: "queueEdit",
+        refusedUnconfirmed: false,
+      });
+      ack(callbacks, {
+        clientActionId: steerId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: true,
+      });
+    });
+    const tileB = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(
+          handle,
+          "tile-b",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+        chatActions: fakeChatActions({
+          queueSettingsUpdate: (queueItemId, settings) =>
+            handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+        }),
+      }),
+    );
+
+    expect(tileB.result.current.steerRestart.open).toBe(true);
+    act(() => {
+      tileB.result.current.steerRestart.onOpenChange(false);
+    });
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        kind: "queueSettingsUpdate",
+        queueItemId: "queue-1",
+        settings: OTHER_SETTINGS,
+      }),
+    );
+  });
+
+  it("lets only one surviving pane answer a closed initiator's refusal", async () => {
+    const { handle, callbacks, sent } = openRunningChat();
+    const tileA = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+    const survivingTile = (tileInstanceId: string) =>
+      renderHook(() =>
+        useChatQueueActions({
+          ...tileInput(
+            handle,
+            tileInstanceId,
+            vi.fn<ChatActions["queueSteerNow"]>(() => null),
+          ),
+          chatActions: fakeChatActions({
+            queueSettingsUpdate: (queueItemId, settings) =>
+              handle.store
+                .getState()
+                .queueSettingsUpdate(queueItemId, settings),
+          }),
+        }),
+      );
+    const tileB = survivingTile("tile-b");
+    const tileC = survivingTile("tile-c");
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+
+    act(() => {
+      ack(callbacks, {
+        clientActionId: editId,
+        action: "queueEdit",
+        refusedUnconfirmed: false,
+      });
+      ack(callbacks, {
+        clientActionId: steerId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: true,
+      });
+    });
+    expect(tileA.result.current.steerRestart.open).toBe(true);
+    expect(tileB.result.current.steerRestart.open).toBe(false);
+    expect(tileC.result.current.steerRestart.open).toBe(false);
+
+    await act(async () => {
+      tileA.unmount();
+      await Promise.resolve();
+    });
+
+    const openSurvivors = [tileB, tileC].filter(
+      (tile) => tile.result.current.steerRestart.open,
+    );
+    expect(openSurvivors).toHaveLength(1);
+    act(() => {
+      openSurvivors[0]?.result.current.steerRestart.onOpenChange(false);
+    });
+    expect(
+      sent.filter((frame) => frame.kind === "queueSettingsUpdate"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a live initiator's refusal through StrictMode effect replay", async () => {
+    const { handle, callbacks } = openRunningChat();
+    const tileB = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-b",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+    const steerId = handle.store
+      .getState()
+      .queueSteerNow("queue-1", SETTINGS, false, {
+        initiatorId: "tile-a",
+        editSettings: null,
+      });
+    if (steerId === null) throw new Error("Expected the steer to dispatch");
+    act(() => {
+      ack(callbacks, {
+        clientActionId: steerId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: true,
+      });
+    });
+
+    const tileA = renderHook(
+      () =>
+        useChatQueueActions(
+          tileInput(
+            handle,
+            "tile-a",
+            vi.fn<ChatActions["queueSteerNow"]>(() => null),
+          ),
+        ),
+      { reactStrictMode: true },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(tileA.result.current.steerRestart.open).toBe(true);
+    expect(tileB.result.current.steerRestart.open).toBe(false);
+  });
+
   it("keeps a declined queue edit's settings until the stream can carry their save", () => {
     const { handle, callbacks, sent } = openRunningChat();
     const editId = handle.store.getState().submitQueueEdit({
@@ -553,5 +900,101 @@ describe("answering a held steer refusal", () => {
       { queueItemId: "queue-1", settings: OTHER_SETTINGS },
     ]);
     expect(handle.store.getState().steerRestartRefusals).toEqual([]);
+  });
+});
+
+describe("steering a queued prompt from the row", () => {
+  // A running turn on another model than the composer's next-step settings.
+  function steerFromRow(chat: OpenRunningChat): {
+    readonly row: RenderHookResult<ChatQueueActionsResult, unknown>;
+    readonly steerFrames: () => Extract<
+      ChatSubscribeClientFrame,
+      { kind: "queueSteerNow" }
+    >[];
+  } {
+    const row = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(
+          chat.handle,
+          "tile-a",
+          (queueItemId, newSettings, restartConfirmed, origin) =>
+            chat.handle.store
+              .getState()
+              .queueSteerNow(
+                queueItemId,
+                newSettings,
+                restartConfirmed,
+                origin,
+              ),
+        ),
+        nextStepSettings: OTHER_SETTINGS,
+      }),
+    );
+    const item = chat.handle.store.getState().queue.items[0];
+    if (item.kind !== "prompt") {
+      throw new Error("Expected the queued prompt");
+    }
+    act(() => {
+      row.result.current.steerQueuedItemNow(item);
+    });
+    return {
+      row,
+      steerFrames: () =>
+        chat.sent.flatMap((frame) =>
+          frame.kind === "queueSteerNow" ? [frame] : [],
+        ),
+    };
+  }
+
+  it("sends a model change unconfirmed on a host that asks for restarts, then asks only if the host refuses", () => {
+    const chat = openRunningChatOn(true);
+    const { row, steerFrames } = steerFromRow(chat);
+
+    expect(steerFrames()).toEqual([
+      expect.objectContaining({
+        newSettings: OTHER_SETTINGS,
+        restartConfirmed: false,
+      }),
+    ]);
+    expect(row.result.current.steerRestart.open).toBe(false);
+
+    const [frame] = steerFrames();
+    act(() => {
+      ack(chat.callbacks, {
+        clientActionId: frame.clientActionId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: true,
+        steerRestartReasons: ["images"],
+      });
+    });
+
+    expect(row.result.current.steerRestart.open).toBe(true);
+    expect(row.result.current.steerRestart.reasons).toEqual(["images"]);
+  });
+
+  it("does not ask when the host accepts the steer as a next-turn fallback", () => {
+    const chat = openRunningChatOn(true);
+    const { row, steerFrames } = steerFromRow(chat);
+    const [frame] = steerFrames();
+
+    act(() => {
+      ack(chat.callbacks, {
+        clientActionId: frame.clientActionId,
+        action: "queueSteerNow",
+        refusedUnconfirmed: false,
+      });
+    });
+
+    expect(row.result.current.steerRestart.open).toBe(false);
+    expect(chat.handle.store.getState().steerRestartRefusals).toEqual([]);
+  });
+
+  it("asks locally about a model change on a host that predates restart confirmation, sending nothing yet", () => {
+    const chat = openRunningChatOn(false);
+    const { row, steerFrames } = steerFromRow(chat);
+
+    expect(row.result.current.steerRestart.open).toBe(true);
+    expect(row.result.current.steerRestart.changed).toContain("model");
+    expect(steerFrames()).toEqual([]);
   });
 });

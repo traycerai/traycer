@@ -16,6 +16,7 @@ import {
 import {
   acceptExhaustedPersistedRestoreFallback,
   buildRowKeyToIndex,
+  chatTimelineRowKeyForBlock,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineLocationForMessage,
@@ -53,7 +54,7 @@ import {
   useChatNavigationBlockReveal,
   type ChatNavigationHighlightTarget,
 } from "@/components/chat/chat-navigation-highlight";
-import { queryMountedChatMessageRoot } from "@/components/chat/chat-find-highlighter";
+import { queryMountedChatRowRoot } from "@/components/chat/chat-find-highlighter";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -65,6 +66,7 @@ import {
   restoreChatTabState,
   restoreChatTabStateForMount,
   saveChatTabState,
+  savedChatTabAnchorRowKey,
   type ChatTabScrollMode,
   type SavedChatTabScrollState,
   type SaveChatTabStateInput,
@@ -75,6 +77,7 @@ import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
   shouldMountChatTurnMinimap,
 } from "@/components/chat/chat-turn-minimap-logic";
+import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -2084,9 +2087,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // identity mapping over `messages`, so nothing below behaves differently
   // there. Computed before the mount-time restore initializers because they
   // resolve saved anchors against LIST indexes, which are row indexes.
+  // Slack's layout, for a bot's channel or thread. Read here because it also
+  // decides how a long turn is drawn. A bot row draws its text blocks and
+  // nothing else (`ChatBotMessage` -> `BotMessageText`): no activity groups,
+  // no tool cards - so the DOM that makes a long turn expensive to mount does
+  // not exist there, and the layout it does draw is one framed, sender-lined
+  // message per row, which a part cannot be half of.
+  const botChannel = use(ChatBotPresentationContext) !== null;
+  // ONE decision, read by all three things that derive a part key: the rows
+  // below, find's projection and `chatTimelineRowKeyForBlock`. A reader that
+  // split differently from the list would name rows the list never built.
+  const splitLongTurns = !botChannel;
+
   const listRows = useMemo(
-    () => transcriptListRows({ window: transcriptWindow, rendered: messages }),
-    [transcriptWindow, messages],
+    () =>
+      transcriptListRows({
+        window: transcriptWindow,
+        rendered: messages,
+        splitLongTurns,
+      }),
+    [splitLongTurns, transcriptWindow, messages],
   );
 
   // Restore the persisted reading position once, on mount (ticket 15: tries
@@ -2127,6 +2147,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
   const pendingHydrationRestoreAnchorId =
     resolvePendingHydrationRestoreAnchorId(restoredTabState, rawSavedTabState);
+  // A cold turn part must retain its exact coordinate until that part lands.
+  // Legacy whole-row restores keep their nearest-row normalization behavior.
+  const savedAnchorRowKey =
+    rawSavedTabState?.anchorRowKey ?? restoredTabState.anchorRowKey ?? null;
+  const isSavedTurnPart =
+    savedAnchorRowKey !== null &&
+    savedAnchorRowKey !== rawSavedTabState?.anchorMessageId;
   // Non-null only when the mount-time restore above had to clamp away from
   // the true saved anchor - the hydration-retry effect below (declared
   // after `navigateToMessage`, which it needs) resolves this against
@@ -2814,7 +2841,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     SaveChatTabStateInput,
     "identity"
   > | null => {
-    if (restorePersistencePendingRef.current) return null;
+    if (
+      restorePersistencePendingRef.current ||
+      (isSavedTurnPart && pendingHydrationRestoreAnchorIdRef.current !== null)
+    )
+      return null;
     const mode = resolvePersistedChatTabScrollMode(
       timelineScrollModeRef.current,
     );
@@ -2878,6 +2909,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       anchorMessageId === null
         ? undefined
         : rowIndexByKeyRef.current.get(anchorMessageId);
+    const anchorRow =
+      anchorIndex === undefined ? null : listRowsRef.current[anchorIndex];
     // Narrow measurement source so capture can fold in the live header pad
     // (list.getState() does not expose headerSize; metrics keep it current).
     const measurementSource =
@@ -2898,10 +2931,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     return {
       mode,
       anchorMessageId,
+      ...(anchorRow?.kind === "hydrated" && anchorRow.part !== null
+        ? { anchorRowKey: anchorRow.model.id }
+        : {}),
       anchorIndex: anchorIndex ?? null,
       offset: captureChatFreeScrollingOffset(measurementSource, anchorIndex),
     };
-  }, []);
+  }, [isSavedTurnPart]);
 
   // Persist the reading position on unmount and synchronously on transcript
   // pointerdown. This tile can still be unmounted without warning (evicted past
@@ -2931,7 +2967,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     const persistCurrentScroll = (): void => {
       const isLive = isEpicCanvasTileInstanceLive(instanceId);
-      if (restorePersistencePendingRef.current) {
+      if (
+        restorePersistencePendingRef.current ||
+        (isSavedTurnPart && pendingHydrationRestoreAnchorIdRef.current !== null)
+      ) {
         // A live tab already has both cache entries that this mount read. Do
         // not overwrite them from a transient bootstrap viewport. A permanent
         // close may have synchronously evicted the tab entry before cleanup;
@@ -2973,6 +3012,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     captureLiveChatTabScrollSnapshot,
     identity,
     instanceId,
+    isSavedTurnPart,
     rawSavedTabState,
   ]);
 
@@ -3031,6 +3071,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
+  // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
+  // stays registered so the layout editor still lists it for agent chats.
   const quoteEnabled = quoteReplyEnabled && visible && !systemOverlayActive;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
@@ -3389,10 +3431,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // temporary partial-transcript end report cannot remain the live
           // follow authority after the saved row has actually landed.
           setTimelineMode("free-scrolling", false);
-          acceptExhaustedPersistedRestoreFallback(
-            restorePersistencePendingRef,
-            pendingMeasuredFreeRestoreRef,
-          );
+          onValidated();
+          // Positioning the owning placeholder is only a bootstrap. Only the
+          // exact part's validated callback clears the hydration transaction.
+          if (
+            !isSavedTurnPart ||
+            pendingHydrationRestoreAnchorIdRef.current === null
+          ) {
+            acceptExhaustedPersistedRestoreFallback(
+              restorePersistencePendingRef,
+              pendingMeasuredFreeRestoreRef,
+            );
+          } else {
+            pendingMeasuredFreeRestoreRef.current = null;
+          }
           // Fixup (fix-top-level-task-tab-scroll-restoration, acceptance
           // criterion 5): warm the visibility-handoff mirror IMMEDIATELY on
           // every validated convergence (mount-time reserve, hydration
@@ -3407,14 +3459,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           if (settledSnapshot !== null) {
             lastVisibleScrollSnapshotRef.current = settledSnapshot;
           }
-          onValidated();
         },
         onSettledInvalid: onExhausted,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
       return true;
     },
-    [captureLiveChatTabScrollSnapshot, setTimelineMode],
+    [captureLiveChatTabScrollSnapshot, isSavedTurnPart, setTimelineMode],
   );
 
   // Find's hand-off after it navigated to an older index hit: the landed row
@@ -3459,7 +3510,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (request: PendingScrollRequestLanding): boolean => {
       const { messageId, blockId, requestId } = request;
       const list = chatTimelineRef.current;
-      const initialIndex = rowIndexByKeyRef.current.get(messageId);
+      // The part that draws the named card - see `chatTimelineRowKeyForBlock`.
+      // Re-resolved on every issue below, because a turn still streaming can
+      // grow a part between them.
+      const rowKey = (): string =>
+        chatTimelineRowKeyForBlock(
+          messagesRef.current,
+          messageId,
+          blockId,
+          splitLongTurns,
+        );
+      const initialIndex = rowIndexByKeyRef.current.get(rowKey());
       if (!list || initialIndex === undefined) return false;
 
       // Superseding an earlier landing of THIS request is a re-issue, not a
@@ -3473,7 +3534,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const scrollNode = list.getScrollableNode();
       const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
       const targetIndex = (): number | null =>
-        rowIndexByKeyRef.current.get(messageId) ?? null;
+        rowIndexByKeyRef.current.get(rowKey()) ?? null;
       const issue = (index: number): Promise<void> => {
         const target = expectedTimelineScrollTop(
           list,
@@ -3501,7 +3562,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         ) {
           return false;
         }
-        return queryMountedChatMessageRoot(scrollNode, messageId) !== null;
+        return queryMountedChatRowRoot(scrollNode, rowKey()) !== null;
       };
       // Idempotent: the cleanup below runs `finish` again after a landing
       // that already settled, and ownership must be released exactly once.
@@ -3568,7 +3629,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // nonetheless mounted where the browser clamped. That is a landing
           // the reader can see, so it still rings and reveals its card; only
           // a row that never mounted is a genuine miss.
-          if (queryMountedChatMessageRoot(scrollNode, messageId) !== null) {
+          if (queryMountedChatRowRoot(scrollNode, rowKey()) !== null) {
             showNavigationHighlight(messageId, blockId);
             if (blockId !== null) blockReveal.requestReveal(messageId, blockId);
             settleScrollRequest(requestId, "landed");
@@ -3599,6 +3660,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       finishImperativeScrollOperation,
       settleScrollRequest,
       showNavigationHighlight,
+      splitLongTurns,
     ],
   );
 
@@ -3702,17 +3764,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       },
       onExhausted: () => {
         resolvePendingRestoreEndLandingRef.current = null;
-        // The bounded restore has accepted the browser-clamped position as
-        // its safe fallback. Publish that real viewport from now on rather
-        // than retaining/replaying an unreachable saved coordinate across
-        // every later remount.
-        restorePersistencePendingRef.current = false;
+        // A bounded whole-row restore accepts its clamped fallback. A part's
+        // provisional owner position still cannot replace the exact saved
+        // coordinate while its hydration is pending.
+        restorePersistencePendingRef.current =
+          isSavedTurnPart &&
+          pendingHydrationRestoreAnchorIdRef.current !== null;
         pendingMeasuredFreeRestoreRef.current = null;
         reconcileInvalidTimelineLanding();
       },
     });
   }, [
     identity,
+    isSavedTurnPart,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
   ]);
@@ -3842,7 +3906,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // retries (or an unavailable list/anchor) left the viewport as the new
     // truth and release the gate.
     const acceptFailedReplayLanding = (): void => {
-      restorePersistencePendingRef.current = false;
+      restorePersistencePendingRef.current =
+        isSavedTurnPart && pendingHydrationRestoreAnchorIdRef.current !== null;
       pendingMeasuredFreeRestoreRef.current = null;
       reconcileInvalidTimelineLanding();
     };
@@ -3859,6 +3924,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [
     clearNavigationHighlight,
     identity,
+    isSavedTurnPart,
     landScrollRequestRow,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
@@ -3888,8 +3954,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ): void => {
       releaseForExplicitNavigation();
       setScrolledActiveUserMessageIdIfChanged(messageId);
+      // The PART that draws the named card, which is the row the reveal below
+      // needs mounted; part 0 - the message's own key - whenever none is named.
       const location = chatTimelineLocationForMessage(
-        messageId,
+        chatTimelineRowKeyForBlock(
+          messagesRef.current,
+          messageId,
+          blockId,
+          splitLongTurns,
+        ),
         rowIndexByKeyRef.current,
         animated,
       );
@@ -3918,6 +3991,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       releaseForExplicitNavigation,
       setScrolledActiveUserMessageIdIfChanged,
       showNavigationHighlight,
+      splitLongTurns,
     ],
   );
 
@@ -4010,7 +4084,31 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     const anchorId = pendingHydrationRestoreAnchorIdRef.current;
     if (anchorId === null) return;
     const index = rowIndexByKeyRef.current.get(anchorId);
-    if (index === undefined) return;
+    if (index === undefined) {
+      if (rawSavedTabState === null) return;
+      const owner = savedChatTabAnchorRowKey(
+        rawSavedTabState,
+        listRows.map((row) => row.key),
+      );
+      const ownerIndex =
+        owner === null ? undefined : rowIndexByKeyRef.current.get(owner);
+      if (ownerIndex === undefined) return;
+      const ownerRow = listRows[ownerIndex];
+      if (ownerRow.kind !== "placeholder") return;
+      // The saved index used the expanded list. Demand the owning ordinal
+      // directly, then replay the original part key and offset after hydration.
+      onVisibleOrdinalRangeChange({
+        fromOrdinal: ownerRow.ordinal,
+        toOrdinal: ownerRow.ordinal + 1,
+      });
+      void chatTimelineRef.current?.scrollToIndex({
+        index: ownerIndex,
+        animated: false,
+        viewPosition: 0,
+        viewOffset: 0,
+      });
+      return;
+    }
     const rawOffset = rawSavedTabState?.offset ?? 0;
     restorePersistedTimelineLocation(anchorId, rawOffset, {
       isAborted: () => false,
@@ -4020,7 +4118,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       },
       onExhausted: () => undefined,
     });
-  }, [identity, listRows, rawSavedTabState, restorePersistedTimelineLocation]);
+  }, [
+    identity,
+    listRows,
+    onVisibleOrdinalRangeChange,
+    rawSavedTabState,
+    restorePersistedTimelineLocation,
+  ]);
 
   const onMinimapItemSelect = useCallback(
     (messageId: string): void =>
@@ -4092,6 +4196,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
+    splitLongTurns,
     getFindCoverageMessage,
     getFindPlacement,
     requestIndexJump: requestFindIndexJump,
@@ -4289,6 +4394,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       hasContent,
       shown: minimapShown,
       mobileViewport: isMobileViewport,
+      botChannel,
     });
 
   return (

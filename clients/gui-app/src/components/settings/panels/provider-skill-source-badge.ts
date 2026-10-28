@@ -6,12 +6,21 @@ import type { ProviderSkillSourceBadge } from "@traycer/protocol/host/provider-n
  * else in the other, and a badge that changes color when you open it reads as
  * a different object.
  */
-export const SKILL_SOURCE_LABEL: Record<ProviderSkillSourceBadge, string> = {
-  shared: "Shared",
-  provider: "Provider-only",
-  plugin: "Plugin",
-  managed: "Built-in",
-};
+export function skillSourceLabel(
+  source: ProviderSkillSourceBadge,
+  providerLabel: string,
+): string {
+  switch (source) {
+    case "shared":
+      return "Shared";
+    case "provider":
+      return `${providerLabel} only`;
+    case "plugin":
+      return "Plugin";
+    case "managed":
+      return "Built-in";
+  }
+}
 
 export const SKILL_SOURCE_TONE: Record<ProviderSkillSourceBadge, string> = {
   shared: "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300",

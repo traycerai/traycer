@@ -2,7 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
 import {
   mountTeamPage,
@@ -40,7 +40,7 @@ afterEach(() => {
   resetTeamPageHarness();
 });
 
-const host: EnvironmentHostRecordV11 = {
+const host: EnvironmentHostRecordV12 = {
   hostId: "host-a",
   hostLabel: "Mac mini",
   hostPlatform: "darwin",
@@ -49,6 +49,7 @@ const host: EnvironmentHostRecordV11 = {
   boundAt: 1,
   reachable: true,
   lastReportedAt: 1,
+  hasLocalRow: false,
   applied: [],
 };
 
@@ -69,7 +70,7 @@ const environments = {
 };
 
 function handlers(
-  hosts: EnvironmentHostRecordV11[],
+  hosts: EnvironmentHostRecordV12[],
   upload: () => {
     outcome: "saved" | "forbidden" | "refused" | "not_served";
     reason: string | null;
@@ -137,7 +138,7 @@ describe("Team skills upload", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toBe(
-        "Skills need a host running Acme. Pick one.",
+        "Skills need a host running Acme.Pick one.",
       );
     });
     expect(screen.queryByRole("button", { name: "Add a skill" })).toBeNull();
@@ -190,10 +191,11 @@ describe("Team skills upload", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toBe(
-        "Skills need a host running Acme. Pick one.",
+        "Skills need a host running Acme.Start an Acme sandbox to see them.",
       );
     });
     expect(screen.queryByRole("button", { name: "Add a skill" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pick one." })).toBeNull();
     expect(
       harness.paramsOf("environment.configuration.skills.upload"),
     ).toHaveLength(0);

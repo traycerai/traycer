@@ -1,6 +1,6 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import {
   mountTeamPage,
   poolSource,
@@ -35,12 +35,11 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-const SUBTITLE = "Values and logins your agents use.";
 // The header's subtitle on a team's page names the team (copy ruling T4-c).
 const TEAM_SUBTITLE =
   "Values and logins Acme's agents use, on its sandboxes without being seen.";
 
-function secret(name: string): EnvironmentSecret {
+function secret(name: string): EnvironmentSecretV12 {
   return {
     secretId: `sec-${name}`,
     name,
@@ -52,11 +51,13 @@ function secret(name: string): EnvironmentSecret {
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
 function renderPanel(
-  secrets: readonly EnvironmentSecret[],
+  secrets: readonly EnvironmentSecretV12[],
   listError: { current: Error | null },
 ): TeamPageHarness {
   useSettingsEnvironmentPickStore.setState({
@@ -99,8 +100,9 @@ describe("the Secrets page header", () => {
     renderPanel([], { current: null });
 
     const empty = await screen.findByTestId("secrets-empty");
-    expect(empty.textContent).toContain(SUBTITLE);
-    expect(screen.getAllByText(new RegExp(SUBTITLE))).toHaveLength(1);
+    expect(empty.textContent).toBe(TEAM_SUBTITLE);
+    expect(empty.textContent).not.toContain("On your computers");
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
   });
 
   it("shows the subtitle once there are secrets", async () => {

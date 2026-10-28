@@ -32,22 +32,6 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
 }));
 
-vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => ({
-    hosts: [{ hostId: HOST_ID, name: "Host A" }],
-    activeHostId: HOST_ID,
-    isLoading: false,
-    listsFailed: false,
-    retryLists: () => undefined,
-  }),
-}));
-
-vi.mock("@/components/home/host-workspace-selector/host-section", () => ({
-  WorkspaceHostSwitcher: (props: { readonly activeHostId: string | null }) => (
-    <div data-testid="pr-panel-host-switcher">{props.activeHostId}</div>
-  ),
-}));
-
 const tileNavigationMocks = vi.hoisted(() => ({
   // Typed so assertions can read the recorded call without `any` leaking
   // through `mock.calls`.

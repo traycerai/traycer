@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { parseHttpUrl } from "@/lib/browser-view/browser-tab-display";
 import { isConfigurableLinkKind, type LinkKind } from "@/lib/links/link-kind";
 import { useLinkTarget } from "@/lib/links/link-target-context";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useOpenBrowserUrl } from "@/lib/links/open-browser-url";
 import { useOpenExternalLink } from "@/lib/links/open-external-link";
 import type { TileOpenModifiers } from "@/lib/canvas/tile-open/intent";
@@ -33,7 +34,8 @@ export type OpenLink = (
  *    device grant;
  * 2. `ctrl`/`meta` forces external, `alt` inverts the configured mode;
  * 3. otherwise the per-kind setting decides, and an in-app open goes through
- *    {@link useOpenBrowserUrl}.
+ *    {@link useOpenBrowserUrl} - except in the installed mobile app, where
+ *    every web link lands in the phone's own browser (see `useLinkOpeners`).
  *
  * Terminal links additionally record their dev-server origin, which is what
  * populates the detected-origins list in settings.
@@ -119,8 +121,8 @@ export interface OpenLinkIn {
    */
   readonly openLinkIn: (url: string, destination: LinkDestination) => void;
   /**
-   * False where no canvas is behind the surface, so an in-app open would land
-   * in the OS browser anyway and offering it as a separate choice would lie.
+   * False where this surface cannot open an in-app tab, so that choice would
+   * land in the OS browser anyway.
    */
   readonly canOpenInApp: boolean;
 }
@@ -169,7 +171,15 @@ interface LinkOpeners {
  * land a link the same way.
  */
 function useLinkOpeners(): LinkOpeners {
-  const target = useLinkTarget();
+  const linkTarget = useLinkTarget();
+  // The installed mobile app has no in-app destination for a web link: its
+  // browser tile is a viewer of a host's browser, not a browser of its own,
+  // and the phone's own browser brings the user's sessions. So the link-open
+  // setting (hidden there, `isLinkOpenRowAvailable`) and the alt-click
+  // inversion both collapse to the OS browser, exactly as on a surface with
+  // no canvas behind it. Read at render, like every `isMobileApp()` reader:
+  // the Capacitor entry sets it before the first render.
+  const target = isMobileApp() ? null : linkTarget;
   const openBrowserUrl = useOpenBrowserUrl();
   const { isPending, mutateAsync } = useOpenExternalLink();
 
@@ -195,11 +205,7 @@ function useLinkOpeners(): LinkOpeners {
     ): Promise<void> => {
       if (destination === "external") return openInOsBrowser(webUrl);
       if (target === null) {
-        // No epic behind this surface at all, so there is no canvas an in-app
-        // tab could land on. This is not the A5 failure case (that one toasts
-        // in `useOpenBrowserUrl`): nothing was attempted and nothing failed,
-        // the surface simply has no in-app destination. Ticket 08 shrinks this
-        // set by mounting `LinkTargetProvider` on the surfaces that do.
+        // This surface has no in-app destination, including the mobile app.
         return openInOsBrowser(webUrl);
       }
       openBrowserUrl({

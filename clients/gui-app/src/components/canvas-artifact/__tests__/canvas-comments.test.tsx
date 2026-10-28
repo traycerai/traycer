@@ -7,10 +7,19 @@
  * the thread data seam is faked.
  */
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
-import { CanvasCommentIndex } from "@/components/canvas-artifact/canvas-comments";
+import {
+  CanvasCommentIndex,
+  CanvasCommentPointPins,
+} from "@/components/canvas-artifact/canvas-comments";
 import {
   CanvasFrameRegistry,
   type CanvasCommentView,
@@ -57,15 +66,19 @@ const boardThread: CommentThreadWire = {
   },
 };
 
-function viewWith(revealBoard: (path: string) => boolean): CanvasCommentView {
+function viewWith(
+  revealBoard: (path: string) => boolean,
+  commenting: boolean,
+): CanvasCommentView {
   return {
     tool: "select",
     play: false,
-    viewOnly: false,
+    commenting,
+    setCommenting: () => undefined,
     order: [BOARD],
     sourceForBoard: () => null,
     revealBoard,
-    setTool: () => undefined,
+    revealCanvasPoint: () => true,
     clearNodeSelection: () => undefined,
   };
 }
@@ -101,7 +114,7 @@ describe("<CanvasCommentIndex /> anchor reveal", () => {
 
     // The thread list has not arrived: nothing to reveal yet.
     const notReady = vi.fn(() => false);
-    act(() => registry.setView(viewWith(notReady)));
+    act(() => registry.setView(viewWith(notReady, false)));
     expect(notReady).not.toHaveBeenCalled();
 
     // The thread arrives, and its board's view answers that it is not ready.
@@ -111,12 +124,12 @@ describe("<CanvasCommentIndex /> anchor reveal", () => {
 
     // A replacement view that is ready takes the reveal.
     const ready = vi.fn(() => true);
-    act(() => registry.setView(viewWith(ready)));
+    act(() => registry.setView(viewWith(ready, false)));
     expect(ready).toHaveBeenCalledExactlyOnceWith(BOARD);
 
     // The request is spent: a later view must not pan the canvas again.
     const later = vi.fn(() => true);
-    act(() => registry.setView(viewWith(later)));
+    act(() => registry.setView(viewWith(later, false)));
     view.rerender(tree());
     expect(later).not.toHaveBeenCalled();
     expect(ready).toHaveBeenCalledTimes(1);
@@ -130,8 +143,63 @@ describe("<CanvasCommentIndex /> anchor reveal", () => {
     useCommentThreadsStore.getState().setActiveThread(EPIC_ID, null);
 
     const ready = vi.fn(() => true);
-    act(() => registry.setView(viewWith(ready)));
+    act(() => registry.setView(viewWith(ready, false)));
 
     expect(ready).not.toHaveBeenCalled();
+  });
+});
+
+describe("<CanvasCommentPointPins />", () => {
+  const POINT_THREAD: CommentThreadWire = {
+    ...boardThread,
+    threadId: "point-1",
+    data: {
+      createdByUserId: "user-1",
+      anchorKind: "canvas-point",
+      page: "flow",
+      x: 100,
+      y: 50,
+    },
+  };
+  const VIEWPORT = { x: 30, y: 10, zoom: 2 };
+
+  function pinsTree(page: string) {
+    return (
+      <QueryClientProvider client={createAppQueryClient()}>
+        <CanvasCommentPointPins
+          scope={scope}
+          page={page}
+          viewport={VIEWPORT}
+          registry={registry}
+        />
+      </QueryClientProvider>
+    );
+  }
+
+  it("pins only this page's canvas-point threads, once comment mode is on, at their viewport position", () => {
+    mocks.threads = [
+      POINT_THREAD,
+      {
+        ...POINT_THREAD,
+        threadId: "elsewhere",
+        data: { ...POINT_THREAD.data, page: "other" },
+      },
+      boardThread,
+    ];
+    render(pinsTree("flow"));
+    expect(document.querySelector("[data-comment-pin]")).toBeNull();
+
+    act(() => registry.setView(viewWith(() => true, true)));
+
+    const pins = document.querySelectorAll<HTMLElement>("[data-comment-pin]");
+    expect(pins).toHaveLength(1);
+    expect(pins[0].dataset.commentPin).toBe("point-1");
+    expect(pins[0].style.left).toBe("230px");
+    expect(pins[0].style.top).toBe("110px");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Open comment/ }));
+    expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
+      "point-1",
+    );
   });
 });

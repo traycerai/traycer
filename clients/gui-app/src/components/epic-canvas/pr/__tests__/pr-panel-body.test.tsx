@@ -30,7 +30,6 @@ import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
 } from "@/stores/epics/sidebar-node-reveal-store";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import {
   prPresenceScopeKey,
   usePrPresenceStore,
@@ -38,90 +37,10 @@ import {
 
 const canvasHostState = vi.hoisted(() => ({ id: "host-a" }));
 let streamBindingsByHost: Record<string, StreamRuntimeBinding | null> = {};
-const hostOptionsState = vi.hoisted(() => ({
-  value: {
-    hosts: [
-      { hostId: "host-a", label: "Host A" },
-      { hostId: "host-b", label: "Host B" },
-    ],
-    activeHostId: "host-a",
-    isLoading: false,
-    listsFailed: false,
-    retryLists: vi.fn(),
-  },
-}));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => canvasHostState.id,
 }));
-
-vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => hostOptionsState.value,
-}));
-
-vi.mock("@/components/home/host-workspace-selector/host-section", () => ({
-  WorkspaceHostSwitcher: (props: {
-    readonly hosts: readonly { readonly hostId: string }[];
-    readonly onSelect: (hostId: string) => void;
-    readonly isLoading: boolean;
-    readonly listsFailed: boolean;
-    readonly onRetryLists: () => void;
-  }) => (
-    <div data-testid="mock-pr-host-switcher">
-      {props.isLoading ? <span data-testid="pr-hosts-loading" /> : null}
-      {props.listsFailed ? (
-        <button type="button" onClick={props.onRetryLists}>
-          Retry hosts
-        </button>
-      ) : null}
-      {props.hosts.map((host) => (
-        <button
-          key={host.hostId}
-          type="button"
-          data-testid={`pr-host-option-${host.hostId}`}
-          onClick={() => props.onSelect(host.hostId)}
-        >
-          {host.hostId}
-        </button>
-      ))}
-    </div>
-  ),
-}));
-
-vi.mock("@/hooks/host/use-surface-host-pin", async () => {
-  const React = await import("react");
-  const { useSurfaceHostSelectionStore } =
-    await import("@/stores/host/surface-host-selection-store");
-  return {
-    useSurfaceHostPinWithDefault: (
-      surfaceKey: string,
-      defaultHostId: string | null,
-    ) => {
-      const stored = useSurfaceHostSelectionStore(
-        (state) => state.selections[surfaceKey],
-      );
-      const setSelectionRaw = useSurfaceHostSelectionStore(
-        (state) => state.setSelection,
-      );
-      const selection = stored ?? null;
-      const setSelection = React.useCallback(
-        (next: string | null) => setSelectionRaw(surfaceKey, next),
-        [setSelectionRaw, surfaceKey],
-      );
-      const resolvedHostId = selection ?? defaultHostId;
-      return {
-        selection,
-        honoredSelection: selection,
-        setSelection,
-        resolvedHostId,
-        followingHostId: defaultHostId,
-        isPinned: selection !== null,
-        latchOnFirstUse: () => undefined,
-        resolvedFrom: selection === null ? "default" : "pin",
-      };
-    },
-  };
-});
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
   useSurfaceHostStreamBinding: (hostId: string | null) =>
@@ -230,22 +149,24 @@ describe("PrPanelBody card list", () => {
   let queryClient: QueryClient;
   let mockWsStreamClient: MockWsStreamClient;
 
+  const panelTree = (props: { epicId: string; tabId: string }) => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <StreamRuntimeContext.Provider
+          value={{
+            wsStreamClient: mockWsStreamClient,
+            hostId: null,
+            retain: null,
+          }}
+        >
+          <PrPanelBody epicId={props.epicId} tabId={props.tabId} />
+        </StreamRuntimeContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+
   const renderPanel = (props: { epicId: string; tabId: string }) => {
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <StreamRuntimeContext.Provider
-            value={{
-              wsStreamClient: mockWsStreamClient,
-              hostId: null,
-              retain: null,
-            }}
-          >
-            <PrPanelBody epicId={props.epicId} tabId={props.tabId} />
-          </StreamRuntimeContext.Provider>
-        </TooltipProvider>
-      </QueryClientProvider>,
-    );
+    return render(panelTree(props));
   };
 
   const emitSnapshot = async (
@@ -281,19 +202,8 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     canvasHostState.id = "host-a";
-    usePrPanelStore.setState({ openOnly: false });
-    useSurfaceHostSelectionStore.setState({ selections: {} });
+    usePrPanelStore.setState({ stateFilter: "all" });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
-    hostOptionsState.value = {
-      hosts: [
-        { hostId: "host-a", label: "Host A" },
-        { hostId: "host-b", label: "Host B" },
-      ],
-      activeHostId: "host-a",
-      isLoading: false,
-      listsFailed: false,
-      retryLists: vi.fn(),
-    };
     resetCanvas();
     useSidebarNodeRevealStore.setState(
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
@@ -315,13 +225,12 @@ describe("PrPanelBody card list", () => {
 
   afterEach(() => {
     cleanup();
-    usePrPanelStore.setState({ openOnly: false });
+    usePrPanelStore.setState({ stateFilter: "all" });
     resetCanvas();
     useSidebarNodeRevealStore.setState(
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
       true,
     );
-    useSurfaceHostSelectionStore.setState({ selections: {} });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
     streamBindingsByHost = {};
     queryClient.clear();
@@ -549,25 +458,35 @@ describe("PrPanelBody card list", () => {
     expect(tabId).toBeUndefined();
   });
 
-  it("routes rows, refresh, presence, and detail tiles to the selected host", async () => {
+  it("re-binds rows, refresh, presence, and detail tiles when the canvas host switches", async () => {
     const epicId = "epic-cross-host";
+    const tabId = "tab-cross-host";
     const hostBClient = new MockWsStreamClient();
     streamBindingsByHost["host-b"] = {
       wsStreamClient: hostBClient,
       hostId: "host-b",
       retain: null,
     };
-    renderPanel({ epicId, tabId: "tab-cross-host" });
+    const rendered = renderPanel({ epicId, tabId });
 
-    await emitSnapshot(epicId, [
+    const hostASession = await emitSnapshot(epicId, [
       buildPrItem({
         base: { owner: "acme", repo: "widgets", prNumber: 1 },
         githubHost: "github.com",
       }),
     ]);
     expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
+    expect(
+      usePrPresenceStore.getState().hasItemsByScopeKey[
+        prPresenceScopeKey("host-a", epicId)
+      ],
+    ).toBe(true);
 
-    fireEvent.click(screen.getByTestId("pr-host-option-host-b"));
+    canvasHostState.id = "host-b";
+    rendered.rerender(panelTree({ epicId, tabId }));
+    await waitFor(() => {
+      expect(hostASession.closed).toBe(true);
+    });
     const hostBItem = buildPrItem({
       base: { owner: "acme", repo: "widgets", prNumber: 2 },
       githubHost: "github.com",
@@ -606,7 +525,7 @@ describe("PrPanelBody card list", () => {
     expect(tile.prNumber).toBe(2);
   });
 
-  it("keeps the picker available for unsupported, loading, and failed reads", () => {
+  it("asks for a host update when the canvas host lacks the PR list stream", () => {
     const unsupportedClient = new MockWsStreamClient();
     vi.spyOn(unsupportedClient, "getMethodSupport").mockReturnValue(
       "unsupported",
@@ -616,26 +535,12 @@ describe("PrPanelBody card list", () => {
       hostId: "host-a",
       retain: null,
     };
-    const retryLists = vi.fn();
-    hostOptionsState.value = {
-      ...hostOptionsState.value,
-      isLoading: true,
-      listsFailed: true,
-      retryLists,
-    };
     renderPanel({ epicId: "epic-unsupported", tabId: "tab-unsupported" });
-    expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
     expect(screen.getByTestId("pr-panel-host-update-required")).toBeTruthy();
-    // A host-list failure must not remove the header; the retry action remains
-    // the recovery path even when the stream itself is unsupported.
-    expect(screen.getByTestId("pr-hosts-loading")).toBeTruthy();
-    expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
-    expect(screen.getByText("Retry hosts")).toBeTruthy();
-    fireEvent.click(screen.getByText("Retry hosts"));
-    expect(retryLists).toHaveBeenCalledTimes(1);
+    expect(unsupportedClient.subscribeCallCount).toBe(0);
   });
 
-  it("keeps the header while a selected host reports a recoverable stream error", async () => {
+  it("keeps the header actions while the canvas host reports a recoverable stream error", async () => {
     const epicId = "epic-header-recovery";
     renderPanel({ epicId, tabId: "tab-header-recovery" });
     await waitFor(() => {
@@ -654,102 +559,92 @@ describe("PrPanelBody card list", () => {
       isFatal: false,
     });
     expect(await screen.findByTestId("pr-panel-error-notice")).toBeTruthy();
-    expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("pr-panel-refresh"));
+    expect(session.sentClientFrames).toEqual([
+      { kind: "refresh", hasBinaryPayload: false },
+    ]);
   });
-  describe("open-only filter", () => {
-    const stateRows = (): readonly PrLightItem[] => [
-      buildPrItem({ headRefName: "open-head", state: "open" }),
+  describe("state filter", () => {
+    const hiddenByOpen = (): readonly PrLightItem[] => [
       buildPrItem({ headRefName: "merged-head", state: "merged" }),
       buildPrItem({ headRefName: "closed-head", state: "closed" }),
     ];
 
-    it("shows every row while the filter is off", async () => {
-      const epicId = "epic-oo0";
-      renderPanel({ epicId, tabId: "tab-oo0" });
-      await emitSnapshot(epicId, stateRows());
-
-      expect(await screen.findByTestId("mock-pr-card-open-head")).toBeTruthy();
-      expect(screen.getByTestId("mock-pr-card-merged-head")).toBeTruthy();
-      expect(screen.getByTestId("mock-pr-card-closed-head")).toBeTruthy();
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
-    });
-
-    it("keeps open rows and hides merged and closed ones", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo1";
-      renderPanel({ epicId, tabId: "tab-oo1" });
-      await emitSnapshot(epicId, stateRows());
-
-      expect(await screen.findByTestId("mock-pr-card-open-head")).toBeTruthy();
-      expect(screen.queryByTestId("mock-pr-card-merged-head")).toBeNull();
-      expect(screen.queryByTestId("mock-pr-card-closed-head")).toBeNull();
-      // The repo count follows what is shown, and nothing says "all hidden".
-      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
-        "1",
-      );
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
-    });
-
-    it("says every row is merged or closed instead of showing the empty state", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo2";
-      renderPanel({ epicId, tabId: "tab-oo2" });
+    it("lists only the rows in the chosen state", async () => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      const epicId = "epic-sf1";
+      renderPanel({ epicId, tabId: "tab-sf1" });
       await emitSnapshot(epicId, [
-        buildPrItem({ headRefName: "merged-head", state: "merged" }),
-        buildPrItem({ headRefName: "closed-head", state: "closed" }),
-        buildPrItem({ headRefName: "closed-head-2", state: "closed" }),
+        buildPrItem({ headRefName: "open-head", state: "open" }),
+        ...hiddenByOpen(),
       ]);
-
-      const message = await screen.findByTestId("pr-panel-all-hidden");
-      expect(message.textContent).toBe(
-        "All 3 pull requests are merged or closed",
-      );
-      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
-      expect(screen.queryByTestId("pr-repo-group")).toBeNull();
-    });
-
-    it("uses the singular line when the only pull request is merged or closed", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo3";
-      renderPanel({ epicId, tabId: "tab-oo3" });
-      await emitSnapshot(epicId, [
-        buildPrItem({ headRefName: "merged-head", state: "merged" }),
-      ]);
-
-      const message = await screen.findByTestId("pr-panel-all-hidden");
-      expect(message.textContent).toBe(
-        "The only pull request is merged or closed",
-      );
-      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
-    });
-
-    it("still shows the generic empty state when the list itself is empty", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo4";
-      renderPanel({ epicId, tabId: "tab-oo4" });
-      await emitSnapshot(epicId, []);
-
-      expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
-    });
-
-    it("reveals the hidden rows again when the filter is switched off", async () => {
-      usePrPanelStore.setState({ openOnly: true });
-      const epicId = "epic-oo5";
-      renderPanel({ epicId, tabId: "tab-oo5" });
-      await emitSnapshot(epicId, [
-        buildPrItem({ headRefName: "merged-head", state: "merged" }),
-      ]);
-      await screen.findByTestId("pr-panel-all-hidden");
-
-      act(() => {
-        usePrPanelStore.getState().setOpenOnly(false);
-      });
 
       expect(
         await screen.findByTestId("mock-pr-card-merged-head"),
       ).toBeTruthy();
-      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-open-head")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-closed-head")).toBeNull();
+      // The repo count follows what is shown.
+      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
+        "1",
+      );
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+
+    it("says the filter hid every row and Show all brings them back", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-sf2";
+      renderPanel({ epicId, tabId: "tab-sf2" });
+      await emitSnapshot(epicId, hiddenByOpen());
+
+      const empty = await screen.findByTestId("pr-panel-filtered-empty");
+      expect(empty.textContent).toContain("No open pull requests");
+      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
+      expect(screen.queryByTestId("pr-repo-group")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+
+      expect(usePrPanelStore.getState().stateFilter).toBe("all");
+      expect(
+        await screen.findByTestId("mock-pr-card-merged-head"),
+      ).toBeTruthy();
+      expect(screen.getByTestId("mock-pr-card-closed-head")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+
+    it("keeps a refresh banner above the filtered empty state", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-sf3";
+      renderPanel({ epicId, tabId: "tab-sf3" });
+      await waitFor(() => {
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      });
+      mockWsStreamClient
+        .getSession("pr.subscribeListForEpic", { epicId, mode: "foreground" })
+        ?.emitFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sourceStatus: "gh-unavailable",
+          notice: null,
+          items: [...hiddenByOpen()],
+        });
+
+      const banner = await screen.findByTestId("pr-panel-gh-unavailable");
+      const empty = screen.getByTestId("pr-panel-filtered-empty");
+      expect(
+        banner.compareDocumentPosition(empty) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("still shows the generic empty state when the list itself is empty", async () => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      const epicId = "epic-sf4";
+      renderPanel({ epicId, tabId: "tab-sf4" });
+      await emitSnapshot(epicId, []);
+
+      expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
     });
   });
 
@@ -826,7 +721,7 @@ describe("PrPanelBody card list", () => {
       );
     });
 
-    it("does not invent a stack when Open only hides a fan-in row", async () => {
+    it("does not invent a stack when the Open filter hides a fan-in row", async () => {
       const epicId = "epic-filter-fanin";
       renderPanel({ epicId, tabId: "tab-filter-fanin" });
       await emitSnapshot(epicId, [
@@ -850,7 +745,7 @@ describe("PrPanelBody card list", () => {
       expect(screen.queryByTestId("pr-stack-header")).toBeNull();
 
       act(() => {
-        usePrPanelStore.getState().setOpenOnly(true);
+        usePrPanelStore.getState().setStateFilter("open");
       });
 
       expect(screen.queryByTestId("mock-pr-card-feat-merged")).toBeNull();
@@ -886,7 +781,7 @@ describe("PrPanelBody card list", () => {
       expect(railKinds()).toEqual(["layer-3", "layer-2", "layer-1", "base"]);
 
       act(() => {
-        usePrPanelStore.getState().setOpenOnly(true);
+        usePrPanelStore.getState().setStateFilter("open");
       });
 
       expect(screen.queryByTestId("mock-pr-card-layer-1")).toBeNull();

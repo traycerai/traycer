@@ -1,4 +1,9 @@
 import {
+  FrameCommentPortalContext,
+  FrameFullscreenContext,
+} from "./frame-comment-surface-context";
+import {
+  useContext,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -82,6 +87,10 @@ function MentionSuggestionListContent({
   // list opened inside a background split pane's comment composer is hidden +
   // inert with that pane instead of escaping over the focused partner.
   const paneContainer = usePanePortalContainer();
+  const commentContainer = useContext(FrameCommentPortalContext);
+  const fullscreenContainer = useContext(FrameFullscreenContext);
+  const portalContainer =
+    commentContainer ?? fullscreenContainer ?? paneContainer;
 
   useImperativeHandle(
     ref,
@@ -134,9 +143,9 @@ function MentionSuggestionListContent({
     reposition();
     const cleanup = autoUpdate(virtualReference, floating, reposition);
     return cleanup;
-    // `paneContainer` dep: the portal remounts into the live node once the host
+    // `portalContainer` dep: the portal remounts into the live node once the host
     // ref settles, so re-bind `autoUpdate` to it rather than the first node.
-  }, [getReferenceClientRect, items.length, paneContainer]);
+  }, [getReferenceClientRect, items.length, portalContainer]);
 
   useLayoutEffect(() => {
     if (items.length === 0) return;
@@ -214,7 +223,7 @@ function MentionSuggestionListContent({
         })
       )}
     </div>,
-    paneContainer ?? document.body,
+    portalContainer ?? document.body,
   );
 }
 

@@ -46,6 +46,7 @@ describe("<TerminalDeadTileBanner />", () => {
         reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="terminal"
+        destroyedLine={null}
         onClose={() => undefined}
         testId="terminal-tile-1"
       />,
@@ -62,6 +63,7 @@ describe("<TerminalDeadTileBanner />", () => {
         reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="agent"
+        destroyedLine={null}
         onClose={() => undefined}
         testId="terminal-agent-tile-1"
       />,
@@ -76,12 +78,72 @@ describe("<TerminalDeadTileBanner />", () => {
     expect(text).not.toContain("permanently closed");
   });
 
+  it("says who destroyed the sandbox and when, for a terminal or a terminal agent, never a fault", () => {
+    for (const ownerKind of ["terminal", "agent"] as const) {
+      render(
+        <TerminalDeadTileBanner
+          reason="sandbox-destroyed"
+          hostLabel="e2e-sbx-win2"
+          ownerKind={ownerKind}
+          destroyedLine="e2e-sbx-win2 was destroyed by you at 11:01."
+          onClose={() => undefined}
+          testId={`tile-${ownerKind}`}
+        />,
+      );
+
+      const text = screen.getByTestId(`tile-${ownerKind}`).textContent;
+      expect(text).toContain("e2e-sbx-win2 was destroyed by you at 11:01.");
+      expect(text).not.toContain("unreachable");
+      expect(text).not.toContain("permanently closed");
+    }
+  });
+
+  it("tells a terminal agent on a stopped sandbox the same, not that the host is unreachable", () => {
+    render(
+      <TerminalDeadTileBanner
+        reason="sandbox-stopped"
+        hostLabel="e2e-sbx-p1"
+        ownerKind="agent"
+        destroyedLine={null}
+        onClose={() => undefined}
+        testId="tui-agent-tile-1"
+      />,
+    );
+
+    const text = screen.getByTestId("tui-agent-tile-1").textContent;
+    expect(text).toContain(
+      "e2e-sbx-p1 is stopped. Start it to use this terminal again.",
+    );
+    expect(text).not.toContain("unreachable");
+  });
+
+  it("tells a terminal on a stopped sandbox to start it, not that it is permanently closed", () => {
+    render(
+      <TerminalDeadTileBanner
+        reason="sandbox-stopped"
+        hostLabel="e2e-sbx-p1"
+        ownerKind="terminal"
+        destroyedLine={null}
+        onClose={() => undefined}
+        testId="terminal-tile-1"
+      />,
+    );
+
+    expect(screen.getByTestId("terminal-tile-1").textContent).toContain(
+      "e2e-sbx-p1 is stopped. Start it to use this terminal again.",
+    );
+    expect(screen.getByTestId("terminal-tile-1").textContent).not.toContain(
+      "permanently closed",
+    );
+  });
+
   it("keeps the close action available on both variants", () => {
     render(
       <TerminalDeadTileBanner
         reason="host-unreachable"
         hostLabel="h"
         ownerKind="agent"
+        destroyedLine={null}
         onClose={() => undefined}
         testId="t-agent"
       />,
@@ -686,6 +748,70 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     expect(text).toContain("no longer shared with you");
     expect(text).not.toContain("sandbox isn't available");
   });
+  describe("destroyed sandbox", () => {
+    it.each([
+      [true, false],
+      [false, false],
+      [true, true],
+    ] as const)(
+      "wins the ownership swaps (ownedByViewer=%s, environmentOwned=%s) and offers 'Continue on another host'",
+      (ownedByViewer, environmentOwned) => {
+        const onClone = vi.fn();
+        render(
+          <ChatDeadTileBanner
+            hostLabel="e2e-sbx-stop3"
+            reason="sandbox-destroyed"
+            ownedByViewer={ownedByViewer}
+            environmentOwned={environmentOwned}
+            cloneAllowed
+            showsPublishedCopy
+            continueTargetLabel={null}
+            cloning={false}
+            onClone={onClone}
+            testId="chat-dead-destroyed"
+            className={undefined}
+          />,
+        );
+
+        const banner = screen.getByTestId("chat-dead-destroyed");
+        expect(banner.getAttribute("data-reason")).toBe("sandbox-destroyed");
+        expect(banner.textContent).toContain("e2e-sbx-stop3");
+        expect(banner.textContent).toContain("destroyed");
+        expect(banner.textContent).not.toContain("offline");
+        expect(banner.textContent).not.toContain("another collaborator");
+        screen
+          .getByRole("button", { name: "Continue on another host" })
+          .click();
+        expect(onClone).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("offers no action to a viewer who cannot clone", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="e2e-sbx-stop3"
+          reason="sandbox-destroyed"
+          ownedByViewer
+          environmentOwned={false}
+          cloneAllowed={false}
+          showsPublishedCopy
+          continueTargetLabel={null}
+          cloning={false}
+          onClone={() => undefined}
+          testId="chat-dead-destroyed-viewer"
+          className={undefined}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "Continue on another host" }),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("chat-dead-destroyed-viewer").textContent,
+      ).toContain("destroyed");
+    });
+  });
+
   describe("removed sandbox continue target", () => {
     it("names the sandbox the agent continues on, in the sentence and on the button", () => {
       render(

@@ -205,6 +205,22 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: { providers: [] },
+    isFetching: false,
+    isError: false,
+  }),
+}));
+
+// A fork that stages no sandbox never asks the staged sign-in check anything.
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
+}));
+
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
 import {
   pendingForkChatStagingKey,
@@ -352,6 +368,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     forkMode: "plain",
     initialHostId: null,
     onlyHostIds: null,
+    stagedSandbox: null,
   };
 }
 

@@ -27,9 +27,12 @@ import {
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanvasArtifactEditor } from "../canvas-artifact-editor";
+import { useCanvasSelectionStore } from "../canvas-selection-store";
 import type { CanvasFrameEvents } from "../canvas-frame";
+import type { CanvasCommentView } from "../canvas-frame-registry";
 import type { CanvasFlowNode } from "../canvas-node-context";
 import type { CanvasLayoutStore } from "../canvas-layout-store";
+import { canvasElement } from "./canvas-edit-test-support";
 import {
   ARTIFACT_ID,
   storeFromFixture,
@@ -58,8 +61,19 @@ interface MockFlowProps {
   readonly onNodeDragStop: DragStop;
   readonly onNodesChange: (changes: NodeChange<CanvasFlowNode>[]) => void;
   readonly noPanClassName?: string;
+  readonly viewport: {
+    readonly x: number;
+    readonly y: number;
+    readonly zoom: number;
+  };
   readonly onInit: (flow: FakeFlowInstance) => void;
   readonly children: ReactNode;
+}
+
+interface FitViewOptions {
+  readonly nodes: readonly { readonly id: string }[];
+  readonly padding: number;
+  readonly duration: number;
 }
 
 // The instance methods the editor calls on xyflow's handle. The pane reports
@@ -71,6 +85,7 @@ interface FakeFlowInstance {
   };
   readonly zoomTo: (zoom: number) => void;
   readonly setCenter: (x: number, y: number, options: object) => void;
+  readonly fitView: (options: FitViewOptions) => void;
 }
 
 // xyflow measures a real layout and owns pointer dragging and resizing,
@@ -85,18 +100,22 @@ interface FlowCapture {
   dragStop: DragStop | null;
   onNodesChange: MockFlowProps["onNodesChange"] | null;
   noPanClassName: string | undefined;
+  viewport: MockFlowProps["viewport"] | null;
   resizeEnds: Map<string, ResizeEnd>;
   zoomTo: Mock<(zoom: number) => void>;
   setCenter: Mock<(x: number, y: number, options: object) => void>;
+  fitView: Mock<(options: FitViewOptions) => void>;
 }
 const flow: FlowCapture = vi.hoisted(() => ({
   nodes: [],
   dragStop: null,
   onNodesChange: null,
   noPanClassName: undefined,
+  viewport: null,
   resizeEnds: new Map<string, ResizeEnd>(),
   zoomTo: vi.fn<(zoom: number) => void>(),
   setCenter: vi.fn<(x: number, y: number, options: object) => void>(),
+  fitView: vi.fn<(options: FitViewOptions) => void>(),
 }));
 
 vi.mock("@xyflow/react", async () => {
@@ -111,6 +130,7 @@ vi.mock("@xyflow/react", async () => {
             screenToFlowPosition: (point) => point,
             zoomTo: flow.zoomTo,
             setCenter: flow.setCenter,
+            fitView: flow.fitView,
           }),
         [onInit],
       );
@@ -118,6 +138,7 @@ vi.mock("@xyflow/react", async () => {
       flow.dragStop = props.onNodeDragStop;
       flow.onNodesChange = props.onNodesChange;
       flow.noPanClassName = props.noPanClassName;
+      flow.viewport = props.viewport;
       return (
         <div role="group" aria-label="Canvas pane">
           {props.nodes.map((node) => {
@@ -320,6 +341,7 @@ afterEach(() => {
   flow.resizeEnds.clear();
   flow.zoomTo.mockClear();
   flow.setCenter.mockClear();
+  flow.fitView.mockClear();
 });
 
 async function openZoomMenu(user: UserEvent) {
@@ -387,18 +409,61 @@ describe("CanvasArtifactEditor pages and boards", () => {
     expect(screen.getByRole("img", { name: "Landing preview" })).toBeDefined();
   });
 
-  it("toggles a board between preview and playable", () => {
+  it("starts play from a board's own Play button without persisting anything", () => {
     const { store } = mountEditor();
-    const toggle = screen.getByRole("button", { name: "Play Home on canvas" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(toggle);
+    const before = store.getSnapshot().layout.boards[HOME];
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
 
-    expect(store.getSnapshot().layout.boards[HOME].is_interactive).toBe(true);
+    // Play is a view, not a document edit: nothing about the board changed.
+    expect(store.getSnapshot().layout.boards[HOME]).toEqual(before);
+    // Play is per board: this board's button becomes its stop control while
+    // every other board keeps its own Play, and the toolbar stays up.
     expect(
-      screen
-        .getByRole("button", { name: "Play Home on canvas" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
+      screen.getByRole("button", { name: "Stop Home (Escape)" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Play Checkout on canvas" }),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Select (V)" })).toBeDefined();
+    // Starting play leaves the camera where the reader put it.
+    expect(flow.setCenter).not.toHaveBeenCalled();
+  });
+
+  it("plays one board at a time: playing another moves the stop control", () => {
+    mountEditor();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Checkout on canvas" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Stop Checkout (Escape)" }),
+    ).toBeDefined();
+  });
+
+  it("stops play on Escape, with the camera untouched either way", () => {
+    mountEditor();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+
+    fireEvent.keyDown(screen.getByLabelText("Canvas"), { code: "Escape" });
+
+    expect(
+      screen.queryByRole("button", { name: "Stop Home (Escape)" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    ).toBeDefined();
+    expect(flow.setCenter).not.toHaveBeenCalled();
+    expect(flow.fitView).not.toHaveBeenCalled();
   });
 
   it("reorders boards from the reading order under the current page", () => {
@@ -643,28 +708,21 @@ describe("CanvasArtifactEditor board frames in play", () => {
     expect(overlayCount()).toBe(2);
   });
 
-  it("keeps the shield in play mode while the board is not marked interactive", () => {
-    mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expect(overlayCount()).toBe(2);
-  });
-
-  it("keeps the shield on a board marked interactive while the canvas is editing", () => {
+  it("lifts the shield from the playing board only; the others stay editable", () => {
     mountEditor();
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
-    expect(overlayCount()).toBe(2);
-  });
-
-  it("lets only a board that is marked interactive, in play mode, take input", () => {
-    mountEditor();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Play Home on canvas" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    // Home is interactive and playing; Checkout is not.
     expect(overlayCount()).toBe(1);
+  });
+
+  it("brings the playing board's shield back when its stop control is used", () => {
+    mountEditor();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop Home (Escape)" }));
+    expect(overlayCount()).toBe(2);
   });
 });
 
@@ -1017,20 +1075,6 @@ describe.each([
 });
 
 describe("CanvasArtifactEditor board shield and panning", () => {
-  // xyflow never starts a pan from inside an element carrying this class, so a
-  // shield wearing it (or sitting in something that does) swallows the drag a
-  // Hand or Play pan needs.
-  function expectShieldsPanThrough(): void {
-    const noPan = flow.noPanClassName ?? "nopan";
-    const shields = document.querySelectorAll<HTMLElement>(
-      "[data-canvas-frame-overlay]",
-    );
-    expect(shields.length).toBeGreaterThan(0);
-    for (const shield of shields) {
-      expect(shield.closest(`.${noPan}`)).toBeNull();
-    }
-  }
-
   it("lets a drag over an unmarked board pan in Hand mode", () => {
     mountEditor();
     fireEvent.click(screen.getByRole("button", { name: "Hand (H)" }));
@@ -1077,12 +1121,6 @@ describe("CanvasArtifactEditor board shield and panning", () => {
     expect(
       document.querySelectorAll("[data-canvas-frame-overlay]"),
     ).toHaveLength(2);
-  });
-
-  it("lets a drag over an unmarked board pan in play mode", () => {
-    mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expectShieldsPanThrough();
   });
 });
 
@@ -1295,34 +1333,80 @@ describe("CanvasArtifactEditor inspector", () => {
   function mountWithPanel(): void {
     mountEditorWithEvents(
       canvasFrameEvents({
-        renderPanel: () => <aside aria-label="Annotations" />,
+        renderPanel: (_store, { onClose }) => (
+          <aside aria-label="Annotations">
+            <button type="button" onClick={onClose}>
+              Close annotations
+            </button>
+          </aside>
+        ),
       }),
     );
   }
 
-  it("stays hidden until the Inspector toggle is pressed", () => {
-    mountWithPanel();
-    const toggle = screen.getByRole("button", { name: "Inspector" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    expect(annotations()).toBeNull();
+  function selectElement(tid: string): void {
+    act(() => {
+      useCanvasSelectionStore.getState().select({
+        artifactId: ARTIFACT_ID,
+        boardPath: HOME,
+        page: null,
+        servedSha256: "sha",
+        element: canvasElement({ tid }),
+        textRange: null,
+      });
+    });
+  }
 
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    expect(annotations()).not.toBeNull();
-
-    fireEvent.click(toggle);
-    expect(annotations()).toBeNull();
+  afterEach(() => {
+    act(() => useCanvasSelectionStore.getState().clear());
   });
 
-  it("shows the note's own inspector when one note is selected", () => {
+  it("stays parked behind its flag whatever is selected", () => {
     mountWithPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
-    streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
 
-    expect(
-      screen.getByRole("complementary", { name: "Note inspector" }),
-    ).toBeDefined();
+    selectElement("first");
     expect(annotations()).toBeNull();
+
+    streamChanges([{ type: "select", id: `board:${HOME}`, selected: true }]);
+    expect(annotations()).toBeNull();
+
+    streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+    expect(
+      screen.queryByRole("complementary", { name: "Note inspector" }),
+    ).toBeNull();
+  });
+});
+
+describe("CanvasArtifactEditor revealing a canvas point", () => {
+  it("leaves a fullscreen board before centering the spot, since point pins live outside every board", () => {
+    let view: CanvasCommentView | null = null;
+    mountEditorWithEvents(
+      canvasFrameEvents({
+        onCanvasView: (next) => {
+          view = next;
+        },
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Back to canvas" }),
+    ).toBeDefined();
+
+    let revealed = false;
+    act(() => {
+      revealed = view?.revealCanvasPoint("page-1", 120, 80) ?? false;
+    });
+
+    expect(revealed).toBe(true);
+    expect(screen.queryByRole("button", { name: "Back to canvas" })).toBeNull();
+    // While fullscreen, the flow's own move events are ignored, so setCenter
+    // would be snapped back by the controlled viewport; the reveal writes the
+    // centered viewport through the controlled state instead. jsdom measures
+    // the stage at 0x0, so the centered origin is -point * zoom.
+    expect(flow.setCenter).not.toHaveBeenCalled();
+    expect(flow.viewport).toEqual({ x: -120 * 0.6, y: -80 * 0.6, zoom: 0.6 });
   });
 });
 
@@ -1334,6 +1418,53 @@ describe("CanvasArtifactEditor zoom menu", () => {
 
     await chooseFromZoomMenu(user, /^200%$/);
     expect(flow.zoomTo).toHaveBeenCalledWith(2);
+  });
+
+  it("fits only the current page's boards and notes, not an off-page board the live budget still retains", async () => {
+    const store = storeFromFixture(file);
+    const sourceForBoard = vi.fn<(path: string) => SandboxSource | null>(
+      () => null,
+    );
+    render(
+      <TooltipProvider>
+        <CanvasArtifactEditor
+          artifactId={ARTIFACT_ID}
+          store={store}
+          awareness={null}
+          user={{ name: "Ada", color: "#112233" }}
+          sourceForBoard={sourceForBoard}
+          boardFiles={null}
+          frameEvents={null}
+          liveFrameLimit={2}
+        />
+      </TooltipProvider>,
+    );
+    const user = userEvent.setup();
+
+    // Visit Details (the other page's board) once, then leave its page -
+    // the live-frame budget keeps it mounted off-page, which is exactly the
+    // board Fit must not measure.
+    openPageMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Specs fullscreen" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
+    openPageMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Flow" }));
+
+    await chooseFromZoomMenu(user, /^Fit to screen$/);
+
+    expect(flow.fitView).toHaveBeenCalledOnce();
+    const fitted = flow.fitView.mock.calls[0][0].nodes;
+    expect(fitted).toEqual(
+      expect.arrayContaining([
+        { id: `board:${HOME}` },
+        { id: `board:${CHECKOUT}` },
+        { id: "note:note-1" },
+      ]),
+    );
+    expect(fitted).toHaveLength(3);
   });
 });
 

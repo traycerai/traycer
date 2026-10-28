@@ -3,7 +3,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import { OverviewCardDatedLines } from "@/components/settings/environment/overview-card-dated-lines";
-import { formatEvidenceDate } from "@/components/settings/move/format-evidence-date";
+import { onSettingsDate } from "@/lib/settings/settings-date";
+import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
 import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -36,11 +37,14 @@ export function HostOverviewSettingsCard(props: {
       className="flex flex-col gap-2 rounded-md border border-border/60 px-3 py-2 text-ui-sm empty:hidden"
       data-testid="host-settings-card"
     >
+      {/* One line: `Settings on this computer only. · Details · Move to
+          Personal`. */}
       {state.kind === "local" ? (
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1">
           <span data-testid="host-settings-card-local">
             Settings on this computer only.
           </span>
+          <OverviewCardDetailsLine {...lineProps} />
           <Button
             type="button"
             size="sm"
@@ -56,24 +60,25 @@ export function HostOverviewSettingsCard(props: {
           </Button>
         </div>
       ) : null}
-      {state.kind === "moving" ? (
-        <p data-testid="host-settings-card-progress">
-          Moving this computer's settings to Personal · {state.applied} of{" "}
-          {state.total} items applied
-        </p>
+      {state.kind === "moving" || state.kind === "move_stopped" ? (
+        <MoveProgressLine {...lineProps} progress={state} />
       ) : null}
-      {/* After a move the dated line carries the card's `Details`:
-          `Moved to Personal on 12 Oct · Details`. */}
+      {/* While moving the progress line carries the card's `Details`, and
+          after a move the dated line does: `Moved to Personal on 12 Oct ·
+          Details`. */}
       {state.kind === "moved" ? (
         <div className="flex flex-wrap items-center gap-1">
           <p data-testid="host-settings-card-moved">
-            Moved to Personal on {formatEvidenceDate(state.acceptedAt)}
+            Moved to Personal {onSettingsDate(state.acceptedAt)}
           </p>
           <OverviewCardDetailsLine {...lineProps} />
         </div>
       ) : null}
       <OverviewCardDatedLines {...lineProps} />
-      {state.kind === "moved" ? null : (
+      {state.kind === "moved" ||
+      state.kind === "moving" ||
+      state.kind === "move_stopped" ||
+      state.kind === "local" ? null : (
         <OverviewCardDetailsLine {...lineProps} />
       )}
     </div>

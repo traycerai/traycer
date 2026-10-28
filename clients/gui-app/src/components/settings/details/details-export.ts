@@ -2,6 +2,7 @@ import type {
   DetailsExport,
   DetailsHistory,
   DetailsHostStatus,
+  DetailsRecovery,
   DetailsStatus,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
@@ -15,6 +16,18 @@ function exportSubject(subject: DetailsSubject): DetailsSubject {
 }
 
 function exportHost(host: DetailsHostStatus): DetailsHostStatus {
+  const recovery = host.recovery;
+  let exportedRecovery: DetailsRecovery | null = null;
+  if (recovery !== null) {
+    exportedRecovery =
+      recovery.kind === "apply"
+        ? {
+            kind: recovery.kind,
+            hostId: recovery.hostId,
+            guestSetupFailed: recovery.guestSetupFailed,
+          }
+        : { kind: recovery.kind, hostId: recovery.hostId };
+  }
   return {
     hostId: host.hostId,
     name: host.name,
@@ -23,10 +36,7 @@ function exportHost(host: DetailsHostStatus): DetailsHostStatus {
     reason: host.reason,
     at: host.at,
     lastReportedAt: host.lastReportedAt,
-    recovery:
-      host.recovery === null
-        ? null
-        : { kind: host.recovery.kind, hostId: host.recovery.hostId },
+    recovery: exportedRecovery,
   };
 }
 
@@ -43,6 +53,7 @@ function exportStatus(status: DetailsStatus): DetailsStatus {
       title: item.title,
       summary: item.summary,
       at: item.at,
+      retryable: item.retryable,
     })),
   };
 }

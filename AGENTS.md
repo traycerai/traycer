@@ -66,10 +66,12 @@ daemon (`useDaemonProcess: false`): leave it off.
 
 ## When CI runs
 
-A team pull request into `main` runs **no CI, on purpose**, except the CodeQL
-scan: every required check reports passed, so a merge needs review only, and
-the commit hook is the only other automatic check before merge. Pull requests from
-forks and bots, and into any other branch, run every check; watch them with
+A team pull request into `main`, an `integration/*` branch or a `land/*`
+branch runs **no CI, on purpose**, except the CodeQL scan: every required
+check reports passed, so a merge needs review only, and the commit hook is the
+only other automatic check before merge. Work on those branches is tested by
+the merge run once it reaches `main`. Pull requests from forks and bots, and
+into any other branch, run every check; watch them with
 `gh pr checks --watch` and fix what they report.
 
 **CI does not run on a branch by default.** Check what you can locally with
@@ -132,24 +134,25 @@ ReturnType<typeof fn>          // name the concrete type
 
 ## Slop the sweep keeps finding
 
-| BAD                                                             | GOOD                                                                              |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Repeat the same input, path and assertion in another test.      | Keep one case; add coverage only for a distinct regression.                       |
-| Leave A's contract above newly inserted B.                      | Keep each contract comment attached to the declaration or operation it describes. |
-| Assert only a constant or two aliases.                          | Assert its effect through the real consumer.                                      |
-| Ticket BEGIN/END or review-round markers in source.             | Remove workflow markers; retain durable invariants.                               |
-| Carry state that no consumer reads.                             | Remove unused fields and the work that populates them.                            |
-| Wrap one call or expression without a distinct contract.        | Keep the expression at its caller.                                                |
-| Describe access using a retired owner or cache policy.          | Match the current authorization boundary and freshness policy.                    |
-| Export a module-only implementation with no external consumer.  | Keep it private; retain public and registered contracts.                          |
-| Require port members that no consumer reads or calls.           | Keep only the members consumers use; remove fixture no-ops.                       |
-| Repeat an assertion implied by an exact result check.           | Keep the exact check and assertions for distinct effects.                         |
-| Assert only that a required field exists.                       | Exercise its effect through the real consumer.                                    |
-| Keep comments that describe a retired contract.                 | Update or remove stale claims when the contract changes.                          |
-| Assert only a test double's implementation.                     | Assert production behavior through the real consumer.                             |
-| Treat a sleep or fixed microtask count as operation completion. | Await the operation's completion or its observable outcome before asserting.      |
-| Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                     |
-| Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                     |
+| BAD                                                             | GOOD                                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Repeat the same input, path and assertion in another test.      | Keep one case; add coverage only for a distinct regression.                           |
+| Let a test inherit mutable fixture state from another test.     | Reset shared fixture state for every test and restore temporary overrides in cleanup. |
+| Leave A's contract above newly inserted B.                      | Keep each contract comment attached to the declaration or operation it describes.     |
+| Assert only a constant or two aliases.                          | Assert its effect through the real consumer.                                          |
+| Ticket BEGIN/END or review-round markers in source.             | Remove workflow markers; retain durable invariants.                                   |
+| Carry state that no consumer reads.                             | Remove unused fields and the work that populates them.                                |
+| Wrap one call or expression without a distinct contract.        | Keep the expression at its caller.                                                    |
+| Describe access using a retired owner or cache policy.          | Match the current authorization boundary and freshness policy.                        |
+| Export a module-only implementation with no external consumer.  | Keep it private; retain public and registered contracts.                              |
+| Require port members that no consumer reads or calls.           | Keep only the members consumers use; remove fixture no-ops.                           |
+| Repeat an assertion implied by an exact result check.           | Keep the exact check and assertions for distinct effects.                             |
+| Assert only that a required field exists.                       | Exercise its effect through the real consumer.                                        |
+| Keep comments that describe a retired contract.                 | Update or remove stale claims when the contract changes.                              |
+| Assert only a test double's implementation.                     | Assert production behavior through the real consumer.                                 |
+| Treat a sleep or fixed microtask count as operation completion. | Await the operation's completion or its observable outcome before asserting.          |
+| Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                         |
+| Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                         |
 
 ## Skills
 

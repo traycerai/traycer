@@ -432,6 +432,9 @@ describe("S7 · doors", () => {
   it("S7c: the divider names the shell by its monitor state", () => {
     renderInChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({
             blockId: "blk-quiet",
@@ -463,6 +466,9 @@ describe("S7 · doors", () => {
   it("S7d: the divider is a door — Open in tab opens the named shell's window", () => {
     renderInChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({
             blockId: "blk-door",
@@ -489,6 +495,9 @@ describe("S7 · doors", () => {
   it("S7e: a kind-only monitor trigger keeps the harness tool's name, and gets no dead door", () => {
     renderInChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({ blockId: "blk-legacy", managedCommand: null }),
         ]}
@@ -506,6 +515,9 @@ describe("S7 · doors", () => {
   it("S7f: a still-running producer's divider says so instead of inventing a terminal outcome", () => {
     renderInChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({
             blockId: "blk-live",
@@ -521,7 +533,7 @@ describe("S7 · doors", () => {
     );
     // A watching shell gets the concise monitor label from its kind and
     // identity, including while the producer is still active.
-    expect(screen.getByText("Monitor running")).toBeTruthy();
+    expect(screen.getByText("Monitor update")).toBeTruthy();
     expect(screen.queryByText(/completed|failed|stopped/)).toBeNull();
   });
 
@@ -579,6 +591,9 @@ describe("S7 · doors", () => {
   it("S7i: a divider for a shell on another host opens the window on THAT host, and one without a host reads as deleted", () => {
     renderInOwnedChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({
             blockId: "blk-remote",
@@ -626,6 +641,9 @@ describe("S7 · doors", () => {
   it("S7i2: a present local shell's divider opens on the tab's host", () => {
     renderInOwnedChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({
             blockId: "blk-local",
@@ -655,6 +673,9 @@ describe("S7 · doors", () => {
     // on host B owns it, not this one.
     renderInOwnedChatContext(
       <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
         triggers={[
           makeTrigger({
             blockId: "blk-cloned",
@@ -707,7 +728,12 @@ describe("S7 · doors", () => {
       .parse({ ...trigger, managedCommand: withoutHost });
 
     renderInOwnedChatContext(
-      <AutonomousResumeSegment triggers={[shallowTrigger]} />,
+      <AutonomousResumeSegment
+        variant="card"
+        ending={null}
+        folded={[]}
+        triggers={[shallowTrigger]}
+      />,
     );
     act(() => {
       chatSession(CHAT_A).setConnectionStatus("open");

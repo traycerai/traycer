@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,11 +16,12 @@ import {
 import type {
   EnvironmentMoveAcceptRequest,
   EnvironmentMoveAcceptResponse,
-  EnvironmentMovePlanResponseV11,
+  EnvironmentMovePlanResponseV12,
 } from "@traycer/protocol/host/environment/move-contracts";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { MoveSheet } from "@/components/settings/move-sheet";
+import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
@@ -32,23 +34,21 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => clientMock.current,
 }));
 
-// The computers the Environment dropdown reads as running Personal.
+// The computers running Personal, as the one hook answers them.
 const runningPersonalMock = vi.hoisted(
-  (): { current: readonly { hostId: string; name: string }[] } => ({
-    current: [],
+  (): { current: HostsRunningConfiguration | null; retry: () => void } => ({
+    current: null,
+    retry: () => undefined,
   }),
 );
 vi.mock(
-  "@/components/settings/environment/use-environment-status-model",
+  "@/components/settings/environment/use-hosts-running-configuration",
   () => ({
     useHostsRunningPersonal: () => runningPersonalMock.current,
   }),
 );
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () => null,
-}));
 
-type PlanRows = EnvironmentMovePlanResponseV11["rows"];
+type PlanRows = EnvironmentMovePlanResponseV12["rows"];
 
 function row(key: string, label: string, detail: string | null) {
   return { kind: "variable" as const, key, os: null, label, detail };
@@ -61,8 +61,23 @@ function rowOfKind(key: string, kind: string, label: string) {
 function plan(
   planHash: string,
   rows: Partial<PlanRows>,
-): EnvironmentMovePlanResponseV11 {
+): EnvironmentMovePlanResponseV12 {
+  return planWith(planHash, rows, {
+    personalHoldsSecrets: false,
+    itemChoices: false,
+  });
+}
+
+function planWith(
+  planHash: string,
+  rows: Partial<PlanRows>,
+  flags: {
+    readonly personalHoldsSecrets: boolean;
+    readonly itemChoices: boolean;
+  },
+): EnvironmentMovePlanResponseV12 {
   return {
+    ...flags,
     planHash,
     planRevision: 1,
     hostVersion: "1.5.0",
@@ -94,7 +109,7 @@ interface Harness {
 }
 
 interface MountOptions {
-  readonly plans: readonly EnvironmentMovePlanResponseV11[];
+  readonly plans: readonly EnvironmentMovePlanResponseV12[];
   readonly acceptAnswers: readonly EnvironmentMoveAcceptResponse[];
 }
 
@@ -105,6 +120,27 @@ function mount(options: MountOptions): Harness {
 function mountReaching(
   options: MountOptions,
   runningPersonal: readonly { hostId: string; name: string }[],
+): Harness {
+  return mountWithRunning(options, {
+    hosts: runningPersonal.map((host) => ({
+      hostId: host.hostId,
+      hostName: host.name,
+      name: host.name,
+      kind: "personal",
+      isThisComputer: false,
+      lastReportedAt: 1,
+      applied: [],
+    })),
+    state: "ready",
+    collisions: [],
+    retry: runningPersonalMock.retry,
+    reread: () => undefined,
+  });
+}
+
+function mountWithRunning(
+  options: MountOptions,
+  running: HostsRunningConfiguration,
 ): Harness {
   const accepts: EnvironmentMoveAcceptRequest[] = [];
   let planReads = 0;
@@ -126,7 +162,7 @@ function mountReaching(
     },
   });
   clientMock.current = client;
-  runningPersonalMock.current = runningPersonal;
+  runningPersonalMock.current = running;
   recordNegotiatedHostMethods(HOST_ID, [
     "environment.move.plan",
     "environment.move.accept",
@@ -185,7 +221,12 @@ describe("<MoveSheet />", () => {
     ).toBeTruthy();
     const moves = screen.getByTestId("move-sheet-moves");
     expect(moves.textContent).toContain("Moves");
-    expect(moves.textContent).toContain("4 items");
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "2 variables · 2 secrets",
+    );
+    expect(
+      within(moves).getByRole("button", { name: "Show all 4" }),
+    ).toBeTruthy();
     expect(
       screen.getByTestId("move-sheet-staysOnThisComputer").textContent,
     ).toContain("Stays on this computer");
@@ -225,7 +266,7 @@ describe("<MoveSheet />", () => {
     expect(differs.textContent).toContain("PAGER: value differs");
     // The other sections keep the `label · detail` form.
     const moves = screen.getByTestId("move-sheet-moves");
-    fireEvent.click(within(moves).getByRole("button", { name: "1 item" }));
+    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
     expect(moves.textContent).toContain("EDITOR · variable");
   });
 
@@ -310,13 +351,13 @@ describe("<MoveSheet />", () => {
       "Your settings then reach every computer and sandbox running Personal. After the move, that is Old laptop only. Old laptop keeps working either way. Every row opens to its items.",
     );
     expect(await reach(["MacBook Pro"])).toBe(
-      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro. Old laptop keeps working either way. Every row opens to its items.",
+      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro and Old laptop. Old laptop keeps working either way. Every row opens to its items.",
     );
     expect(await reach(["MacBook Pro", "dev-box"])).toBe(
-      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro and dev-box. Old laptop keeps working either way. Every row opens to its items.",
+      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro, dev-box and Old laptop. Old laptop keeps working either way. Every row opens to its items.",
     );
     expect(await reach(["MacBook Pro", "dev-box", "build-1"])).toContain(
-      "which today is MacBook Pro, dev-box and build-1.",
+      "which today is MacBook Pro, dev-box and 1 more, and Old laptop. Old laptop keeps",
     );
 
     cleanup();
@@ -326,8 +367,54 @@ describe("<MoveSheet />", () => {
     ]);
     await settle();
     expect(screen.getByTestId("move-sheet-description").textContent).toContain(
-      "which today is MacBook Pro. Old laptop keeps",
+      "which today is MacBook Pro and Old laptop. Old laptop keeps",
     );
+  });
+
+  it("names nobody and holds Move to Personal while the computers running Personal are unread", async () => {
+    mountWithRunning(
+      { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
+      {
+        hosts: [],
+        state: "loading",
+        collisions: [],
+        retry: () => undefined,
+        reread: () => undefined,
+      },
+    );
+    await settle();
+
+    expect(screen.getByTestId("move-sheet-description").textContent).toBe(
+      "Old laptop keeps working either way. Every row opens to its items.",
+    );
+    expect(
+      screen.getByTestId("move-sheet-accept").hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("says it couldn't read which computers run Personal, and Retry reads again", async () => {
+    const retry = vi.fn<() => void>();
+    mountWithRunning(
+      { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
+      {
+        hosts: [],
+        state: "failed",
+        collisions: [],
+        retry,
+        reread: () => undefined,
+      },
+    );
+    await settle();
+
+    expect(
+      screen.getByText("Couldn't read which computers run Personal."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("move-sheet-loading")).toBeNull();
+    expect(
+      screen.getByTestId("move-sheet-accept").hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledOnce();
   });
 
   it("says there is nothing to move, with Done alone, when no row moves", async () => {
@@ -375,9 +462,10 @@ describe("<MoveSheet />", () => {
     await settle();
 
     const moves = screen.getByTestId("move-sheet-moves");
-    fireEvent.click(within(moves).getByRole("button", { name: "3 items" }));
+    fireEvent.click(within(moves).getByRole("button", { name: "Show all 3" }));
     expect(moves.textContent).toContain("Browser agent access");
-    expect(moves.textContent).toContain("Claude Code: ANTHROPIC_BASE_URL");
+    expect(moves.textContent).toContain("ANTHROPIC_BASE_URL (Claude Code)");
+    expect(moves.textContent).not.toContain("Claude Code: ");
     expect(moves.textContent).not.toContain("browser ");
     expect(moves.textContent).toContain("EDITOR");
   });
@@ -409,7 +497,7 @@ describe("<MoveSheet />", () => {
     ]);
     await settle();
     expect(disclosure()).toBe(
-      `${custody} Today that is MacBook Pro and dev-box, and any computer that joins Personal later. ${accepts}`,
+      `${custody} Today that is MacBook Pro and dev-box, and any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read. ${accepts}`,
     );
     cleanup();
 
@@ -445,7 +533,7 @@ describe("<MoveSheet />", () => {
     expect(
       screen.getByTestId("members-data-handling-notice").textContent,
     ).toContain(
-      "Traycer's cloud broker stores the value encrypted. The sandboxes running this configuration use the value without seeing it.",
+      "Traycer's cloud stores the value encrypted. Sandboxes running Personal or a team use the value without seeing it.",
     );
     cleanup();
 
@@ -478,8 +566,10 @@ describe("<MoveSheet />", () => {
     const disclosure = () =>
       screen.getByTestId("move-sheet-disclosure").textContent;
 
-    expect(moves().textContent).toContain("2 items");
-    openMoves("2 items");
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "1 variable · 1 secret",
+    );
+    openMoves("Show all 2");
     expect(moves().textContent).toContain("ENV_E2E_API_TOKEN, as a secret");
     expect(moves().textContent).toContain("EDITOR");
     expect(disclosure()).toContain(custody);
@@ -487,7 +577,9 @@ describe("<MoveSheet />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Leave as a variable" }),
     );
-    expect(moves().textContent).toContain("2 items");
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "2 variables",
+    );
     expect(moves().textContent).toContain("ENV_E2E_API_TOKEN, as a variable");
     expect(moves().textContent).not.toContain("as a secret");
     expect(disclosure()).not.toContain(custody);
@@ -495,7 +587,9 @@ describe("<MoveSheet />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Leave on this computer only" }),
     );
-    expect(moves().textContent).toContain("1 item");
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "1 variable",
+    );
     expect(moves().textContent).not.toContain("ENV_E2E_API_TOKEN");
     expect(screen.getByTestId("move-sheet-key-row")).toBeTruthy();
     expect(disclosure()).not.toContain(custody);
@@ -516,8 +610,10 @@ describe("<MoveSheet />", () => {
       screen.getByRole("button", { name: "Leave as a variable" }),
     );
     const moves = screen.getByTestId("move-sheet-moves");
-    expect(moves.textContent).toContain("1 item");
-    fireEvent.click(within(moves).getByRole("button", { name: "1 item" }));
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "1 variable",
+    );
+    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
     expect(moves.textContent).toContain("ENV_E2E_API_TOKEN, as a variable");
 
     fireEvent.click(
@@ -573,7 +669,7 @@ describe("<MoveSheet />", () => {
 
     fireEvent.click(
       within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
-        name: "4 items",
+        name: "Show all 4",
       }),
     );
     expect(screen.getByTestId("move-sheet-moves").textContent).toContain(
@@ -633,6 +729,77 @@ describe("<MoveSheet />", () => {
       { key: "OPENAI_API_KEY", choice: "secret" },
       { key: "TOKEN_X", choice: "secret" },
     ]);
+  });
+
+  it("keeps an invalid held key local by default and when its variable choice is toggled back", async () => {
+    const heldKeyPlan = plan("hash-held-key", {
+      looksLikeAKey: [row("api_key", "api_key", null)],
+    });
+    const variableChoice = mount({
+      plans: [heldKeyPlan],
+      acceptAnswers: [ACCEPTED],
+    });
+    const initialRow = await screen.findByTestId("move-sheet-key-row");
+    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
+    expect(initialRow.textContent).not.toContain("would become a secret");
+    expect(
+      within(initialRow)
+        .getByRole("button", {
+          name: "Leave on this computer only",
+        })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    fireEvent.click(
+      within(initialRow).getByRole("button", { name: "Leave as a variable" }),
+    );
+    expect(
+      within(initialRow)
+        .getByRole("button", {
+          name: "Leave as a variable",
+        })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await waitFor(() => {
+      expect(variableChoice.accepts[0]?.keyChoices).toEqual([
+        { key: "api_key", choice: "variable" },
+      ]);
+      expect(useMoveSheetStore.getState().target).toBeNull();
+    });
+
+    cleanup();
+    useMoveSheetStore.setState({ target: null });
+
+    const toggledBack = mount({
+      plans: [heldKeyPlan],
+      acceptAnswers: [ACCEPTED],
+    });
+    const toggledRow = await screen.findByTestId("move-sheet-key-row");
+    const variableButton = within(toggledRow).getByRole("button", {
+      name: "Leave as a variable",
+    });
+    fireEvent.click(variableButton);
+    expect(variableButton.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(variableButton);
+
+    expect(variableButton.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      within(toggledRow)
+        .getByRole("button", {
+          name: "Leave on this computer only",
+        })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await waitFor(() => {
+      expect(toggledBack.accepts[0]?.keyChoices).toEqual([
+        { key: "api_key", choice: "stays" },
+      ]);
+      expect(useMoveSheetStore.getState().target).toBeNull();
+    });
   });
 
   it("re-reads the plan on plan_changed, says so, and sends the new hash next", async () => {
@@ -700,5 +867,340 @@ describe("<MoveSheet />", () => {
       "Old laptop has no move waiting to start, so nothing moved.",
     );
     expect(useMoveSheetStore.getState().target).not.toBeNull();
+  });
+  it("lists a Looks-like-a-key override as <NAME> (<Provider>), as a secret, then as a variable", async () => {
+    mount({
+      plans: [
+        plan("hash-o", {
+          looksLikeAKey: [
+            rowOfKind(
+              "claude-code:ANTHROPIC_AUTH_TOKEN",
+              "env_override",
+              "ANTHROPIC_AUTH_TOKEN",
+            ),
+          ],
+        }),
+      ],
+      acceptAnswers: [ACCEPTED],
+    });
+    await settle();
+
+    const moves = screen.getByTestId("move-sheet-moves");
+    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
+    const text = () =>
+      within(moves).getByTestId("move-sheet-moves-row").textContent;
+    expect(text()).toBe("ANTHROPIC_AUTH_TOKEN (Claude Code), as a secret");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Leave as a variable" }),
+    );
+    expect(text()).toBe("ANTHROPIC_AUTH_TOKEN (Claude Code), as a variable");
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "1 Claude Code env setting",
+    );
+  });
+
+  it("moves a key row left on this computer only from Moves to Stays", async () => {
+    mount({
+      plans: [
+        plan("hash-ks", {
+          moves: [row("EDITOR", "EDITOR", null)],
+          looksLikeAKey: [row("TOKEN_X", "TOKEN_X", null)],
+        }),
+      ],
+      acceptAnswers: [ACCEPTED],
+    });
+    await settle();
+    expect(
+      within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
+        name: "Show all 2",
+      }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Leave on this computer only" }),
+    );
+
+    const moves = screen.getByTestId("move-sheet-moves");
+    fireEvent.click(within(moves).getByRole("button", { name: "Show all 1" }));
+    expect(moves.textContent).not.toContain("TOKEN_X");
+    const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
+    fireEvent.click(within(stays).getByRole("button", { name: "1 item" }));
+    expect(stays.textContent).toContain("TOKEN_X");
+  });
+
+  it("names the other computers in the recipient boundary when a secret moves", async () => {
+    const secretPlan = plan("hash-r", {
+      moves: [rowOfKind("TOKEN", "secret", "TOKEN")],
+    });
+    const later =
+      "any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.";
+    const disclosure = () =>
+      screen.getByTestId("move-sheet-disclosure").textContent;
+
+    mount({ plans: [secretPlan], acceptAnswers: [ACCEPTED] });
+    await settle();
+    expect(disclosure()).toContain(
+      `No other computer runs Personal yet. Any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.`,
+    );
+    cleanup();
+
+    mountReaching({ plans: [secretPlan], acceptAnswers: [ACCEPTED] }, [
+      { hostId: "a", name: "A" },
+      { hostId: "b", name: "B" },
+      { hostId: HOST_ID, name: "Old laptop" },
+    ]);
+    await settle();
+    expect(disclosure()).toContain(`Today that is A and B, and ${later}`);
+  });
+
+  it("tells a second computer that Personal's existing keys and secrets arrive, when it stores none itself", async () => {
+    const arrives =
+      "Nothing new is stored as a secret. Once Old laptop runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.";
+    const accepts =
+      "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";
+    const variablePlan = (holds: boolean) =>
+      planWith(
+        "hash-h",
+        { moves: [row("EDITOR", "EDITOR", null)] },
+        { personalHoldsSecrets: holds, itemChoices: false },
+      );
+
+    mount({ plans: [variablePlan(true)], acceptAnswers: [ACCEPTED] });
+    await settle();
+    expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
+      `${arrives} ${accepts}`,
+    );
+    cleanup();
+
+    mount({ plans: [variablePlan(false)], acceptAnswers: [ACCEPTED] });
+    await settle();
+    expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
+      accepts,
+    );
+  });
+
+  describe("choices on a Moves row (itemChoices)", () => {
+    const itemPlan = (itemChoices: boolean) =>
+      planWith(
+        "hash-i",
+        {
+          moves: [
+            row("EDITOR", "EDITOR", null),
+            rowOfKind("OPENAI_API_KEY", "secret", "OPENAI_API_KEY"),
+            rowOfKind("fallback", "fallback_policy", "fallback"),
+          ],
+          looksLikeAKey: [row("TOKEN_X", "TOKEN_X", null)],
+        },
+        { personalHoldsSecrets: false, itemChoices },
+      );
+
+    function rowButtons(index: number): string[] {
+      const rows = within(
+        screen.getByTestId("move-sheet-moves"),
+      ).getAllByTestId("move-sheet-moves-row");
+      return within(rows[index])
+        .queryAllByRole("button")
+        .map((button) => button.textContent);
+    }
+
+    function openMoves(): void {
+      fireEvent.click(
+        within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
+          name: "Show all 4",
+        }),
+      );
+    }
+
+    it("offers a variable both choices, a provider key only Leave, and a fallback policy neither", async () => {
+      mount({ plans: [itemPlan(true)], acceptAnswers: [ACCEPTED] });
+      await settle();
+      openMoves();
+
+      expect(rowButtons(0)).toEqual([
+        "Mark as a secret",
+        "Leave on this computer only",
+      ]);
+      expect(rowButtons(1)).toEqual(["Leave on this computer only"]);
+      expect(rowButtons(2)).toEqual([]);
+    });
+
+    it("offers secret storage only for names the secret intake accepts", async () => {
+      const overlongName = `A${"B".repeat(128)}`;
+      const { accepts } = mount({
+        plans: [
+          planWith(
+            "hash-secret-names",
+            {
+              moves: [
+                row("region", "region", null),
+                row("_PRIVATE", "_PRIVATE", null),
+                row(overlongName, overlongName, null),
+                rowOfKind(
+                  "claude-code:region",
+                  "env_override",
+                  "Claude Code override",
+                ),
+                row("GITHUB_TOKEN", "GITHUB_TOKEN", null),
+              ],
+            },
+            { personalHoldsSecrets: false, itemChoices: true },
+          ),
+        ],
+        acceptAnswers: [ACCEPTED],
+      });
+      const showAll = await screen.findByRole("button", {
+        name: "Show all 5",
+      });
+      fireEvent.click(showAll);
+
+      const rows = await within(
+        screen.getByTestId("move-sheet-moves"),
+      ).findAllByTestId("move-sheet-moves-row");
+      expect(rows).toHaveLength(5);
+      for (const index of [0, 1, 2, 3]) {
+        expect(
+          within(rows[index]).queryByRole("button", {
+            name: "Mark as a secret",
+          }),
+        ).toBeNull();
+        expect(
+          within(rows[index]).getByRole("button", {
+            name: "Leave on this computer only",
+          }),
+        ).toBeTruthy();
+      }
+      expect(
+        within(rows[4]).getByRole("button", {
+          name: "Mark as a secret",
+        }),
+      ).toBeTruthy();
+
+      fireEvent.click(
+        within(rows[4]).getByRole("button", {
+          name: "Leave on this computer only",
+        }),
+      );
+      fireEvent.click(screen.getByTestId("move-sheet-accept"));
+      await waitFor(() =>
+        expect(accepts[0]?.keyChoices).toEqual([
+          { key: "item:variable:GITHUB_TOKEN", choice: "stays" },
+        ]),
+      );
+    });
+
+    it("offers no choice on a host that does not honour them, and sends no item entry", async () => {
+      const { accepts } = mount({
+        plans: [itemPlan(false)],
+        acceptAnswers: [ACCEPTED],
+      });
+      await settle();
+      openMoves();
+
+      expect(rowButtons(0)).toEqual([]);
+      expect(rowButtons(1)).toEqual([]);
+      fireEvent.click(screen.getByTestId("move-sheet-accept"));
+      await settle();
+      expect(accepts[0]?.keyChoices).toEqual([
+        { key: "TOKEN_X", choice: "secret" },
+      ]);
+    });
+
+    it("lists a row marked as a secret by that name, counts it, and sends it under item:<kind>:<key> beside the key rows", async () => {
+      const { accepts } = mount({
+        plans: [itemPlan(true)],
+        acceptAnswers: [ACCEPTED],
+      });
+      await settle();
+      openMoves();
+
+      fireEvent.click(screen.getByRole("button", { name: "Mark as a secret" }));
+      expect(
+        within(screen.getByTestId("move-sheet-moves")).getAllByTestId(
+          "move-sheet-moves-row",
+        )[0].textContent,
+      ).toContain("EDITOR, as a secret");
+      expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+        "2 secrets · 1 API key · Model routing",
+      );
+      fireEvent.click(screen.getByTestId("move-sheet-accept"));
+      await settle();
+
+      expect(accepts[0]?.keyChoices).toEqual([
+        { key: "TOKEN_X", choice: "secret" },
+        { key: "item:variable:EDITOR", choice: "secret" },
+      ]);
+    });
+
+    it("moves a row left on this computer only under Stays, where its pressed button takes it back", async () => {
+      const { accepts } = mount({
+        plans: [itemPlan(true)],
+        acceptAnswers: [ACCEPTED],
+      });
+      await settle();
+      openMoves();
+
+      fireEvent.click(
+        within(
+          within(screen.getByTestId("move-sheet-moves")).getAllByTestId(
+            "move-sheet-moves-row",
+          )[0],
+        ).getByRole("button", { name: "Leave on this computer only" }),
+      );
+      expect(screen.getByTestId("move-sheet-moves").textContent).not.toContain(
+        "EDITOR",
+      );
+      const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
+      fireEvent.click(within(stays).getByRole("button", { name: "1 item" }));
+      const left = within(stays).getByTestId("move-sheet-left-here-row");
+      expect(left.textContent).toContain("EDITOR");
+      const pressed = within(left).getByRole("button", {
+        name: "Leave on this computer only",
+      });
+      expect(pressed.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(screen.getByTestId("move-sheet-accept"));
+      await settle();
+      expect(accepts[0]?.keyChoices).toEqual([
+        { key: "TOKEN_X", choice: "secret" },
+        { key: "item:variable:EDITOR", choice: "stays" },
+      ]);
+    });
+
+    it("sends nothing for a row whose choice was taken back", async () => {
+      const { accepts } = mount({
+        plans: [itemPlan(true)],
+        acceptAnswers: [ACCEPTED],
+      });
+      await settle();
+      openMoves();
+
+      fireEvent.click(
+        within(
+          within(screen.getByTestId("move-sheet-moves")).getAllByTestId(
+            "move-sheet-moves-row",
+          )[0],
+        ).getByRole("button", { name: "Leave on this computer only" }),
+      );
+      const stays = screen.getByTestId("move-sheet-staysOnThisComputer");
+      fireEvent.click(within(stays).getByRole("button", { name: "1 item" }));
+      fireEvent.click(
+        within(stays).getByRole("button", {
+          name: "Leave on this computer only",
+        }),
+      );
+      expect(screen.queryByTestId("move-sheet-left-here-row")).toBeNull();
+      expect(
+        within(screen.getByTestId("move-sheet-moves")).getByRole("button", {
+          name: "Show all 4",
+        }),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByTestId("move-sheet-accept"));
+      await settle();
+
+      expect(accepts[0]?.keyChoices).toEqual([
+        { key: "TOKEN_X", choice: "secret" },
+      ]);
+    });
   });
 });

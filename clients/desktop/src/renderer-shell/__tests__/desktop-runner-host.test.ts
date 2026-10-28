@@ -655,6 +655,7 @@ function buildFakeBridge(
     power: {
       setSleepBlocked: async () => undefined,
     },
+    trackpadScrollPhase: null,
     zoom: {
       ladder: [100] as const,
       get: async () => 100,
@@ -923,7 +924,7 @@ describe("DesktopRunnerHost.sandboxControlUnavailableReason", () => {
 });
 
 describe("DesktopRunnerHost.runSandboxVerb", () => {
-  it("hands the preload bridge the bearer, the sandbox, the verb and the timeout, and returns its answer", async () => {
+  it("hands the preload bridge the bearer, the sandbox, the verb, the gesture and the timeout, and returns its answer", async () => {
     const runSandboxVerb = vi.fn<DesktopPreloadBridge["runSandboxVerb"]>(
       async () => ({ kind: "ok", settled: false, state: "starting" }),
     );
@@ -933,7 +934,7 @@ describe("DesktopRunnerHost.runSandboxVerb", () => {
     });
 
     await expect(
-      host.runSandboxVerb("bearer-1", "sbx_1", "start", 87_000),
+      host.runSandboxVerb("bearer-1", "sbx_1", "start", "send", 87_000),
     ).resolves.toEqual({ kind: "ok", settled: false, state: "starting" });
 
     expect(runSandboxVerb).toHaveBeenCalledTimes(1);
@@ -941,6 +942,7 @@ describe("DesktopRunnerHost.runSandboxVerb", () => {
       "bearer-1",
       "sbx_1",
       "start",
+      "send",
       87_000,
     );
   });

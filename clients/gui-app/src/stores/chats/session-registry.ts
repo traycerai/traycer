@@ -17,6 +17,7 @@ import {
   acceptedActionIsUnsettled,
   noticeCarriesOnlyCopy,
 } from "@/stores/chats/chat-queue-reconciler";
+import { isSandboxHostId } from "@/lib/sandboxes/sandbox-host-directory";
 import { queueEditRecordsInCustody } from "@/stores/chats/queue-edit-custody";
 
 /**
@@ -139,8 +140,11 @@ export class ChatSessionRegistry {
         // A release stamps `lastUsedAt`, which is what the overflow sort reads.
         refreshOrderOnRelease: true,
         // Every chat session is worth keeping warm; this plane has no
-        // unreattachable state.
-        retainWhenIdle: () => true,
+        // unreattachable state. On a sandbox the stream goes at once
+        // (`isSandboxHostId`), unless it holds a prompt not yet recorded.
+        retainWhenIdle: (handle) =>
+          !isSandboxHostId(this.hostIdByHandle.get(handle) ?? null) ||
+          holdsUnrecordedPrompt(handle),
         hasActiveWork: (handle) =>
           chatCapHasActiveWork(handle, this.hostIdByHandle.get(handle) ?? null),
         activeWorkReason: (handle) =>

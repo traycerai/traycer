@@ -3,6 +3,13 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceEntry } from "@/lib/composer/types";
 import type { MentionFlowStep } from "@/lib/composer/mentions";
+import type { UseEpicMentionEntriesParams } from "@/hooks/composer/use-epic-mention-entries";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import {
+  EMPTY_CHATS_SLICE,
+  EMPTY_TERMINAL_AGENTS_SLICE,
+  type ArtifactProjection,
+} from "@/stores/epics/open-epic/types";
 import {
   createComposerPickerStore,
   type ComposerPickerStore,
@@ -28,6 +35,16 @@ const workspaceMock = vi.hoisted((): { result: WorkspaceResult } => ({
   },
 }));
 
+const hostSupportMock = vi.hoisted(() => ({ supportsArtifactIndex: false }));
+
+// The picker reads `handle.store.getState()` and nothing else of the handle,
+// so the fixture carries just the store.
+type OpenEpicStoreOnlyHandle = Pick<OpenEpicStoreHandle, "store">;
+
+const epicHandleMock = vi.hoisted(
+  (): { handle: OpenEpicStoreOnlyHandle | null } => ({ handle: null }),
+);
+
 const stableMocks = vi.hoisted(() => {
   const githubContext = {
     pullRequests: { rows: [], rowsHeld: false, repositories: null },
@@ -43,6 +60,8 @@ const stableMocks = vi.hoisted(() => {
       error: null,
       refetch: (): Promise<void> => Promise.resolve(),
     },
+    // Records the requests the picker hands the epic mention lane.
+    epicMentionRequests: [] as UseEpicMentionEntriesParams["requests"][],
     githubResult: {
       context: githubContext,
       chrome: null,
@@ -72,12 +91,25 @@ const stableMocks = vi.hoisted(() => {
   };
 });
 
+// A terminal's task directory is named by its host's directory row; this
+// suite has no host directory and no task terminal in the task's own folder.
+vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
+  useTaskHomeDirectory: () => null,
+  useTaskHomeDirectoryFor: () => () => null,
+}));
 vi.mock("@/hooks/composer/use-workspace-entries", () => ({
   useWorkspaceEntries: (): WorkspaceResult => workspaceMock.result,
 }));
 
 vi.mock("@/hooks/composer/use-epic-mention-entries", () => ({
-  useEpicMentionEntries: () => stableMocks.epicMentionResult,
+  useEpicMentionEntries: (params: UseEpicMentionEntriesParams) => {
+    stableMocks.epicMentionRequests.push(params.requests);
+    return stableMocks.epicMentionResult;
+  },
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (): boolean => hostSupportMock.supportsArtifactIndex,
 }));
 
 vi.mock("../use-github-mention-sections", () => ({
@@ -105,7 +137,7 @@ vi.mock("@/hooks/ui/use-debounced-value", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  useMaybeOpenEpicHandle: () => null,
+  useMaybeOpenEpicHandle: () => epicHandleMock.handle,
 }));
 
 vi.mock("@/stores/auth/auth-store", () => ({
@@ -168,6 +200,20 @@ function openMention(
   });
 }
 
+const ARTIFACTS_STEP: MentionFlowStep = {
+  kind: "provider",
+  providerId: "artifacts",
+  stepId: "root",
+  workspacePath: null,
+};
+
+const MARKDOWN_ARTIFACT_METHODS = [
+  "epic.mentionSpecs",
+  "epic.mentionTickets",
+  "epic.mentionStories",
+  "epic.mentionReviews",
+];
+
 const FILE_STEP: MentionFlowStep = {
   kind: "provider",
   providerId: "files",
@@ -179,20 +225,68 @@ function StrictWrapper(props: { readonly children: ReactNode }): ReactNode {
   return <StrictMode>{props.children}</StrictMode>;
 }
 
-function renderMentionItems(pickerStore: ComposerPickerStore) {
+function renderMentionItems(
+  pickerStore: ComposerPickerStore,
+  currentEpicId: string | null,
+) {
   const params: UseMentionItemsParams = {
     pickerStore,
     hostClient: null,
     mentionRoots: ["/repo"],
-    currentEpicId: null,
+    currentEpicId,
   };
   return renderHook(() => useMentionItems(params), {
     wrapper: StrictWrapper,
   });
 }
 
+function localArtifact(
+  id: string,
+  kind: ArtifactProjection["kind"],
+): ArtifactProjection {
+  return {
+    id,
+    kind,
+    title: id,
+    folderName: id,
+    parentId: null,
+    artifactRoomId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    status: null,
+    createdManually: false,
+  };
+}
+
+function openEpicHandleHoldingArtifacts(
+  artifacts: ReadonlyArray<ArtifactProjection>,
+): OpenEpicStoreOnlyHandle {
+  const state = {
+    chats: EMPTY_CHATS_SLICE,
+    tuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
+    artifacts: {
+      byId: Object.fromEntries(
+        artifacts.map((artifact) => [artifact.id, artifact]),
+      ),
+      allIds: artifacts.map((artifact) => artifact.id),
+    },
+    epic: { title: "Epic" },
+  };
+  // Same shape `tab-strip.test.tsx` gives its handle stores: the slice of the
+  // Zustand store API the consumer reads, typed through `unknown`.
+  const storeBase: unknown = {
+    getState: () => state,
+    subscribe: () => () => undefined,
+  };
+  return { store: storeBase as OpenEpicStoreHandle["store"] };
+}
+
 afterEach(() => {
   cleanup();
+  stableMocks.epicMentionRequests.length = 0;
+  stableMocks.authState.status = "signed-out";
+  hostSupportMock.supportsArtifactIndex = false;
+  epicHandleMock.handle = null;
   setWorkspaceResult([], { isLoading: false, isFetching: false });
 });
 
@@ -203,7 +297,7 @@ describe("useMentionItems mounted publication", () => {
     const pickerStore = createComposerPickerStore();
     openMention(pickerStore, 1, "config");
 
-    renderMentionItems(pickerStore);
+    renderMentionItems(pickerStore, null);
 
     await waitFor(() => {
       expect(pickerStore.getState().items.map((item) => item.id)).toEqual([
@@ -222,7 +316,7 @@ describe("useMentionItems mounted publication", () => {
     setWorkspaceResult(firstRows, { isLoading: false, isFetching: false });
     const pickerStore = createComposerPickerStore();
     openMention(pickerStore, 1, "config");
-    const mounted = renderMentionItems(pickerStore);
+    const mounted = renderMentionItems(pickerStore, null);
 
     await waitFor(() => {
       expect(pickerStore.getState().itemsForQuery).toBe("config");
@@ -276,7 +370,7 @@ describe("useMentionItems mounted publication", () => {
     setWorkspaceResult(sessionOneRows, { isLoading: false, isFetching: true });
     const pickerStore = createComposerPickerStore();
     openMention(pickerStore, 1, "config");
-    const mounted = renderMentionItems(pickerStore);
+    const mounted = renderMentionItems(pickerStore, null);
 
     await waitFor(() => {
       expect(pickerStore.getState().items.map((item) => item.id)).toEqual([
@@ -327,5 +421,66 @@ describe("useMentionItems mounted publication", () => {
     ]);
     expect(pickerStore.getState().itemsForQuery).toBe("config");
     expect(pickerStore.getState().itemsForStepId).toBe("root");
+  });
+
+  it("asks for html, canvas and file rows only when the host advertises epic.mentionArtifacts", () => {
+    stableMocks.authState.status = "signed-in";
+
+    function requestedMethodsOnArtifactsStep(
+      supportsArtifactIndex: boolean,
+    ): ReadonlyArray<string> {
+      stableMocks.epicMentionRequests.length = 0;
+      hostSupportMock.supportsArtifactIndex = supportsArtifactIndex;
+      const pickerStore = createComposerPickerStore();
+      openMention(pickerStore, 1, "");
+      pickerStore.getState().setStep(ARTIFACTS_STEP);
+      renderMentionItems(pickerStore, null);
+      cleanup();
+      const latestRequests = stableMocks.epicMentionRequests.at(-1);
+      if (latestRequests === undefined) throw new Error("no epic requests");
+      return latestRequests.map((request) => request.method);
+    }
+
+    expect(requestedMethodsOnArtifactsStep(false)).toEqual(
+      MARKDOWN_ARTIFACT_METHODS,
+    );
+    expect(requestedMethodsOnArtifactsStep(true)).toEqual([
+      ...MARKDOWN_ARTIFACT_METHODS,
+      "epic.mentionArtifacts",
+    ]);
+  });
+
+  it("offers the current epic's html, canvas and file artifacts only when the host advertises epic.mentionArtifacts", async () => {
+    stableMocks.authState.status = "signed-in";
+    const epicId = "epic-1";
+    epicHandleMock.handle = openEpicHandleHoldingArtifacts([
+      localArtifact("spec-1", "spec"),
+      localArtifact("canvas-1", "canvas"),
+    ]);
+
+    async function offeredArtifactIds(
+      supportsArtifactIndex: boolean,
+    ): Promise<ReadonlyArray<string>> {
+      hostSupportMock.supportsArtifactIndex = supportsArtifactIndex;
+      const pickerStore = createComposerPickerStore();
+      openMention(pickerStore, 1, "");
+      pickerStore.getState().setStep(ARTIFACTS_STEP);
+      renderMentionItems(pickerStore, epicId);
+      await waitFor(() => {
+        expect(pickerStore.getState().itemsForStepId).toBe("artifacts:root:");
+      });
+      const offered = pickerStore
+        .getState()
+        .items.map((item) => item.id)
+        .filter((id) => id !== "mention-back");
+      cleanup();
+      return offered;
+    }
+
+    expect(await offeredArtifactIds(false)).toEqual(["spec:epic-1:spec-1"]);
+    expect(await offeredArtifactIds(true)).toEqual([
+      "spec:epic-1:spec-1",
+      "canvas:epic-1:canvas-1",
+    ]);
   });
 });

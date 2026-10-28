@@ -114,6 +114,7 @@ afterAll(async () => {
 import {
   buildSystemdUnit,
   createLinuxController,
+  linuxUserManagerUnreachable,
   setRestartStopGracesForTests,
   type ProcessRunner,
 } from "../linux";
@@ -133,6 +134,7 @@ import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 import { withStopTarget } from "../../stop-target";
 import {
   isServiceMutationAuthorityError,
+  ServiceMutationAuthorityError,
   withServiceMutationAuthority,
 } from "../../mutation-authority";
 import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
@@ -1564,5 +1566,99 @@ describe("systemd unit install — linger ordering (the mechanism)", () => {
     await installWith(runner, publish, false);
 
     expect(log.some((entry) => entry.startsWith("loginctl"))).toBe(false);
+  });
+});
+
+describe("linuxUserManagerUnreachable", () => {
+  interface RecordedRun {
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly options: RunOptions;
+  }
+
+  function runnerAnswering(answer: () => Promise<RunResult>): {
+    readonly calls: RecordedRun[];
+    readonly run: ProcessRunner;
+  } {
+    const calls: RecordedRun[] = [];
+    const run: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      return await answer();
+    };
+    return { calls, run };
+  }
+
+  it("exit 0 is reachable", async () => {
+    const { run } = runnerAnswering(async () => ({
+      exitCode: 0,
+      stdout: "HOME=/home/user\n",
+      stderr: "",
+    }));
+
+    await expect(linuxUserManagerUnreachable(run, 4_000)).resolves.toBe(false);
+  });
+
+  it("a non-zero exit (no bus) is unreachable", async () => {
+    const { run } = runnerAnswering(async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory",
+    }));
+
+    await expect(linuxUserManagerUnreachable(run, 4_000)).resolves.toBe(true);
+  });
+
+  it("the runner's -1 (spawn failure or timeout) is unreachable", async () => {
+    const { run } = runnerAnswering(async () => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+    }));
+
+    await expect(linuxUserManagerUnreachable(run, 4_000)).resolves.toBe(true);
+  });
+
+  it("a thrown runner error is unreachable", async () => {
+    const { run } = runnerAnswering(async () => {
+      throw new Error("systemctl could not be spawned (ENOENT)");
+    });
+
+    await expect(linuxUserManagerUnreachable(run, 4_000)).resolves.toBe(true);
+  });
+
+  it("a lost mutation authority is rethrown, not read as unreachable", async () => {
+    const authorityLost = new ServiceMutationAuthorityError(
+      new Error("lock was lost"),
+    );
+    const { run } = runnerAnswering(async () => {
+      throw authorityLost;
+    });
+
+    await expect(linuxUserManagerUnreachable(run, 4_000)).rejects.toBe(
+      authorityLost,
+    );
+  });
+
+  it("asks `systemctl --user show-environment` in the inherited environment with the caller's timeout", async () => {
+    const { calls, run } = runnerAnswering(async () => ({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    }));
+
+    await linuxUserManagerUnreachable(run, 1_234);
+
+    expect(calls).toEqual([
+      {
+        command: "systemctl",
+        args: ["--user", "show-environment"],
+        options: {
+          env: undefined,
+          cwd: undefined,
+          timeoutMs: 1_234,
+          tolerateNonZeroExit: true,
+        },
+      },
+    ]);
   });
 });

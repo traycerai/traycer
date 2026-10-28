@@ -54,11 +54,12 @@ concurrency:
 jobs:
   macos:
     name: CLI real-launchd rows (macOS)
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       github.event_name != 'pull_request'
-      || github.base_ref != 'main'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: macos-latest

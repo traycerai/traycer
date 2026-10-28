@@ -327,10 +327,9 @@ describe("The Skills page", () => {
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText("written in Settings · all providers"),
-    ).toBeTruthy();
+    expect(await screen.findByText("all providers")).toBeTruthy();
     expect(screen.getByText("Built-in · all providers")).toBeTruthy();
+    expect(screen.queryByText(/written in Settings/)).toBeNull();
     expect(screen.getByText("review")).toBeTruthy();
     expect(screen.getByText("Review a change.")).toBeTruthy();
     expect(harness.paramsOf("environment.configuration.skills.list")).toEqual([
@@ -354,9 +353,7 @@ describe("The Skills page", () => {
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText("written in Settings · all providers"),
-    ).toBeTruthy();
+    expect(await screen.findByText("all providers")).toBeTruthy();
   });
 
   it("draws the providers from offFor once the host switches per provider", async () => {
@@ -381,9 +378,7 @@ describe("The Skills page", () => {
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText("written in Settings · Codex only"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Codex only")).toBeTruthy();
   });
 
   it("offers Edit on a written skill and Preview, with no Remove, on a built-in one", async () => {
@@ -539,7 +534,7 @@ describe("The Skills page", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toBe(
-        "Skills need a host running Acme. Pick one.",
+        "Skills need a host running Acme.Pick one.",
       );
     });
   });
@@ -771,6 +766,32 @@ describe("A provider's Skills tab on Personal or a team", () => {
     ).toBeTruthy();
     expect(within(written).queryByText(/can't be removed/)).toBeNull();
   });
+
+  it.each([
+    { source: personalPoolSource(), word: "Personal" },
+    { source: poolSource("editor"), word: "Acme" },
+  ])(
+    "names the configuration's own skill by $word, never as written in Settings",
+    async ({ source, word }) => {
+      negotiateMethods(SWITCHES);
+      const harness = mountTeamPage(
+        source,
+        handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+      );
+      render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const written = (await screen.findByText("review")).closest("li");
+      const builtIn = screen.getByText("find-skills").closest("li");
+      expect(written).not.toBeNull();
+      expect(builtIn).not.toBeNull();
+      if (written === null || builtIn === null) return;
+      expect(within(written).getByText(word)).toBeTruthy();
+      expect(within(builtIn).getByText("Built-in")).toBeTruthy();
+      expect(screen.queryByText(/written in Settings/)).toBeNull();
+    },
+  );
 
   it("names where each on-host skill lives, hides the configuration's names at every scope, and adds one at its scope and folder", async () => {
     negotiateMethods(SWITCHES);

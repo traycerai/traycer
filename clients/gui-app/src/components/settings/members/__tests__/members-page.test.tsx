@@ -818,6 +818,9 @@ describe("MembersPage pending removal", () => {
       );
     });
     expect(screen.getByText("Acme · 1 person")).toBeTruthy();
+    expect(
+      within(rowOf("u-priya")).getByText("removing · waiting for 1 host"),
+    ).toBeTruthy();
 
     deliver(removalNotice("n-other", "removal:env-a:6", "done"));
     deliver(removalNotice("n-legacy", null, "done"));
@@ -825,10 +828,14 @@ describe("MembersPage pending removal", () => {
     expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("pending");
 
     deliver(removalNotice("n-partial", "removal:env-a:7", "done"));
-    expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("done");
-    expect(
-      within(rowOf("u-priya")).queryByRole("button", { name: "Remove" }),
-    ).toBeNull();
+    await vi.waitFor(() => {
+      expect(
+        screen
+          .queryAllByTestId("members-row")
+          .some((row) => row.getAttribute("data-member-id") === "u-priya"),
+      ).toBe(false);
+    });
+    expect(screen.queryByText("done")).toBeNull();
   });
 
   it("shows a removed member who rejoins as a member again, once a read lists them after their removal committed", async () => {

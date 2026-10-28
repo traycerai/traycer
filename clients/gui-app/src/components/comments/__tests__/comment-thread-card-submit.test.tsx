@@ -24,6 +24,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  CanvasCommentDraftContext,
+  canvasCommentDraftStore,
+} from "@/components/comments/canvas-comment-drafts";
 import { CommentThreadCard } from "@/components/comments/comment-thread-card";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -404,5 +408,128 @@ describe("<CommentThreadCard /> edit submit", () => {
 
     expect(composerEditors()).toHaveLength(2);
     expect(reopenedEditor.getText()).toContain("fresh");
+  });
+});
+
+describe("<CommentThreadCard /> sharing a draft across two mounted instances", () => {
+  // The normal left panel and the fullscreen sidebar mount their own
+  // `CommentThreadCard` for the same thread; `CanvasCommentDraftContext`
+  // (canvas-comment-drafts.ts) is what makes the SAME in-progress reply or
+  // edit show in both rather than only in whichever one the person is
+  // looking at. The host is real, same as the suites above - only the
+  // outcome of the one in-flight request is what the test decides.
+  function pairElement() {
+    const drafts = canvasCommentDraftStore(hostClient, "shared-pair");
+    const card = (
+      <CommentThreadCard
+        epicId={EPIC_ID}
+        hostClient={hostClient}
+        artifactType="canvas"
+        artifactId={ARTIFACT_ID}
+        thread={thread}
+        currentUserId="user-1"
+        canModerate={false}
+        isExpanded
+        hasAnchor
+        onExpandedChange={() => undefined}
+        onActivateAnchor={() => undefined}
+      />
+    );
+    return (
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionContext.Provider value={epicHandle}>
+          <CanvasCommentDraftContext value={drafts}>
+            {card}
+            {card}
+          </CanvasCommentDraftContext>
+        </EpicSessionContext.Provider>
+      </QueryClientProvider>
+    );
+  }
+
+  it("mirrors a typed reply into the other instance, keeps it there on a failed submit, and clears both on success", async () => {
+    render(pairElement());
+    await screen.findAllByRole("button", { name: /^Reply/ });
+
+    typeIntoEditor(composerEditorAt(0), "shared reply text");
+    await waitFor(() => {
+      expect(composerEditorAt(1).getText()).toBe("shared reply text");
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Reply/ })[0]);
+    await waitFor(() => {
+      expect(replies).toHaveLength(1);
+    });
+    await waitFor(() => {
+      const buttons = screen.getAllByRole("button", { name: /^Reply/ });
+      expect(buttons).toHaveLength(2);
+      expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
+        true,
+      );
+    });
+
+    replyAt(0).answer.reject(new Error("network error"));
+    await waitFor(() => {
+      const buttons = screen.getAllByRole("button", { name: /^Reply/ });
+      expect(buttons).toHaveLength(2);
+      expect(buttons.some((button) => button.hasAttribute("disabled"))).toBe(
+        false,
+      );
+    });
+    // A failed submit is the single-flight rule's whole point: the draft it
+    // was holding stays right where it was, in every instance that shares it.
+    expect(composerEditorAt(0).getText()).toBe("shared reply text");
+    expect(composerEditorAt(1).getText()).toBe("shared reply text");
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Reply/ })[0]);
+    await waitFor(() => {
+      expect(replies).toHaveLength(2);
+    });
+    replyAt(1).answer.resolve({ ok: true });
+    await waitFor(() => {
+      expect(composerEditorAt(0).isEmpty).toBe(true);
+      expect(composerEditorAt(1).isEmpty).toBe(true);
+    });
+  });
+
+  it("mirrors an in-progress edit's text into the other instance", async () => {
+    render(pairElement());
+    const user = userEvent.setup();
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Comment actions" })[0],
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    // One editor per instance now shows the edit, each above its own reply
+    // composer: index 0 and 2 are the two edit composers.
+    typeIntoEditor(composerEditorAt(0), " (edited together)");
+
+    await waitFor(() => {
+      expect(composerEditorAt(2).getText()).toContain("(edited together)");
+    });
+  });
+
+  it("keeps what was typed when Edit is chosen again for the comment already being edited", async () => {
+    render(pairElement());
+    const user = userEvent.setup();
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Comment actions" })[0],
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    typeIntoEditor(composerEditorAt(0), " (kept)");
+    await waitFor(() => {
+      expect(composerEditorAt(2).getText()).toContain("(kept)");
+    });
+
+    // The other instance's menu offers Edit for the same comment; choosing it
+    // must not reseed the shared edit from the stored comment text.
+    await user.click(
+      screen.getAllByRole("button", { name: "Comment actions" })[1],
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+
+    expect(composerEditorAt(0).getText()).toContain("(kept)");
+    expect(composerEditorAt(2).getText()).toContain("(kept)");
   });
 });

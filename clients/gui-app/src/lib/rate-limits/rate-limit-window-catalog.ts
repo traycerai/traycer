@@ -99,6 +99,7 @@ export function isWindowedRateLimitProvider(
     case "grok":
     case "cursor":
     case "antigravity":
+    case "kimi":
       return true;
     case "openrouter":
     case "kilocode":
@@ -184,6 +185,12 @@ const OPENCODE_WINDOW_KEYS = {
   monthly: "opencode:monthly",
 } as const;
 
+const KIMI_WINDOW_KEYS = {
+  fiveHour: "kimi:fiveHour",
+  weekly: "kimi:weekly",
+  monthly: "kimi:monthly",
+} as const;
+
 const GROK_WINDOW_KEYS = { period: "grok:period" } as const;
 
 const CURSOR_WINDOW_KEYS = {
@@ -211,6 +218,8 @@ export function fixedProviderWindowKeys(
       return Object.values(GROK_WINDOW_KEYS);
     case "cursor":
       return Object.values(CURSOR_WINDOW_KEYS);
+    case "kimi":
+      return Object.values(KIMI_WINDOW_KEYS);
     // Every Antigravity window is discovered: Google owns the bucket ids and
     // the set a plan reports, so none can be named before a reading.
     case "antigravity":
@@ -462,6 +471,32 @@ function providerWindowCandidates(
         }),
         ...entry({
           windowKey: OPENCODE_WINDOW_KEYS.monthly,
+          label: "mo",
+          labelIsDuration: true,
+          kind: "monthly",
+          window: rateLimits.monthly,
+        }),
+      ];
+    case "kimi":
+      // The three rows Kimi's own `/usage` command renders. A window the
+      // backend left out is null and files no entry.
+      return [
+        ...entry({
+          windowKey: KIMI_WINDOW_KEYS.fiveHour,
+          label: "5h",
+          labelIsDuration: true,
+          kind: "session",
+          window: rateLimits.fiveHour,
+        }),
+        ...entry({
+          windowKey: KIMI_WINDOW_KEYS.weekly,
+          label: "wk",
+          labelIsDuration: true,
+          kind: "weekly",
+          window: rateLimits.weekly,
+        }),
+        ...entry({
+          windowKey: KIMI_WINDOW_KEYS.monthly,
           label: "mo",
           labelIsDuration: true,
           kind: "monthly",

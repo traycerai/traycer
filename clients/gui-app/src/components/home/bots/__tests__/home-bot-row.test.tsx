@@ -8,20 +8,22 @@ import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotActivity,
+  BotRecord,
+  BotSessionActivity,
+} from "@traycer/protocol/host/bot/schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
 interface MockState {
   effectiveHostId: string | null;
   snapshot: BotSubscriptionSnapshot | null;
-  working: boolean;
 }
 
 const mocks = vi.hoisted(() => {
   const state: MockState = {
     effectiveHostId: "host-effective",
     snapshot: null,
-    working: false,
   };
   return { state, navigate: vi.fn(), navigateToTabIntent: vi.fn() };
 });
@@ -41,11 +43,6 @@ vi.mock("@/hooks/bots/use-bot-subscription", () => ({
     resubscribe: vi.fn(),
   }),
 }));
-vi.mock("@/stores/agent-activity-store", () => ({
-  useEpicAgentActivity: () => ({
-    working: new Set<string>(mocks.state.working ? ["agent-1"] : []),
-  }),
-}));
 vi.mock("@/lib/tab-navigation", () => ({
   navigateToTabIntent: mocks.navigateToTabIntent,
 }));
@@ -61,6 +58,33 @@ const OWN = "host-own";
 const EFFECTIVE = "host-effective";
 const TEAMMATE = "host-teammate";
 const SANDBOX = "host-sandbox";
+
+const IDLE: BotSessionActivity = {
+  state: "idle",
+  startedAt: null,
+  step: null,
+  requestId: null,
+  reason: null,
+};
+const REPLYING: BotSessionActivity = {
+  state: "replying",
+  startedAt: 5_000,
+  step: "bun test",
+  requestId: null,
+  reason: null,
+};
+
+/** The bot's subscription snapshot carrying `activity`, the row's one source of working. */
+function snapshotWith(activity: BotActivity | null): BotSubscriptionSnapshot {
+  return {
+    bot: BOT,
+    tasks: [],
+    openRequestCount: 0,
+    conversationsRevision: null,
+    boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
+    activity,
+  };
+}
 
 const BOT: BotRecord = {
   botId: BOT_ID,
@@ -138,6 +162,11 @@ function mountRow(input: Mount): void {
   );
 }
 
+/** The bot's trunk is idle, the reading every state case below starts from. */
+function idleTrunk(): void {
+  mocks.state.snapshot = snapshotWith({ trunk: IDLE, threads: {} });
+}
+
 function stateBadge(): { text: string; state: string | null } {
   const badge = screen.getByTestId("home-bot-state");
   return { text: badge.textContent, state: badge.getAttribute("data-state") };
@@ -152,7 +181,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.state.effectiveHostId = EFFECTIVE;
   mocks.state.snapshot = null;
-  mocks.state.working = false;
   useBotTabsStore.setState({ tabs: {} });
 });
 
@@ -162,16 +190,52 @@ afterEach(() => {
 
 describe("<HomeBotRow /> state", () => {
   it("says Idle for a bot on one of the reader's own hosts that can be dialled", () => {
+    idleTrunk();
     mountRow(OWN_AND_DIALABLE);
 
     expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
   });
 
-  it("says Working while the bot's agents run", () => {
-    mocks.state.working = true;
+  it("says Working while the bot's trunk is replying", () => {
+    mocks.state.snapshot = snapshotWith({ trunk: REPLYING, threads: {} });
     mountRow(OWN_AND_DIALABLE);
 
     expect(stateBadge()).toEqual({ text: "Working", state: "working" });
+  });
+
+  it("says Working while a thread is replying and the trunk is idle", () => {
+    mocks.state.snapshot = snapshotWith({
+      trunk: IDLE,
+      threads: { "thread-1": REPLYING },
+    });
+    mountRow(OWN_AND_DIALABLE);
+
+    expect(stateBadge()).toEqual({ text: "Working", state: "working" });
+  });
+
+  it("says Working while a thread is replying and no trunk is open", () => {
+    mocks.state.snapshot = snapshotWith({
+      trunk: null,
+      threads: { "thread-1": REPLYING },
+    });
+    mountRow(OWN_AND_DIALABLE);
+
+    expect(stateBadge().state).toBe("working");
+  });
+
+  it("says nothing before a snapshot arrives, or when it has no reading of the bot's activity", () => {
+    mountRow(OWN_AND_DIALABLE);
+    expect(screen.queryByTestId("home-bot-state")).toBeNull();
+    cleanup();
+
+    mocks.state.snapshot = snapshotWith(null);
+    mountRow(OWN_AND_DIALABLE);
+    expect(screen.queryByTestId("home-bot-state")).toBeNull();
+    cleanup();
+
+    mocks.state.snapshot = snapshotWith({ trunk: null, threads: {} });
+    mountRow(OWN_AND_DIALABLE);
+    expect(screen.queryByTestId("home-bot-state")).toBeNull();
   });
 
   it("says Paused for a bot on one of the reader's own hosts that cannot be dialled", () => {
@@ -181,6 +245,7 @@ describe("<HomeBotRow /> state", () => {
   });
 
   it("says Idle, not Paused, for a bot on the reader's own host while the host directory has not answered", () => {
+    idleTrunk();
     mountRow({
       ...OWN_AND_DIALABLE,
       directory: [],
@@ -203,14 +268,15 @@ describe("<HomeBotRow /> state", () => {
     expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
   });
 
-  it("says Idle, not Working, for a team bot while the registry has not answered which hosts are personal", () => {
-    mocks.state.working = true;
+  it("says Working for a replying team bot while the registry has not answered which hosts are personal", () => {
+    mocks.state.snapshot = snapshotWith({ trunk: REPLYING, threads: {} });
     mountRow({ ...OWN_AND_DIALABLE, personal: null });
 
-    expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
+    expect(stateBadge()).toEqual({ text: "Working", state: "working" });
   });
 
   it("says Idle for a personal environment's bot on the same dialable personal host", () => {
+    idleTrunk();
     mountRow({
       ...OWN_AND_DIALABLE,
       environmentOwnerKind: "user",
@@ -231,6 +297,7 @@ describe("<HomeBotRow /> state", () => {
   });
 
   it("says Idle for a team bot on the team's sandbox, which the team's list carries", () => {
+    idleTrunk();
     mountRow({
       ...OWN_AND_DIALABLE,
       bot: { ...BOT, boundHostId: SANDBOX },
@@ -241,6 +308,7 @@ describe("<HomeBotRow /> state", () => {
   });
 
   it("says Idle for a team bot while the team's machine list has not answered", () => {
+    idleTrunk();
     mountRow({
       ...OWN_AND_DIALABLE,
       bot: { ...BOT, boundHostId: TEAMMATE },
@@ -275,6 +343,7 @@ describe("<HomeBotRow /> state", () => {
   });
 
   it("names no machine, offline state or working dot, whatever the state", () => {
+    idleTrunk();
     for (const input of [
       OWN_AND_DIALABLE,
       { ...OWN_AND_DIALABLE, connectable: [EFFECTIVE] },

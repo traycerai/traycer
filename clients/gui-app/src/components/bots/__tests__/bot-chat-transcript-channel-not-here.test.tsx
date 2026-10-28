@@ -110,6 +110,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   openThread: null,
   openAnnouncementThread: null,
   chooseOption: null,
+  failedRequest: () => null,
   intro: { botTitle: "Release Bot", directive: null },
 };
 
@@ -164,6 +165,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         instanceId="bot-channel:test"
         surface={surface}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
+        showConnecting
       />
     </QueryClientProvider>
   );
@@ -211,7 +213,7 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     mountTranscript(CHANNEL_SURFACE);
 
     expect(screen.getByTestId("bot-channel-intro").textContent).toContain(
-      "This is the beginning of #Release Bot.",
+      "This is the beginning of your channel with Release Bot.",
     );
     expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
     expect(retry).not.toHaveBeenCalled();
@@ -323,7 +325,11 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
   });
 
   it("leaves a thread's close to the thread's own view", () => {
-    mountTranscript({ kind: "thread", chooseOption: null });
+    mountTranscript({
+      kind: "thread",
+      chooseOption: null,
+      failedRequest: () => null,
+    });
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByTestId("chat-messages-stub")).toBeTruthy();

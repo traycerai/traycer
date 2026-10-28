@@ -56,11 +56,20 @@ import type {
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import {
+  fetchEnvironmentInvitations,
+  acceptEnvironmentInvitation,
+} from "@traycer-clients/shared/auth/environment-invitations";
+import type {
+  EnvironmentInvitationsListResponse,
+  EnvironmentInvitationsAcceptResponse,
+} from "@traycer/protocol/host/environment/contracts";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
@@ -3124,14 +3133,17 @@ export class AuthService {
     return this.runnerHost.createSandbox(bearer, request);
   }
 
-  async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+  async destroySandbox(
+    sandboxId: string,
+    onlyIfIdle: boolean,
+  ): Promise<SandboxVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       throw new Error("Sign in to destroy this sandbox.");
     }
-    return this.runnerHost.destroySandbox(bearer, sandboxId);
+    return this.runnerHost.destroySandbox(bearer, sandboxId, onlyIfIdle);
   }
 
   async patchSandbox(
@@ -3159,12 +3171,13 @@ export class AuthService {
 
   /**
    * A lifecycle verb: the card's suspend / resume / stop / start, and the
-   * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
+   * wake a tab open runs, with the gesture it came from. Answers `unauthorized` with no cloud bearer rather
    * than throwing, because the tab-open wake reads it as an outcome.
    */
   async runSandboxVerb(
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
@@ -3173,7 +3186,13 @@ export class AuthService {
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb, timeoutMs);
+    return this.runnerHost.runSandboxVerb(
+      bearer,
+      sandboxId,
+      verb,
+      gesture,
+      timeoutMs,
+    );
   }
 
   /**
@@ -3206,6 +3225,31 @@ export class AuthService {
       throw new Error("Sign in to start Automations.");
     }
     return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /** Explicit invitation access when the serving tier predates the host methods. */
+  async listEnvironmentInvitations(
+    signal: AbortSignal | null,
+  ): Promise<EnvironmentInvitationsListResponse> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to review team invitations.");
+    return fetchEnvironmentInvitations(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      signal,
+    );
+  }
+
+  async acceptEnvironmentInvitation(
+    environmentId: string,
+  ): Promise<EnvironmentInvitationsAcceptResponse> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to accept this invitation.");
+    return acceptEnvironmentInvitation(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+    );
   }
 
   /**

@@ -571,6 +571,7 @@ describe("useHostQuery auth readiness", () => {
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           };
         },
       },
@@ -1203,6 +1204,7 @@ function createHostQueryFixture(): {
           install: null,
           processMemory: null,
           crossHostMessaging: null,
+          sessions: null,
         };
       },
     },
@@ -1268,6 +1270,7 @@ function createEndpointGatedHostQueryFixture(): {
             install: null,
             processMemory: null,
             crossHostMessaging: null,
+            sessions: null,
           };
         },
       },
@@ -1434,6 +1437,7 @@ const STATUS_RESPONSE = {
   install: null,
   processMemory: null,
   crossHostMessaging: null,
+  sessions: null,
 } as const;
 
 /**

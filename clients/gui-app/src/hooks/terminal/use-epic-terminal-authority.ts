@@ -14,6 +14,7 @@ import {
 } from "@/stores/epics/canvas/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 import {
   useTabPlainTerminalMutations,
   type PlainTerminalMutations,
@@ -104,6 +105,7 @@ export function useEpicTerminalAuthority(args: {
     [args.epicId],
   );
   const authority = useTabPlainTerminalAuthority(scope);
+  const taskHome = useTaskHomeDirectory(args.epicId, args.node.hostId);
   const mutations = useTabPlainTerminalMutations(authority);
   const importLegacyMutateAsync = mutations.importLegacy.mutateAsync;
   const adoptProjection = useEpicCanvasStore(
@@ -194,7 +196,9 @@ export function useEpicTerminalAuthority(args: {
     setAttempt((current) => current + 1);
   };
   const viewModel =
-    projection === undefined ? null : selectPlainTerminalViewModel(projection);
+    projection === undefined
+      ? null
+      : selectPlainTerminalViewModel(projection, taskHome);
   let refAuthority: EpicTerminalAuthorityController["refAuthority"] = "legacy";
   if (isCanonical) refAuthority = "host";
   if (isUnsupported) refAuthority = "unsupported";

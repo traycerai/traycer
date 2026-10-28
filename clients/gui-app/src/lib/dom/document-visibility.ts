@@ -7,12 +7,15 @@
  *    minimised, as main sees it - pushed in through
  *    `lib/epics/desktop-window-visibility.ts`.
  *
- * The second input exists because the first is INERT on the desktop. Every GUI
- * window is created with `backgroundThrottling: false` (the WebRTC receiver
- * needs its timers while occluded), and Electron documents that setting as
- * keeping `visibilityState` at `"visible"` through minimise, hide and
- * occlusion alike. So in the desktop app minimising the window changes nothing
- * here unless main says so. Occlusion is detected by neither input.
+ * Desktop windows are background-throttled, so the first input reports a
+ * minimised or hidden window as `"hidden"` there too, and a covered one on
+ * macOS. Electron updates it on occlusion only there: on Windows and Linux a
+ * covered window stays `"visible"` until it is minimised or hidden. The second
+ * input covers the one exception: while a browser tile's WebRTC video plane
+ * keeps throttling off (#1613,
+ * `lib/browser-view/tiles/desktop-background-rendering.ts`), DOM visibility
+ * stays visible and only main can still report minimise/hide. A window covered
+ * during that time is detected by neither input.
  *
  * `visibilityState`, deliberately, and NOT `document.hasFocus()`. Focus answers
  * a different question: a window the user can plainly see loses focus the

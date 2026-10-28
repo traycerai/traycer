@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,13 +41,24 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
 }));
 const workspaceSelectorTestState = vi.hoisted<{
+  hostIds: string[];
+  ownerIds: string[];
   inFlightWorktreeIntent: WorktreeIntent | null;
   isOwnerActive: boolean | null;
   hasActiveTurn: boolean | null;
 }>(() => ({
+  hostIds: [],
+  ownerIds: [],
   inFlightWorktreeIntent: null,
   isOwnerActive: null,
   hasActiveTurn: null,
+}));
+const workspaceRpcTestState = vi.hoisted(() => ({
+  methods: [] as string[],
+  settingsWrites: [] as Array<{
+    readonly hostId: string;
+    readonly chatId: string;
+  }>,
 }));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
@@ -99,12 +111,16 @@ vi.mock(
   () => ({
     HostWorkspaceSelector: (props: {
       readonly surface: {
+        readonly hostId: string;
+        readonly ownerId: string;
         readonly bindingResolved: boolean;
         readonly inFlightWorktreeIntent: WorktreeIntent | null;
         readonly isOwnerActive: boolean;
         readonly hasActiveTurn: boolean;
       };
     }) => {
+      workspaceSelectorTestState.hostIds.push(props.surface.hostId);
+      workspaceSelectorTestState.ownerIds.push(props.surface.ownerId);
       workspaceSelectorTestState.inFlightWorktreeIntent =
         props.surface.inFlightWorktreeIntent;
       workspaceSelectorTestState.isOwnerActive = props.surface.isOwnerActive;
@@ -124,7 +140,31 @@ vi.mock(
 );
 
 const MOCK_HOST_CLIENT = {
-  request: () => new Promise(() => {}),
+  request: (
+    method: string,
+    params: { readonly chatId?: string } | undefined,
+  ) => {
+    workspaceRpcTestState.methods.push(method);
+    if (
+      method === "epic.updateChatRunSettings" &&
+      params?.chatId !== undefined
+    ) {
+      workspaceRpcTestState.settingsWrites.push({
+        hostId: HOST_ID,
+        chatId: params.chatId,
+      });
+      return Promise.resolve({ updated: true });
+    }
+    return new Promise(() => {});
+  },
+  requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    _params: RequestOfMethod<HostRpcRegistry, Method>,
+    _signal: AbortSignal | undefined,
+  ) => {
+    workspaceRpcTestState.methods.push(method);
+    return new Promise<never>(() => {});
+  },
   getActiveHostId: () => HOST_ID,
   // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
   // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
@@ -418,8 +458,13 @@ import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-co
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  ChatTile,
+  ChatTileSessionView,
+} from "@/components/epic-canvas/renderers/chat-tile";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -443,7 +488,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionStoreHandle,
+  ChatStreamClientHandle,
+} from "@/stores/chats/chat-session-store";
 import type {
   ChatEvent,
   Message,
@@ -478,6 +526,10 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -486,6 +538,17 @@ const CHAT_ARTIFACT = {
   type: "chat" as const,
   name: "Chat 1",
   hostId: HOST_ID,
+};
+const RESTING_COPY_SANDBOX = {
+  kind: "resting" as const,
+  sandbox: sandboxSummaryFixture({
+    id: "sbx-resting-copy",
+    hostId: "owner-sandbox-host",
+    state: "stopped",
+    displayName: "resting-copy",
+  }),
+  configuration: { kind: "personal" as const },
+  wakeChangesPayer: false,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",
@@ -1418,6 +1481,57 @@ function chatTileTestTree(
     readonly hostId: string;
   },
 ) {
+  return chatTileProviders(
+    queryClient,
+    chatVisible ? (
+      <ChatTile node={node} viewTabId="tab-test" tileId="pane-test" isActive />
+    ) : null,
+  );
+}
+
+function chatTileSessionViewTestTree(
+  queryClient: QueryClient,
+  handle: ChatSessionStoreHandle,
+) {
+  return chatTileProviders(
+    queryClient,
+    <ChatTileSessionView
+      handle={handle}
+      node={CHAT_ARTIFACT}
+      viewTabId="tab-resting-copy-test"
+      tileId="pane-resting-copy-test"
+      isActive
+      currentEpicId={EPIC_ID}
+      restingSandbox={RESTING_COPY_SANDBOX}
+      readOnlyNotice={null}
+      isLiveSession={false}
+      preContent={null}
+    />,
+  );
+}
+
+function renderRestingCopy(handle: ChatSessionStoreHandle) {
+  act(() => {
+    handle.store.setState({
+      access: { role: "owner", ownerUserId: "owner-1", canAct: false },
+      worktreeBinding: null,
+      missingWorktreePaths: ["/Users/test/project"],
+    });
+  });
+  workspaceSelectorTestState.hostIds.length = 0;
+  workspaceSelectorTestState.ownerIds.length = 0;
+  workspaceRpcTestState.methods.length = 0;
+  workspaceRpcTestState.settingsWrites.length = 0;
+  usePendingSandboxSendStore.setState({ sends: {} });
+  useStagedSandboxStore.getState().clearAll();
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(chatTileSessionViewTestTree(queryClient, handle));
+}
+
+function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -1438,14 +1552,7 @@ function chatTileTestTree(
             <TooltipProvider>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
                 <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {chatVisible ? (
-                    <ChatTile
-                      node={node}
-                      viewTabId="tab-test"
-                      tileId="pane-test"
-                      isActive
-                    />
-                  ) : null}
+                  {content}
                 </TabHostProvider>
               </TestEpicSessionWrapper>
             </TooltipProvider>
@@ -1592,9 +1699,13 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    workspaceSelectorTestState.hostIds.length = 0;
+    workspaceSelectorTestState.ownerIds.length = 0;
     workspaceSelectorTestState.inFlightWorktreeIntent = null;
     workspaceSelectorTestState.isOwnerActive = null;
     workspaceSelectorTestState.hasActiveTurn = null;
+    workspaceRpcTestState.methods.length = 0;
+    workspaceRpcTestState.settingsWrites.length = 0;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -2006,6 +2117,119 @@ describe("<ChatTile />", () => {
     }
     expect(messages.length).toBe(1);
     rootState.destroy();
+  });
+
+  it("keeps a resting copy sendable without serving-host workspace access", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+
+    expect(workspaceSelectorTestState.hostIds).toContain(HOST_ID);
+    expect(workspaceSelectorTestState.ownerIds).toContain(CHAT_ARTIFACT.id);
+    await waitFor(() => {
+      expect(workspaceRpcTestState.methods).toContain(
+        "worktree.listBindingsForEpic",
+      );
+      expect(workspaceRpcTestState.methods).toContain("worktree.getBinding");
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+
+    renderRestingCopy(handle);
+
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+    });
+    expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
+    expect(workspaceSelectorTestState.hostIds).toEqual([]);
+    expect(workspaceSelectorTestState.ownerIds).toEqual([]);
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "worktree.listBindingsForEpic",
+    );
+    expect(workspaceRpcTestState.methods).not.toContain("worktree.getBinding");
+
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    if (!(sendButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send button");
+    }
+    fireEvent.click(sendButton);
+
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.request).toMatchObject({
+      kind: "message",
+      chatId: CHAT_ARTIFACT.id,
+      hostId: RESTING_COPY_SANDBOX.sandbox.hostId,
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("keeps resting-copy composer settings local while live settings persist", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+
+    const liveComposer = getFocusedComposerControls();
+    if (liveComposer === null) {
+      throw new Error("expected live composer controls");
+    }
+    act(() => liveComposer.controls.setPermission("supervised"));
+    await waitFor(() => {
+      expect(workspaceRpcTestState.settingsWrites).toContainEqual({
+        hostId: HOST_ID,
+        chatId: CHAT_ARTIFACT.id,
+      });
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    expect(handle.store.getState().currentComposerSettings).toMatchObject({
+      permissionMode: "supervised",
+    });
+    await waitFor(() => expect(__chainCountForTests()).toBe(0));
+    liveTile.unmount();
+
+    renderRestingCopy(handle);
+
+    await waitFor(() => expect(getFocusedComposerControls()).not.toBeNull());
+
+    const copyComposer = getFocusedComposerControls();
+    if (copyComposer === null) {
+      throw new Error("expected resting-copy composer controls");
+    }
+    act(() => copyComposer.controls.setPermission("auto_accept_edits"));
+    expect(handle.store.getState().currentComposerSettings).toMatchObject({
+      permissionMode: "auto_accept_edits",
+    });
+    expect(
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings(EPIC_ID, HOST_ID),
+    ).toMatchObject({ permissionMode: "auto_accept_edits" });
+    expect(__chainCountForTests()).toBe(0);
+    expect(workspaceRpcTestState.settingsWrites).toEqual([]);
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "epic.updateChatRunSettings",
+    );
   });
 
   it("uses the composer send button as the running turn stop control", async () => {
@@ -6635,7 +6859,10 @@ describe("<ChatTile />", () => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
 
         const editor = screen.getByTestId("composer-editor");
-        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        const event = createEvent.keyDown(editor, {
+          key: "ArrowRight",
+          code: "ArrowRight",
+        });
         fireEvent(editor, event);
 
         expect(editor.textContent).toBe(SUGGESTION);
@@ -6648,7 +6875,10 @@ describe("<ChatTile />", () => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
 
         const editor = screen.getByTestId("composer-editor");
-        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        const event = createEvent.keyDown(editor, {
+          key: "ArrowRight",
+          code: "ArrowRight",
+        });
         // One act scope: React commits nothing until it exits, so the paste
         // reaches the live editor while the tile still holds the offer, and
         // the key is handled against that stale offer.

@@ -13,6 +13,7 @@ import {
   Keyboard,
   KeyRound,
   LockKeyhole,
+  MessageSquareDot,
   MousePointerClick,
   LineChart,
   Palette,
@@ -44,6 +45,7 @@ export type SettingsSectionId =
   | "layout"
   | "opening-behavior"
   | "app-notifications"
+  | "alerts"
   | "providers"
   | "secrets"
   | "sandboxes"
@@ -161,12 +163,13 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-four on
- * desktop (twenty-five with a team's Members). Getting started and the eight
- * Application entries take 1 to 9, and Sessions, the first Account entry,
- * takes 0. Everything after it - the rest of Account, all of Environment and
- * the host group - goes without. The groups follow the design's order, so
- * shortcut order stays sidebar reading order and command-palette row order.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-seven on
+ * desktop (twenty-eight with a team's Members). Getting started and the nine
+ * Application entries take 1 to 9 and 0, so Sessions, the first Account
+ * entry, goes without, and so does everything after it - the rest of Account,
+ * all of Environment and the host group. The groups follow the design's
+ * order, so shortcut order stays sidebar reading order and command-palette
+ * row order.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
@@ -215,12 +218,24 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "app",
   },
   // Different controls than Account → Notifications, so a different word and
-  // icon (see the rail-table rule above). The section `id` stays
-  // `app-notifications`.
+  // icon (see the rail-table rule above). The id `app-notifications` now names
+  // a chimes-only page - the OS and push rows moved to Alerts below - and it
+  // stays, because ids are a compatibility surface (routes, remembered tab
+  // paths, analytics, the panel table).
   {
     id: "app-notifications",
     label: "Sounds",
     icon: Volume2,
+    group: "app",
+  },
+  // How this app's alerts reach you: the OS's notification settings on the
+  // desktop, the phone's push permission and severities in the mobile app.
+  // Not "Notifications" and not the bell, which are Account → Notifications',
+  // a page that controls different things.
+  {
+    id: "alerts",
+    label: "Alerts",
+    icon: MessageSquareDot,
     group: "app",
   },
   {
@@ -285,7 +300,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "account",
   },
   // Event policy and automation for the account. Different controls than
-  // Application → Sounds, so it keeps the generic word and the bell.
+  // Application → Sounds and Alerts, so it keeps the generic word and the
+  // bell.
   {
     id: "notifications",
     label: "Notifications",
@@ -372,8 +388,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "personal",
   },
   // Whether agents may drive the in-app browser. Not offered in navigation
-  // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is a region of Permissions,
-  // and its route redirects there.
+  // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is the Browser tab of
+  // Permissions, and its route redirects there.
   {
     id: "browser-agent-access",
     label: "Browser agent access",
@@ -517,7 +533,7 @@ export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * path or a deep link still resolves, and they have no search collection.
  * Machine setup left the Environment group with the redesign; Agent
  * definitions became the Agents page's Definitions tab and Browser agent
- * access a region of Permissions.
+ * access the Browser tab of Permissions.
  */
 export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
   new Set(["machine-setup", "agent-definitions", "browser-agent-access"]);

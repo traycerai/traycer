@@ -1,6 +1,11 @@
-import { useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { KnownHostSessionsList } from "@/components/host/host-restart-sessions";
+import {
+  HostReportedSessionsList,
+  SandboxSessionPillBadge,
+} from "@/components/hosts/sandbox-reported-sessions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -28,7 +33,6 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import {
   useSandboxDestroyBatch,
-  type SandboxBatchOutcome,
   type SandboxBatchResult,
   type SandboxBatchTarget,
 } from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
@@ -37,10 +41,12 @@ import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import {
   SANDBOX_SESSIONS_CAPTION,
   sandboxDestroySessionsSentence,
   sandboxRestingPreview,
+  sandboxStopDestroySentence,
   sandboxTypedNameReason,
   toastSandboxVerbOutcome,
 } from "@/components/hosts/sandbox-confirm-model";
@@ -55,6 +61,7 @@ import {
   sandboxPeriodDraft,
   sandboxPeriodMinutes,
   sandboxRestingRefusal,
+  sandboxSessionPills,
   sandboxSessionsLine,
   type SandboxPageConfiguration,
   type SandboxPeriodDraft,
@@ -131,10 +138,18 @@ function storageCredits(
   return `${payer === "you" ? "your" : `${payer}'s`} ${configuration.teamName} credits`;
 }
 
-/** The sessions count line and the caption, inside every confirmation. */
+/**
+ * The sessions count line with its pills, the named sessions (the host's
+ * own list while live, else the ones this window knows of), and the caption, inside every confirmation that interrupts
+ * something. Destroy says the count in its sentence (`countLine: false`). A
+ * named session's link closes the dialog it opens from.
+ */
 export function SandboxSessionsBlock(props: {
   readonly report: SandboxSessionReport;
+  readonly countLine: boolean;
   readonly trailing: string | null;
+  readonly hostId: string;
+  readonly onNavigate: () => void;
 }): ReactNode {
   const now = useSampledNow();
   return (
@@ -142,12 +157,34 @@ export function SandboxSessionsBlock(props: {
       className="flex flex-col gap-1 border-t border-border/60 px-5 py-3"
       data-testid="sandbox-confirm-sessions"
     >
-      <p
-        className="text-ui-sm font-medium"
-        data-testid="sandbox-confirm-sessions-line"
-      >
-        {sandboxSessionsLine(props.report, now)}
-      </p>
+      {props.countLine ? (
+        <p
+          className="flex flex-wrap items-center gap-1.5 text-ui-sm font-medium"
+          data-testid="sandbox-confirm-sessions-line"
+        >
+          {sandboxSessionsLine(props.report, now)}
+          {sandboxSessionPills(props.report).map((pill) => (
+            <SandboxSessionPillBadge
+              key={pill.key}
+              pill={pill}
+              testId="sandbox-confirm-session-pill"
+            />
+          ))}
+        </p>
+      ) : null}
+      {props.report.kind === "live" ? (
+        <HostReportedSessionsList
+          hostId={props.hostId}
+          sessions={props.report.sessions}
+          onNavigate={props.onNavigate}
+        />
+      ) : (
+        <KnownHostSessionsList
+          hostId={props.hostId}
+          disabled={false}
+          onNavigate={props.onNavigate}
+        />
+      )}
       <p className="text-ui-xs text-muted-foreground">
         {props.trailing === null
           ? SANDBOX_SESSIONS_CAPTION
@@ -169,11 +206,13 @@ function VerbConfirmDialog(
   },
 ): ReactNode {
   const verb = useSandboxVerb(props.sandbox.id);
+  const operation = useSandboxOperation(props.sandbox.id);
+  const pending = operation?.kind === "pending";
   const report = useDialogSessions(props.sandbox, props.open);
   return (
     <Dialog
       open={props.open}
-      onOpenChange={verb.isPending ? undefined : props.onOpenChange}
+      onOpenChange={pending ? undefined : props.onOpenChange}
     >
       <DialogContent
         layout="banded"
@@ -188,13 +227,19 @@ function VerbConfirmDialog(
             {props.outcome}
           </DialogDescription>
         </DialogHeader>
-        <SandboxSessionsBlock report={report} trailing={props.told} />
+        <SandboxSessionsBlock
+          report={report}
+          countLine
+          trailing={props.told}
+          hostId={props.sandbox.hostId}
+          onNavigate={() => props.onOpenChange(false)}
+        />
         <DialogFooter>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            disabled={verb.isPending}
+            disabled={pending}
             onClick={() => props.onOpenChange(false)}
           >
             Cancel
@@ -202,12 +247,12 @@ function VerbConfirmDialog(
           <Button
             type="button"
             size="sm"
-            disabled={verb.isPending}
+            disabled={pending}
             data-testid={`sandbox-confirm-${props.verb}-action`}
             onClick={() => {
+              props.onOpenChange(false);
               verb.mutate(props.verb, {
                 onSuccess: (outcome) => {
-                  props.onOpenChange(false);
                   toastSandboxVerbOutcome(
                     props.verb,
                     outcome,
@@ -217,7 +262,7 @@ function VerbConfirmDialog(
               });
             }}
           >
-            {verb.isPending ? (
+            {pending ? (
               <AgentSpinningDots
                 className={undefined}
                 testId={undefined}
@@ -266,13 +311,24 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
 export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
+  const now = useSampledNow();
   const team = configuration.kind === "team";
+  const destroyed = sandboxStopDestroySentence(
+    props.sandbox.destroyAfterRestingMinutes,
+    now,
+  );
   return (
     <VerbConfirmDialog
       {...props}
       verb="stop"
       title={`Stop ${props.sandbox.displayName}?`}
-      outcome={`Stop ends every process; Start is a cold boot and only shells marked relaunch come back. The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}. Its destroy-after period counts from now.`}
+      outcome={[
+        "Stop ends every process; Start is a cold boot and only shells marked relaunch come back.",
+        `The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}.`,
+        destroyed,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" ")}
       told={
         team
           ? "They and you are told who stopped it and whether it completed."
@@ -292,13 +348,17 @@ export function SandboxDestroyDialog(
   },
 ): ReactNode {
   const [typed, setTyped] = useState("");
-  const inputId = useId();
-  const destroy = useSandboxDestroy(props.sandbox.id);
+  const destroy = useSandboxDestroy(props.sandbox);
+  const operation = useSandboxOperation(props.sandbox.id);
   const configuration = useDialogConfiguration(props.sandbox);
   const report = useDialogSessions(props.sandbox, props.open);
   const team = configuration.kind === "team";
   const name = props.sandbox.displayName;
   const reason = sandboxTypedNameReason(typed, name);
+  // A stopped or failed sandbox has no process left to end; one mid-destroy
+  // keeps the sentence it opened with.
+  const runsNothing =
+    props.sandbox.state === "stopped" || props.sandbox.state === "failed";
   return (
     <ConfirmDestructiveDialog
       blockedReason={reason}
@@ -308,16 +368,16 @@ export function SandboxDestroyDialog(
         props.onOpenChange(next);
       }}
       title={`Destroy ${name}?`}
-      description={`${sandboxDestroySessionsSentence(report, team)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
+      description={`${sandboxDestroySessionsSentence(report, team, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
       cascadeSummary={null}
       actionLabel="Destroy"
-      isPending={destroy.isPending}
+      isPending={operation?.kind === "pending" && operation.verb === "destroy"}
       onConfirm={() => {
         if (reason !== null) return;
+        setTyped("");
+        props.onOpenChange(false);
         destroy.mutate(undefined, {
           onSuccess: (gone) => {
-            setTyped("");
-            props.onOpenChange(false);
             if (gone) {
               toast.success(`Destroyed ${name}`);
               props.onDestroyed?.();
@@ -328,21 +388,19 @@ export function SandboxDestroyDialog(
         });
       }}
     >
-      <SandboxSessionsBlock
-        report={report}
-        trailing={team ? "Affected members are told who destroyed it." : null}
-      />
-      <div className="flex flex-col gap-1.5 px-5 pb-4">
-        <Label htmlFor={inputId}>Type the name to confirm</Label>
-        <Input
-          id={inputId}
-          value={typed}
-          autoComplete="off"
-          placeholder={name}
-          data-testid="sandbox-confirm-destroy-typed"
-          onChange={(event) => setTyped(event.target.value)}
+      {runsNothing ? null : (
+        <SandboxSessionsBlock
+          report={report}
+          countLine={false}
+          trailing={team ? "Affected members are told who destroyed it." : null}
+          hostId={props.sandbox.hostId}
+          onNavigate={() => {
+            setTyped("");
+            props.onOpenChange(false);
+          }}
         />
-      </div>
+      )}
+      <SandboxDestroyNameField name={name} typed={typed} onChange={setTyped} />
     </ConfirmDestructiveDialog>
   );
 }
@@ -362,7 +420,6 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
   const wake = useSandboxWakeString(props.sandbox);
-  const report = useDialogSessions(props.sandbox, props.open);
   const now = useSampledNow();
   const name = props.sandbox.displayName;
   const restingDays = SANDBOX_DEFAULT_RESTING_MINUTES / (24 * 60);
@@ -398,7 +455,7 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
         <DialogHeader>
           <DialogTitle className="wrap-anywhere">{`Keep ${name}?`}</DialogTitle>
           <DialogDescription className="wrap-anywhere">
-            {keepPreviewLine(restingDays, formatSandboxDate(restsUntil, false))}
+            {keepPreviewLine(restingDays, formatSandboxDate(restsUntil, true))}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1 px-5 py-3 text-ui-sm">
@@ -420,7 +477,6 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
             </p>
           ) : null}
         </div>
-        <SandboxSessionsBlock report={report} trailing={null} />
         <DialogFooter>
           <Button
             type="button"
@@ -804,78 +860,201 @@ function IdleSettingsForm(props: {
 
 // ── Destroy all idle ────────────────────────────────────────────────────────
 
-const BATCH_OUTCOME_LINE: Record<SandboxBatchOutcome["kind"], string> = {
-  destroyed: "destroyed",
-  destroying: "destroying",
-  gone: "already destroyed",
-  skipped: "no longer idle, left as it is",
-  failed: "couldn't be destroyed",
-};
-
-function batchOutcomeLine(result: SandboxBatchResult): string {
-  const line = BATCH_OUTCOME_LINE[result.outcome.kind];
-  return result.outcome.kind === "failed"
-    ? `${result.name} · ${line}: ${result.outcome.message}`
-    : `${result.name} · ${line}`;
+function SandboxDestroyNameField(props: {
+  readonly name: string;
+  readonly typed: string;
+  readonly onChange: (typed: string) => void;
+}): ReactNode {
+  const inputId = useId();
+  return (
+    <div className="flex flex-col gap-1.5 px-5 pb-4">
+      <Label htmlFor={inputId}>Type the name to confirm</Label>
+      <Input
+        id={inputId}
+        value={props.typed}
+        autoComplete="off"
+        placeholder={props.name}
+        data-testid="sandbox-confirm-destroy-typed"
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </div>
+  );
 }
 
-/**
- * `Destroy all idle`: the enumerated filtered rows, by count and name. The
- * batch is exactly these targets; each reports its own outcome, and a retry
- * never widens the set. Once confirmed, the title, the list and a retry read
- * the confirmed set, not the list, which drops each row as it is destroyed.
- */
+function batchOutcomeLine(result: SandboxBatchResult): string {
+  switch (result.outcome.kind) {
+    case "destroyed":
+      return `${result.name} · destroyed`;
+    case "destroying":
+      return `${result.name} · Destroying · pending`;
+    case "skipped":
+      return `${result.name} · ${result.outcome.message}`;
+    case "failed":
+      return `${result.name} · couldn't be destroyed: ${result.outcome.message}`;
+  }
+}
+
+/** Each open owns a snapshot. Closing resets only the confirmation's form. */
 export function SandboxDestroyAllIdleDialog(props: {
-  readonly targets: readonly SandboxBatchTarget[];
+  readonly targets: readonly SandboxSummary[];
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
+  return props.open ? (
+    <SandboxDestroyAllIdleConfirmation
+      targets={props.targets}
+      onOpenChange={props.onOpenChange}
+    />
+  ) : null;
+}
+
+/** The enumerated set and its per-target outcomes stay fixed across retries. */
+function SandboxDestroyAllIdleConfirmation(props: {
+  readonly targets: readonly SandboxSummary[];
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const [targets] = useState(() =>
+    props.targets.filter((target) => target.kind !== "automation"),
+  );
+  const [results, setResults] = useState<readonly SandboxBatchResult[] | null>(
+    null,
+  );
+  const [ready, setReady] = useState<ReadonlySet<string>>(() => new Set());
   const batch = useSandboxDestroyBatch();
-  const results = batch.data ?? null;
-  const [confirmed, setConfirmed] = useState<
-    readonly SandboxBatchTarget[] | null
-  >(null);
-  const count = (confirmed ?? props.targets).length;
+  const [startedBy] = useState(signedInUserId);
+  const viewerUserId = useViewerUserId();
+  const count = targets.length;
+  const pendingTargets: readonly SandboxBatchTarget[] = targets
+    .filter(
+      (target) =>
+        results === null ||
+        results.some(
+          (result) =>
+            result.sandboxId === target.id && result.outcome.kind === "failed",
+        ),
+    )
+    .map((target) => ({
+      sandboxId: target.id,
+      hostId: target.hostId,
+      name: target.displayName,
+    }));
+  const onReady = useCallback((id: string, valid: boolean): void => {
+    setReady((previous) => {
+      if (previous.has(id) === valid) return previous;
+      const next = new Set(previous);
+      if (valid) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const blocked =
+    viewerUserId !== startedBy ||
+    pendingTargets.length === 0 ||
+    pendingTargets.some((target) => !ready.has(target.sandboxId));
   return (
     <ConfirmDestructiveDialog
-      blockedReason={count === 0 ? "" : null}
-      open={props.open}
-      dismissableWhilePending
-      onOpenChange={(next) => {
-        if (!next) {
-          batch.reset();
-          setConfirmed(null);
-        }
-        props.onOpenChange(next);
-      }}
-      title={`Destroy ${count} idle agent ${count === 1 ? "sandbox" : "sandboxes"}?`}
-      description="The disk of each is not recoverable; files on them were never synced anywhere. Published chats stay readable."
+      blockedReason={blocked ? "" : null}
+      open
+      onOpenChange={props.onOpenChange}
+      title={`Destroy ${count} idle ${count === 1 ? "sandbox" : "sandboxes"}?`}
+      description={
+        <>
+          <span
+            data-testid="sandbox-destroy-all-idle-targets"
+            className="flex flex-col"
+          >
+            {targets.map((target) => (
+              <span key={target.id}>{target.displayName}</span>
+            ))}
+          </span>
+          Files on these sandboxes cannot be recovered; published chats stay
+          readable.
+        </>
+      }
       cascadeSummary={null}
-      actionLabel={results === null ? "Destroy all idle" : "Retry"}
+      actionLabel={results === null ? `Destroy ${count}` : "Retry"}
       isPending={batch.isPending}
-      // A retry repeats the confirmed set, whatever the list holds since.
       onConfirm={() => {
-        const targets = confirmed ?? props.targets;
-        setConfirmed(targets);
-        batch.mutate({ targets, startedBy: signedInUserId() });
+        if (blocked) return;
+        batch.mutate(
+          { targets: pendingTargets, startedBy },
+          {
+            onSuccess: (next) => {
+              setResults((previous) => {
+                const outcomes = new Map(
+                  (previous ?? []).map((result) => [result.sandboxId, result]),
+                );
+                for (const result of next)
+                  outcomes.set(result.sandboxId, result);
+                return targets.flatMap((target) => {
+                  const result = outcomes.get(target.id);
+                  return result === undefined ? [] : [result];
+                });
+              });
+            },
+          },
+        );
       }}
     >
-      <ul
-        className="mx-5 mb-4 flex max-h-[30vh] list-none flex-col gap-1 overflow-y-auto p-0 text-ui-sm"
-        data-testid="sandbox-destroy-all-idle-targets"
-      >
-        {results === null
-          ? (confirmed ?? props.targets).map((target) => (
-              <li key={target.sandboxId} className="wrap-anywhere">
-                {target.name}
-              </li>
-            ))
-          : results.map((result) => (
-              <li key={result.sandboxId} className="wrap-anywhere">
-                {batchOutcomeLine(result)}
-              </li>
-            ))}
-      </ul>
+      {targets.map((target) => (
+        <SandboxBatchDestroyConfirmationTarget
+          key={target.id}
+          sandbox={target}
+          onReady={onReady}
+          onNavigate={() => props.onOpenChange(false)}
+        />
+      ))}
+      {results === null ? null : (
+        <ul
+          className="mx-5 mb-4 list-none space-y-1 p-0 text-ui-sm"
+          aria-label="Destroy outcomes"
+        >
+          {results.map((result) => (
+            <li key={result.sandboxId} className="wrap-anywhere">
+              {batchOutcomeLine(result)}
+            </li>
+          ))}
+        </ul>
+      )}
     </ConfirmDestructiveDialog>
+  );
+}
+
+function SandboxBatchDestroyConfirmationTarget(props: {
+  readonly sandbox: SandboxSummary;
+  readonly onReady: (id: string, valid: boolean) => void;
+  readonly onNavigate: () => void;
+}): ReactNode {
+  const { sandbox, onReady } = props;
+  const [typed, setTyped] = useState("");
+  // Reading a resting host's cached report never wakes it. A known session
+  // still needs the same name confirmation as single-row Destroy.
+  const report = useDialogSessions(sandbox, true);
+  const hasSessions = report.kind !== "unknown" && report.count > 0;
+  const reason = sandboxTypedNameReason(typed, sandbox.displayName);
+  const valid = !hasSessions || reason === null;
+  useEffect(() => {
+    onReady(sandbox.id, valid);
+  }, [onReady, sandbox.id, valid]);
+  if (!hasSessions) return null;
+  return (
+    <>
+      <p className="px-5 pb-2 text-ui-sm font-medium">{sandbox.displayName}</p>
+      <SandboxSessionsBlock
+        report={report}
+        countLine
+        trailing={null}
+        hostId={sandbox.hostId}
+        onNavigate={props.onNavigate}
+      />
+      <SandboxDestroyNameField
+        name={sandbox.displayName}
+        typed={typed}
+        onChange={setTyped}
+      />
+      {reason === null || reason.length === 0 ? null : (
+        <p className="px-5 pb-4 text-ui-sm text-destructive">{reason}</p>
+      )}
+    </>
   );
 }

@@ -21,7 +21,8 @@ import {
   movedNoticeShown,
   SETUP_STEPS,
   setupView,
-  TERMINAL_ACCOUNT_SENTENCE,
+  terminalAccountSentence,
+  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -35,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
   useEnvironmentNoticesRead,
@@ -154,6 +156,7 @@ function AccessSections(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
+  const localHostId = useReactiveLocalHostId();
   return (
     <>
       <MovedNotice
@@ -171,7 +174,18 @@ function AccessSections(props: {
         hostId={props.hostId}
         status={props.status.remoteAccess}
       />
-      <TerminalAccountsSection client={props.client} />
+      <TerminalAccountsSection
+        client={props.client}
+        sentence={
+          props.status.principal?.kind === "team"
+            ? teamTerminalAccountSentence(props.status.principal.teamName)
+            : terminalAccountSentence(
+                props.hostId !== null && props.hostId === localHostId
+                  ? null
+                  : props.hostName,
+              )
+        }
+      />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>
   );
@@ -374,6 +388,7 @@ const AMBIENT_PROFILE_ID = "ambient";
 
 function TerminalAccountsSection(props: {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly sentence: string;
 }): ReactNode {
   const list = useProvidersListForClient(props.client, {
     enabled: true,
@@ -402,7 +417,7 @@ function TerminalAccountsSection(props: {
       fill={false}
     >
       <p className="max-w-[72ch] px-5 pt-4 text-ui-sm text-muted-foreground">
-        {TERMINAL_ACCOUNT_SENTENCE}
+        {props.sentence}
       </p>
       <ul className="flex flex-col">
         {rows.map((row) => (

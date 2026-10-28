@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   __getOpenEpicRegistryForTests,
+  releaseOpenEpicSession,
   releaseOpenEpicSessionIfUnused,
 } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -104,6 +105,17 @@ describe("releaseOpenEpicSessionIfUnused", () => {
     openTabFor("epic-2");
 
     releaseOpenEpicSessionIfUnused("epic-1", "keep", null);
+
+    expect(__getOpenEpicRegistryForTests().peek("epic-1")).toBeNull();
+  });
+});
+
+describe("releaseOpenEpicSession (a task tab closed in the strip)", () => {
+  it("disposes the epic's session at once, whichever host serves it, though the epic is still named by an open tab record", () => {
+    mountSession("epic-1");
+    openTabFor("epic-1");
+
+    releaseOpenEpicSession("epic-1");
 
     expect(__getOpenEpicRegistryForTests().peek("epic-1")).toBeNull();
   });

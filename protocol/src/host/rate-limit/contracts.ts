@@ -11,6 +11,7 @@ import {
   providersRefreshProfileStatusResponseSchema,
   providersRefreshProfileStatusResponseSchemaV10,
   providersRefreshProfileStatusResponseSchemaV20,
+  providersRefreshProfileStatusResponseSchemaV30,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -22,13 +23,21 @@ import {
   rateLimitUsageResponseSchemaV30,
   rateLimitUsageResponseSchemaV40,
   rateLimitUsageResponseSchemaV50,
+  rateLimitUsageResponseSchemaV60,
   mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
   mapHuggingFaceAvailableToUnavailable,
+  mapKimiAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   type ProviderRateLimits,
+  type ProvidersRefreshProfileStatusResponse,
   type RateLimitUsageRequestV12,
   type RateLimitUsageRequestV40,
+  type RateLimitUsageResponseV12,
+  type RateLimitUsageResponseV21,
+  type RateLimitUsageResponseV30,
+  type RateLimitUsageResponseV40,
+  type RateLimitUsageResponseV60,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 // Drops the v4.0-only `force` opt-out when a request travels down to a released
@@ -140,11 +149,19 @@ export const providersRefreshProfileStatusV20 = defineRpcContract({
   responseSchema: providersRefreshProfileStatusResponseSchemaV20,
 });
 
-// The LIVE line. The moment a tag ships `3`, freeze it against a snapshot
-// union and open `4`.
 export const providersRefreshProfileStatusV30 = defineRpcContract({
   method: "providers.refreshProfileStatus",
   schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
+  // Frozen: the 1.5.1 tags shipped this line.
+  responseSchema: providersRefreshProfileStatusResponseSchemaV30,
+});
+
+// The LIVE line. The moment a tag ships `4`, freeze it against a snapshot
+// union and open `5`.
+export const providersRefreshProfileStatusV40 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: providersRefreshProfileStatusRequestSchema,
   responseSchema: providersRefreshProfileStatusResponseSchema,
 });
@@ -249,6 +266,93 @@ export const providersRefreshProfileStatusDowngradeV30ToV10 =
         };
       }
       return { ok: true, value: parsed.data };
+    },
+  });
+
+// A Kimi-available snapshot has no arm on any older line, but `"kimi"` is in
+// every older provider enum, so every 4.0 bridge degrades it to the
+// `unsupported_provider` row a pre-Kimi-usage host returned, then passes the
+// response through or refuses it. The message names no provider so it stays
+// honest as the enum grows.
+const REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT = {
+  code: "DOWNGRADE_UNSUPPORTED" as const,
+  message:
+    "Refreshing this provider's profile status requires a newer Traycer client.",
+};
+
+function withKimiRefreshDegraded(
+  response: ProvidersRefreshProfileStatusResponse,
+): { providerRateLimits: ProviderRateLimits | null } {
+  return {
+    ...response,
+    providerRateLimits: mapKimiAvailableToUnavailable(
+      response.providerRateLimits,
+    ),
+  };
+}
+
+export const providersRefreshProfileStatusUpgradeV30ToV40 = defineUpgradePath<
+  typeof providersRefreshProfileStatusV30,
+  typeof providersRefreshProfileStatusV40
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 4, minor: 0 },
+  // Request shape identical; only the response's union grows.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersRefreshProfileStatusDowngradeV40ToV30 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV40,
+    typeof providersRefreshProfileStatusV30
+  >({
+    from: { major: 4, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV30.safeParse(
+        withKimiRefreshDegraded(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV40ToV20 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV40,
+    typeof providersRefreshProfileStatusV20
+  >({
+    from: { major: 4, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV20.safeParse(
+        withKimiRefreshDegraded(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV40ToV10 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV40,
+    typeof providersRefreshProfileStatusV10
+  >({
+    from: { major: 4, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV10.safeParse(
+        withKimiRefreshDegraded(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
     },
   });
 
@@ -601,10 +705,89 @@ export const hostGetRateLimitUsageUpgradeV40ToV50 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Downgrade bridge 5.0 -> 4.0: the request is identical (both carry `force`).
-// An Antigravity reading, on either arm, is refused (see
+// The 5.0 -> N response bodies, shared by the 5 -> N and 6 -> N bridges so the
+// two fans can never apply different maps to the same arm. Each takes a live
+// (6.0) response: a 5.0 response is one whose union lacks only the Kimi arm, and
+// every 6 -> N bridge runs `mapKimiAvailableToUnavailable` before handing over.
+type RateLimitDowngrade<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: typeof RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+
+// To 4.0: an Antigravity reading, on either arm, is refused (see
 // `namesProviderNewerThanV40`); every other snapshot is already valid 4.0 and
 // passes the parse unchanged.
+function downgradeRateLimitResponseToV40(
+  response: RateLimitUsageResponseV60,
+): RateLimitDowngrade<RateLimitUsageResponseV40> {
+  if (namesProviderNewerThanV40(response.providerRateLimits)) {
+    return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  }
+  const parsed = rateLimitUsageResponseSchemaV40.safeParse(response);
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+}
+
+// To 3.0: an Antigravity reading is refused first - the v3.0 unavailable arm
+// names the live enum, so the parse alone would pass an unavailable one - then
+// the 4.0 -> 3.0 degrades and the v3.0 parse.
+function downgradeRateLimitResponseToV30(
+  response: RateLimitUsageResponseV60,
+): RateLimitDowngrade<RateLimitUsageResponseV30> {
+  if (namesProviderNewerThanV40(response.providerRateLimits)) {
+    return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  }
+  const parsed = rateLimitUsageResponseSchemaV30.safeParse({
+    ...response,
+    providerRateLimits: degradeProviderRateLimitsToV30(
+      response.providerRateLimits,
+    ),
+  });
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+}
+
+// To 2.1: an Antigravity reading is refused first (as on the way to 3.0), then
+// the 4.0 -> 2.1 degrades and the v2.1 parse.
+function downgradeRateLimitResponseToV21(
+  response: RateLimitUsageResponseV60,
+): RateLimitDowngrade<RateLimitUsageResponseV21> {
+  if (namesProviderNewerThanV40(response.providerRateLimits)) {
+    return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  }
+  const parsed = rateLimitUsageResponseSchemaV21.safeParse({
+    ...response,
+    providerRateLimits: degradeProviderRateLimitsToV21(
+      response.providerRateLimits,
+    ),
+  });
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+}
+
+// To 1.2: an Antigravity reading is refused first (as on the way to 3.0), then
+// the 4.0 -> 1.2 degrades and the v1.2 parse (which also strips v2.1
+// reset-credit detail).
+function downgradeRateLimitResponseToV12(
+  response: RateLimitUsageResponseV60,
+): RateLimitDowngrade<RateLimitUsageResponseV12> {
+  if (namesProviderNewerThanV40(response.providerRateLimits)) {
+    return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  }
+  const parsed = rateLimitUsageResponseSchemaV12.safeParse({
+    ...response,
+    providerRateLimits: degradeProviderRateLimitsToV12(
+      response.providerRateLimits,
+    ),
+  });
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+}
+
+// Downgrade bridge 5.0 -> 4.0: the request is identical (both carry `force`).
 export const hostGetRateLimitUsageDowngradeV5ToV4 = defineDowngradePath<
   typeof hostGetRateLimitUsageV50,
   typeof hostGetRateLimitUsageV40
@@ -612,20 +795,9 @@ export const hostGetRateLimitUsageDowngradeV5ToV4 = defineDowngradePath<
   from: hostGetRateLimitUsageV50.schemaVersion,
   to: hostGetRateLimitUsageV40.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  downgradeResponse: (response) => {
-    if (namesProviderNewerThanV40(response.providerRateLimits)) {
-      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-    }
-    const parsed = rateLimitUsageResponseSchemaV40.safeParse(response);
-    return parsed.success
-      ? { ok: true, value: parsed.data }
-      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-  },
+  downgradeResponse: downgradeRateLimitResponseToV40,
 });
 
-// Downgrade bridge 5.0 -> 3.0: an Antigravity reading is refused first - the
-// v3.0 unavailable arm names the live enum, so the parse alone would pass an
-// unavailable one - then the 4.0 -> 3.0 degrades and the v3.0 parse.
 export const hostGetRateLimitUsageDowngradeV5ToV3 = defineDowngradePath<
   typeof hostGetRateLimitUsageV50,
   typeof hostGetRateLimitUsageV30
@@ -633,24 +805,9 @@ export const hostGetRateLimitUsageDowngradeV5ToV3 = defineDowngradePath<
   from: hostGetRateLimitUsageV50.schemaVersion,
   to: hostGetRateLimitUsageV30.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
-  downgradeResponse: (response) => {
-    if (namesProviderNewerThanV40(response.providerRateLimits)) {
-      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-    }
-    const parsed = rateLimitUsageResponseSchemaV30.safeParse({
-      ...response,
-      providerRateLimits: degradeProviderRateLimitsToV30(
-        response.providerRateLimits,
-      ),
-    });
-    return parsed.success
-      ? { ok: true, value: parsed.data }
-      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-  },
+  downgradeResponse: downgradeRateLimitResponseToV30,
 });
 
-// Downgrade bridge 5.0 -> 2.1: an Antigravity reading is refused first (as on
-// 5.0 -> 3.0), then the 4.0 -> 2.1 degrades and the v2.1 parse.
 export const hostGetRateLimitUsageDowngradeV5ToV2 = defineDowngradePath<
   typeof hostGetRateLimitUsageV50,
   typeof hostGetRateLimitUsageV21
@@ -658,25 +815,9 @@ export const hostGetRateLimitUsageDowngradeV5ToV2 = defineDowngradePath<
   from: hostGetRateLimitUsageV50.schemaVersion,
   to: hostGetRateLimitUsageV21.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
-  downgradeResponse: (response) => {
-    if (namesProviderNewerThanV40(response.providerRateLimits)) {
-      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-    }
-    const parsed = rateLimitUsageResponseSchemaV21.safeParse({
-      ...response,
-      providerRateLimits: degradeProviderRateLimitsToV21(
-        response.providerRateLimits,
-      ),
-    });
-    return parsed.success
-      ? { ok: true, value: parsed.data }
-      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-  },
+  downgradeResponse: downgradeRateLimitResponseToV21,
 });
 
-// Downgrade bridge 5.0 -> 1.2: an Antigravity reading is refused first (as on
-// 5.0 -> 3.0), then the 4.0 -> 1.2 degrades and the v1.2 parse (which also
-// strips v2.1 reset-credit detail).
 export const hostGetRateLimitUsageDowngradeV5ToV1 = defineDowngradePath<
   typeof hostGetRateLimitUsageV50,
   typeof hostGetRateLimitUsageV12
@@ -684,18 +825,107 @@ export const hostGetRateLimitUsageDowngradeV5ToV1 = defineDowngradePath<
   from: hostGetRateLimitUsageV50.schemaVersion,
   to: hostGetRateLimitUsageV12.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: downgradeRateLimitResponseToV12,
+});
+
+// v6.0 adds the Kimi available arm (see `rateLimitUsageResponseSchemaV60`). A
+// major, not a 5.1: the 1.5.1 tags shipped 5.0, a new available arm is not
+// strippable by the within-major skew handler, and the frozen 5.0 union
+// (`providerRateLimitsSchemaV151`) has no arm for it. The request is unchanged
+// from 4.0, `force` included.
+export const hostGetRateLimitUsageV60 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 6, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV40,
+  responseSchema: rateLimitUsageResponseSchemaV60,
+});
+
+// Every frozen 5.0 arm is a valid 6.0 arm (the live union is a strict superset
+// of `providerRateLimitsSchemaV151`), and the request is the same schema, so the
+// upgrade is the identity both ways.
+export const hostGetRateLimitUsageUpgradeV50ToV60 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV50,
+  typeof hostGetRateLimitUsageV60
+>({
+  from: hostGetRateLimitUsageV50.schemaVersion,
+  to: hostGetRateLimitUsageV60.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// The 6.0 -> N bridges. The negotiator looks up one direct bridge per target
+// major (it never chains them), so each one degrades a Kimi-available snapshot
+// to `unsupported_provider` - a row every older line can parse, since `"kimi"`
+// is in every frozen provider enum - and then does exactly what the 5.0 -> N
+// bridge to that major does.
+function withKimiDegraded(
+  response: RateLimitUsageResponseV60,
+): RateLimitUsageResponseV60 {
+  return {
+    ...response,
+    providerRateLimits: mapKimiAvailableToUnavailable(
+      response.providerRateLimits,
+    ),
+  };
+}
+
+export const hostGetRateLimitUsageDowngradeV6ToV5 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV60,
+  typeof hostGetRateLimitUsageV50
+>({
+  from: hostGetRateLimitUsageV60.schemaVersion,
+  to: hostGetRateLimitUsageV50.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
-    if (namesProviderNewerThanV40(response.providerRateLimits)) {
-      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
-    }
-    const parsed = rateLimitUsageResponseSchemaV12.safeParse({
-      ...response,
-      providerRateLimits: degradeProviderRateLimitsToV12(
-        response.providerRateLimits,
-      ),
-    });
+    const parsed = rateLimitUsageResponseSchemaV50.safeParse(
+      withKimiDegraded(response),
+    );
     return parsed.success
       ? { ok: true, value: parsed.data }
       : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
   },
+});
+
+export const hostGetRateLimitUsageDowngradeV6ToV4 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV60,
+  typeof hostGetRateLimitUsageV40
+>({
+  from: hostGetRateLimitUsageV60.schemaVersion,
+  to: hostGetRateLimitUsageV40.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV40(withKimiDegraded(response)),
+});
+
+export const hostGetRateLimitUsageDowngradeV6ToV3 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV60,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV60.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV30(withKimiDegraded(response)),
+});
+
+export const hostGetRateLimitUsageDowngradeV6ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV60,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV60.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV21(withKimiDegraded(response)),
+});
+
+export const hostGetRateLimitUsageDowngradeV6ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV60,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV60.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) =>
+    downgradeRateLimitResponseToV12(withKimiDegraded(response)),
 });

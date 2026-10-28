@@ -13,10 +13,16 @@ export interface DetailsSubject {
 
 export type DetailsReaderScope = "full" | "own" | "status_only";
 
-export interface DetailsRecovery {
-  readonly kind: "repair" | "install" | "retry" | "overview";
-  readonly hostId: string;
-}
+export type DetailsRecovery =
+  | {
+      readonly kind: "repair" | "install" | "retry" | "overview";
+      readonly hostId: string;
+    }
+  | {
+      readonly kind: "apply";
+      readonly hostId: string;
+      readonly guestSetupFailed: boolean | null;
+    };
 
 /** Metadata only: never add values, tokens, credentials or arbitrary payloads.
  * Host names and actor labels must already be authorized by the provider.
@@ -36,7 +42,10 @@ export interface DetailsItemStatus {
   readonly subject: DetailsSubject;
   readonly title: string;
   readonly summary: string;
+  /** Left out of the row when `null`: a time the app doesn't have. */
   readonly at: number | null;
+  /** The item has an unfinished step Retry repeats (a secret's removal). */
+  readonly retryable: boolean;
 }
 
 /** Value-free current evidence, already filtered to the reader's authority. */
@@ -47,6 +56,8 @@ export interface DetailsStatus {
   readonly changedAt: number | null;
   readonly reason: string | null;
   readonly hosts: readonly DetailsHostStatus[];
+  /** The subject has an unfinished secret removal Retry can resume. */
+  readonly retryable?: boolean;
   /** Page-level entries, including retained removed-secret metadata. */
   readonly items?: readonly DetailsItemStatus[];
 }

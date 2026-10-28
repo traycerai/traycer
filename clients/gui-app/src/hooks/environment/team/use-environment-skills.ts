@@ -17,12 +17,14 @@ import {
 } from "@/stores/auth/auth-store";
 
 /**
- * The configuration's skills, from a host that serves it: `client` is the
- * viewing host. Answered `not_served` by any other host. `enabled` is the
- * caller's: false while that host has not negotiated the method.
+ * The configuration's skills, from its room: `client` is
+ * `useConfigurationReadClient`'s, so no host has to be running it. A build
+ * with no pool asks the picked host, and any other host answers
+ * `not_served`. `enabled` is the caller's: false while the serving tier has
+ * not negotiated the method.
  */
 export function useEnvironmentSkillsQuery(
-  client: HostClient<HostRpcRegistry> | null,
+  client: HostClient<HostRpcRegistry>,
   enabled: boolean,
 ): UseQueryResult<EnvironmentConfigurationSkillsListResponse, HostRpcError> {
   const source = useConfigurationSource();
@@ -40,11 +42,7 @@ export function useEnvironmentSkillsQuery(
     preflight: cloudVerdictPreflight("environment.configuration.skills.list"),
     options: {
       enabled:
-        enabled &&
-        client !== null &&
-        source.kind === "pool" &&
-        viewerId.length > 0 &&
-        authorized,
+        enabled && source.kind === "pool" && viewerId.length > 0 && authorized,
     },
   });
 }

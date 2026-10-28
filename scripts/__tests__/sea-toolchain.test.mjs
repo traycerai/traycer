@@ -117,14 +117,15 @@ describe("this project is actually called by CI", () => {
     // one would be asserting something it cannot see. Both `continue-on-error`
     // keys stay required-absent too.
     //
-    // The JOB carries the pull-request gate (a team PR into `main` skips it;
-    // the merge to `main` runs it once), so its `if` cannot be absent. It must
+    // The JOB carries the pull-request gate (a team PR into `main`,
+    // `integration/*` or `land/*` skips it; the merge to `main` runs it once),
+    // so its `if` cannot be absent. It must
     // equal exactly that gate text, whitespace-normalised: `if: false`, or any
     // other condition, still reds this, and the row cannot be switched off
     // unnoticed. The same string is pinned for every gated job in
     // ci-pull-request-gate.test.mjs.
     const PULL_REQUEST_GATE =
-      "github.event_name != 'pull_request' || github.base_ref != 'main' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot'";
+      "github.event_name != 'pull_request' || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/')) || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot'";
     expect(testSteps[0].if).toBeUndefined();
     expect(String(job.if).replace(/\s+/g, " ").trim()).toBe(PULL_REQUEST_GATE);
     for (const scope of [testSteps[0], job]) {

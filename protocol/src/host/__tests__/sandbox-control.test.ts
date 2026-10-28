@@ -9,6 +9,7 @@ import {
   sandboxListResponseSchema,
   sandboxPodSchema,
   sandboxRefusalBodySchema,
+  sandboxSupportReference,
 } from "@traycer/protocol/host/sandbox-control";
 
 /**
@@ -63,8 +64,9 @@ describe("sandbox control plane mirror", () => {
     ).toBe(false);
   });
 
-  it("parses the catalogue with its shape bounds and from-prices", () => {
+  it("preserves offered agents with the catalogue's shape bounds and from-prices", () => {
     const parsed = sandboxCatalogueSchema.parse({
+      offeredAgents: ["traycer"],
       providers: [
         {
           provider: "tensorlake",
@@ -99,6 +101,7 @@ describe("sandbox control plane mirror", () => {
       ],
     });
     expect(parsed.providers[0]?.shape.diskDefaultMb).toBe(20480);
+    expect(parsed.offeredAgents).toEqual(["traycer"]);
   });
 
   describe("shapes", () => {
@@ -249,8 +252,10 @@ describe("sandbox control plane mirror", () => {
       currentAwakeBurnMcPerHour: 60,
       balanceMc: 50,
       shortfallMc: 70,
+      creditSource: "team-allowance",
     });
     expect(gate.shortfallMc).toBe(70);
+    expect(gate.creditSource).toBe("team-allowance");
     expect(gate.currentAwakeBurnMcPerHour).toBe(60);
     expect(
       sandboxRefusalBodySchema.parse({
@@ -434,5 +439,23 @@ describe("refusal body message", () => {
       sandboxRefusalBodySchema.safeParse({ code: "sandbox_busy", message: 3 })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("sandboxSupportReference", () => {
+  it.each([
+    ["create:kube-create-service-account", "SBX-0412"],
+    ["resume", "SBX-0507"],
+    ["destroy:provider-delete", "SBX-0801"],
+    ["wake-timeout:attaching", "SBX-0511"],
+    ["envelope-delivery:x", "SBX-0520"],
+  ])("maps %s to %s by its class", (code, reference) => {
+    expect(sandboxSupportReference(code)).toBe(reference);
+  });
+
+  it("is null for a code of no listed class and for no code", () => {
+    expect(sandboxSupportReference("kube-thing")).toBeNull();
+    expect(sandboxSupportReference("nostage:create")).toBeNull();
+    expect(sandboxSupportReference(null)).toBeNull();
   });
 });

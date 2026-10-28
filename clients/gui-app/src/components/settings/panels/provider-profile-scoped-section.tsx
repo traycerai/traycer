@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
@@ -35,8 +36,6 @@ import { providersMutationKeys } from "@/lib/query-keys";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
-import { ProfileSyncEntryButton } from "./profile-sync/profile-sync-entry-button";
-import { profileSyncWireProvider } from "@/lib/profile-sync/profile-sync-presentation";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -245,18 +244,16 @@ function ProfileScopedSectionMessages(props: {
  * even when there is only the terminal/default profile, so the page does not
  * switch visual languages after the first managed profile is added.
  * Everything below the header - the selected profile's details, usage limits,
- * and actions - is scoped to `selectedProfileId`. With zero profiles, a
- * Local row keeps the transferable provider's sync entry, so persistent rules
- * are still reachable. The caller keeps the plain unscoped
+ * and actions - is scoped to `selectedProfileId`. With zero profiles there
+ * is no section; the caller keeps the plain unscoped
  * `ProviderRateLimitForProvider` mounted for that case.
  *
  * The terminal login is a read-only row (design, Profiles & Limits): named as
  * the tool's own login on this host, with one verb that starts a Settings
  * sign-in - a new profile that follows you - and leaves that login untouched.
  *
- * Sync profiles copies profiles from one computer to another, which Personal
- * already does for every profile it holds, so it is offered on a Local row
- * only (the old page, whole). The page header's Refresh re-probes every
+ * The card's one verb is `Add a profile`: Personal carries every profile it
+ * holds to each computer running it. The page header's Refresh re-probes every
  * profile's sign-in, and usage re-reads on open and after each turn, so the
  * card carries no refresh of its own.
  */
@@ -282,7 +279,6 @@ export function ProviderProfileScopedSection(
   } = props;
   const profiles = state.profiles;
   const pick = useEnvironmentPick();
-  const localRow = pick.kind === "local";
   const personalHostName = usePersonalHostName();
   // A Local row reads its own computer; Personal names the window's host.
   const hostName = pick.kind === "local" ? pick.hostName : personalHostName;
@@ -292,11 +288,7 @@ export function ProviderProfileScopedSection(
     startInReauth ? "sign-in" : "manage",
   );
 
-  if (profiles.length === 0) {
-    return localRow ? (
-      <EmptyProviderProfiles state={state} hostId={hostId} />
-    ) : null;
-  }
+  if (profiles.length === 0) return null;
 
   const selectedProfile =
     profiles.find(
@@ -336,12 +328,6 @@ export function ProviderProfileScopedSection(
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
           <div className="flex flex-wrap items-center gap-1">
-            {localRow ? (
-              <ProfileSyncEntryButton
-                hostId={hostId}
-                providerId={state.providerId}
-              />
-            ) : null}
             <TooltipWrapper
               label={addProfileDisabledReason}
               side="top"
@@ -405,7 +391,6 @@ export function ProviderProfileScopedSection(
         />
         {selectedProfile.kind === "ambient" ? (
           <OwnLoginSummary
-            ownLogin={ownLogin}
             profile={selectedProfile}
             addProfileDisabled={addProfileDisabled}
             addProfileDisabledReason={addProfileDisabledReason}
@@ -551,13 +536,12 @@ function ownLoginStateText(profile: ProviderProfile): string | null {
 }
 
 /**
- * The terminal login's row: whose login it is, where it works and whether it
- * is signed in, with one verb. `Sign in to use everywhere` opens the same
+ * The terminal login's row under the dropdown that names it: where it works
+ * and whether it is signed in, with one verb. `Sign in to use everywhere` opens the same
  * sign-in `Add a profile` does, so the tool's own login is never touched from
  * here.
  */
 function OwnLoginSummary(props: {
-  readonly ownLogin: string;
   readonly profile: ProviderProfile;
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
@@ -565,7 +549,7 @@ function OwnLoginSummary(props: {
 }): ReactNode {
   const refreshProviders = useRefreshProviders();
   const refreshing =
-    useIsMutating({ mutationKey: providersMutationKeys.refresh() }) > 0;
+    useIsMutatingOf({ mutationKey: providersMutationKeys.refresh() }) > 0;
   const stateText = ownLoginStateText(props.profile);
   return (
     <div
@@ -573,9 +557,7 @@ function OwnLoginSummary(props: {
       className="flex min-w-0 flex-wrap items-center justify-end gap-2"
     >
       <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-        <span className="min-w-0">
-          {props.ownLogin} · works on this computer only
-        </span>
+        <span className="min-w-0">works on this computer only</span>
         {stateText === null ? (
           <span className="inline-flex shrink-0 items-center gap-1">
             couldn&apos;t be checked
@@ -623,31 +605,6 @@ function OwnLoginSummary(props: {
         </span>
       </TooltipWrapper>
     </div>
-  );
-}
-
-function EmptyProviderProfiles(props: {
-  readonly state: ProviderCliState;
-  readonly hostId: string | null;
-}): ReactNode {
-  if (
-    props.hostId === null ||
-    profileSyncWireProvider(props.state.providerId) === null
-  )
-    return null;
-  return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-ui-sm font-medium text-foreground">Profiles</div>
-        <ProfileSyncEntryButton
-          hostId={props.hostId}
-          providerId={props.state.providerId}
-        />
-      </div>
-      <p className="text-ui-xs text-muted-foreground">
-        No profiles on this device.
-      </p>
-    </section>
   );
 }
 

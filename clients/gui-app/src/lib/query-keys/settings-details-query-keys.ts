@@ -1,6 +1,7 @@
 import type { DetailsSubject } from "@/lib/settings-details-entry";
 
 export const settingsDetailsQueryKeys = {
+  all: () => ["settings-details"] as const,
   entry: (
     hostId: string | null,
     subject: DetailsSubject,
@@ -13,6 +14,9 @@ export const settingsDetailsQueryKeys = {
 export const settingsDetailsMutationKeys = {
   secretCreate: () => ["environment.secrets.create"] as const,
   secretDestroy: () => ["environment.secrets.destroy"] as const,
+  // Details' Retry of a removal: the versions read, then Remove again.
+  secretRemovalRetry: () =>
+    ["environment.secrets.destroy", "removal-retry"] as const,
   secretReplaceValue: () => ["environment.secrets.replaceValue"] as const,
   secretUndo: () => ["environment.secrets.undo"] as const,
   secretVerify: () => ["environment.secrets.verify"] as const,

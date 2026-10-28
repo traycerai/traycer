@@ -1,3 +1,6 @@
+import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -5,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   QueryClient,
@@ -22,6 +26,7 @@ import {
 import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
+  refusal,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { sandboxMutationKeys } from "@/lib/query-keys";
@@ -64,12 +69,16 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () => mocks.binding,
 }));
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ refreshHostFleet: vi.fn() }),
+  useRunnerHost: () => ({
+    refreshHostFleet: vi.fn(),
+    signInUrl: "https://billing.test",
+  }),
   useRunnerHostOrNull: () => ({
     sandboxControlUnavailableReason: mocks.unavailableReason,
   }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
@@ -156,6 +165,20 @@ function renderFrame(withWake: boolean) {
   return { ...view, rerenderFrame: () => view.rerender(tree()) };
 }
 
+/** A chat tile's frame: its own resolver and composer footer own its lifecycle. */
+function renderChatFrame() {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <SandboxTileStateFrame chat={{ epicId: "epic-1", chatId: "chat-1" }}>
+        <textarea data-testid="tile-body" />
+      </SandboxTileStateFrame>
+    </QueryClientProvider>,
+  );
+}
+
 function bodyWrapper(): HTMLElement {
   const wrapper = screen.getByTestId("tile-body").parentElement;
   if (wrapper === null) throw new Error("the tile body has no wrapper");
@@ -164,6 +187,11 @@ function bodyWrapper(): HTMLElement {
 
 beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "u1", username: "ada" },
+  });
+  vi.mocked(toastFromAuthError).mockClear();
   mocks.entry = null;
   mocks.list = null;
   mocks.listError = false;
@@ -174,7 +202,67 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe("<SandboxTileStateFrame /> around a chat tile", () => {
+  it.each([
+    ["suspended", false],
+    ["stopped", false],
+    ["released", false],
+    ["suspended", true],
+    ["awake", true],
+  ] as const)(
+    "never overlays or inerts a chat's body on a %s sandbox (frozen: %s)",
+    (state, frozen) => {
+      setSandboxEntry(state, frozen);
+      renderChatFrame();
+
+      expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+      expect(
+        screen.getByTestId("tile-body").parentElement?.hasAttribute("inert"),
+      ).toBe(false);
+    },
+  );
+});
+
 describe("<SandboxTileStateFrame />", () => {
+  it.each<{ label: string; failure: SandboxLifecycleVerbFetchResult }>([
+    {
+      label: "credits",
+      failure: {
+        ...refusal(402, "insufficient_credit"),
+        shortfallMc: 210,
+        creditSource: "personal",
+      },
+    },
+    { label: "bearer", failure: { kind: "unauthorized" } },
+    {
+      label: "network",
+      failure: { kind: "network-error", detail: "unreachable" },
+    },
+  ])(
+    "keeps a visible named $label wake failure with remedies on the tile",
+    async ({ failure, label }) => {
+      setSandboxEntry("suspended", false);
+      mocks.binding?.auth.runSandboxVerb.mockResolvedValue(failure);
+      renderFrame(false);
+      fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Couldn't resume build-box");
+      expect(
+        within(alert).getByRole("button", { name: "Retry" }),
+      ).toBeDefined();
+      expect(
+        within(alert).getByRole("button", { name: "Details" }),
+      ).toBeDefined();
+      if (label === "credits") {
+        expect(alert.textContent).toContain("$0.21");
+        expect(
+          within(alert).getByRole("button", { name: "Add credits ↗" }),
+        ).toBeDefined();
+      }
+      expect(toastFromAuthError).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns the tile untouched, reading no directory, when there is no host runtime above it", () => {
     setSandboxEntry("suspended", false);
     mocks.binding = null;
@@ -295,13 +383,13 @@ describe("<SandboxTileStateFrame />", () => {
     }
   });
 
-  it("overlays a released sandbox with Released and Start", () => {
+  it("overlays a released sandbox with Suspended and Start", () => {
     setSandboxEntry("released", false);
     renderFrame(false);
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("asleep");
-    expect(overlay.textContent).toContain("Released");
+    expect(overlay.textContent).toContain("Suspended");
     expect(screen.getByTestId("sandbox-tile-overlay-wake").textContent).toBe(
       "Start",
     );
@@ -403,6 +491,7 @@ describe("<SandboxTileStateFrame />", () => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         "resume",
+        null,
         expect.any(Number),
       );
     });

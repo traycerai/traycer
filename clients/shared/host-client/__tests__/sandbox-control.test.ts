@@ -117,6 +117,7 @@ describe("runSandboxVerbViaHttp", () => {
       null,
       ULID,
       "resume",
+      null,
       VERB_TIMEOUT_MS,
     );
 
@@ -127,6 +128,39 @@ describe("runSandboxVerbViaHttp", () => {
     expect(init?.headers).toMatchObject({
       Authorization: `Bearer ${BEARER}`,
     });
+  });
+
+  it("sends a gesture as a JSON body, and no body without one", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandbox: SUMMARY }),
+    );
+
+    await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      null,
+      ULID,
+      "resume",
+      "open-terminal",
+      VERB_TIMEOUT_MS,
+    );
+    await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      null,
+      ULID,
+      "resume",
+      null,
+      VERB_TIMEOUT_MS,
+    );
+
+    const [, withGesture] = fetchMock.mock.calls[0];
+    expect(withGesture?.body).toBe('{"gesture":"open-terminal"}');
+    expect(withGesture?.headers).toMatchObject({
+      "Content-Type": "application/json",
+    });
+    const [, plain] = fetchMock.mock.calls[1];
+    expect(plain?.body).toBeNull();
   });
 
   it("refuses an id that is not one plain path segment before any request", async () => {
@@ -141,6 +175,7 @@ describe("runSandboxVerbViaHttp", () => {
           null,
           id,
           "resume",
+          null,
           VERB_TIMEOUT_MS,
         ),
       ).toEqual(INVALID_ID_RESULT);
@@ -157,6 +192,7 @@ describe("runSandboxVerbViaHttp", () => {
         null,
         "sbx_1",
         "suspend",
+        null,
         VERB_TIMEOUT_MS,
       ),
     ).toEqual({ kind: "ok", settled: true, state: SUMMARY.state });
@@ -173,6 +209,7 @@ describe("runSandboxVerbViaHttp", () => {
         null,
         "sbx_1",
         "suspend",
+        null,
         VERB_TIMEOUT_MS,
       ),
     ).toEqual({ kind: "ok", settled: true, state: "stopped" });
@@ -187,6 +224,7 @@ describe("runSandboxVerbViaHttp", () => {
         null,
         "sbx_1",
         "suspend",
+        null,
         VERB_TIMEOUT_MS,
       ),
     ).toEqual({ kind: "ok", settled: true, state: null });
@@ -201,6 +239,7 @@ describe("runSandboxVerbViaHttp", () => {
         null,
         "sbx_1",
         "suspend",
+        null,
         VERB_TIMEOUT_MS,
       ),
     ).toEqual({ kind: "ok", settled: false, state: SUMMARY.state });
@@ -215,6 +254,7 @@ describe("runSandboxVerbViaHttp", () => {
         null,
         "sbx_1",
         "resume",
+        null,
         VERB_TIMEOUT_MS,
       ),
     ).toEqual({
@@ -223,6 +263,7 @@ describe("runSandboxVerbViaHttp", () => {
       code: "sandbox_frozen",
       reason: null,
       shortfallMc: null,
+      creditSource: null,
       newRateMcPerHour: null,
       currentAwakeBurnMcPerHour: null,
       message: null,
@@ -237,6 +278,7 @@ describe("runSandboxVerbViaHttp", () => {
       null,
       "sbx_1",
       "suspend",
+      null,
       VERB_TIMEOUT_MS,
     );
     expect(result).toMatchObject({
@@ -252,6 +294,7 @@ describe("runSandboxVerbViaHttp", () => {
         code: "insufficient_credit",
         reason: "denied",
         shortfallMc: 70,
+        creditSource: "team-allowance",
         newRateMcPerHour: 120,
         currentAwakeBurnMcPerHour: 60,
       }),
@@ -263,6 +306,7 @@ describe("runSandboxVerbViaHttp", () => {
         null,
         "sbx_1",
         "start",
+        null,
         VERB_TIMEOUT_MS,
       ),
     ).toEqual({
@@ -271,6 +315,7 @@ describe("runSandboxVerbViaHttp", () => {
       code: "insufficient_credit",
       reason: "denied",
       shortfallMc: 70,
+      creditSource: "team-allowance",
       newRateMcPerHour: 120,
       currentAwakeBurnMcPerHour: 60,
       message: null,
@@ -287,6 +332,7 @@ describe("runSandboxVerbViaHttp", () => {
           null,
           "sbx_1",
           "stop",
+          null,
           VERB_TIMEOUT_MS,
         ),
       ).toEqual({ kind: "unauthorized" });
@@ -304,6 +350,7 @@ describe("runSandboxVerbViaHttp", () => {
       null,
       "sbx_1",
       "stop",
+      null,
       VERB_TIMEOUT_MS,
     );
     expect(result).toEqual({
@@ -322,6 +369,7 @@ describe("runSandboxVerbViaHttp", () => {
       null,
       "sbx_1",
       "stop",
+      null,
       VERB_TIMEOUT_MS,
     );
     expect(result).toEqual({
@@ -358,6 +406,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
       null,
       "sbx_1",
       "resume",
+      null,
       120_000,
     );
     const signal = signalOfLastFetch(fetchMock);
@@ -383,6 +432,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
         null,
         "sbx_1",
         "resume",
+        null,
         requested,
       );
       const signal = signalOfLastFetch(fetchMock);
@@ -405,6 +455,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
       null,
       "sbx_1",
       "resume",
+      null,
       -5_000,
     );
     const signal = signalOfLastFetch(fetchMock);
@@ -418,14 +469,30 @@ describe("runSandboxVerbViaHttp request deadline", () => {
     stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
 
     await expect(
-      runSandboxVerbViaHttp(BASE, BEARER, null, "sbx_1", "resume", -5_000),
+      runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "resume",
+        null,
+        -5_000,
+      ),
     ).resolves.toEqual({ kind: "ok", settled: true, state: SUMMARY.state });
   });
 
   it("leaves no timer behind once the request has answered", async () => {
     stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
 
-    await runSandboxVerbViaHttp(BASE, BEARER, null, "sbx_1", "resume", 120_000);
+    await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      null,
+      "sbx_1",
+      "resume",
+      null,
+      120_000,
+    );
 
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -476,6 +543,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
       null,
       "sbx_1",
       "resume",
+      null,
       30_000,
     );
     const signal = signalOfLastFetch(fetchMock);
@@ -492,9 +560,31 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
 });
 
 describe("destroySandboxViaHttp", () => {
+  it("sends the idle-only precondition and preserves the typed CAS conflict", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(409, {
+        code: "sandbox_transition_conflict",
+        sandboxId: "sbx_1",
+        state: "awake",
+      }),
+    );
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", true),
+    ).toMatchObject({
+      kind: "refused",
+      status: 409,
+      code: "sandbox_transition_conflict",
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `${BASE}/api/sandboxes/sbx_1?onlyIfIdle=true`,
+    );
+  });
+
   it("DELETEs the sandbox and reads 200 as settled, 202 as still destroying", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
+    ).toEqual({
       kind: "ok",
       settled: true,
     });
@@ -503,7 +593,9 @@ describe("destroySandboxViaHttp", () => {
     expect(init?.method).toBe("DELETE");
 
     stubFetch(async () => jsonResponse(202, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
+    ).toEqual({
       kind: "ok",
       settled: false,
     });
@@ -513,9 +605,9 @@ describe("destroySandboxViaHttp", () => {
     // An empty id would otherwise DELETE the collection.
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
     for (const id of UNSAFE_IDS) {
-      expect(await destroySandboxViaHttp(BASE, BEARER, null, id)).toEqual(
-        INVALID_ID_RESULT,
-      );
+      expect(
+        await destroySandboxViaHttp(BASE, BEARER, null, id, false),
+      ).toEqual(INVALID_ID_RESULT);
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -523,7 +615,7 @@ describe("destroySandboxViaHttp", () => {
   it("hands a 404 sandbox_not_found to the caller as a typed refusal", async () => {
     stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
     expect(
-      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1"),
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1", false),
     ).toMatchObject({
       kind: "refused",
       status: 404,
@@ -909,6 +1001,7 @@ describe("openSandboxAutomationViaHttp", () => {
       code: "team_pods_full",
       reason: null,
       shortfallMc: null,
+      creditSource: null,
       newRateMcPerHour: null,
       currentAwakeBurnMcPerHour: null,
       message: "Every pod of Alpha is full. Ask an admin to add one.",
@@ -1215,6 +1308,7 @@ describe("ensureSandboxAwake", () => {
           code: "insufficient_credit",
           reason: "denied",
           shortfallMc: 70,
+          creditSource: "team-allowance",
           newRateMcPerHour: 120,
           currentAwakeBurnMcPerHour: 60,
           message: null,
@@ -1225,6 +1319,7 @@ describe("ensureSandboxAwake", () => {
     expect(outcome).toEqual({
       kind: "credit-gate",
       shortfallMc: 70,
+      creditSource: "team-allowance",
       burnMcPerHour: 60,
     });
   });
@@ -1236,6 +1331,7 @@ describe("ensureSandboxAwake", () => {
       code,
       reason: null,
       shortfallMc: null,
+      creditSource: null,
       newRateMcPerHour: null,
       currentAwakeBurnMcPerHour: null,
       message: null,

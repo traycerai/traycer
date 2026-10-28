@@ -211,7 +211,7 @@ function activeTabTestId(): string | null {
 }
 
 describe("PermissionsSettingsPanel", () => {
-  it("renders four tab triggers, each carrying its settings anchor", () => {
+  it("renders five tab triggers, each carrying its settings anchor", () => {
     render(<PermissionsSettingsPanel />);
 
     for (const [tab, label] of [
@@ -219,6 +219,7 @@ describe("PermissionsSettingsPanel", () => {
       ["judge", "Judge"],
       ["rules", "Rules"],
       ["activity", "Activity"],
+      ["browser", "Browser"],
     ] as const) {
       const trigger = screen.getByTestId(`permissions-tab-${tab}`);
       expect(trigger.textContent).toBe(label);
@@ -226,12 +227,17 @@ describe("PermissionsSettingsPanel", () => {
         `permissions-tab-${tab}`,
       );
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getAllByRole("tab")).toHaveLength(5);
   });
 
-  it("shows the Browser agent access switch below the tabs on a host pick", () => {
+  it("shows the Browser agent access switch on the Browser tab of a host pick, and nowhere else", async () => {
+    const user = userEvent.setup();
     render(<PermissionsSettingsPanel />);
 
+    expect(screen.queryByTestId("settings-browser-agent-access")).toBeNull();
+
+    await user.click(screen.getByTestId("permissions-tab-browser"));
+    expect(activeTabTestId()).toBe("permissions-tab-browser");
     const group = screen.getByTestId("settings-browser-agent-access");
     expect(group.textContent).toContain("Browser agent access");
     expect(
@@ -239,16 +245,49 @@ describe("PermissionsSettingsPanel", () => {
         name: "Let agents use the in-app browser",
       }),
     ).toBeTruthy();
-    const tabs = screen.getAllByRole("tab")[0];
-    expect(
-      tabs.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
+
+    await user.click(screen.getByTestId("permissions-tab-judge"));
+    expect(screen.queryByTestId("settings-browser-agent-access")).toBeNull();
   });
 
   it("starts on Modes", () => {
     render(<PermissionsSettingsPanel />);
 
     expect(activeTabTestId()).toBe("permissions-tab-modes");
+  });
+
+  describe("the page subtitle", () => {
+    afterEach(() => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: null,
+        defaultPick: PERSONAL_PICK,
+      });
+    });
+
+    it("says what the person's agents may do across computers and sandboxes", () => {
+      useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+      render(<PermissionsSettingsPanel />);
+
+      expect(
+        screen.getByText(
+          "What your agents may do without asking, on every computer and sandbox.",
+        ),
+      ).not.toBeNull();
+    });
+
+    it("keeps the general subtitle on a computer's own row", () => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "local", hostId: "host-a", hostName: "MacBook Pro" },
+      });
+      render(<PermissionsSettingsPanel />);
+
+      expect(
+        screen.getByText(
+          "How much an agent may do on its own, and who reviews the rest.",
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByText(/running Personal/)).toBeNull();
+    });
   });
 
   describe("Modes with no usable host", () => {
@@ -433,7 +472,7 @@ describe("PermissionsSettingsPanel", () => {
       );
     });
 
-    it("shows the Browser agent access switch inside the team's Permissions", () => {
+    it("shows the Browser agent access switch as a region of the team's Permissions, which has no tabs", () => {
       renderPicked();
 
       const group = within(screen.getByTestId("team-permissions")).getByTestId(
@@ -445,6 +484,12 @@ describe("PermissionsSettingsPanel", () => {
           .getByRole("switch", { name: "Let agents use the in-app browser" })
           .getAttribute("aria-checked"),
       ).toBe("true");
+      // No tab bar here, so the Browser tab's search anchor lands on the
+      // region: a "browser agent access" result still scrolls to the switch.
+      const anchored = screen
+        .getByTestId("team-permissions")
+        .querySelector('[data-settings-anchor="permissions-tab-browser"]');
+      expect(anchored?.contains(group)).toBe(true);
     });
 
     it("opens a composer's machine on its Judge tab, moving the pick to that machine's row, and spends the intent", () => {

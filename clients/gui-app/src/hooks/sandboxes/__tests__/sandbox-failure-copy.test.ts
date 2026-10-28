@@ -49,6 +49,12 @@ describe("sandboxFailureMessage", () => {
     ).toBe("Sandboxes aren't available in staging builds.");
   });
 
+  it("words a rename authn cannot take as a retry, not the generic refusal", () => {
+    expect(
+      sandboxFailureMessage(refused("rename_unavailable", NO_DETAIL)),
+    ).toBe("Couldn't rename the sandbox. Try again in a moment.");
+  });
+
   it("words the frozen and busy refusals the card and the tile surface", () => {
     expect(
       sandboxFailureMessage(refused("sandbox_frozen", NO_DETAIL)),
@@ -76,7 +82,7 @@ describe("sandboxFailureMessage", () => {
         }),
       ),
     ).toBe(
-      "Your credits don't cover an hour of this sandbox. Add 7.00 credits and try again.",
+      "Your credits don't cover an hour of this sandbox. Add $7.00 and try again.",
     );
     expect(
       sandboxFailureMessage(
@@ -94,7 +100,7 @@ describe("sandboxFailureMessage", () => {
         }),
       ),
     ).toBe(
-      "Your credits don't cover an hour of this sandbox. Add 11 credits and try again.",
+      "Your credits don't cover an hour of this sandbox. Add $11 and try again.",
     );
   });
 

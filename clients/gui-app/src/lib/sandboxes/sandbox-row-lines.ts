@@ -1,8 +1,14 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { sandboxSettingsFailureLine } from "@traycer/protocol/host/sandbox-settings";
 import type {
-  SandboxCost,
-  SandboxMember,
-  SandboxSummary,
+  HostStatusAgentSession,
+  HostStatusSessions,
+} from "@traycer/protocol/host/status/contracts";
+import {
+  sandboxSupportReference,
+  type SandboxCost,
+  type SandboxMember,
+  type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
@@ -13,10 +19,12 @@ import {
   LESS_THAN_A_CENT_SO_FAR,
   configurationLabel,
   costLine,
+  formatSandboxCost,
   formatSandboxDollars,
   keptByLine,
   paidByLine,
   startedByLine,
+  sandboxVerbPendingLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -94,12 +102,13 @@ export function sandboxRowKind(summary: SandboxSummary): SandboxRowKind {
   return summary.burst ? "agent" : "sandbox";
 }
 
-/** The seven public states, without Destroyed: a destroyed row is not listed. */
+/** The public states, without Destroyed: a destroyed row is not listed. */
 export type SandboxPublicState =
   | "creating"
   | "awake"
   | "suspended"
   | "stopped"
+  | "destroying"
   | "frozen"
   | "failed";
 
@@ -111,6 +120,7 @@ export type SandboxPublicState =
 export function sandboxPublicState(
   summary: SandboxSummary,
 ): SandboxPublicState {
+  if (summary.state === "destroying") return "destroying";
   if (summary.frozen) return "frozen";
   return PUBLIC_STATE[summary.state];
 }
@@ -125,7 +135,7 @@ const PUBLIC_STATE: Record<HostSandboxState, SandboxPublicState> = {
   released: "suspended",
   stopping: "stopped",
   stopped: "stopped",
-  destroying: "stopped",
+  destroying: "destroying",
   destroyed: "stopped",
   failed: "failed",
 };
@@ -135,6 +145,7 @@ export const SANDBOX_PUBLIC_STATE_LABEL: Record<SandboxPublicState, string> = {
   awake: "Awake",
   suspended: "Suspended",
   stopped: "Stopped",
+  destroying: "Destroying",
   frozen: "Frozen",
   failed: "Failed",
 };
@@ -219,7 +230,8 @@ function rowStarter(
   viewerUserId: string | null,
 ): "you" | "agent" | "others" | null {
   if (summary.kind === "automation") return null;
-  if (summary.burst) return "agent";
+  // A kept row is no longer burst, but an agent still started it.
+  if (summary.burst || summary.createdByAgentId !== null) return "agent";
   if (summary.createdBy === null) return "you";
   return viewerUserId !== null && summary.createdBy.userId === viewerUserId
     ? "you"
@@ -252,7 +264,7 @@ export function sandboxRowMatches(
   );
 }
 
-/** Awake first, then by last activity, newest first. */
+/** Awake first, then by last activity, newest first, with id breaking ties. */
 export function sortSandboxRows(
   rows: readonly SandboxSummary[],
 ): readonly SandboxSummary[] {
@@ -262,15 +274,15 @@ export function sortSandboxRows(
     const awakeA = sandboxPublicState(a) === "awake" ? 0 : 1;
     const awakeB = sandboxPublicState(b) === "awake" ? 0 : 1;
     if (awakeA !== awakeB) return awakeA - awakeB;
-    return activity(b) - activity(a);
+    return activity(b) - activity(a) || a.id.localeCompare(b.id);
   });
 }
 
-/** `Destroy all idle` shows only while the filter is exactly this pair. */
+/** The header action is offered with either idle State filter, for any Kind. */
 export function sandboxDestroyAllIdleOffered(
   filter: SandboxRowFilter,
 ): boolean {
-  return filter.kind === "agent" && filter.state === "suspended";
+  return filter.state === "suspended" || filter.state === "stopped";
 }
 
 // ── Who ─────────────────────────────────────────────────────────────────────
@@ -284,13 +296,21 @@ export function sandboxMemberName(
   return member.displayName ?? "a member";
 }
 
-/** `Started by you` / `Started by Priya` / `Agent sandbox` / `Automations`. */
+/**
+ * `Started by you` / `Started by Priya` / `Agent sandbox` / `Automations`.
+ * A row an agent created and someone kept reads `Started by <agent>`, or
+ * `Started by an agent` where the server does not name it to this viewer:
+ * Keep changes who keeps it, never who started it.
+ */
 export function sandboxStartedByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return "Automations";
   if (summary.burst) return AGENT_SANDBOX;
+  if (summary.createdByAgentId !== null) {
+    return startedByLine(summary.createdByAgentName ?? "an agent");
+  }
   if (summary.createdBy === null) return startedByLine("you");
   return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
 }
@@ -305,7 +325,9 @@ export function sandboxPaidByLabel(
   if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
     return null;
   }
-  return paidByLine(sandboxMemberName(summary.wakePayer, viewerUserId));
+  const payer = summary.wakePayer;
+  if (payer.displayName !== null) return paidByLine(payer.displayName);
+  return payer.userId === viewerUserId ? paidByLine("you") : null;
 }
 
 export function sandboxKeptByLabel(
@@ -327,20 +349,72 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
 
 /**
  * The row's second line: the shape, then the cost line, or for the
- * Automations row what it runs and who pays for it.
+ * Automations row what it runs and who pays for it. An agent sandbox names
+ * the agent that created it and its task in place of whose credits, where
+ * the server names them to this viewer.
  */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
 ): string {
-  if (summary.kind === "automation") {
-    return configuration.kind === "team"
-      ? `Runs ${configuration.teamName}'s long-running shells · agents can't run here · uses ${configuration.teamName}'s shared credits, not a member's allowance`
-      : "Runs your long-running shells · agents can't run here · no charge";
-  }
+  if (summary.kind === "automation") return automationsShapeLine(configuration);
   const shape = sandboxShapeLine(summary);
-  if (summary.priceMcPerHour === null) return shape;
-  return `${shape} · ${costLine(summary.priceMcPerHour.awakeMc, configurationCopy(configuration))}`;
+  const creator = agentCreatorClause(summary);
+  const teamNonPayer =
+    configuration.kind === "team" && summary.wakePayer?.userId !== viewerUserId;
+  const resting = summary.state === "suspended" || summary.state === "stopped";
+  const wakeWarning =
+    teamNonPayer && resting ? "waking it makes you the payer" : null;
+  if (summary.priceMcPerHour === null) {
+    return joinParts(shape, wakeWarning, wakeWarning === null ? null : creator);
+  }
+  const cost =
+    creator !== null || teamNonPayer
+      ? `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          configurationCopy(configuration),
+        );
+  return joinParts(shape, cost, wakeWarning, creator);
+}
+
+/** `created by Planner for Sandbox setup`, on an agent sandbox. */
+function agentCreatorClause(summary: SandboxSummary): string | null {
+  const agent = summary.createdByAgentName;
+  if (!summary.burst || agent === null) return null;
+  const task = summary.createdByTaskTitle;
+  return task === null
+    ? `created by ${agent}`
+    : `created by ${agent} for ${task}`;
+}
+
+/** What the configuration's Automations host is for, and what it costs. */
+export function automationsShapeLine(
+  configuration: SandboxPageConfiguration,
+): string {
+  return configuration.kind === "team"
+    ? `Runs ${configuration.teamName}'s long-running shells · agents can't run here · uses ${configuration.teamName}'s shared credits, not a member's allowance`
+    : "Runs your long-running shells · agents can't run here · no charge";
+}
+
+/**
+ * The Automations host at rest, or not created yet: the next shell starts it.
+ * Its badge reads Suspended, and so does the line.
+ */
+export const AUTOMATIONS_RELEASED_LINE =
+  "Suspended · files kept · the next shell starts it";
+
+/**
+ * Whether the filter keeps the Automations row of a host not created yet:
+ * it reads as released, by no one, named `Automations`.
+ */
+export function unstartedAutomationsMatches(filter: SandboxRowFilter): boolean {
+  if (filter.kind !== "all" && filter.kind !== "automation") return false;
+  if (filter.state !== "all" && filter.state !== "suspended") return false;
+  if (filter.startedBy !== "anyone") return false;
+  const term = filter.search.trim().toLowerCase();
+  return term.length === 0 || "automations".includes(term);
 }
 
 // ── The clock line ──────────────────────────────────────────────────────────
@@ -402,6 +476,21 @@ export function formatSandboxTime(at: number): string {
   });
 }
 
+/**
+ * What a chat on a destroyed sandbox says: `e2e-sbx-win2 was destroyed by you
+ * at 11:01.`, or the member's name for another member's destroy.
+ */
+export function sandboxDestroyedLine(
+  ended: {
+    readonly name: string;
+    readonly at: number;
+    readonly actor: SandboxMember;
+  },
+  viewerUserId: string | null,
+): string {
+  return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
+}
+
 /** `23:40` today, `Mon` this week, `Oct 20` before. */
 export function formatSandboxSince(at: number, now: number): string {
   if (
@@ -414,6 +503,14 @@ export function formatSandboxSince(at: number, now: number): string {
     return new Date(at).toLocaleDateString(undefined, { weekday: "short" });
   }
   return formatSandboxDate(at, false);
+}
+
+/**
+ * A report time, or `null` when it is unset: `null`, or `0`, which a read
+ * that never answered carries and which would print as an age since 1970.
+ */
+export function sandboxReportedAt(at: number | null): number | null {
+  return at === null || at <= 0 ? null : at;
 }
 
 /** `6 min ago`, `2 h ago`, `3 days ago`. */
@@ -435,8 +532,12 @@ export function sandboxTodayCost(
   cost: SandboxCost | null,
   awakeTodayMs: number,
 ): string | null {
-  if (cost !== null && cost.todayMillicredits > 0) {
+  if (cost !== null && cost.todayMillicredits >= MC_PER_CENT) {
     return `${formatSandboxDollars(cost.todayMillicredits)} today`;
+  }
+  // Below a cent posted is still accruing: `under $0.01 so far`.
+  if (cost !== null && cost.todayMillicredits > 0) {
+    return LESS_THAN_A_CENT_SO_FAR;
   }
   if (
     sandboxPublicState(summary) !== "awake" ||
@@ -493,20 +594,32 @@ export function sandboxFrozenNeedsOwnCredits(
 /** The frozen clock's sentence; the frozen date governs even a `never` period. */
 export function sandboxFrozenClock(frozenAt: number | null): string | null {
   if (frozenAt === null) return null;
-  return `Frozen sandboxes aren't destroyed on their idle schedule; this one is destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}.`;
-}
-
-/** The resting destroy clause: `destroyed Oct 31 unless used`, or kept. */
-function restingDestroyClause(summary: SandboxSummary, verb: string): string {
-  if (summary.destroyAt !== null) {
-    return `destroyed ${formatSandboxDate(summary.destroyAt, false)} unless ${verb}`;
-  }
-  return KEPT_UNTIL_YOU_DESTROY_IT;
+  return `Frozen sandboxes aren't destroyed on their idle schedule; this one is destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
 }
 
 /**
- * How long the row has been awake today: since it last woke, clipped to the
- * UTC day the cost header names.
+ * `destroyed Nov 1 at 09:49 unless used`, or `kept until you destroy it` on
+ * a row that rests forever. `null` while a period is set but its date has not
+ * arrived yet: a default drawn before the value would flash the wrong claim.
+ */
+function restingDestroyClause(
+  summary: SandboxSummary,
+  verb: string,
+): string | null {
+  if (summary.destroyAt !== null) {
+    return `destroyed ${formatSandboxDate(summary.destroyAt, true)} unless ${verb}`;
+  }
+  const period = summary.destroyAfterRestingMinutes;
+  // `0` is never, as the server spells it.
+  return period === null || period === 0 ? KEPT_UNTIL_YOU_DESTROY_IT : null;
+}
+
+/** The suspended row's promise: what a suspended sandbox does next. */
+const RESUMES_ON_YOUR_NEXT_ACTION = "resumes on your next action";
+
+/**
+ * The current wake's age within the UTC day, for a local cost estimate
+ * before the ledger answers. The day's total duration comes from the cost view.
  */
 export function sandboxAwakeTodayMs(
   summary: SandboxSummary,
@@ -523,11 +636,17 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
   return items.filter((item): item is string => item !== null).join(" · ");
 }
 
-/** The row's clock line, per state (Flow 6 › The page). */
+/**
+ * The row's clock line, per state (Flow 6 › The page). A destroy in flight
+ * reads `Destroying · pending`: the row's clock and its keep promise no longer
+ * hold.
+ */
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
   const state = sandboxPublicState(summary);
   switch (state) {
+    case "destroying":
+      return sandboxVerbPendingLine("destroy");
     case "frozen":
       return [
         sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
@@ -536,7 +655,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      return `Failed to start (${summary.failureCode ?? "unknown"}) at ${formatSandboxTime(summary.lastTransitionAt)} · Nothing is billed for a sandbox that never woke · support reference in Details`;
+      return `${sandboxFailedToStart(summary.failureCode)} at ${formatSandboxTime(summary.lastTransitionAt)} · Nothing is billed for a sandbox that never woke · support reference in Details`;
     case "creating":
       return "Starting";
     case "awake":
@@ -546,36 +665,45 @@ export function sandboxClockLine(input: SandboxClockInput): string {
     case "suspended":
     case "stopped":
       return summary.kind === "automation"
-        ? "Released · comes back on the next shell"
+        ? AUTOMATIONS_RELEASED_LINE
         : restingClockLine(input, state);
   }
 }
 
 function awakeClockLine(input: SandboxClockInput): string {
   const { summary, now } = input;
-  if (input.reachability.unreachable) {
-    const contact = input.reachability.lastContactAt;
+  if (summary.state === "awake" && input.reachability.unreachable) {
+    const contact = sandboxReportedAt(input.reachability.lastContactAt);
     return contact === null
       ? "Running, but Traycer can't connect"
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
   if (summary.guestConfigured === false) {
-    return joinParts(
-      `Awake · ${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
-      summary.failureCode,
+    return sandboxSettingsFailureLine(
+      summary.displayName,
+      configurationLabel(configurationCopy(input.configuration)),
+      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
     );
   }
-  const awakeMs = sandboxAwakeTodayMs(summary, now);
-  const today = sandboxTodayCost(summary, input.cost, awakeMs);
+  const awakeMs = input.cost?.todayAwakeMs ?? null;
+  const today = sandboxTodayCost(
+    summary,
+    input.cost,
+    sandboxAwakeTodayMs(summary, now),
+  );
+  const awake =
+    awakeMs === null
+      ? "Awake"
+      : `Awake ${formatSandboxDuration(awakeMs)} today`;
   if (summary.burst) {
     return joinParts(
-      `Awake ${formatSandboxDuration(awakeMs)}`,
+      awake,
       today,
       `destroys itself after ${idleMinutesOf(summary)} idle min · files on it are lost then`,
     );
   }
   return joinParts(
-    `Awake ${formatSandboxDuration(awakeMs)} today`,
+    awake,
     today,
     `suspends after ${idleMinutesOf(summary)} idle min`,
     input.wakeString,
@@ -593,17 +721,18 @@ function restingClockLine(
       ? joinParts(
           `Suspended since ${formatSandboxSince(since, now)}`,
           input.wakeString,
+          RESUMES_ON_YOUR_NEXT_ACTION,
           restingDestroyClause(summary, "used"),
         )
       : joinParts(
-          `Stopped since ${formatSandboxSince(since, now)}`,
+          `${stoppedLead(summary, input.viewerUserId)} since ${formatSandboxSince(since, now)}`,
           restingDestroyClause(summary, "started"),
         );
   if (configuration.kind !== "team") {
     return joinParts(
       resting,
       cost !== null && cost.todayMillicredits > 0
-        ? `${formatSandboxDollars(cost.todayMillicredits)} today`
+        ? `${formatSandboxCost(cost.todayMillicredits)} today`
         : null,
     );
   }
@@ -614,20 +743,160 @@ function restingClockLine(
   return `${resting} · Storage uses ${possessive(sandboxMemberName(payer, input.viewerUserId))} ${configuration.teamName} credits. Resuming changes the payer to you.`;
 }
 
+/**
+ * Who or what stopped the row: `Stopped by you`, `Stopped after a failed
+ * wake` for a wake rolled back to stopped, else `Stopped`.
+ */
+function stoppedLead(
+  summary: SandboxSummary,
+  viewerUserId: string | null,
+): string {
+  const operation = summary.operation;
+  if (operation === null || operation.state !== "stopped") return "Stopped";
+  if (operation.outcomeCause === "failure")
+    return "Stopped after a failed wake";
+  if (operation.actor === null) return "Stopped";
+  return `Stopped by ${sandboxMemberName(operation.actor, viewerUserId)}`;
+}
+
+/**
+ * `Failed to start (SBX-0412)`, by the failure's support reference; with no
+ * reference, `Failed to start` alone. Never the raw code.
+ */
+export function sandboxFailedToStart(failureCode: string | null): string {
+  const reference = sandboxSupportReference(failureCode);
+  return reference === null
+    ? "Failed to start"
+    : `Failed to start (${reference})`;
+}
+
+/**
+ * What "Copy support reference" copies: `SBX-0412 · <sandbox id>`, the id
+ * letting support find the row; the id alone with no reference.
+ */
+export function sandboxSupportReferenceLine(
+  failureCode: string | null,
+  sandboxId: string | null,
+): string {
+  return [sandboxSupportReference(failureCode), sandboxId]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+}
+
 function possessive(name: string): string {
   return name === "you" ? "your" : `${name}'s`;
 }
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 
+/** How a host's list splits: agents (chat and terminal agents) and terminals. */
+export interface SandboxSessionKinds {
+  readonly agents: number;
+  readonly terminals: number;
+}
+
 /**
- * What the host last reported about its running sessions: the live count, an
- * old one, or nothing. Never a zero without a report.
+ * What the host last reported about its running sessions: its list of
+ * running agents and open terminals while live, the count of an old one, or
+ * nothing. Never a zero without a report.
  */
 export type SandboxSessionReport =
-  | { readonly kind: "live"; readonly count: number; readonly busy: boolean }
+  | {
+      readonly kind: "live";
+      readonly count: number;
+      readonly busy: boolean;
+      readonly kinds: SandboxSessionKinds;
+      readonly sessions: HostStatusSessions;
+    }
   | { readonly kind: "stale"; readonly count: number; readonly at: number }
   | { readonly kind: "unknown" };
+
+/**
+ * `host.status`'s list split into agents and terminals; `null` from a host
+ * that did not report one.
+ */
+export function sandboxSessionKinds(
+  sessions: HostStatusSessions | null,
+): SandboxSessionKinds | null {
+  return sessions === null
+    ? null
+    : { agents: sessions.agents.length, terminals: sessions.terminals.length };
+}
+
+function countNoun(count: number, noun: string): string {
+  return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
+}
+
+function sessionKindNames(kinds: SandboxSessionKinds): string[] {
+  const names: string[] = [];
+  if (kinds.agents > 0) names.push(countNoun(kinds.agents, "agent"));
+  if (kinds.terminals > 0) names.push(countNoun(kinds.terminals, "terminal"));
+  return names;
+}
+
+/** The live list's split in words: `1 agent`, `2 terminals`. */
+export function sandboxSessionKindNames(
+  report: SandboxSessionReport,
+): readonly string[] {
+  return report.kind === "live" ? sessionKindNames(report.kinds) : [];
+}
+
+/**
+ * An agent's name in the list: its own, `Terminal agent` for a terminal agent
+ * not renamed, `null` for a chat whose name the host does not send.
+ */
+export function sandboxAgentSessionName(
+  agent: HostStatusAgentSession,
+): string | null {
+  if (agent.name !== null) return agent.name;
+  return agent.kind === "terminal-agent" ? "Terminal agent" : null;
+}
+
+/** One running agent or open terminal beside the sessions line. */
+export interface SandboxSessionPill {
+  readonly key: string;
+  /** Its name; `Agent` or `Terminal` for one the host sends no name for. */
+  readonly label: string;
+  /** An agent mid-turn now. */
+  readonly working: boolean;
+}
+
+/**
+ * The live list as pills, agents first: each session by its name, and one
+ * in another member's task, whose name the host does not send, by its kind
+ * alone. None without a live list.
+ */
+export function sandboxSessionPills(
+  report: SandboxSessionReport,
+): readonly SandboxSessionPill[] {
+  if (report.kind !== "live") return [];
+  return [
+    ...report.sessions.agents.map((agent) => ({
+      key: `agent:${agent.sessionId}`,
+      label: sandboxAgentSessionName(agent) ?? "Agent",
+      working: agent.working,
+    })),
+    ...report.sessions.terminals.map((terminal) => ({
+      key: `terminal:${terminal.sessionId}`,
+      label: terminal.name ?? "Terminal",
+      working: false,
+    })),
+  ];
+}
+
+/**
+ * The hover card's host-wide activity under the idle line: `1 agent and
+ * 1 terminal on it`. `null` with nothing on it or no list, since the card
+ * says nothing it does not know.
+ */
+export function sandboxHostActivityLine(
+  kinds: SandboxSessionKinds | null,
+): string | null {
+  const names = kinds === null ? [] : sessionKindNames(kinds);
+  return names.length === 0 ? null : `${names.join(" and ")} on it`;
+}
+
+const SESSIONS_UNKNOWN = "Sessions unknown · no report yet";
 
 export function sandboxSessionsLine(
   report: SandboxSessionReport,
@@ -638,10 +907,14 @@ export function sandboxSessionsLine(
       return report.count === 1
         ? "1 session running"
         : `${report.count} sessions running`;
-    case "stale":
-      return `Sessions as of ${formatSandboxAge(report.at, now)}`;
+    case "stale": {
+      const at = sandboxReportedAt(report.at);
+      return at === null
+        ? SESSIONS_UNKNOWN
+        : `Sessions as of ${formatSandboxAge(at, now)}`;
+    }
     case "unknown":
-      return "Sessions unknown · no report yet";
+      return SESSIONS_UNKNOWN;
   }
 }
 
@@ -655,6 +928,7 @@ export type SandboxRowAction =
   | "keep"
   | "retry"
   | "retry-applying"
+  | "repair-setup"
   | "resume-paying"
   | "add-credits"
   | "open-tab"
@@ -673,36 +947,37 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 /**
  * One matrix; a cell not listed is hidden. `Details` is on every row and is
  * not part of it. A row between two states offers only Details (and Destroy
- * from a stuck suspend or stop, as the card always did). An agent's sandbox
- * has no Idle settings until it is kept: it destroys itself when idle, and
- * Keep applies the configuration's defaults. Nor does a failed one offer
- * Retry: the row's create makes a kept sandbox, so retrying it would turn
- * the agent's into one that never destroys itself.
+ * from a stuck suspend or stop, as the card always did). A failed agent's
+ * sandbox offers no Retry: the row's create makes a kept sandbox, so
+ * retrying it would turn the agent's into one that never destroys itself.
  */
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
   /** A frozen row's remedy is the viewer's own top-up. */
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const actions = matrixRowActions(input);
-  if (!input.summary.burst) return actions;
-  return {
-    primary: actions.primary === "retry" ? null : actions.primary,
-    menu: actions.menu.filter((action) => action !== "idle-settings"),
-  };
+  if (!input.summary.burst || actions.primary !== "retry") return actions;
+  return { primary: null, menu: actions.menu };
 }
 
 function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const { summary } = input;
-  // No Open terminal: a landing terminal follows the composer's host, and
-  // the composer never offers the Automations host.
+  // Open terminal starts a released Automations host first, in every state
+  // but a failed start, whose primary is Retry; Rename is the only other
+  // thing a person does to it.
   if (summary.kind === "automation") {
-    return { primary: null, menu: ["rename"] };
+    return {
+      primary: summary.state === "failed" ? "retry" : "open-terminal",
+      menu: ["rename"],
+    };
   }
   const state = sandboxPublicState(summary);
   if (state === "frozen") {
@@ -736,7 +1011,7 @@ function matrixRowActions(input: {
       if (input.unreachable) {
         return { primary: "stop", menu: ["rename", "destroy"] };
       }
-      if (summary.guestConfigured === false) {
+      if (summary.guestConfigured === false || input.settingsFailed) {
         return {
           primary: "retry-applying",
           menu: ["open-terminal", "rename", "stop", "destroy"],
@@ -753,47 +1028,37 @@ function matrixRowActions(input: {
           "destroy",
         ],
       };
-    case "creating":
-      return NO_ROW_ACTIONS;
   }
+  return NO_ROW_ACTIONS;
 }
+
+const SANDBOX_ROW_ACTION_LABEL = {
+  suspend: "Suspend",
+  resume: "Resume",
+  start: "Start",
+  stop: "Stop",
+  keep: "Keep this sandbox",
+  retry: "Retry",
+  "retry-applying": "Retry applying",
+  "repair-setup": "Repair setup",
+  "add-credits": "Add credits ↗",
+  "open-tab": "Open a tab",
+  "open-terminal": "Open terminal",
+  rename: "Rename",
+  "idle-settings": "Idle settings…",
+  destroy: "Destroy",
+} satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
 
 export function sandboxRowActionLabel(
   action: SandboxRowAction,
   configuration: SandboxPageConfiguration,
 ): string {
-  switch (action) {
-    case "suspend":
-      return "Suspend";
-    case "resume":
-      return "Resume";
-    case "start":
-      return "Start";
-    case "stop":
-      return "Stop";
-    case "keep":
-      return "Keep this sandbox";
-    case "retry":
-      return "Retry";
-    case "retry-applying":
-      return "Retry applying";
-    case "resume-paying":
-      return configuration.kind === "team"
-        ? `Resume using my ${configuration.teamName} credits`
-        : "Resume using my credits";
-    case "add-credits":
-      return "Add credits ↗";
-    case "open-tab":
-      return "Open a tab";
-    case "open-terminal":
-      return "Open terminal";
-    case "rename":
-      return "Rename";
-    case "idle-settings":
-      return "Idle settings…";
-    case "destroy":
-      return "Destroy";
+  if (action === "resume-paying") {
+    return configuration.kind === "team"
+      ? `Resume using my ${configuration.teamName} credits`
+      : "Resume using my credits";
   }
+  return SANDBOX_ROW_ACTION_LABEL[action];
 }
 
 // ── Give it another <period> ────────────────────────────────────────────────
@@ -843,13 +1108,20 @@ export function sandboxGiveAnotherLabel(
 
 // ── Header ──────────────────────────────────────────────────────────────────
 
-/** `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.` */
+/**
+ * `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.`
+ * The count is of the rows shown, an Automations host not created yet
+ * (`unstartedAutomations`) included.
+ */
 export function sandboxListHeader(input: {
   readonly rows: readonly SandboxSummary[];
+  readonly unstartedAutomations: boolean;
   readonly todayMc: number | null;
   readonly todayYoursMc: number | null;
 }): string {
-  const automations = input.rows.some((row) => row.kind === "automation");
+  const automations =
+    input.unstartedAutomations ||
+    input.rows.some((row) => row.kind === "automation");
   const sandboxes = input.rows.filter(
     (row) => row.kind !== "automation",
   ).length;
@@ -858,11 +1130,11 @@ export function sandboxListHeader(input: {
     ? `${sandboxes} ${noun} and Automations`
     : `${sandboxes} ${noun}`;
   if (input.todayMc === null) return count;
-  const today = `${formatSandboxDollars(input.todayMc)} today (UTC day)`;
+  const today = `${formatSandboxCost(input.todayMc)} today (UTC day)`;
   if (input.todayYoursMc === null || input.todayYoursMc === input.todayMc) {
     return `${count} · ${today}`;
   }
-  return `${count} · ${today}, ${formatSandboxDollars(input.todayYoursMc)} of it yours`;
+  return `${count} · ${today}, ${formatSandboxCost(input.todayYoursMc)} of it yours`;
 }
 
 /** `Showing Suspended. 1 of 3.`: what a filter left of the list. */
@@ -959,10 +1231,20 @@ export function sandboxAddCreditsUrl(
     : `${base}/billing`;
 }
 
-/** `Team usage and credits ↗`: the dashboard's team usage page. */
+/** `Team usage and credits ↗`: the dashboard's team usage page, under the team's environment. */
 export function sandboxTeamUsageUrl(
   signInUrl: string,
   teamName: string,
 ): string {
-  return `${resolvePlatformBaseUrl(signInUrl)}/team/${encodeURIComponent(teamName)}/usage`;
+  return `${resolvePlatformBaseUrl(signInUrl)}/team/${encodeURIComponent(teamName)}/environment/usage`;
+}
+
+/**
+ * A row's region as the server labels it (`United States (West)`), never its
+ * id: `null` from a server that sends no label, and the surface then says no
+ * region at all.
+ */
+export function sandboxRegionLabel(summary: SandboxSummary): string | null {
+  const label = summary.regionLabel;
+  return label === null || label.length === 0 ? null : label;
 }

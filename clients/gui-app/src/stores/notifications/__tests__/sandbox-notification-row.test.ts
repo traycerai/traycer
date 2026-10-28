@@ -10,6 +10,21 @@ describe("sandboxIdOfNotificationRow", () => {
     expect(sandboxIdOfNotificationRow({ source: "cloud", sourceId })).toBe(id);
   });
 
+  it("reads a sandbox.notice row's payload before its key", () => {
+    expect(
+      sandboxIdOfNotificationRow({
+        source: "cloud",
+        sourceId: "0195a1f0-0001-7000-8000-00000000000a",
+        sandboxNotice: {
+          kind: "sandbox_notice",
+          sandboxId: "sbx_notice",
+          sandboxName: "build box",
+          notice: { kind: "lost" },
+        },
+      }),
+    ).toBe("sbx_notice");
+  });
+
   it("is null for other rows, a local row, or a key with no id segment", () => {
     expect(
       sandboxIdOfNotificationRow({ source: "cloud", sourceId: "entry-1" }),

@@ -23,6 +23,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationFilterMenu } from "@/components/notifications/notification-filter-menu";
 import { NotificationRow } from "@/components/notifications/notification-row";
+import { NotificationBotsProvider } from "@/components/notifications/notification-bots";
 import { NeedsYouItem } from "@/components/notifications/needs-you-item";
 import {
   useNeedsYouItems,
@@ -767,67 +768,69 @@ function NotificationsFeedSections(
   );
   const shouldReduceMotion = useReducedMotion() === true;
   return (
-    <LayoutGroup id="notifications-feed">
-      {props.needsYou}
-      <AnimatePresence initial={false}>
-        {isAttentionSectionVisible({
-          loadedAttentionCount: props.attentionIds.length,
-          canLoadMoreAttention: props.canLoadMoreAttention,
-        }) ? (
-          <m.section
-            key="attention-section"
-            layout={shouldReduceMotion ? false : "position"}
-            exit={shouldReduceMotion ? undefined : { height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="overflow-hidden px-4 pt-3"
-          >
-            <SectionLabel>{props.attentionLabel}</SectionLabel>
-            {/* -mx-4 breaks the row list out of the section's inset so each
+    <NotificationBotsProvider>
+      <LayoutGroup id="notifications-feed">
+        {props.needsYou}
+        <AnimatePresence initial={false}>
+          {isAttentionSectionVisible({
+            loadedAttentionCount: props.attentionIds.length,
+            canLoadMoreAttention: props.canLoadMoreAttention,
+          }) ? (
+            <m.section
+              key="attention-section"
+              layout={shouldReduceMotion ? false : "position"}
+              exit={shouldReduceMotion ? undefined : { height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="overflow-hidden px-4 pt-3"
+            >
+              <SectionLabel>{props.attentionLabel}</SectionLabel>
+              {/* -mx-4 breaks the row list out of the section's inset so each
             row's bottom divider reaches the popover's true edges; rows
             restore the same visual inset as their own content padding (see
             notification-row.tsx). */}
-            <ul className="-mx-4 flex flex-col">
-              <AnimatePresence initial={false}>
-                {props.attentionIds.map((id) => (
-                  <NotificationRow
-                    key={id}
-                    feedId={id}
-                    highlightRelocation={false}
-                    onActivate={props.onActivate}
-                    onAcknowledge={props.onAcknowledge}
-                  />
-                ))}
-              </AnimatePresence>
-            </ul>
-            {props.canLoadMoreAttention ? (
-              <LoadMoreButton
-                label="Load more attention"
-                isLoading={props.isLoadingMoreAttention}
-                hasError={props.hasAttentionLoadError}
-                onClick={props.onLoadMoreAttention}
-                testId="notifications-load-more-attention"
-              />
-            ) : null}
-          </m.section>
-        ) : null}
-      </AnimatePresence>
+              <ul className="-mx-4 flex flex-col">
+                <AnimatePresence initial={false}>
+                  {props.attentionIds.map((id) => (
+                    <NotificationRow
+                      key={id}
+                      feedId={id}
+                      highlightRelocation={false}
+                      onActivate={props.onActivate}
+                      onAcknowledge={props.onAcknowledge}
+                    />
+                  ))}
+                </AnimatePresence>
+              </ul>
+              {props.canLoadMoreAttention ? (
+                <LoadMoreButton
+                  label="Load more attention"
+                  isLoading={props.isLoadingMoreAttention}
+                  hasError={props.hasAttentionLoadError}
+                  onClick={props.onLoadMoreAttention}
+                  testId="notifications-load-more-attention"
+                />
+              ) : null}
+            </m.section>
+          ) : null}
+        </AnimatePresence>
 
-      <m.section
-        layout={shouldReduceMotion ? false : "position"}
-        transition={{ layout: { duration: 0.24, ease: "easeOut" } }}
-        className="px-4 pt-3 pb-2"
-      >
-        <SectionLabel>Recent activity</SectionLabel>
-        <RecentSectionBody
-          recentIds={props.recentIds}
-          relocatedIds={relocatedIds}
-          isFilteredEmpty={props.isRecentFilteredEmpty}
-          onActivate={props.onActivate}
-          onAcknowledge={props.onAcknowledge}
-          onResetFilters={props.onResetFilters}
-        />
-      </m.section>
-    </LayoutGroup>
+        <m.section
+          layout={shouldReduceMotion ? false : "position"}
+          transition={{ layout: { duration: 0.24, ease: "easeOut" } }}
+          className="px-4 pt-3 pb-2"
+        >
+          <SectionLabel>Recent activity</SectionLabel>
+          <RecentSectionBody
+            recentIds={props.recentIds}
+            relocatedIds={relocatedIds}
+            isFilteredEmpty={props.isRecentFilteredEmpty}
+            onActivate={props.onActivate}
+            onAcknowledge={props.onAcknowledge}
+            onResetFilters={props.onResetFilters}
+          />
+        </m.section>
+      </LayoutGroup>
+    </NotificationBotsProvider>
   );
 }
 

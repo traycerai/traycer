@@ -419,6 +419,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The visible browser pane refreshes its discovery index every 30 seconds.
+  "browser.catalog.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
   // Settings > Browser's saved-logins list. A bounded read that can coalesce,
   // and no cadence: the list changes only when the person on this screen
   // clears a row or a site writes a cookie, and the group refetches on the
@@ -1021,8 +1026,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A repair re-applies the guest's files and refetches its configuration; two
-  // presses must run in order, never coalesce into one answer.
+  // Guest repair (1.0) and combined settings retry (1.1) mutate the sandbox;
+  // preserve separate presses in order, never coalesce unrelated attempts.
   "host.sandbox.repairGuestConfiguration": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1169,6 +1174,7 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.mentionTickets": { ...LATEST_SCHEDULING, poll: null },
   "epic.mentionStories": { ...LATEST_SCHEDULING, poll: null },
   "epic.mentionReviews": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionArtifacts": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCollaborators": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 5 * MINUTE_MS },
@@ -1497,10 +1503,12 @@ export const HOST_METHOD_POLL_TABLE = {
   // one read per open, picked up by reopening.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
-  // The task's host list. Not polled: it changes when a host first owns a
-  // chat the viewer can read, and a reopened panel or a focus refetch reads
-  // it again.
-  "epic.listTaskHosts": { ...LATEST_SCHEDULING, poll: null },
+  // A sandbox's permanent end remains here after it leaves the live list.
+  // A mounted task refreshes that fact even when no host can notify it.
+  "epic.listTaskHosts": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
@@ -1631,6 +1639,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "bot.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.list": { ...LATEST_SCHEDULING, poll: null },
   "bot.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.updateRunSettings": {
     mode: "fifo",
@@ -2505,6 +2519,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.seats": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },

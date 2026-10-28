@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
@@ -166,5 +169,80 @@ describe("useHostNegotiatedMethodVersions", () => {
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
+  });
+});
+
+describe("useHostNegotiatedMethodVersion on a build with a server pool", () => {
+  // The tier plan is frozen per process from the build; this file's build has a pool.
+  beforeAll(() => {
+    settleProcessHostRpcTierPlan(poolEntry);
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetNegotiatedManifests();
+  });
+
+  function clientOnLocalHost(): HostClient<HostRpcRegistry> {
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => {} },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {},
+      }),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    });
+    return spine.createRequester(mockLocalHostEntry);
+  }
+
+  it("reads a pool-only method from the pool's manifest, not the client host's", () => {
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "environment.configuration.skills.list": { major: 1, minor: 1 },
+    });
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "environment.configuration.skills.list": { major: 1, minor: 0 },
+    });
+
+    const client = clientOnLocalHost();
+    const { result } = renderHook(() =>
+      useHostNegotiatedMethodVersion(
+        client,
+        "environment.configuration.skills.list",
+      ),
+    );
+    expect(result.current).toEqual({ major: 1, minor: 1 });
+  });
+
+  it("reads false when the pool lacks a pool-only method the client host has", () => {
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.listChats": { major: 1, minor: 0 },
+    });
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "environment.configuration.skills.list": { major: 1, minor: 0 },
+    });
+
+    const client = clientOnLocalHost();
+    const { result } = renderHook(() =>
+      useHostNegotiatedMethodVersion(
+        client,
+        "environment.configuration.skills.list",
+      ),
+    );
+    expect(result.current).toBe(false);
+  });
+
+  it("still reads a host method from the client host's manifest", () => {
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "epic.createChat": { major: 1, minor: 0 },
+    });
+
+    const client = clientOnLocalHost();
+    const { result } = renderHook(() =>
+      useHostNegotiatedMethodVersion(client, "epic.createChat"),
+    );
+    expect(result.current).toEqual({ major: 1, minor: 0 });
   });
 });

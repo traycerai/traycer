@@ -20,15 +20,17 @@ import {
 import { useEnvironmentBrowserAccessQuery } from "@/hooks/environment/team/use-browser-access-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
 /**
- * Permissions ▸ Browser agent access: whether agents get the in-app browser as
- * a tool. A region of Permissions rather than a row on Browser, because
- * Browser is this app's own browsing and stays with the window, while this is
- * the configuration's.
+ * Permissions ▸ Browser: whether agents get the in-app browser as a tool. A
+ * tab of Permissions (a region below the policy on a team, whose page has no
+ * tabs) rather than a row on the Browser page, because that page is this
+ * app's own browsing and stays with the window, while this is the
+ * configuration's.
  *
  * Read through the host binding `EnvironmentHostBinding` re-provides around
  * it: a Local row's computer, else the window's own host, which
@@ -136,11 +138,12 @@ function TeamBrowserAccessRow(): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanAdministerConfiguration();
   const query = useEnvironmentBrowserAccessQuery(false);
+  const read = useBoundedRead(query);
   const { put } = useConfigurationItemMutations();
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
   let control: ReactNode = null;
-  if (query.isPending)
+  if (read.pending)
     control = <span className="text-ui-xs text-muted-foreground">Loading</span>;
   else if (query.data !== undefined) {
     control = canEdit ? (
@@ -172,10 +175,10 @@ function TeamBrowserAccessRow(): ReactNode {
       <SettingsRow
         row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
         status={
-          query.isError ? (
+          read.failed ? (
             <ConfigurationReadFailed
               page="browser agent access"
-              onRetry={() => void query.refetch()}
+              onRetry={read.retry}
             />
           ) : (
             "Running agents pick this up on their next turn."

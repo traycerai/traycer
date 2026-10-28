@@ -116,13 +116,13 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(await service.getSandboxCosts()).toEqual(unavailable);
     expect(await service.getSandboxCatalogue()).toEqual(unavailable);
     expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
-    expect(await service.destroySandbox("sbx_1")).toEqual(unavailable);
+    expect(await service.destroySandbox("sbx_1", false)).toEqual(unavailable);
     expect(await service.patchSandbox("sbx_1", PATCH_REQUEST)).toEqual(
       unavailable,
     );
     expect(await service.keepSandbox("sbx_1")).toEqual(unavailable);
     expect(
-      await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
+      await service.runSandboxVerb("sbx_1", "resume", null, VERB_TIMEOUT_MS),
     ).toEqual(unavailable);
     expect(await service.getSandboxAutomation(null)).toEqual(unavailable);
     expect(await service.openSandboxAutomation(null)).toEqual(unavailable);
@@ -150,7 +150,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
       kind: "unavailable",
       reason: REASON,
     });
-    await expect(service.destroySandbox("sbx_1")).resolves.toEqual({
+    await expect(service.destroySandbox("sbx_1", false)).resolves.toEqual({
       kind: "unavailable",
       reason: REASON,
     });
@@ -165,14 +165,14 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
       kind: "unauthorized",
     });
     expect(
-      await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
+      await service.runSandboxVerb("sbx_1", "resume", null, VERB_TIMEOUT_MS),
     ).toEqual({
       kind: "unauthorized",
     });
     await expect(service.createSandbox(CREATE_REQUEST)).rejects.toThrow(
       "Sign in to create a sandbox.",
     );
-    await expect(service.destroySandbox("sbx_1")).rejects.toThrow(
+    await expect(service.destroySandbox("sbx_1", false)).rejects.toThrow(
       "Sign in to destroy this sandbox.",
     );
     await expect(service.patchSandbox("sbx_1", PATCH_REQUEST)).rejects.toThrow(

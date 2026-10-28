@@ -251,6 +251,12 @@ export function useRpcShellConfigController(props: {
         { ...entry, executableWriteGrant: null },
         callbacks,
       ),
+    setEnvAsync: async (entry) => {
+      await envSetMutation.mutateAsync({
+        ...entry,
+        executableWriteGrant: null,
+      });
+    },
     deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
     renameEnv: (rename, callbacks) =>
       envRenameMutation.mutate(rename, callbacks),

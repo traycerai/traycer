@@ -1,12 +1,21 @@
+import { FrameFullscreenContext } from "./frame-comment-surface-context";
 import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
-import { useCallback, useRef, useState, type Ref } from "react";
 import {
-  MoreHorizontal,
-  CheckCircle2,
-  RotateCcw,
-  Trash2,
-  X,
-} from "lucide-react";
+  useCallback,
+  useContext,
+  useSyncExternalStore,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
+import {
+  CanvasCommentDraftContext,
+  EMPTY_CANVAS_THREAD_DRAFT,
+  submitCanvasCommentDraft,
+  type SharedCommentComposerDraft,
+  type CanvasCommentDraftStore,
+} from "./canvas-comment-drafts";
+import { MoreHorizontal, CheckCircle2, RotateCcw, Trash2 } from "lucide-react";
 import { type JsonContent } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -35,7 +44,63 @@ import {
 } from "./comment-composer";
 import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import "@/lib/composer/tiptap-json-content";
+
+function sharedComposerDraft(
+  store: CanvasCommentDraftStore | null,
+  threadId: string,
+  commentId: string | null,
+): SharedCommentComposerDraft | undefined {
+  if (store === null) return undefined;
+  const draft = store.getState().threads[threadId] ?? EMPTY_CANVAS_THREAD_DRAFT;
+  const edit = draft.edit;
+  if (commentId !== null && edit?.commentId !== commentId) return undefined;
+  return {
+    content: commentId === null ? draft.reply : (edit?.content ?? null),
+    dirty: commentId === null ? draft.reply !== null : edit?.dirty === true,
+    pending: draft.pending,
+    onChange: (content, empty) => {
+      const current =
+        store.getState().threads[threadId] ?? EMPTY_CANVAS_THREAD_DRAFT;
+      if (current.pending) return;
+      if (commentId === null)
+        store
+          .getState()
+          .update(threadId, { ...current, reply: empty ? null : content });
+      else if (current.edit?.commentId === commentId)
+        store.getState().update(threadId, {
+          ...current,
+          edit: { commentId, content, dirty: true },
+        });
+    },
+  };
+}
+
+function useCommentDraft(
+  threadId: string,
+  replySaving: boolean,
+  editSaving: boolean,
+) {
+  const sharedStore = useContext(CanvasCommentDraftContext);
+  const shared = useSyncExternalStore(
+    (listener) => sharedStore?.subscribe(listener) ?? (() => undefined),
+    () =>
+      sharedStore?.getState().threads[threadId] ?? EMPTY_CANVAS_THREAD_DRAFT,
+  );
+  const [localEditingComment, setEditingComment] = useState<{
+    readonly commentId: string;
+  } | null>(null);
+  const editingComment =
+    sharedStore === null ? localEditingComment : shared.edit;
+  return {
+    sharedStore,
+    shared,
+    editingComment,
+    setEditingComment,
+    replyPending: replySaving || shared.pending,
+    editPending: editSaving || shared.pending,
+  };
+}
 
 export interface CommentThreadCardProps {
   readonly epicId: string;
@@ -57,15 +122,22 @@ export interface CommentThreadCardProps {
   readonly hasAnchor: boolean;
   readonly onExpandedChange: (next: boolean) => void;
   readonly onActivateAnchor: () => void;
-  readonly framePresentation?: {
-    readonly number: number;
-    readonly label: string;
-    readonly onClose: () => void;
-  };
+}
+
+/** What the card quotes: canvas-wide anchors carry a label, not page text. */
+function threadQuotedText(
+  artifactType: CommentArtifactKind,
+  thread: CommentThreadWire,
+): string {
+  if (artifactType !== "canvas") return thread.data.quotedText ?? "";
+  if (thread.data.anchorKind === "artifact") return "Whole canvas";
+  if (thread.data.anchorKind === "canvas-point")
+    return thread.data.label ?? "Pinned on canvas";
+  return thread.data.quotedText ?? "";
 }
 
 /**
- * Thread body and actions shared by the sidebar and frame popovers.
+ * Thread body and actions for the comments sidebar.
  *
  * Layout:
  *   - quoted snapshot (italic, line-clamped) - frozen at thread creation
@@ -99,9 +171,18 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
   const deleteThreadMutation = useDeleteCommentThreadForClient(hostClient);
   const setResolvedMutation = useSetCommentThreadResolvedForClient(hostClient);
 
-  const [editingComment, setEditingComment] = useState<{
-    readonly commentId: string;
-  } | null>(null);
+  const {
+    sharedStore,
+    shared,
+    editingComment,
+    setEditingComment,
+    replyPending,
+    editPending,
+  } = useCommentDraft(
+    thread.threadId,
+    replyMutation.isPending,
+    editMutation.isPending,
+  );
   const replyHandleRef = useRef<CommentComposerHandle | null>(null);
   const editHandleRef = useRef<CommentComposerHandle | null>(null);
 
@@ -112,19 +193,33 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
   const handleReplySubmit = useCallback(
     async (content: JsonContent) => {
       const submittedComposer = replyHandleRef.current;
-      await replyMutation.mutateAsync({
-        epicId,
-        artifactType,
-        artifactId,
-        threadId: thread.threadId,
-        content,
-      });
-      if (replyHandleRef.current === submittedComposer) {
+      const saved = await submitCanvasCommentDraft(
+        sharedStore,
+        thread.threadId,
+        "reply",
+        async () => {
+          await replyMutation.mutateAsync({
+            epicId,
+            artifactType,
+            artifactId,
+            threadId: thread.threadId,
+            content,
+          });
+        },
+      );
+      if (saved && replyHandleRef.current === submittedComposer) {
         submittedComposer?.reset();
         submittedComposer?.focus();
       }
     },
-    [replyMutation, epicId, artifactType, artifactId, thread.threadId],
+    [
+      replyMutation,
+      epicId,
+      artifactType,
+      artifactId,
+      thread.threadId,
+      sharedStore,
+    ],
   );
 
   const handleToggleResolved = useCallback(() => {
@@ -162,10 +257,25 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
     onExpandedChange(false);
   }, [isExpanded, onExpandedChange, onActivateAnchor]);
 
-  const quotedText = thread.data.quotedText ?? "";
+  const quotedText = threadQuotedText(artifactType, thread);
+
+  // A pin click (or any other activation) expands the card from outside the
+  // sidebar's own scroll, so the list scrolls to the thread it just opened.
+  // Starts false so a card that MOUNTS expanded scrolls too - a pin tap that
+  // opens a closed panel selects the thread before its card exists.
+  const wasExpanded = useRef(false);
+  const scrollOnExpand = useCallback(
+    (node: HTMLElement | null): void => {
+      const appeared = isExpanded && !wasExpanded.current;
+      wasExpanded.current = isExpanded;
+      if (appeared) node?.scrollIntoView({ block: "nearest" });
+    },
+    [isExpanded],
+  );
 
   return (
     <article
+      ref={scrollOnExpand}
       data-slot="comment-thread-card"
       data-resolved={thread.resolved ? "true" : undefined}
       data-expanded={isExpanded ? "true" : undefined}
@@ -175,55 +285,42 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
         isExpanded ? "ring-1 ring-ring/40" : "hover:bg-foreground/5",
       )}
     >
-      {props.framePresentation === undefined ? (
-        <button
-          type="button"
-          // The card's expand/collapse control. Named as a slot because it is not
-          // a `ui/button` and the coarse-pointer hit-slop rules address controls
-          // by slot; its own box is a single line of meta text on a thread with no
-          // quoted snapshot, well under the 44px touch target.
-          data-slot="comment-thread-toggle"
-          onClick={handleHeaderClick}
-          aria-expanded={isExpanded}
-          aria-controls={`comment-thread-body-${thread.threadId}`}
-          className="flex w-full items-start gap-2 text-left"
-        >
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            {quotedText.length > 0 ? (
-              <span className="line-clamp-3 border-l-2 border-muted-foreground/40 pl-2 text-ui-xs text-muted-foreground italic">
-                {quotedText}
-              </span>
+      <button
+        type="button"
+        // The card's expand/collapse control. Named as a slot because it is not
+        // a `ui/button` and the coarse-pointer hit-slop rules address controls
+        // by slot; its own box is a single line of meta text on a thread with no
+        // quoted snapshot, well under the 44px touch target.
+        data-slot="comment-thread-toggle"
+        onClick={handleHeaderClick}
+        aria-expanded={isExpanded}
+        aria-controls={`comment-thread-body-${thread.threadId}`}
+        className="flex w-full items-start gap-2 text-left"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          {quotedText.length > 0 ? (
+            <span className="line-clamp-3 border-l-2 border-muted-foreground/40 pl-2 text-ui-xs text-muted-foreground italic">
+              {quotedText}
+            </span>
+          ) : null}
+          <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+            <span>
+              {thread.comments.length} comment
+              {thread.comments.length === 1 ? "" : "s"}
+            </span>
+            {thread.resolved ? (
+              <Badge variant="secondary" className="h-4" size="sm">
+                Resolved
+              </Badge>
             ) : null}
-            <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-              <span>
-                {thread.comments.length} comment
-                {thread.comments.length === 1 ? "" : "s"}
-              </span>
-              {thread.resolved ? (
-                <Badge variant="secondary" className="h-4" size="sm">
-                  Resolved
-                </Badge>
-              ) : null}
-              {hasAnchor ? null : (
-                <Badge variant="outline" className="h-4" size="sm">
-                  Anchor missing
-                </Badge>
-              )}
-            </div>
+            {hasAnchor ? null : (
+              <Badge variant="outline" className="h-4" size="sm">
+                Anchor missing
+              </Badge>
+            )}
           </div>
-        </button>
-      ) : (
-        <FrameThreadHeader
-          presentation={props.framePresentation}
-          hasAnchor={hasAnchor}
-          canManage={canManageThread}
-          resolved={thread.resolved}
-          resolving={setResolvedMutation.isPending}
-          deleting={deleteThreadMutation.isPending}
-          onResolve={handleToggleResolved}
-          onDelete={handleDeleteThread}
-        />
-      )}
+        </div>
+      </button>
 
       {isExpanded ? (
         <div
@@ -239,23 +336,60 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
                 hostClient={hostClient}
                 currentUserId={currentUserId}
                 isEditing={editingComment?.commentId === comment.commentId}
-                isPending={editMutation.isPending}
+                isPending={editPending}
                 editComposerRef={editHandleRef}
-                onStartEdit={() =>
-                  setEditingComment({ commentId: comment.commentId })
-                }
-                onCancelEdit={() => setEditingComment(null)}
+                sharedDraft={sharedComposerDraft(
+                  sharedStore,
+                  thread.threadId,
+                  comment.commentId,
+                )}
+                onStartEdit={() => {
+                  if (sharedStore === null)
+                    setEditingComment({ commentId: comment.commentId });
+                  // Choosing Edit again while this comment's edit is already
+                  // open must not reseed it: that would discard the typing.
+                  else if (
+                    !shared.pending &&
+                    shared.edit?.commentId !== comment.commentId
+                  )
+                    sharedStore.getState().update(thread.threadId, {
+                      ...shared,
+                      edit: {
+                        commentId: comment.commentId,
+                        content: comment.content,
+                        dirty: false,
+                      },
+                    });
+                }}
+                onCancelEdit={() => {
+                  if (sharedStore === null) setEditingComment(null);
+                  else if (!shared.pending)
+                    sharedStore
+                      .getState()
+                      .update(thread.threadId, { ...shared, edit: null });
+                }}
                 onSubmitEdit={async (next) => {
                   const submittedComposer = editHandleRef.current;
-                  await editMutation.mutateAsync({
-                    epicId,
-                    artifactType,
-                    artifactId,
-                    threadId: thread.threadId,
-                    commentId: comment.commentId,
-                    content: next,
-                  });
-                  if (editHandleRef.current === submittedComposer) {
+                  const saved = await submitCanvasCommentDraft(
+                    sharedStore,
+                    thread.threadId,
+                    "edit",
+                    async () => {
+                      await editMutation.mutateAsync({
+                        epicId,
+                        artifactType,
+                        artifactId,
+                        threadId: thread.threadId,
+                        commentId: comment.commentId,
+                        content: next,
+                      });
+                    },
+                  );
+                  if (
+                    saved &&
+                    sharedStore === null &&
+                    editHandleRef.current === submittedComposer
+                  ) {
                     setEditingComment((current) =>
                       current === editingComment ? null : current,
                     );
@@ -279,25 +413,28 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
             epicId={epicId}
             hostClient={hostClient}
             initialContent={null}
+            sharedDraft={sharedComposerDraft(
+              sharedStore,
+              thread.threadId,
+              null,
+            )}
             placeholder="Reply…"
             focusOnMount={false}
             submitLabel="Reply"
-            isPending={replyMutation.isPending}
+            isPending={replyPending}
             onSubmit={handleReplySubmit}
             onCancel={null}
             className={undefined}
           />
 
-          {props.framePresentation === undefined ? (
-            <CommentThreadFooter
-              canManage={canManageThread}
-              resolved={thread.resolved}
-              resolving={setResolvedMutation.isPending}
-              deleting={deleteThreadMutation.isPending}
-              onResolve={handleToggleResolved}
-              onDelete={handleDeleteThread}
-            />
-          ) : null}
+          <CommentThreadFooter
+            canManage={canManageThread}
+            resolved={thread.resolved}
+            resolving={setResolvedMutation.isPending}
+            deleting={deleteThreadMutation.isPending}
+            onResolve={handleToggleResolved}
+            onDelete={handleDeleteThread}
+          />
         </div>
       ) : null}
     </article>
@@ -351,132 +488,6 @@ function CommentThreadFooter(props: ThreadActionsProps) {
   );
 }
 
-function FrameThreadHeader(
-  props: {
-    readonly presentation: NonNullable<
-      CommentThreadCardProps["framePresentation"]
-    >;
-    readonly hasAnchor: boolean;
-  } & ThreadActionsProps,
-) {
-  return (
-    <>
-      <header className="flex items-center gap-2">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-ui-xs font-medium text-primary-foreground">
-          {props.presentation.number}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-          {props.presentation.label}
-        </span>
-        {props.canManage ? (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={props.resolved ? "Reopen thread" : "Resolve thread"}
-              disabled={props.resolving}
-              onClick={props.onResolve}
-            >
-              {props.resolved ? <RotateCcw /> : <CheckCircle2 />}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Thread actions"
-                >
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  variant="destructive"
-                  disabled={props.deleting}
-                  onSelect={props.onDelete}
-                >
-                  <Trash2 />
-                  Delete thread
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Close thread"
-          onClick={props.presentation.onClose}
-        >
-          <X />
-        </Button>
-      </header>
-      {props.hasAnchor ? null : (
-        <Badge variant="outline" size="sm">
-          Anchor missing
-        </Badge>
-      )}
-    </>
-  );
-}
-
-export function FrameCommentSummary(props: {
-  readonly thread: CommentThreadWire;
-  readonly number: number;
-  readonly label: string;
-  readonly hasAnchor: boolean;
-  readonly onActivate: () => void;
-}) {
-  const first = props.thread.comments.at(0);
-  const author =
-    first?.author.fallbackHandle ?? first?.author.userId ?? "Unknown author";
-  const replies = Math.max(0, props.thread.comments.length - 1);
-  const createdAt = first?.createdAt ?? props.thread.createdAt;
-  return (
-    <button
-      type="button"
-      data-slot="frame-comment-summary"
-      aria-label={`Open comment ${props.number}`}
-      onClick={props.onActivate}
-      className="flex w-full flex-col gap-2 rounded-md border border-border bg-card p-3 text-left hover:bg-foreground/5"
-    >
-      <span className="flex w-full items-center gap-2">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-ui-xs font-medium text-primary-foreground">
-          {props.number}
-        </span>
-        <Avatar size="sm">
-          <AvatarFallback>{deriveInitials(author)}</AvatarFallback>
-        </Avatar>
-        <span className="min-w-0 flex-1 truncate text-ui-sm font-medium">
-          {author}
-        </span>
-        <time
-          dateTime={new Date(createdAt).toISOString()}
-          className="shrink-0 text-ui-xs text-muted-foreground"
-        >
-          {formatRelativeTime(createdAt)}
-        </time>
-      </span>
-      <span className="line-clamp-2 text-ui-sm">
-        {first === undefined
-          ? "Comment deleted"
-          : extractPlainTextFromComposerJSONContent(first.content)}
-      </span>
-      <span className="w-full truncate text-ui-xs text-muted-foreground">
-        {props.label}
-      </span>
-      <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-        {replies} {replies === 1 ? "reply" : "replies"}
-        {props.hasAnchor ? null : (
-          <Badge variant="outline" size="sm">
-            Anchor missing
-          </Badge>
-        )}
-      </span>
-    </button>
-  );
-}
-
 type CommentEntryData = CommentThreadWire["comments"][number];
 
 interface CommentEntryProps {
@@ -487,6 +498,7 @@ interface CommentEntryProps {
   readonly isEditing: boolean;
   readonly isPending: boolean;
   readonly editComposerRef: Ref<CommentComposerHandle>;
+  readonly sharedDraft: SharedCommentComposerDraft | undefined;
   readonly onStartEdit: () => void;
   readonly onCancelEdit: () => void;
   readonly onSubmitEdit: (content: JsonContent) => Promise<void>;
@@ -494,6 +506,7 @@ interface CommentEntryProps {
 }
 
 function CommentEntry(props: CommentEntryProps) {
+  const fullscreenContainer = useContext(FrameFullscreenContext);
   const {
     comment,
     epicId,
@@ -529,7 +542,7 @@ function CommentEntry(props: CommentEntryProps) {
           <span className="text-ui-xs text-muted-foreground">(edited)</span>
         ) : null}
         {isCommentAuthor ? (
-          <DropdownMenu>
+          <DropdownMenu modal={fullscreenContainer === null}>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -540,7 +553,7 @@ function CommentEntry(props: CommentEntryProps) {
                 <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" container={fullscreenContainer}>
               <DropdownMenuItem onSelect={onStartEdit}>Edit</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={onDelete}>
@@ -556,8 +569,9 @@ function CommentEntry(props: CommentEntryProps) {
           epicId={epicId}
           hostClient={hostClient}
           initialContent={comment.content}
+          sharedDraft={props.sharedDraft}
           placeholder="Edit comment…"
-          focusOnMount
+          focusOnMount={props.sharedDraft === undefined}
           submitLabel="Save"
           isPending={isPending}
           onSubmit={onSubmitEdit}

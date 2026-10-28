@@ -347,8 +347,9 @@ export const DEFAULT_LANDING_PANEL_LAYOUT: LandingPanelLayout = {
 };
 
 /**
- * The unpicked "New tab" row: a real strip entry the user can activate, close
- * or switch away from, whose body is the Terminal / Browser chooser.
+ * A reserved strip row the user can activate, close or switch away from.
+ * It holds the Terminal / Browser chooser, or an Automations shell waiting
+ * for its host. That shell fulfills this same row when it attaches.
  *
  * It lives outside `tabs` and outside persistence. Outside `tabs` because it
  * names no host resource - every consumer of a tab ref would have to defend
@@ -361,6 +362,20 @@ export const DEFAULT_LANDING_PANEL_LAYOUT: LandingPanelLayout = {
 export interface LandingPanelPlaceholder {
   readonly instanceId: string;
   readonly index: number;
+  /** An explicitly requested shell owns this row until its host can attach. */
+  readonly automation?: AutomationTerminalRequest;
+}
+
+export interface AutomationTerminalRequest {
+  readonly userId: string | null;
+  readonly terminalId: string;
+  readonly startedAt: number;
+  readonly existing: {
+    readonly hostId: string;
+    readonly sandboxId: string;
+    readonly awake: boolean;
+  } | null;
+  readonly teamEnvironmentId: string | null;
 }
 
 /**
@@ -476,6 +491,11 @@ export interface LandingPanelStoreState {
   /** Drops the request bound to a start page that unmounted unserved. */
   readonly dropTerminalRequestForPage: (landingPageId: string) => void;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
+  /** Reserves and reveals one Automations pane before any network request. */
+  readonly openAutomationTerminal: (
+    request: AutomationTerminalRequest,
+    instanceId: string,
+  ) => boolean;
   /**
    * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and
    * with `everyPage` on EVERY start page as well: each page that has recorded
@@ -810,6 +830,38 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
             panelOpen,
           }),
         ),
+      openAutomationTerminal: (request, instanceId) => {
+        if (get().placeholder?.automation !== undefined) return false;
+        set((state) => {
+          const opened = openEveryPageLayout(state);
+          const layoutsByLandingPageId: Partial<
+            Record<string, LandingPanelLayout>
+          > = {};
+          for (const [pageId, layout] of Object.entries(
+            opened.layoutsByLandingPageId,
+          )) {
+            if (layout !== undefined)
+              layoutsByLandingPageId[pageId] = { ...layout, maximized: true };
+          }
+          return {
+            layoutsByLandingPageId,
+            fallbackLayout: {
+              ...(opened.fallbackLayout ?? DEFAULT_LANDING_PANEL_LAYOUT),
+              maximized: true,
+            },
+            placeholder: {
+              instanceId,
+              index: state.tabs.length,
+              automation: request,
+            },
+            activeInstanceId: instanceId,
+            selectionRevision: state.selectionRevision + 1,
+            panelReveal: instanceId,
+            terminalRequest: null,
+          };
+        });
+        return true;
+      },
       revealPanel: ({ landingPageIds, everyPage, instanceId }) =>
         set((state) => {
           const opened = everyPage ? openEveryPageLayout(state) : {};
@@ -1574,7 +1626,7 @@ export function hostAcknowledgedTab(
   tab: LandingTerminalTabRef,
   terminal: PlainTerminalProjection,
 ): LandingTerminalTabRef {
-  const view = selectPlainTerminalViewModel(terminal);
+  const view = selectPlainTerminalViewModel(terminal, null);
   return {
     ...tab,
     sessionId: terminal.record.terminalId,

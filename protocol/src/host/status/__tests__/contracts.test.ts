@@ -10,6 +10,7 @@ import {
   hostStatusUpgradeV15ToV16,
   hostStatusUpgradeV16ToV17,
   hostStatusUpgradeV17ToV18,
+  hostStatusUpgradeV18ToV19,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
@@ -19,6 +20,7 @@ import {
   hostStatusV16,
   hostStatusV17,
   hostStatusV18,
+  hostStatusV19,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -385,10 +387,10 @@ describe("host.status registry membership", () => {
     expect(hostStatusV18.requestSchema).toBe(hostStatusV17.requestSchema);
   });
 
-  it("installs @1.0 through @1.8 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.9 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(8);
+    expect(entry[1].latestMinor).toBe(9);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -418,6 +420,10 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[8].contract).toBe(hostStatusV18);
     expect(entry[1].versions[8].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV17ToV18,
+    );
+    expect(entry[1].versions[9].contract).toBe(hostStatusV19);
+    expect(entry[1].versions[9].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV18ToV19,
     );
   });
 });

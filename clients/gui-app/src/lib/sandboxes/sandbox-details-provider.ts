@@ -1,6 +1,7 @@
 import type {
   SandboxCost,
   SandboxCostSegment,
+  SandboxHistoryEntry,
   SandboxListResponse,
   SandboxSummary,
   UserSandboxCost,
@@ -19,15 +20,19 @@ import {
   SANDBOX_PUBLIC_STATE_LABEL,
   formatSandboxAge,
   formatSandboxDate,
+  sandboxFailedToStart,
   sandboxMemberName,
   sandboxPeriodLabel,
   sandboxPublicState,
+  sandboxRegionLabel,
+  sandboxReportedAt,
   sandboxShapeLine,
+  sandboxSupportReferenceLine,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   KEPT_UNTIL_YOU_DESTROY_IT,
   SANDBOX_LIST_FAILED,
-  formatSandboxDollars,
+  formatSandboxCost,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -108,15 +113,29 @@ function creatorName(input: SandboxDetailsInput): string | null {
   return input.personal ? "you" : null;
 }
 
+/** What starts Automations: its row is made by the first shell opened on it. */
+const AUTOMATIONS_STARTER = "the first shell";
+
+const NOTHING_BILLED_NEVER_WOKE =
+  "Nothing is billed for a sandbox that never woke";
+
 function starter(input: SandboxDetailsInput): string | null {
-  if (input.summary.kind === "automation") return "Automations";
+  if (input.summary.kind === "automation") return AUTOMATIONS_STARTER;
   if (input.summary.burst) return "An agent";
   return creatorName(input);
 }
 
-/** Idle, then Resting; an agent's sandbox never rests, it destroys itself. */
+/**
+ * Idle, then Resting; an agent's sandbox never rests, it destroys itself,
+ * and Automations never rests either: it is released, its files kept.
+ */
 function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
+  if (summary.kind === "automation") {
+    return [
+      { label: "Idle", value: `released after ${idle} idle min · files kept` },
+    ];
+  }
   if (summary.burst) {
     return [{ label: "Idle", value: `destroys itself after ${idle} idle min` }];
   }
@@ -135,6 +154,7 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
 
 function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   const { summary, now, viewerUserId } = input;
+  const reportedAt = sandboxReportedAt(summary.lastActivityAt);
   const rows: SandboxDetailsRow[] = [
     {
       label: "State",
@@ -143,13 +163,16 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
     {
       label: "Last report",
       value:
-        summary.lastActivityAt === null
+        reportedAt === null
           ? "No report yet"
-          : formatSandboxAge(summary.lastActivityAt, now),
+          : formatSandboxAge(reportedAt, now),
     },
     { label: "Shape", value: sandboxShapeLine(summary) },
-    { label: "Region", value: summary.region },
   ];
+  const regionLabel = sandboxRegionLabel(summary);
+  if (regionLabel !== null) {
+    rows.push({ label: "Region", value: regionLabel });
+  }
   if (input.wakeString !== null) {
     rows.push({ label: "Suspend", value: input.wakeString });
   }
@@ -177,27 +200,158 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   if (summary.frozen && summary.frozenAt !== null) {
     rows.push({
       label: "Frozen",
-      value: `out of credits since ${formatSandboxDate(summary.frozenAt, true)}; destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), false)}`,
+      value: `out of credits since ${formatSandboxDate(summary.frozenAt, true)}; destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}`,
     });
   }
   if (summary.state === "failed") {
     rows.push({
       label: "Failed",
-      value: `Failed to start (${summary.failureCode ?? "unknown"}) · Nothing is billed for a sandbox that never woke`,
+      value: `${sandboxFailedToStart(summary.failureCode)} · ${NOTHING_BILLED_NEVER_WOKE}`,
     });
   }
   if (summary.guestConfigured === false) {
     rows.push({ label: "Settings", value: "didn't apply" });
   }
-  rows.push({ label: "Support reference", value: summary.id });
+  rows.push({
+    label: "Support reference",
+    value: sandboxSupportReferenceLine(summary.failureCode, summary.id),
+  });
   return rows;
+}
+
+const GESTURE_LABEL: Record<
+  NonNullable<SandboxHistoryEntry["gesture"]>,
+  string
+> = {
+  "open-terminal": "Open terminal",
+  send: "Send",
+  "open-files": "Open files",
+};
+
+const RESTING_STATES: ReadonlySet<string> = new Set([
+  "suspending",
+  "suspended",
+  "stopping",
+  "stopped",
+  "released",
+]);
+
+/**
+ * What an operation did: `Created`, `Resumed`, `Suspended`, `Stopped`, or
+ * `Failed to start (SBX-0412)` for a create or a start that failed, by its
+ * support reference.
+ */
+function operationVerb(entry: SandboxHistoryEntry): string {
+  if (entry.state === "failed") {
+    return sandboxFailedToStart(entry.outcomeDetail);
+  }
+  if (entry.fromState === "creating") return "Created";
+  if (entry.cause === "freeze") return "Frozen";
+  switch (entry.state) {
+    case "suspending":
+    case "suspended":
+      return "Suspended";
+    case "stopping":
+    case "stopped":
+      return entry.outcomeCause === "failure"
+        ? "Stopped after a failed wake"
+        : "Stopped";
+    case "released":
+      return "Released";
+    case "destroying":
+    case "destroyed":
+      return "Destroyed";
+    default:
+      return entry.fromState === "stopped" || entry.fromState === "stopping"
+        ? "Started"
+        : "Resumed";
+  }
+}
+
+/**
+ * Who or what started it: `by you (Open terminal)`, `after 30 idle minutes`,
+ * or nothing for the control plane's own moves.
+ */
+function operationCause(
+  entry: SandboxHistoryEntry,
+  input: SandboxDetailsInput,
+): string | null {
+  const { summary, viewerUserId } = input;
+  if (entry.actor !== null) {
+    const who = `by ${sandboxMemberName(entry.actor, viewerUserId)}`;
+    return entry.gesture === null
+      ? who
+      : `${who} (${GESTURE_LABEL[entry.gesture]})`;
+  }
+  if (entry.fromState === "creating") {
+    if (summary.kind === "automation") return `by ${AUTOMATIONS_STARTER}`;
+    if (summary.burst) return "by an agent";
+    return null;
+  }
+  if (entry.cause === "idle" || entry.cause === "burst-idle") {
+    const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
+    return `after ${idle} idle minutes`;
+  }
+  if (entry.cause === "freeze") return "out of credits";
+  return null;
+}
+
+/**
+ * One History line: `Suspended by you until Oct 25 at 09:55 · under $0.01`,
+ * `Resumed by you (Open terminal) · awake until Oct 25 at 10:01 · $0.02`, or
+ * on the current operation `· resting from then` / `· awake from then`.
+ */
+function historyEntryEvent(
+  entry: SandboxHistoryEntry,
+  input: SandboxDetailsInput,
+): SandboxDetailsEvent {
+  const cause = operationCause(entry, input);
+  const resting = RESTING_STATES.has(entry.state);
+  const ended = entry.state === "destroying" || entry.state === "destroyed";
+  const cost = formatSandboxCost(entry.millicredits);
+  let span: readonly (string | null)[];
+  if (entry.state === "failed") {
+    span = [cause, NOTHING_BILLED_NEVER_WOKE];
+  } else if (ended) {
+    span = [cause];
+  } else if (entry.untilAt === null) {
+    span = [cause, resting ? "resting from then" : "awake from then"];
+  } else if (resting) {
+    const until = `until ${formatSandboxDate(entry.untilAt, true)}`;
+    span = [cause === null ? until : `${cause} ${until}`, cost];
+  } else {
+    span = [
+      cause,
+      `awake until ${formatSandboxDate(entry.untilAt, true)}`,
+      cost,
+    ];
+  }
+  return {
+    at: entry.at,
+    label: operationVerb(entry),
+    value: span.filter((part): part is string => part !== null).join(" · "),
+  };
 }
 
 function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   const { summary, cost, viewerUserId } = input;
+  // The operations, where the server records them; a team row of the list
+  // and a server before them leave the ledger's segments below.
+  if (cost !== null && cost.history.length > 0) {
+    const events = cost.history.map((entry) => historyEntryEvent(entry, input));
+    if (summary.keptBy !== null) {
+      events.push({
+        at: summary.keptAt,
+        label: "Kept",
+        value: `by ${sandboxMemberName(summary.keptBy, viewerUserId)}`,
+      });
+    }
+    return events.sort(byTime);
+  }
   const creator = creatorName(input);
   let created = "";
-  if (summary.burst) created = "by an agent";
+  if (summary.kind === "automation") created = `by ${AUTOMATIONS_STARTER}`;
+  else if (summary.burst) created = "by an agent";
   else if (creator !== null) created = `by ${creator}`;
   const events: SandboxDetailsEvent[] = [
     { at: summary.createdAt, label: "Created", value: created },
@@ -206,7 +360,7 @@ function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
     events.push({
       at: segment.fromAt,
       label: SEGMENT_LABEL[segment.state],
-      value: `until ${formatSandboxDate(segment.toAt, true)} · ${formatSandboxDollars(segment.millicredits)}`,
+      value: `until ${formatSandboxDate(segment.toAt, true)} · ${formatSandboxCost(segment.millicredits)}`,
     });
   }
   if (summary.restingSince !== null) {
@@ -258,7 +412,7 @@ export function sandboxDetailsEntry(
       kind: "sandbox",
       sandboxId: input.summary.id,
       exportedAt: input.now,
-      status: Object.fromEntries(status.map((row) => [row.label, row.value])),
+      status: Object.fromEntries(exportStatusEntries(status, input.summary)),
       history: history.map((event) => ({
         at: event.at === null ? null : new Date(event.at).toISOString(),
         event: event.label,
@@ -266,6 +420,21 @@ export function sandboxDetailsEntry(
       })),
     }),
   };
+}
+
+/**
+ * The export's status: the rows, then the raw failure code, which the rows
+ * show only as its support reference.
+ */
+function exportStatusEntries(
+  status: readonly SandboxDetailsRow[],
+  summary: SandboxSummary,
+): [string, string][] {
+  const entries = status.map((row): [string, string] => [row.label, row.value]);
+  if (summary.failureCode !== null) {
+    entries.push(["Failure code", summary.failureCode]);
+  }
+  return entries;
 }
 
 /**
@@ -309,7 +478,7 @@ async function freshAnswers<T>(
 /** Why the sandbox needs attention, or `null` when nothing does. */
 function sandboxReason(summary: SandboxSummary): string | null {
   if (summary.state === "failed") {
-    return `Failed to start (${summary.failureCode ?? "unknown"})`;
+    return sandboxFailedToStart(summary.failureCode);
   }
   if (summary.frozen) return "Out of credits";
   if (summary.guestConfigured === false) return "Settings didn't apply";
@@ -320,7 +489,9 @@ function detailsStatus(summary: SandboxSummary): DetailsStatus {
   const state = SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)];
   const reason = sandboxReason(summary);
   return {
-    summary: `${state} · ${sandboxShapeLine(summary)} · ${summary.region}`,
+    summary: [state, sandboxShapeLine(summary), sandboxRegionLabel(summary)]
+      .filter((part): part is string => part !== null)
+      .join(" · "),
     currentVersion: null,
     changedBy: null,
     changedAt: summary.lastTransitionAt,

@@ -25,6 +25,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
     configuration: PERSONAL,
     price: { awakeMcPerHour: 120, exact: true },
     needsCredits: false,
+    shortfallMc: 120,
     audience: "private",
     reachHost: null,
     unmovedComputer: null,
@@ -54,8 +55,36 @@ describe("priceClause", () => {
 
   it("asks for credits at a zero or short balance", () => {
     expect(priceClause(input({ needsCredits: true })).text).toBe(
-      "Add credits to start a sandbox · from $0.12 an hour while awake",
+      "Not enough credits. $0.12 more starts this sandbox for an hour.",
     );
+  });
+
+  it("names the team's credits when a team is short, and Personal's without a name", () => {
+    expect(
+      priceClause(
+        input({
+          configuration: {
+            kind: "team",
+            teamId: "team-pool",
+            teamName: "pool-e2e-fixture",
+          },
+          price: { awakeMcPerHour: 210, exact: false },
+          needsCredits: true,
+          shortfallMc: 210,
+        }),
+      ).text,
+    ).toBe(
+      "Your pool-e2e-fixture allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+    );
+    expect(
+      priceClause(
+        input({
+          price: { awakeMcPerHour: 210, exact: false },
+          needsCredits: true,
+          shortfallMc: 210,
+        }),
+      ).text,
+    ).toBe("Not enough credits. $0.21 more starts this sandbox for an hour.");
   });
 
   it("says what it bills by when the server prices no shape", () => {
@@ -129,7 +158,7 @@ describe("consequenceClauses", () => {
     const clauses = consequenceClauses(
       input({ configuration: ACME, needsCredits: true }),
     );
-    expect(clauses[0].text).toMatch(/^Add credits to start a sandbox/);
+    expect(clauses[0].text).toMatch(/^Your Acme allowance is short/);
     expect(clauses).toHaveLength(4);
   });
 });
@@ -204,14 +233,45 @@ describe("stagePrice", () => {
           vcpuHourMillicredits: 50,
           memoryGbHourMillicredits: 25,
           diskGbHourMillicredits: 0.5,
-          multiplier: 1.1,
+          multiplier: 1.25,
         },
         "linux",
       ),
       STAGED,
     );
-    // (2 × 50 + 4 × 25 + 20 × 0.5) × 1.1
-    expect(price).toEqual({ awakeMcPerHour: 231, exact: true });
+    // ceil((2 × 50 + 4 × 25) × 1.25): no disk term
+    expect(price).toEqual({ awakeMcPerHour: 250, exact: true });
+  });
+
+  it("prices at the billed rate: compute at its rates times the margin, rounded up, the disk adding nothing", () => {
+    const windows = catalogue(
+      {
+        vcpuHourMillicredits: 136.2,
+        memoryGbHourMillicredits: 16.2,
+        diskGbHourMillicredits: 0.108,
+        multiplier: 1.25,
+      },
+      "windows",
+    );
+    const staged = { ...STAGED, os: "windows" } as const;
+    // ceil((2 × 136.2 + 8 × 16.2) × 1.25) = ceil(502.5)
+    expect(
+      stagePrice(windows, {
+        ...staged,
+        cpus: 2,
+        memoryMb: 8192,
+        diskMb: 20480,
+      }),
+    ).toEqual({ awakeMcPerHour: 503, exact: true });
+    // ceil((136.2 + 4 × 16.2) × 1.25) = ceil(251.25)
+    expect(
+      stagePrice(windows, {
+        ...staged,
+        cpus: 1,
+        memoryMb: 4096,
+        diskMb: 102400,
+      }),
+    ).toEqual({ awakeMcPerHour: 252, exact: true });
   });
 
   it("quotes the smallest shape exactly without the rates, but a larger disk only as from", () => {
@@ -363,10 +423,10 @@ describe("listed shapes", () => {
   });
 
   it("prices the smallest listed shape from the region's rates, else its from price", () => {
-    // 2 × 10 + 4 × 5 + 20 × 1
+    // 2 × 10 + 4 × 5: no disk term
     expect(stageSmallestShape(listed(RATES), STAGED)).toEqual({
       isStaged: true,
-      awakeMcPerHour: 60,
+      awakeMcPerHour: 40,
     });
     expect(
       stageSmallestShape(listed(RATES), { ...STAGED, ...LARGE }),

@@ -1,3 +1,4 @@
+import { useMutation } from "@tanstack/react-query";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Info, RotateCcw } from "lucide-react";
@@ -16,7 +17,14 @@ import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
 import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
 import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
-import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
+import {
+  usePersonalPageHost,
+  usePersonalRowNotes,
+} from "@/components/settings/personal/personal-page-context";
+import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
+import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
+import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -524,6 +532,39 @@ function ShellSettingsPanelBody(props: {
     beginEnvSave();
     controller.deleteEnv(key, envSaveCallbacks(key));
   };
+  // Use everywhere: this host's own value becomes Personal's, then the host
+  // stops keeping one of its own. Cleared only after the save landed, so a
+  // failed save leaves the host's value where it was.
+  const pageHost = usePersonalPageHost();
+  const clearOwnValue = useHostScopedMutationForClient(pageHost.client, {
+    method: "config.env.localOverride.clear",
+    mutationKey: environmentMutationKeys.localOverrideClear(),
+    errorMessage: "Couldn't stop this computer keeping its own value.",
+    scope: { id: "config.env.localOverride" },
+    invalidateMethods: ["environment.localOverrides", "config.env.list"],
+  });
+  const useEverywhere = useMutation({
+    mutationFn: async (entry: {
+      readonly key: string;
+      readonly value: string;
+    }) => {
+      await controller.setEnvAsync(entry);
+      await clearOwnValue.mutateAsync({
+        target: { kind: "variable", key: entry.key },
+      });
+    },
+  });
+  const onUseEverywhere = (key: string, value: string): void => {
+    if (envPending || useEverywhere.isPending) return;
+    if (
+      credentialRefusal !== null &&
+      (isCredentialShapedEnvName(key) || urlCarriesCredentials(value))
+    ) {
+      return;
+    }
+    beginEnvSave();
+    useEverywhere.mutate({ key, value }, envSaveCallbacks(key));
+  };
 
   return (
     <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
@@ -560,6 +601,8 @@ function ShellSettingsPanelBody(props: {
         keyRefusal={keyShaped.refusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
+        onUseEverywhere={onUseEverywhere}
+        useEverywherePending={useEverywhere.isPending}
       />
       {keyShaped.dialog}
     </div>
@@ -954,10 +997,25 @@ function HostEnvironmentGroup(props: {
     value: string | null,
   ) => void;
   readonly onDelete: (key: string) => void;
+  readonly onUseEverywhere: (key: string, value: string) => void;
+  readonly useEverywherePending: boolean;
 }) {
-  const rowNotes = usePersonalRowNotes("variable");
+  const notes = usePersonalRowNotes(VARIABLE_NOTES);
+  const rowNotes = new Map<string, ReactNode>();
+  for (const [key, note] of notes) {
+    rowNotes.set(
+      key,
+      <PersonalRowNoteText
+        name={key}
+        note={note}
+        disabled={props.pending || props.useEverywherePending}
+        onUseEverywhere={props.onUseEverywhere}
+      />,
+    );
+  }
   const personal = useEnvironmentPick().kind === "personal";
   const onHold = useHeldValueReviews("variable", "");
+  const claimedBy = useSecretClaimedNames(VARIABLE_CLAIMS);
   return (
     <SettingsGroup
       group={SHELL.definitions.hostEnvironment}
@@ -994,6 +1052,7 @@ function HostEnvironmentGroup(props: {
           <EnvOverrideEditor
             rowNotes={rowNotes}
             onHold={onHold}
+            claimedBy={claimedBy}
             overrides={props.overrides}
             disabled={props.pending}
             credentialRefusal={props.credentialRefusal}
@@ -1016,6 +1075,9 @@ function HostEnvironmentGroup(props: {
     </SettingsGroup>
   );
 }
+
+const VARIABLE_NOTES = { kind: "variable" } as const;
+const VARIABLE_CLAIMS = { kind: "variable" } as const;
 
 /** One refusal for every name: Variables sends every key to Secrets. */
 function keyRefusalOf(refusal: KeyRefusal | null): KeyRefusalFor {

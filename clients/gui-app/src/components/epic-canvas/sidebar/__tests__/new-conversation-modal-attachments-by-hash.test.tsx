@@ -393,10 +393,25 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   }),
 }));
 
+// The agent gates read the placement host's own lists; nothing here stages a
+// sandbox or sits on one, so none of them holds or refuses a send.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
+    values: {
+      selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
+    },
     selectedModel: null,
     permission: "supervised",
     reasoning: "medium",
@@ -501,7 +516,6 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
-  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
     hint: null,

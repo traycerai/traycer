@@ -666,6 +666,8 @@ function deliveryClause(policy: ChatQueueDeliveryPolicy | null): string {
  * still there.
  */
 export interface WorktreeSweepAccount {
+  /** Recovery outside the original workspace must name even a single folder. */
+  readonly nameWorkspaces?: boolean;
   readonly survivors: WorktreeIntent | null;
   readonly swept: WorktreeIntent | null;
   /**
@@ -757,8 +759,9 @@ function worktreeAccountClause(
   // the list must not change how its members read.
   const total =
     (sweep.survivors?.entries.length ?? 0) + (sweep.swept?.entries.length ?? 0);
-  const survivors = intentLabels(sweep.survivors, total > 1);
-  const swept = intentLabels(sweep.swept, total > 1);
+  const nameWorkspaces = total > 1 || sweep.nameWorkspaces === true;
+  const survivors = intentLabels(sweep.survivors, nameWorkspaces);
+  const swept = intentLabels(sweep.swept, nameWorkspaces);
   if (survivors.length === 0 && swept.length === 0) return "";
   if (handedBack) {
     // The survivors came back staged with the prompt, so there is nothing to

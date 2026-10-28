@@ -144,6 +144,11 @@ export type HomeBotState = "working" | "idle" | "paused";
  *   machines: a team's bots run only on the team's machines, so a binding to
  *   a laptop (made before that rule) runs nothing - the tab's `bot.open` on
  *   a team machine takes the bot back, and on a personal one pauses it.
+ * Working means the bot's activity says a turn is running, its trunk's or a
+ * thread's: that reading is the bound host's own, so it beats any
+ * reachability this client can infer, the registry not having answered
+ * included. Only the two bindings that run nothing (no host, a team bot on
+ * a personal machine) stay paused while a reading says otherwise.
  * A machine of the environment the reader cannot dial (a team machine
  * another member added) has unknown reachability here; the row says idle
  * and opening the tab decides. So does an environment whose machine list
@@ -152,6 +157,7 @@ export type HomeBotState = "working" | "idle" | "paused";
  * own machines are not known, so nothing about them is evidence.
  */
 export function homeBotState(input: {
+  /** The bot's activity has its trunk or a thread replying. */
   readonly working: boolean;
   readonly boundHostId: string | null;
   /** Hosts in the reader's own directory. */
@@ -178,13 +184,8 @@ export function homeBotState(input: {
   if (team && input.personalHostIds?.has(boundHostId) === true) {
     return "paused";
   }
-  const reach = reachabilityState(input, boundHostId);
-  // Until the registry answers, a team bot's host may be a personal machine,
-  // which runs no team bot: working is not known, though a host proven
-  // unreachable is paused whatever its kind.
-  if (team && input.personalHostIds === null) return reach;
   if (input.working) return "working";
-  return reach;
+  return reachabilityState(input, boundHostId);
 }
 
 /** Paused when the answered lists prove the bound host away; idle otherwise. */

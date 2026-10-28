@@ -261,9 +261,28 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
   };
 });
 
+// The agent gates read the placement host's own lists; nothing here stages a
+// sandbox or sits on one, so none of them holds or refuses a send.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly values: {
+      readonly selection: {
+        readonly harnessId: string;
+        readonly modelSlug: string;
+        readonly profileId: string | null;
+      };
+    };
     readonly selection: {
       readonly harnessId: string;
       readonly modelSlug: string;
@@ -284,6 +303,13 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
       profileId: null,
+    },
+    values: {
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: null,
+      },
     },
     // No catalog answered: this suite stages no sandbox to hand off.
     catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
@@ -379,7 +405,6 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // hook stubbed to its "nothing to report" answer so these gate tests stay
   // about the gate they name. `blocked: false` is also the hook's real
   // fail-open answer before `providers.list` resolves.
-  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
     hint: null,
@@ -416,6 +441,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
   useStagedSandboxHandoff: () => undefined,
+  useOpenLandingStagedTerminal: () => vi.fn(),
 }));
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,

@@ -1,6 +1,6 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,9 +16,9 @@ import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
-  secrets: [] as EnvironmentSecret[],
+  secrets: [] as EnvironmentSecretV12[],
   tasks: [] as readonly { readonly id: string }[],
-  hosts: [] as HostListItem[],
+  hosts: [] as RunningHost[],
   user: null as AuthenticatedUser | null,
   staged: null as { readonly target: { readonly kind: string } } | null,
   openLink: vi.fn(() => Promise.resolve()),
@@ -50,9 +50,18 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: mocks.tasks }),
 }));
 
-vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
-  useRegisteredHosts: () => ({ data: { hosts: mocks.hosts } }),
-}));
+// The computers Personal reaches come from one hook, not the account registry.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: mocks.hosts,
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
@@ -107,7 +116,7 @@ function storedKeyProvider(): ProviderCliState {
   };
 }
 
-function secret(): EnvironmentSecret {
+function secret(): EnvironmentSecretV12 {
   return {
     secretId: "secret-1",
     name: "DEPLOY_KEY",
@@ -119,30 +128,20 @@ function secret(): EnvironmentSecret {
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
-function personalHost(hostId: string): HostListItem {
+function personalHost(hostId: string): RunningHost {
   return {
     hostId,
-    displayName: hostId,
-    platform: "linux",
+    hostName: hostId,
+    name: hostId,
     kind: "personal",
-    publicKey: `pk-${hostId}`,
-    createdAt: "2026-10-01T00:00:00.000Z",
-    status: {
-      connectivity: "connectable",
-      viewerReachability: "unknown",
-      clientCloud: "ok",
-      updateState: "current",
-      appVersion: "1.5.0",
-      lastSeenAt: "2026-10-09T00:00:00.000Z",
-    },
-    updatePolicy: "manual",
-    sandboxState: "awake",
-    sandboxFrozen: false,
-    profile: "agent",
-    owner: { kind: "user", id: "u1" },
+    isThisComputer: false,
+    lastReportedAt: null,
+    applied: [],
   };
 }
 

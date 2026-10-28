@@ -2,15 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
+import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
 import {
   createEpicSessionTestHarness,
   type TestEpicHarness,
 } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
+import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
@@ -136,6 +142,83 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
+// The container runs the real sandbox-state hook. Its external reads are
+// controlled here so the tests can exercise both answered and offline hosts.
+const sandboxHookSources = vi.hoisted(
+  (): {
+    ended: TaskSandboxEndedHost | null;
+    sandboxes: SandboxSummary[];
+    configurations: SandboxConfigurations;
+    hostEntry: HostDirectoryEntry | null;
+    sampledNow: number;
+  } => ({
+    ended: null,
+    sandboxes: [],
+    configurations: {
+      configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+    },
+    hostEntry: null,
+    sampledNow: 0,
+  }),
+);
+
+vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/epic/use-task-sandbox-end")>();
+  return {
+    ...actual,
+    useTaskSandboxEnd: () => sandboxHookSources.ended,
+  };
+});
+
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...actual,
+    useSandboxList: () => ({
+      data: { sandboxes: sandboxHookSources.sandboxes },
+    }),
+  };
+});
+
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return {
+      ...actual,
+      useSandboxConfigurations: () => sandboxHookSources.configurations,
+    };
+  },
+);
+
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: () => sandboxHookSources.hostEntry,
+  };
+});
+
+vi.mock("@/lib/relative-time", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/relative-time")>();
+  return {
+    ...actual,
+    useSampledNow: () => sandboxHookSources.sampledNow,
+  };
+});
+
 vi.mock("@/components/report-issue/report-issue-action", () => ({
   ReportIssueAction: () => null,
 }));
@@ -187,6 +270,7 @@ function renderContainer(input: {
   readonly providedOwnerUserId: string | undefined;
   readonly permissionRole: PermissionRole | null;
   readonly showsPublishedCopy: boolean;
+  readonly reason: ChatDeadTileBannerReason;
 }) {
   const epicId = `epic-banner-container-${++epicSeq}`;
   const harness = createEpicSessionTestHarness(epicId);
@@ -218,7 +302,7 @@ function renderContainer(input: {
               chatId={CHAT_ID}
               sourceHostId="owner-host-1"
               hostLabel="owner-host-1"
-              reason="host-offline"
+              reason={input.reason}
               showsPublishedCopy={input.showsPublishedCopy}
               testId="banner-under-test"
               sourceOwnerUserId={input.providedOwnerUserId}
@@ -258,6 +342,15 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   environments.pool = false;
   environments.list = undefined;
+  sandboxHookSources.ended = null;
+  sandboxHookSources.sandboxes = [];
+  sandboxHookSources.configurations = {
+    configurations: [{ kind: "personal" }],
+    teamEnvironmentIds: new Set<string>(),
+    complete: true,
+  };
+  sandboxHookSources.hostEntry = null;
+  sandboxHookSources.sampledNow = 0;
   resetHostConnectionRegistryForTest();
 });
 
@@ -268,6 +361,7 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: "editor",
       showsPublishedCopy: true,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -286,6 +380,7 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: "viewer",
       showsPublishedCopy: true,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -308,6 +403,7 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: null,
       showsPublishedCopy: true,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -320,6 +416,7 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
       providedOwnerUserId: undefined,
       permissionRole: "editor",
       showsPublishedCopy: false,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -336,6 +433,7 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: "editor",
       showsPublishedCopy: false,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -356,6 +454,7 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: "editor",
       showsPublishedCopy: false,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -374,6 +473,7 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: "editor",
       showsPublishedCopy: false,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -398,6 +498,7 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
       providedOwnerUserId: COLLABORATOR_USER_ID,
       permissionRole: "editor",
       showsPublishedCopy: true,
+      reason: "host-offline",
     });
     await settleEpicSession();
 
@@ -405,4 +506,91 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     expect(text).toContain("This chat's sandbox isn't available");
     expect(text).not.toContain("belongs to another collaborator");
   });
+});
+
+describe("ChatDeadTileBannerContainer - the sandbox's own state", () => {
+  const ROW = sandboxSummaryFixture({
+    id: "sbx-c",
+    hostId: "owner-host-1",
+    displayName: "e2e-sbx-stop3",
+  });
+
+  async function mountOffline() {
+    renderContainer({
+      ownerUserId: VIEWER_USER_ID,
+      providedOwnerUserId: undefined,
+      permissionRole: "editor",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+  }
+
+  it("says the sandbox was destroyed, by its projected name and never its raw host id, and offers Continue on another host", async () => {
+    sandboxHookSources.ended = {
+      name: "e2e-sbx-stop3",
+      end: {
+        state: "destroyed",
+        destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
+        cause: "resting",
+        actor: null,
+      },
+    };
+    await mountOffline();
+
+    const banner = screen.getByTestId("banner-under-test");
+    expect(banner.getAttribute("data-reason")).toBe("sandbox-destroyed");
+    expect(banner.textContent).toContain("e2e-sbx-stop3");
+    expect(banner.textContent).not.toContain("owner-host-1");
+    expect(banner.textContent).not.toContain("offline");
+    expect(
+      screen.getByRole("button", { name: "Continue on another host" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+  });
+
+  it.each([
+    ["resting", "suspended"],
+    ["unreachable", "awake"],
+  ] as const)(
+    "shows no generic offline banner for a %s sandbox: its footer owns the line",
+    async (_name, state) => {
+      sandboxHookSources.sandboxes = [sandboxSummaryFixture({ ...ROW, state })];
+      await mountOffline();
+
+      expect(screen.queryByTestId("banner-under-test")).toBeNull();
+    },
+  );
+});
+
+describe("ChatDeadTileBannerContainer - answered-host reasons", () => {
+  it.each([
+    ["chat-not-visible", 'history isn\'t available on "owner-host-1"'],
+    ["chat-not-on-this-host", "history is no longer on this host"],
+  ] as const)(
+    "keeps the %s explanation and Clone offer when its awake sandbox answered",
+    async (reason, explanation) => {
+      sandboxHookSources.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-answered",
+          hostId: "owner-host-1",
+          displayName: "e2e-sbx-answered",
+          state: "awake",
+        }),
+      ];
+      renderContainer({
+        ownerUserId: VIEWER_USER_ID,
+        providedOwnerUserId: undefined,
+        permissionRole: "editor",
+        showsPublishedCopy: true,
+        reason,
+      });
+      await screen.findByRole("button", { name: "Clone agent" });
+      const banner = screen.getByTestId("banner-under-test");
+      expect(banner.getAttribute("data-reason")).toBe(reason);
+      expect(banner.textContent).toContain(explanation);
+      expect(banner.textContent).not.toContain("offline");
+      expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    },
+  );
 });

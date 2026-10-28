@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { EnvironmentApplyFailedCard } from "@/components/notifications/environment-apply-failed-card";
+import { SandboxSettingsFailedCard } from "@/components/notifications/sandbox-settings-failed-card";
 import { EnvironmentMoveStalledCard } from "@/components/notifications/environment-move-stalled-card";
 import { SecretRemovedCard } from "@/components/notifications/secret-removed-card";
 import { TeamHostReturnedCard } from "@/components/notifications/team-host-returned-card";
@@ -18,6 +19,7 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
  */
 export function EnvironmentNotificationExtra(props: {
   readonly detail: EnvironmentNotificationDetail;
+  readonly onSettingsApplied?: () => void;
 }): ReactNode {
   const details = (
     <SettingsDetailsButton
@@ -26,8 +28,15 @@ export function EnvironmentNotificationExtra(props: {
       controls={null}
     />
   );
-  if (props.detail.kind === "team_role_changed") {
-    const role = isTeamRole(props.detail.to) ? props.detail.to : "viewer";
+  if (
+    props.detail.kind === "team_role_changed" ||
+    props.detail.kind === "team_member_welcome"
+  ) {
+    const granted =
+      props.detail.kind === "team_role_changed"
+        ? props.detail.to
+        : props.detail.role;
+    const role = isTeamRole(granted) ? granted : "viewer";
     return (
       <TeamRoleChangedCard
         teamName={props.detail.teamName}
@@ -62,11 +71,17 @@ export function EnvironmentNotificationExtra(props: {
     );
   }
   if (props.detail.kind === "environment_apply_failed") {
+    if (props.detail.sandbox !== null && props.detail.sandbox !== undefined)
+      return (
+        <SandboxSettingsFailedCard
+          detail={props.detail}
+          details={details}
+          onSettingsApplied={props.onSettingsApplied}
+        />
+      );
     return (
       <EnvironmentApplyFailedCard
         hostName={props.detail.hostName}
-        itemKey={props.detail.itemKey}
-        reason={props.detail.reason}
         details={details}
       />
     );
@@ -83,6 +98,7 @@ export function EnvironmentNotificationExtra(props: {
 function detailsSubject(detail: EnvironmentNotificationDetail): DetailsSubject {
   if (
     detail.kind === "team_role_changed" ||
+    detail.kind === "team_member_welcome" ||
     detail.kind === "team_host_returned"
   ) {
     return { environmentId: detail.environmentId, kind: "member", key: "" };
@@ -107,6 +123,7 @@ function detailsSubject(detail: EnvironmentNotificationDetail): DetailsSubject {
 function detailsTitle(detail: EnvironmentNotificationDetail): string {
   if (
     detail.kind === "team_role_changed" ||
+    detail.kind === "team_member_welcome" ||
     detail.kind === "team_host_returned"
   ) {
     return "Member details";

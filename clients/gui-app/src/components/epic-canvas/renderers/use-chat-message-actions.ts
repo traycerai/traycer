@@ -27,6 +27,7 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
+import type { StagedSandboxTarget } from "@/stores/composer/staged-sandbox-store";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import {
   editSubmitNeedsRevertPrompt,
@@ -155,18 +156,21 @@ function unstartedDeliveryPhase(
 
 /**
  * Where the fork dialog's host picker starts and what it lists: `initialHostId`
- * preselects (`null` is the source chat's own host) and `onlyHostIds` narrows
- * the list (a team's hosts; `null` is every host).
+ * preselects (`null` is the source chat's own host), `onlyHostIds` narrows
+ * the list (a team's hosts; `null` is every host), and `stagedSandbox` is a
+ * New sandbox picked in the chat's host chip, which the fork lands on.
  */
 export interface ForkDialogHosts {
   readonly initialHostId: string | null;
   readonly onlyHostIds: ReadonlySet<string> | null;
+  readonly stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }> | null;
 }
 
 /** Every per-message fork: the source chat's host, every host listed. */
 export const FORK_ON_SOURCE_HOST: ForkDialogHosts = {
   initialHostId: null,
   onlyHostIds: null,
+  stagedSandbox: null,
 };
 
 export interface ChatMessageActionsInput {
@@ -959,6 +963,7 @@ export function useChatMessageActions(
         forkMode: mode,
         initialHostId: hosts.initialHostId,
         onlyHostIds: hosts.onlyHostIds,
+        stagedSandbox: hosts.stagedSandbox,
       });
     },
     [

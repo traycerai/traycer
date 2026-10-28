@@ -1,38 +1,59 @@
+import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
   useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { SandboxSetupLine } from "@/components/composer/sandbox-setup-line";
+import { queryOptions, useQueryClient } from "@tanstack/react-query";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
+import {
+  SandboxSetupLine,
+  type SandboxSetupLineFacts,
+} from "@/components/composer/sandbox-setup-line";
 import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
-import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import {
+  useSandboxRepairGuestConfigurationOnHost,
+  useSandboxSettingsOperation,
+  useSandboxRetryApplyingSupported,
+  useSandboxGuestSetupRepairSupported,
+  useSandboxRepairGuestSetupOnHost,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
   priceClause,
   stageBalanceMc,
   stagePrice,
   stageProviderFor,
   stageSmallestShape,
+  type StagePrice,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import {
+  rewakeStagedSandbox,
   runStagedSandbox,
   type StagedRunRequest,
+  type StagedSandboxRunDeps,
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import {
   handoffOwnerLive,
   holdHandoffOwner,
@@ -44,9 +65,8 @@ import {
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 
-/** A sandbox's name when the shape sheet set none: the message's first words. */
+/** A fallback label for older sends without a named stage. */
 const FALLBACK_NAME_WORDS = 4;
-const FALLBACK_NAME = "sandbox";
 /** The create's longest `displayName`. */
 const FALLBACK_NAME_MAX_LENGTH = 191;
 
@@ -59,17 +79,17 @@ export function stagedSandboxFallbackName(text: string): string {
     .join("-")
     .slice(0, FALLBACK_NAME_MAX_LENGTH)
     .replace(/-+$/, "");
-  return slug.length === 0 ? FALLBACK_NAME : slug;
+  return slug.length === 0 ? "New sandbox" : slug;
 }
 
 export interface StagedSandboxSend {
   /**
-   * Called first by the surface's submit. `true` when the stage took the
-   * send (phase 1 started, or is already running): the surface submits
-   * nothing and keeps the draft. `false` when nothing is staged, or the stage
-   * is in its handoff and the surface's own submit should run. A taken
-   * terminal agent's Start passes its launch, which the stage keeps for
-   * phase 2; a send passes `null`.
+   * Called first by a terminal's start. `true` when the stage took it (phase
+   * 1 started, or is already running): the surface starts nothing. `false`
+   * when nothing is staged, or the stage is in its handoff and the surface's
+   * own start should run. A terminal agent's Start passes its launch, which
+   * the stage keeps for phase 2; a plain terminal passes `null`. A message
+   * sent to a stage is handed to its task instead (`handPendingSandboxSend`).
    */
   readonly intercept: (
     messageText: string,
@@ -91,28 +111,84 @@ export type StagedSandboxRunner = (
  * run is owned by the store, so the caller may unmount while it goes on.
  */
 export function useStagedSandboxRunner(): StagedSandboxRunner {
+  const deps = useStagedSandboxRunDeps();
+  return useCallback(
+    (surfaceKey, fresh, request) => {
+      if (deps === null) return;
+      void runStagedSandbox(surfaceKey, fresh, request, deps);
+    },
+    [deps],
+  );
+}
+
+/**
+ * Wakes a handed-off stage's sandbox that rested while its send waited
+ * (`rewakeStagedSandbox`), with this window's account and host directory.
+ */
+export function useStagedSandboxWaker(): (surfaceKey: string) => void {
+  const deps = useStagedSandboxRunDeps();
+  return useCallback(
+    (surfaceKey) => {
+      if (deps === null) return;
+      void rewakeStagedSandbox(surfaceKey, deps);
+    },
+    [deps],
+  );
+}
+
+function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  return useCallback(
-    (surfaceKey, fresh, request) => {
-      if (binding === null) return;
-      void runStagedSandbox(surfaceKey, fresh, request, {
-        auth: binding.auth,
-        directory: binding.directory,
-        queryClient,
-        userId,
-        wake: (hostId) =>
-          startSandboxWake(queryClient, binding, hostId).then(
-            (outcome) => outcome !== null && outcome.kind === "awake",
-          ),
-        now: Date.now,
-        sleep: (ms) =>
-          new Promise((resolve) => {
-            setTimeout(resolve, ms);
-          }),
-      });
-    },
+  return useMemo(
+    () =>
+      binding === null
+        ? null
+        : {
+            auth: binding.auth,
+            directory: binding.directory,
+            queryClient,
+            userId,
+            readSettings: async (hostId: string) => {
+              const requestSettings = async () => {
+                const client = resolveNamedHostClient(binding, hostId);
+                if (client === null) throw new Error("Host unavailable");
+                return client.request("environment.status", {});
+              };
+              return queryClient
+                .fetchQuery(
+                  queryOptions({
+                    // A staged wake must not join a status read begun before it.
+                    queryKey: [
+                      ...hostQueryKeys.method<
+                        HostRpcRegistry,
+                        "environment.status"
+                      >(hostId, "environment.status", {}),
+                      "sandbox-settings",
+                      uuidv4(),
+                    ],
+                    queryFn: requestSettings,
+                    staleTime: 0,
+                    gcTime: 0,
+                    retry: false,
+                  }),
+                )
+                .catch((error: unknown) =>
+                  error instanceof HostRpcError &&
+                  error.code === "E_HOST_UNSUPPORTED" &&
+                  error.method === "environment.status"
+                    ? ("unsupported" as const)
+                    : null,
+                );
+            },
+            wake: (hostId: string, gesture: SandboxVerbGesture) =>
+              startSandboxWake(queryClient, binding, hostId, gesture),
+            now: Date.now,
+            sleep: (ms: number) =>
+              new Promise<void>((resolve) => {
+                setTimeout(resolve, ms);
+              }),
+          },
     [binding, queryClient, userId],
   );
 }
@@ -157,6 +233,40 @@ export function startStagedTerminal(
 }
 
 /**
+ * A terminal asked for on the landing composer's stage: the panel's `+` and
+ * the staged block's `Open terminal instead`. The stage takes it as its first
+ * action, and the start page's terminal panel opens it on the sandbox once it
+ * is awake (`handOff`); a sandbox that is up already opens it there now. The
+ * same credit checks as a send, and no agent sign-in.
+ */
+export function openLandingStagedTerminal(
+  surfaceKey: string,
+  runner: StagedSandboxRunner,
+): StagedTerminalAsk {
+  const ask = startStagedTerminal(surfaceKey, (fresh) =>
+    runner(surfaceKey, fresh, {
+      taskId: null,
+      resume: false,
+    }),
+  );
+  if (ask.kind === "awake") {
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, ask.hostId);
+    useLandingPanelStore.getState().requestTerminal(surfaceKey, ask.hostId);
+  }
+  return ask;
+}
+
+/** {@link openLandingStagedTerminal} for the landing composer's staged block. */
+export function useOpenLandingStagedTerminal(surfaceKey: string): () => void {
+  const runner = useStagedSandboxRunner();
+  return useCallback(() => {
+    openLandingStagedTerminal(surfaceKey, runner);
+  }, [runner, surfaceKey]);
+}
+
+/**
  * The send side of a staged sandbox (sandboxes plan D1, the critique's
  * two-phase handoff). Phase 1 creates or wakes the staged sandbox and waits
  * until it is ready, then pins the surface to it (`runStagedSandbox`); phase
@@ -187,20 +297,15 @@ export function useStagedSandboxSend(input: {
 }): StagedSandboxSend {
   const { surfaceKey, terminal, taskId, ownerId, claimsSend } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
-  const user = useAuthUser().data ?? null;
-  const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
-  const messageTextRef = useRef("");
-  // The name the create falls back to, for the line to show meanwhile.
-  const [fallbackName, setFallbackName] = useState(FALLBACK_NAME);
   const runner = useStagedSandboxRunner();
 
   const run = useCallback(
     (fresh: boolean): void => {
       if (surfaceKey === null) return;
       runner(surfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(messageTextRef.current),
         taskId,
+        resume: false,
       });
     },
     [runner, surfaceKey, taskId],
@@ -249,7 +354,7 @@ export function useStagedSandboxSend(input: {
 
   const intercept = useCallback(
     (
-      messageText: string,
+      _messageText: string,
       terminalLaunch: TerminalAgentLaunch | null,
     ): boolean => {
       if (surfaceKey === null) return false;
@@ -269,8 +374,6 @@ export function useStagedSandboxSend(input: {
       // it is busy. A boot with no send (a terminal ask started it, or the
       // draft that sent is gone) is handed off with this one.
       if (current.phase === "staged" || current.failure !== null) {
-        messageTextRef.current = messageText;
-        setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore
           .getState()
           .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
@@ -285,13 +388,86 @@ export function useStagedSandboxSend(input: {
     [ownerId, run, surfaceKey],
   );
 
-  const facts = useMemo(() => {
+  const facts = useSetupLineFacts(stage);
+  const providersOpener = useConfigurationProvidersOpener(
+    stage?.target.configuration.kind === "team",
+  );
+
+  const stop = useCallback((): void => {
+    if (surfaceKey === null || stage === null) return;
+    const clearCurrentStage = (): void => {
+      if (
+        readStagedSandbox(surfaceKey)?.clientRequestId === stage.clientRequestId
+      )
+        useStagedSandboxStore.getState().clear(surfaceKey);
+    };
+    if (stage.createdSandboxId === null) clearCurrentStage();
+    else verb.mutate("stop", { onSuccess: clearCurrentStage });
+  }, [stage, surfaceKey, verb]);
+
+  const line =
+    surfaceKey === null || stage === null || facts === null ? null : (
+      <>
+        <SandboxSetupLine
+          stage={stage}
+          name={stage.target.name}
+          facts={facts}
+          actions={{
+            onKeepWaiting: () => runFromLine(false),
+            onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
+            onChooseAnotherHost: () =>
+              useStagedSandboxStore.getState().clear(surfaceKey),
+            onRetryCreation: () => runFromLine(true),
+            onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
+            onSendAgain,
+            onChangeShape: () => {
+              useStagedSandboxStore.getState().cancel(surfaceKey);
+              openStagedShapeSheet(surfaceKey);
+            },
+            onRetryApplying: newHost.onRetryApplying,
+            onRepairSetup: newHost.onRepairSetup,
+            repairSetupPending: newHost.repairSetupPending,
+            applyingPending: newHost.applyingPending,
+            applyingError: newHost.applyingError,
+            onStop: stop,
+            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenProviders: providersOpener(stage.target.configuration),
+          }}
+        />
+        <StagedStopFailure stage={stage} onRetry={stop} />
+      </>
+    );
+
+  return { intercept, line };
+}
+
+/**
+ * The facts the setup line reads beyond its stage: the cost line, and for the
+ * shape refusal the region, the shape and whether a smaller one is affordable.
+ * `null` while there is no stage.
+ */
+export function useSetupLineFacts(
+  stage: StagedSandbox | null,
+): SandboxSetupLineFacts | null {
+  const user = useAuthUser().data ?? null;
+  const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
+  const sandboxes = useSandboxList().data?.sandboxes;
+  // A resting sandbox of the person's costs what its row says.
+  const existingPrice = useMemo<StagePrice | null>(() => {
+    if (stage === null || stage.target.kind !== "existing") return null;
+    const sandboxId = stage.target.sandboxId;
+    const row = sandboxes?.find((candidate) => candidate.id === sandboxId);
+    return row === undefined || row.priceMcPerHour === null
+      ? null
+      : { awakeMcPerHour: row.priceMcPerHour.awakeMc, exact: true };
+  }, [sandboxes, stage]);
+  return useMemo(() => {
     if (stage === null) return null;
     if (stage.target.kind === "existing" || catalogue === null) {
       return {
         costLine: priceClause({
           configuration: stage.target.configuration,
-          price: null,
+          price: existingPrice,
           needsCredits: false,
           audience: "private",
           reachHost: null,
@@ -318,7 +494,8 @@ export function useStagedSandboxSend(input: {
         reachHost: null,
         unmovedComputer: null,
       }).text,
-      regionLabel: region === null ? shape.region : region.label,
+      // A region the catalogue does not name is left unsaid, never its id.
+      regionLabel: region === null ? "" : region.label,
       shapeLabel: sandboxShapeLabel(shape.cpus, shape.memoryMb),
       // A larger staged shape has a smaller one the balance covers when it
       // covers the smallest's hour.
@@ -330,38 +507,7 @@ export function useStagedSandboxSend(input: {
           smallest.awakeMcPerHour,
         ),
     };
-  }, [catalogue, stage, user]);
-
-  const line =
-    surfaceKey === null || stage === null || facts === null ? null : (
-      <SandboxSetupLine
-        stage={stage}
-        name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
-        facts={facts}
-        actions={{
-          onKeepWaiting: () => runFromLine(false),
-          onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
-          onChooseAnotherHost: () =>
-            useStagedSandboxStore.getState().clear(surfaceKey),
-          onRetryCreation: () => runFromLine(true),
-          onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
-          onSendAgain,
-          onChangeShape: () => {
-            useStagedSandboxStore.getState().cancel(surfaceKey);
-            openStagedShapeSheet(surfaceKey);
-          },
-          onRetryApplying: newHost.onRetryApplying,
-          onStop: () => {
-            if (stage.createdSandboxId !== null) verb.mutate("stop");
-            useStagedSandboxStore.getState().clear(surfaceKey);
-          },
-          onOpenTerminal: newHost.onOpenTerminal,
-          onOpenProviders: null,
-        }}
-      />
-    );
-
-  return { intercept, line };
+  }, [catalogue, existingPrice, stage, user]);
 }
 
 /**
@@ -528,7 +674,7 @@ export function useStagedSandboxHandoff(input: {
 }
 
 /** Where the surface opens a terminal on the new host, in its epic. */
-interface StagedSandboxTerminal {
+export interface StagedSandboxTerminal {
   readonly epicId: string;
   readonly open: (target: TerminalLaunchTarget) => void;
 }
@@ -538,44 +684,72 @@ interface StagedSandboxTerminal {
  * settings there, then the wait resumes on the new verdict; `Open terminal`
  * opens a folderless one there once the host can.
  */
-function useNewHostActions(
+export function useNewHostActions(
   surfaceKey: string | null,
   createdHostId: string | null,
   terminal: StagedSandboxTerminal | null,
   run: (fresh: boolean) => void,
 ): {
-  readonly onRetryApplying: () => void;
+  readonly onRetryApplying: (() => void) | null;
+  readonly onRepairSetup: (() => void) | null;
+  readonly repairSetupPending: boolean;
+  readonly applyingPending: boolean;
+  readonly applyingError: boolean;
   readonly onOpenTerminal: (() => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
+  const operation = useSandboxSettingsOperation(createdHostId ?? "");
+  const retrySupported = useSandboxRetryApplyingSupported(createdHostId ?? "");
+  const guestRepairSupported = useSandboxGuestSetupRepairSupported(
+    createdHostId ?? "",
+  );
+  const guestRepair = useSandboxRepairGuestSetupOnHost(createdHostId ?? "");
+  const row = useSandboxList().data?.sandboxes.find(
+    (sandbox) => sandbox.hostId === createdHostId,
+  );
   const terminalTarget = useFolderlessTerminalTarget(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
   );
   return {
-    onRetryApplying: () => {
-      if (surfaceKey === null || createdHostId === null) return;
-      const origin = readStagedSandbox(surfaceKey);
-      if (origin === null) return;
-      repair.mutate(
-        {},
-        {
-          // The wait resumes only for the stage the repair was for: another
-          // pick made meanwhile is created by its own send, never by this.
-          onSuccess: () => {
-            const current = readStagedSandbox(surfaceKey);
-            if (
-              current === null ||
-              current.clientRequestId !== origin.clientRequestId ||
-              current.createdHostId !== createdHostId
-            ) {
-              return;
-            }
-            run(false);
-          },
-        },
-      );
-    },
+    applyingPending: operation === "pending",
+    applyingError: operation === "failed",
+    onRepairSetup:
+      guestRepairSupported && row?.guestConfigured === false
+        ? () => guestRepair.mutate({})
+        : null,
+    repairSetupPending: guestRepair.isPending,
+    onRetryApplying: retrySupported
+      ? () => {
+          if (
+            surfaceKey === null ||
+            createdHostId === null ||
+            operation === "pending"
+          )
+            return;
+          const origin = readStagedSandbox(surfaceKey);
+          if (origin === null) return;
+          repair.mutate(
+            {},
+            {
+              // The wait resumes only for the stage the repair was for: another
+              // pick made meanwhile is created by its own send, never by this.
+              onSuccess: (outcome) => {
+                if (!outcome.settingsApplied) return;
+                const current = readStagedSandbox(surfaceKey);
+                if (
+                  current === null ||
+                  current.clientRequestId !== origin.clientRequestId ||
+                  current.createdHostId !== createdHostId
+                ) {
+                  return;
+                }
+                run(false);
+              },
+            },
+          );
+        }
+      : null,
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null

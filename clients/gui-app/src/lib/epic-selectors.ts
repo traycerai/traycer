@@ -76,6 +76,9 @@ import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useEpicStore, useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
 import {
   useMaybeOpenEpicHandle,
@@ -1878,14 +1881,24 @@ function liveArtifactTitleFromHandle(
 
 /**
  * Canonical display title for a canvas tile / node. Live state is the single
- * source of truth - the Y.Doc title for record-backed nodes, the HOST's
- * `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
+ * source of truth - the projected record title for record-backed nodes, the
+ * HOST's `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
  * keyed by the tab's bound host + session id). The tile's persisted `name`
  * snapshot is only a fallback for tiles that have no live title (workspace
  * files, git diff, pre-hydration, a terminal session the host no longer
  * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
  * through this hook - never the raw `node.name` - so the resolve cannot be
  * forgotten in one place.
+ *
+ * A chat tab whose record the projection does not hold at all reads the cloud
+ * chat list next, before the snapshot. The sidebar renders exactly such a chat
+ * as a cloud-list row carrying the cloud title, so without this arm the two
+ * surfaces disagree for as long as the record plane lags: the serving host's
+ * replica inbox starts empty after a restart and fills by reconciliation, and
+ * through that window a tile opened before its title was generated announced
+ * "Untitled agent" beside a sidebar row with the real name. The list is read
+ * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
+ * TanStack cache is shared rather than split by host.
  *
  * `terminalHostClient` is the tab's bound-host client for terminal nodes
  * (`null` for every other node kind). The caller resolves it so one
@@ -1900,29 +1913,102 @@ type EpicTabDisplayTitleNode = {
   readonly hostId: string | null;
 };
 
+/**
+ * Whether an Agent tab's bound host is the host its projected record names.
+ * Only Agent tabs carry a binding to compare; an unbound tab or an unprojected
+ * record has nothing to disagree with.
+ */
+function tabMatchesProjectedHost(
+  node: EpicTabDisplayTitleNode,
+  projectedHostId: string | null,
+): boolean {
+  if (node.type !== "chat" && node.type !== "terminal-agent") return true;
+  if (node.hostId === null || projectedHostId === null) return true;
+  return node.hostId === projectedHostId;
+}
+
+/**
+ * The cloud-list title for a chat tab the projection holds NO record of, else
+ * `null`. "No record at all" is distinct from "a record with an empty title":
+ * the latter is the projection's own answer (untitled) and is never overridden
+ * by a cloud row, while the former is the projection not having heard of the
+ * chat yet, which is when the sidebar renders the cloud row instead.
+ */
+function useCloudChatTitleForAbsentRecord(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): string | null {
+  const chatRecordAbsent = useEpicStore(
+    (s) => node.type === "chat" && !Object.hasOwn(s.chats.byId, node.id),
+  );
+  const sessionHostClient = useEpicSessionHostClient();
+  const cloudChats = useCloudChatList({
+    client: sessionHostClient,
+    taskId: epicId,
+    enabled: chatRecordAbsent,
+  });
+  if (!chatRecordAbsent) return null;
+  // The OWNER is half the identity, not a refinement of the id: `chatId` is
+  // host-minted and the list carries every task-visible row including
+  // collaborators'. A local chat tile is the viewer's own by construction, so
+  // an id-only match could label this tab with a collaborator's chat. The
+  // HOST is the other half for the viewer's own rows: two of their hosts can
+  // mint the same id under one task, so a tab bound to a real host takes only
+  // the row that host minted - the same binding the projected-title path
+  // compares. A tab whose binding is still the placeholder has no host to
+  // hold the row to.
+  const boundHostId =
+    node.hostId === UNKNOWN_HOST_PLACEHOLDER ? null : node.hostId;
+  const title =
+    cloudChats.data?.chats.find(
+      (chat) =>
+        chat.identity.chatId === node.id &&
+        cloudRowIsViewersOwn(chat) &&
+        (boundHostId === null || chat.ownerHostId === boundHostId),
+    )?.title ?? null;
+  return title !== null && title.length > 0 ? title : null;
+}
+
 export function useEpicTabDisplayTitle(
   node: EpicTabDisplayTitleNode,
   epicId: string,
   terminalHostClient: HostClient<HostRpcRegistry> | null,
 ): string {
   const projectedHostId = useEpicNodeHostId(node.id);
-  const matchesProjection =
-    (node.type !== "chat" && node.type !== "terminal-agent") ||
-    node.hostId === null ||
-    projectedHostId === null ||
-    node.hostId === projectedHostId;
+  const matchesProjection = tabMatchesProjectedHost(node, projectedHostId);
   const liveArtifactTitle = useEpicLiveArtifactTitle(
     matchesProjection ? node.id : null,
   );
+  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
   const isTerminal = node.type === "terminal";
-  const liveTerminalTitle = useTerminalDisplayTitle({
-    client: isTerminal ? terminalHostClient : null,
-    epicId: isTerminal ? epicId : null,
-    sessionId: isTerminal ? node.id : null,
-  });
-  // An output window's tile carries no label at all (its persisted shape is
-  // just the command pointer), so the kind-explicit title comes from the owning
-  // chat's live set - and follows a rename the agent makes.
+  const liveTerminalTitle = useTerminalDisplayTitle(
+    {
+      client: isTerminal ? terminalHostClient : null,
+      epicId: isTerminal ? epicId : null,
+      sessionId: isTerminal ? node.id : null,
+    },
+    isTerminal ? node.hostId : null,
+  );
+  const liveManagedCommandTitle = useManagedCommandOutputTitle(node, epicId);
+  return (
+    liveArtifactTitle ??
+    cloudChatTitle ??
+    liveTerminalTitle ??
+    liveManagedCommandTitle ??
+    node.name
+  );
+}
+
+/**
+ * An output window's live title, `null` for every other node kind. Its tile
+ * carries no label at all (its persisted shape is just the command pointer),
+ * so the kind-explicit title comes from the owning chat's live set - and
+ * follows a rename the agent makes.
+ */
+function useManagedCommandOutputTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): string | null {
   const isManagedCommandOutput = node.type === "managed-command-output";
   const managedCommand = useManagedCommandOnHost({
     epicId,
@@ -1932,14 +2018,7 @@ export function useEpicTabDisplayTitle(
     hostId: isManagedCommandOutput ? (node.hostId ?? "") : "",
     commandId: isManagedCommandOutput ? node.id : "",
   });
-  const liveManagedCommandTitle =
-    managedCommand === null ? null : managedCommandTitle(managedCommand);
-  return (
-    liveArtifactTitle ??
-    liveTerminalTitle ??
-    liveManagedCommandTitle ??
-    node.name
-  );
+  return managedCommand === null ? null : managedCommandTitle(managedCommand);
 }
 
 export function useEpicLiveArtifactTitleGenerating(

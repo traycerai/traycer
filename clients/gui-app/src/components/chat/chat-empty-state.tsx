@@ -1,5 +1,5 @@
 import { use } from "react";
-import { Hash } from "lucide-react";
+import { BotAvatar } from "@/components/bots/bot-avatars";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { ChatBotPresentationContext } from "./chat-bot-presentation-context";
 
@@ -29,31 +29,27 @@ export function ChatEmptyState() {
 }
 
 /**
- * An empty bot channel opens as Slack's does, with the channel's name and
- * where it begins; an empty thread says it has no reply yet.
+ * An empty bot channel opens as Slack's does, with the bot's picture and
+ * name and where the person's channel with it begins; an empty thread draws
+ * nothing, so its box follows the post it opens on (decision 90).
  */
 function BotEmptyState(props: {
   readonly channel: boolean;
   readonly title: string;
 }) {
-  if (!props.channel) {
-    return (
-      <p className="px-4 py-6 text-ui-sm text-muted-foreground">
-        No replies yet.
-      </p>
-    );
-  }
+  if (!props.channel) return null;
   return (
     <div
       className="flex h-full flex-col justify-end gap-1 px-6 pb-4"
       data-testid="bot-channel-intro"
     >
-      <p className="flex items-center gap-1 text-ui-lg font-bold text-foreground">
-        <Hash className="size-5 shrink-0" aria-hidden="true" />
+      <p className="flex items-center gap-2 text-ui-lg font-bold text-foreground">
+        <BotAvatar size="sm" />
         <span className="truncate">{props.title}</span>
       </p>
       <p className="text-ui-sm text-muted-foreground">
-        This is the very beginning of the #{props.title} channel.
+        This is the beginning of your channel with{" "}
+        <span className="font-medium text-foreground">{props.title}</span>.
       </p>
     </div>
   );

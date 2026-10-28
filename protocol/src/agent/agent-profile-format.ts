@@ -194,6 +194,22 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       `${formatWindowLine("monthly", rateLimits.monthly)} [${rateLimits.monthly.status}]`,
     ].join("\n");
   }
+  if (rateLimits.provider === "kimi") {
+    // Only the windows Kimi's backend served: a null one is a quota the plan
+    // does not have, not one whose usage is unknown.
+    const lines = [
+      rateLimits.fiveHour === null
+        ? null
+        : formatWindowLine("5-hour", rateLimits.fiveHour),
+      rateLimits.weekly === null
+        ? null
+        : formatWindowLine("weekly", rateLimits.weekly),
+      rateLimits.monthly === null
+        ? null
+        : formatWindowLine("monthly", rateLimits.monthly),
+    ].filter((line): line is string => line !== null);
+    return lines.length === 0 ? "no limits reported" : lines.join("\n");
+  }
   if (rateLimits.provider === "cursor") {
     const hasBucketWindow =
       rateLimits.cursorModels !== null || rateLimits.otherModels !== null;

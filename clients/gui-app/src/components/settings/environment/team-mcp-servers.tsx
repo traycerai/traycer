@@ -3,6 +3,7 @@ import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protoco
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationMcpQuery } from "@/hooks/environment/team/use-mcp-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { configurationMcpValueSchema } from "@/hooks/environment/team/configuration-item-values";
@@ -42,14 +43,13 @@ export function TeamMcpItems(props: {
   readonly providerId: string | null;
 }): ReactNode {
   const query = useConfigurationMcpQuery();
+  const read = useBoundedRead(query);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
-  if (query.isPending) return <MutedAgentSpinner />;
-  if (query.isError)
-    return (
-      <ConfigurationReadFailed
-        page="MCP servers"
-        onRetry={() => void query.refetch()}
-      />
+  if (query.isPending || query.isError)
+    return read.failed ? (
+      <ConfigurationReadFailed page="MCP servers" onRetry={read.retry} />
+    ) : (
+      <MutedAgentSpinner />
     );
   return (
     <div className="flex flex-col gap-3">

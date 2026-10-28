@@ -84,11 +84,40 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * otherwise; never set with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
+    /**
+     * `bot.conversation.send@1.1`: a retry. Re-delivers the post whose
+     * request is `requestId`, as it was, to the session it went to; no row
+     * is written and `text` is not read. The bound host refuses with
+     * `REQUEST_NOT_FAILED` unless that request is open and its session is
+     * failed or parked on it. `null` (or absent) for a new post.
+     */
+    redeliver: z
+      .object({ requestId: z.string().min(1).max(255) })
+      .nullable()
+      .default(null),
+    /**
+     * `bot.conversation.send@1.1`: the request of a failed post this one
+     * replaces (an edit sent again). The bound host resolves it as
+     * superseded, so it owes no answer; its row stays. `null` (or absent)
+     * otherwise; never set with `redeliver`.
+     */
+    supersedes: z.string().min(1).max(255).nullable().default(null),
   }),
 );
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
 >;
+
+/** The 1.0 request, frozen by hand: without `redeliver` and `supersedes`. */
+export const botConversationSendRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1).max(255),
+    text: z.string().min(1).max(100_000),
+    threadId: z.string().min(1).max(36).nullable().default(null),
+    announcementId: z.string().min(1).max(255).nullable().default(null),
+  }),
+);
 
 export const botConversationSendDeliverySchema = lazySchema(() =>
   z.enum(["written", "queued"]),
@@ -118,14 +147,18 @@ export type BotConversationSendResponse = z.infer<
 
 // ---- bot.thread.list (T41) --------------------------------------------- //
 
-/** The post a thread hangs off, as its list row shows it. */
+/**
+ * The post a thread hangs off, as its list row shows it. It names the post
+ * and carries no text: a client reads the text from the channel's row
+ * `messageId` names, and a summary stays one small entry wherever it is
+ * kept (the bot's environment room holds one per thread, T65).
+ */
 export const botThreadAnchorSchema = lazySchema(() =>
   z.object({
     messageId: z.string().min(1),
     requestId: z.string().min(1),
     /** The member who posted it. */
     senderUserId: z.string().min(1).nullable(),
-    text: z.string(),
     sentAt: z.number().int(),
     /** When the thread's verdict resolved the post's request; `null` while open. */
     resolvedAt: z.number().int().nullable(),
@@ -159,7 +192,11 @@ export const botThreadSummarySchema = lazySchema(() =>
 );
 export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;
 
-/** Answered by the bot's bound host, from its own store; most recent activity first. */
+/**
+ * Answered by any host: the bound one from its own store, any other from
+ * the summaries the bound host keeps in the bot's environment room (T65).
+ * Most recent activity first.
+ */
 export const botThreadListRequestSchema = lazySchema(() =>
   z.object({ botId: botIdSchema }),
 );

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import {
   STATUS_ANIMATION_SMOOTH_CADENCE_MS,
   useStatusAnimation,
@@ -22,7 +22,6 @@ export function WorkingShimmerText(props: {
   readonly children: string;
   readonly className: string | undefined;
 }) {
-  const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback(
     (element: HTMLSpanElement, elapsedMs: number) => {
       const elapsed =
@@ -37,7 +36,11 @@ export function WorkingShimmerText(props: {
   const clear = useCallback((element: HTMLSpanElement) => {
     element.style.backgroundPosition = "";
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
+  const ref = useStatusAnimation(
+    write,
+    clear,
+    STATUS_ANIMATION_SMOOTH_CADENCE_MS,
+  );
   return (
     <span ref={ref} className={cn("working-text-shimmer", props.className)}>
       {props.children}

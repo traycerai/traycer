@@ -30,6 +30,7 @@ import type {
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
+  SandboxVerbGesture,
   SecretRequestDecideFetchResult,
   SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
@@ -136,6 +137,7 @@ export interface AuthBridgeSurface {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult>;
   patchSandbox(
     bearerToken: string,
@@ -150,6 +152,7 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
@@ -285,11 +288,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         request,
       ) as Promise<SandboxCreateFetchResult>,
 
-    destroySandbox: (bearerToken, sandboxId) =>
+    destroySandbox: (bearerToken, sandboxId, onlyIfIdle) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.destroySandbox,
         bearerToken,
         sandboxId,
+        onlyIfIdle,
       ) as Promise<SandboxVerbFetchResult>,
 
     patchSandbox: (bearerToken, sandboxId, request) =>
@@ -307,12 +311,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         sandboxId,
       ) as Promise<SandboxVerbFetchResult>,
 
-    runSandboxVerb: (bearerToken, sandboxId, verb, timeoutMs) =>
+    runSandboxVerb: (bearerToken, sandboxId, verb, gesture, timeoutMs) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.runSandboxVerb,
         bearerToken,
         sandboxId,
         verb,
+        gesture,
         timeoutMs,
       ) as Promise<SandboxLifecycleVerbFetchResult>,
 

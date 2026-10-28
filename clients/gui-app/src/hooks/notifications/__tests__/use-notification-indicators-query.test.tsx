@@ -403,6 +403,8 @@ function applyCloudSnapshot(
   rows: ReadonlyArray<HostNotificationsCloudFeedRow>,
   version: number,
 ): void {
+  // The simulated stream was opened for the harness's signed-in user-a.
+  useCloudNotificationsStore.setState({ accountId: "user-a" });
   useCloudNotificationsStore.getState().applySnapshot({
     rows,
     version,

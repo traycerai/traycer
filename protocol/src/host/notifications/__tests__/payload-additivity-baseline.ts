@@ -879,4 +879,125 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
     },
     required: ["kind", "environmentId", "secretName", "outcome"],
   },
+  sandbox_notice: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "sandbox_notice" },
+      sandboxId: { type: "string", minLength: 1 },
+      sandboxName: { type: "string" },
+      notice: {
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", const: "resting_warning" },
+              destroyAt: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              periodMinutes: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            required: ["kind", "destroyAt", "periodMinutes"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", const: "resting_destroyed" },
+            },
+            required: ["kind"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", const: "frozen" },
+              cause: { type: "string", enum: ["credits", "payer_removed"] },
+            },
+            required: ["kind", "cause"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", const: "frozen_warning" },
+              daysLeft: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            required: ["kind", "daysLeft"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: { kind: { type: "string", const: "frozen_deleting" } },
+            required: ["kind"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: { kind: { type: "string", const: "frozen_destroyed" } },
+            required: ["kind"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: { kind: { type: "string", const: "create_failed" } },
+            required: ["kind"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: { kind: { type: "string", const: "lost" } },
+            required: ["kind"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", const: "destroyed_by_member" },
+              actorName: { anyOf: [{ type: "string" }, { type: "null" }] },
+              destroyedAt: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              stoppedAgentTaskTitles: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            required: ["kind", "actorName"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", const: "manual_rest" },
+              verb: { type: "string", enum: ["suspend", "stop"] },
+              outcome: { type: "string", enum: ["confirmed", "failed"] },
+              byYou: { type: "boolean" },
+              actorName: { anyOf: [{ type: "string" }, { type: "null" }] },
+              confirmedAt: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            required: ["kind", "verb", "outcome", "byYou", "actorName"],
+            additionalProperties: false,
+          },
+        ],
+        "x-traycer-discriminator": "kind",
+      },
+    },
+    required: ["kind", "sandboxId", "sandboxName", "notice"],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;

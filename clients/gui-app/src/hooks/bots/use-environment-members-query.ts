@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useState } from "react";
 import {
   useQueryClient,
@@ -6,7 +7,10 @@ import {
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentMembersResponse } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentMember,
+  EnvironmentMembersResponse,
+} from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -62,9 +66,28 @@ export function useEnvironmentMembers(
   environmentId: string | null,
   enabled: boolean,
 ): BotMemberResolver {
+  return useEnvironmentMemberDirectory(client, environmentId, enabled).resolve;
+}
+
+/**
+ * The environment's members as a list and as a resolver: the pages
+ * {@link useEnvironmentMembers} reads, in order. The list is `null` until
+ * every page asked for has answered, and while the gate is shut.
+ */
+interface EnvironmentMemberDirectory {
+  readonly resolve: BotMemberResolver;
+  readonly members: ReadonlyArray<EnvironmentMember> | null;
+}
+
+export function useEnvironmentMemberDirectory(
+  client: HostClient<HostRpcRegistry> | null,
+  environmentId: string | null,
+  enabled: boolean,
+): EnvironmentMemberDirectory {
+  const servingClient = usePoolTierHostClient(client);
   const queryClient = useQueryClient();
   // The same host id the batch below keys its queries with.
-  const hostId = useReactiveHostReadiness(client).hostId;
+  const hostId = useReactiveHostReadiness(servingClient).hostId;
   const [requested, setRequested] = useState<Requested>({
     environmentId,
     hostId,
@@ -101,7 +124,7 @@ export function useEnvironmentMembers(
     typeof METHOD,
     ReadonlyArray<EnvironmentMembersResponse | undefined>
   >({
-    client,
+    client: servingClient,
     requests,
     cacheKeyIdentity: undefined,
     options: {
@@ -118,21 +141,32 @@ export function useEnvironmentMembers(
       setRequested({ environmentId, hostId, cursors: walked });
     }
   }
-  return useMemo((): BotMemberResolver => {
+  return useMemo((): EnvironmentMemberDirectory => {
     // A host that cannot answer now names nobody, whatever it answered
     // before: the gate, not the cache, decides.
-    if (!enabled) return UNRESOLVED_BOT_MEMBERS;
+    if (!enabled) return { resolve: UNRESOLVED_BOT_MEMBERS, members: null };
     const byUserId = new Map<string, BotMember>();
+    const members: EnvironmentMember[] = [];
     for (const page of pages) {
       for (const member of page?.members ?? []) {
+        if (!byUserId.has(member.userId)) members.push(member);
         byUserId.set(member.userId, {
           displayName: member.displayName,
           avatarUrl: member.avatarUrl,
         });
       }
     }
-    if (byUserId.size === 0) return UNRESOLVED_BOT_MEMBERS;
-    return (userId) => byUserId.get(userId) ?? null;
+    const complete =
+      pages.length > 0 &&
+      pages.every((page) => page !== undefined) &&
+      pages.at(-1)?.nextCursor === null;
+    return {
+      resolve:
+        byUserId.size === 0
+          ? UNRESOLVED_BOT_MEMBERS
+          : (userId) => byUserId.get(userId) ?? null,
+      members: complete ? members : null,
+    };
   }, [enabled, pages]);
 }
 

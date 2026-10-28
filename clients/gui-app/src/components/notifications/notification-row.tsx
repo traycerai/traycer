@@ -28,6 +28,8 @@ import {
   type TeamHostNotificationKind,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
+import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
+import { SandboxNoticeActions } from "@/components/notifications/sandbox-notice-actions";
 import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -55,6 +57,7 @@ import {
   type MergedNotificationRow,
   sandboxIdOfNotificationRow,
   useMergedNotificationRow,
+  useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
 import {
   type NotificationEvent,
@@ -286,9 +289,12 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         aria-hidden
         className="flex size-6 shrink-0 items-center justify-center"
       >
-        <Icon className={cn("size-4", glyph.colorClassName)} />
+        <NotificationRowBotAvatar
+          payload={row.payload}
+          fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
+        />
       </span>
-      <NotificationRowWithSecrets row={row}>
+      <NotificationRowWithSecrets row={row} onActivate={props.onActivate}>
         <NotificationRowMain
           row={row}
           displayBody={packPresentation.displayBody}
@@ -316,18 +322,21 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
 /**
  * Extra content sits UNDER the row's main area and never inside it, because
  * that area is one button when the row is navigable and the extra controls
- * are buttons of their own. Secrets (grant / export) and P2's five
- * environment rows share this wrapper.
+ * are buttons of their own. Secrets (grant / export), P2's five
+ * environment rows and the sandbox notices share this wrapper.
  *
  * Every other row gets its main area back untouched, with no wrapper.
  */
 function NotificationRowWithSecrets(props: {
   readonly row: MergedNotificationRow;
+  readonly onActivate: (row: MergedNotificationRow) => void;
   readonly children: ReactNode;
 }): ReactNode {
   const secrets = props.row.secrets ?? null;
   const environmentDetail = props.row.environmentDetail ?? null;
-  if (secrets === null && environmentDetail === null) return props.children;
+  const sandboxNotice = props.row.sandboxNotice ?? null;
+  if (secrets === null && environmentDetail === null && sandboxNotice === null)
+    return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {props.children}
@@ -336,9 +345,47 @@ function NotificationRowWithSecrets(props: {
         resolved={props.row.resolvedAt !== null}
       />
       {environmentDetail === null ? null : (
-        <EnvironmentNotificationExtra detail={environmentDetail} />
+        <EnvironmentNoticeExtra row={props.row} detail={environmentDetail} />
+      )}
+      {sandboxNotice === null ? null : (
+        <SandboxNoticeExtra
+          row={props.row}
+          notice={sandboxNotice}
+          onActivate={props.onActivate}
+        />
       )}
     </div>
+  );
+}
+
+function EnvironmentNoticeExtra(props: {
+  readonly row: MergedNotificationRow;
+  readonly detail: NonNullable<MergedNotificationRow["environmentDetail"]>;
+}): ReactNode {
+  const actions = useMergedNotificationsActions();
+  return (
+    <EnvironmentNotificationExtra
+      detail={props.detail}
+      onSettingsApplied={() => actions.resolveNotice(props.row)}
+    />
+  );
+}
+
+/** Details opens the row as activating it does; Dismiss clears it. */
+function SandboxNoticeExtra(props: {
+  readonly row: MergedNotificationRow;
+  readonly notice: NonNullable<MergedNotificationRow["sandboxNotice"]>;
+  readonly onActivate: (row: MergedNotificationRow) => void;
+}): ReactNode {
+  const actions = useMergedNotificationsActions();
+  return (
+    <SandboxNoticeActions
+      notice={props.notice}
+      onDetails={() => props.onActivate(props.row)}
+      onDismiss={() => actions.clear(props.row)}
+      active={props.row.resolvedAt === null}
+      onExtended={() => actions.resolveNotice(props.row)}
+    />
   );
 }
 
@@ -657,6 +704,9 @@ const HOST_KIND_GLYPHS: Record<
   "secret.export.minted": SECRET_GLYPH,
   "secret.rotated": SECRET_GLYPH,
   "secret.removed": SECRET_GLYPH,
+  // Only reachable for an `info` row: the severity branches above claim a
+  // warning and a destroy.
+  "sandbox.notice": NEUTRAL_BELL,
   // A change in a team the reader belongs to.
   "team.role.changed": TEAM_GLYPH,
   "team.host.returned": TEAM_GLYPH,

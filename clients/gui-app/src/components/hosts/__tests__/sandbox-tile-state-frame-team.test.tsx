@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -23,12 +22,7 @@ import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
-import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
-import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const HOST_ID = "host-sbx-1";
@@ -55,19 +49,6 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
     refetch: vi.fn(),
   }),
 }));
-vi.mock(
-  "@traycer-clients/shared/host-client/host-rpc-routing",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
-      >();
-    return {
-      ...actual,
-      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
-    };
-  },
-);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
@@ -179,6 +160,7 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
         expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
           "sbx_1",
           verb,
+          null,
           expect.any(Number),
         );
       });
@@ -202,6 +184,7 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         "start",
+        null,
         expect.any(Number),
       );
     });
@@ -253,67 +236,5 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     expect(screen.getByTestId("sandbox-tile-overlay").textContent).toBe(
       "Frozen: out of credits. Top up to resume.",
     );
-  });
-});
-
-describe("<SandboxTileStateFrame /> a chat the pool may serve", () => {
-  const CHAT = { epicId: "epic-1", chatId: "chat-1" };
-
-  function servingFrame(serving: ChatServing) {
-    return { kind: "serving", hasBinaryPayload: false, serving };
-  }
-
-  it("moves the sandbox's state from a strip to a cover when a later frame says the chat is live", () => {
-    setEntry({
-      state: "suspended",
-      frozen: false,
-      owner: TEAM,
-      profile: "agent",
-      summary: {},
-    });
-    const client = new FakeStreamClient(true);
-    const witness = new PoolChatServingWitness();
-    witness.setStreamClient(client);
-    const release = witness.retain({ hostId: HOST_ID, ...CHAT });
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <ChatServingWitnessContext.Provider value={witness}>
-          <SandboxTileStateFrame chat={CHAT}>
-            <textarea data-testid="tile-body" />
-          </SandboxTileStateFrame>
-        </ChatServingWitnessContext.Provider>
-      </QueryClientProvider>,
-    );
-
-    act(() => {
-      client.sessions[0]?.emit(
-        servingFrame({
-          ownerHostId: HOST_ID,
-          state: "at-rest",
-          catchingUp: null,
-        }),
-        null,
-      );
-    });
-    expect(
-      screen.getByTestId("sandbox-tile-overlay").getAttribute("data-placement"),
-    ).toBe("strip");
-
-    act(() => {
-      client.sessions[0]?.emit(
-        servingFrame({
-          ownerHostId: HOST_ID,
-          state: "live",
-          catchingUp: null,
-        }),
-        null,
-      );
-    });
-    expect(
-      screen.getByTestId("sandbox-tile-overlay").getAttribute("data-placement"),
-    ).toBe("cover");
-
-    release();
-    witness.dispose();
   });
 });

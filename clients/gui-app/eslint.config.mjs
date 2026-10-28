@@ -74,6 +74,14 @@ import {
 // To EXEMPT one file, add a block whose `files` is that single file and whose
 // dimensions are its partition's minus the one being lifted.
 const importRestrictionDimensions = {
+  mutationWatchers: [
+    {
+      regex: "^@tanstack/react-query$",
+      importNames: ["useMutationState", "useIsMutating"],
+      message:
+        "Use useMutationStateOf / useIsMutatingOf from @/hooks/use-mutation-state-of so changed filters are reflected immediately without observer-option cache fan-out.",
+    },
+  ],
   posthog: [
     {
       group: ["posthog-js", "posthog-js/*"],
@@ -162,7 +170,7 @@ const importRestrictionDimensions = {
   ],
 };
 
-/** The `boundary` dimension plus whichever others this file set carries. */
+/** The app-wide boundary and mutation watchers, plus this file set's dimensions. */
 function importRestrictions(...dimensions) {
   return [
     "error",
@@ -170,6 +178,7 @@ function importRestrictions(...dimensions) {
       ...traycerClientsImportBoundaryRestrictions,
       patterns: [
         ...(traycerClientsImportBoundaryRestrictions.patterns ?? []),
+        ...importRestrictionDimensions.mutationWatchers,
         ...dimensions.flatMap((name) => importRestrictionDimensions[name]),
       ],
     },
@@ -1612,7 +1621,10 @@ const restyleExemptions = [
     // A hashed profile accent carried as a CSS custom property - ticket 02's
     // sanctioned form for a colour that is DATA - with the one fixed near-black
     // that is legible on every hue it can produce.
-    files: ["src/components/providers/profile-avatar-badge.tsx"],
+    files: [
+      "src/components/providers/profile-avatar-badge.tsx",
+      "src/components/bots/bot-avatars.tsx",
+    ],
     contracts: [
       { pattern: "^AvatarFallback$", allow: ["color", "typography"] },
     ],
@@ -1765,6 +1777,15 @@ const hooksEpicAppWideByCallerExemptions = [
   // pre-flight host fence); every session-scoped hook in this file already
   // resolves `useEpicSessionHostClient` or takes a client.
   "src/hooks/epic/use-epic-chat-mutations.ts",
+];
+
+// `epic.attachEnvironment` is the person's account-level act: the protocol
+// requires their own host's bearer and refuses a team's host. Prefer the
+// caller's personal serving client; when that host belongs to a team, the
+// personal app-wide fallback follows the fork dialog's attachment contract.
+// This read never selects task placement or the host a chat/terminal runs on.
+const accountOperationAppWideReadExemptions = [
+  "src/hooks/epic/use-epic-attach-environment-mutation.ts",
 ];
 
 // The dead-tile "open in editor" opener is a FOLLOWING surface with no picker
@@ -2226,6 +2247,7 @@ export default tseslint.config(
       ...followingSurfaceAppWideReadExemptions,
       ...appChromeAppWideReadExemptions,
       ...hookWrapperAppWideReadExemptions,
+      ...accountOperationAppWideReadExemptions,
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
@@ -3145,11 +3167,12 @@ export default tseslint.config(
     //     colour the user picked (`resolveProfileAccentColor`), never a token,
     //     so its initials need a fixed dark that reads on those values.
     //     `--foreground` would flip with the theme while the chip behind it
-    //     did not.
+    //     did not. A bot channel's pictures hash onto the same palette.
     files: [
       "src/components/auth/cinematic-backdrop.tsx",
       "src/components/layout/header/sign-in/device-code-progress.tsx",
       "src/components/providers/profile-avatar-badge.tsx",
+      "src/components/bots/bot-avatars.tsx",
     ],
     rules: {
       "shadcn/no-raw-colors": "off",

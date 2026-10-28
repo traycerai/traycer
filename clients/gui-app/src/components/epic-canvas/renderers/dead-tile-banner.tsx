@@ -55,16 +55,34 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * whatever the owner may still be driving. Access to a remote agent is
  * live-only by construction; the owner's machine is the only place it can be
  * started.
+ *
+ * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
+ * ended with it, and Start is the remedy, so a terminal or a terminal
+ * agent says that instead of calling the host unreachable.
+ *
+ * `sandbox-destroyed` - a member destroyed the sandbox: the banner says who
+ * and when (`destroyedLine`), not a fault.
  */
-export type DeadTileReason = "host-unreachable" | "not-running-remotely";
+export type DeadTileReason =
+  | "host-unreachable"
+  | "not-running-remotely"
+  | "sandbox-stopped"
+  | "sandbox-destroyed";
 
 function terminalDeadTileMessage(
   reason: DeadTileReason,
   ownerKind: DeadTileOwnerKind,
   hostLabel: string,
+  destroyedLine: string | null,
 ): string {
+  if (reason === "sandbox-destroyed" && destroyedLine !== null) {
+    return destroyedLine;
+  }
   if (reason === "not-running-remotely") {
     return `This agent is not running on "${hostLabel}" right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
+  }
+  if (reason === "sandbox-stopped") {
+    return `${hostLabel} is stopped. Start it to use this terminal again.`;
   }
   return ownerKind === "agent"
     ? `Host "${hostLabel}" is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
@@ -80,6 +98,8 @@ export interface TerminalDeadTileBannerProps {
    * silently pick one for a call site that had not thought about it.
    */
   readonly reason: DeadTileReason;
+  /** Who destroyed the sandbox and when, for `sandbox-destroyed`; else `null`. */
+  readonly destroyedLine: string | null;
   readonly onClose: () => void;
   readonly testId: string;
 }
@@ -97,6 +117,7 @@ export function TerminalDeadTileBanner(
           props.reason,
           props.ownerKind,
           props.hostLabel,
+          props.destroyedLine,
         )}
       </p>
       <div className="flex flex-wrap justify-center gap-2">
@@ -393,6 +414,7 @@ export function ChatCatchingUpBanner(
  *   created the agent.
  */
 export type ChatDeadTileBannerReason =
+  | "sandbox-destroyed"
   | "host-offline"
   | "chat-not-visible"
   | "chat-not-on-this-host"
@@ -452,6 +474,7 @@ export interface ChatDeadTileBannerProps {
    * reads it.
    */
   readonly continueTargetLabel: string | null;
+  readonly details?: ReactNode;
   readonly onClone: () => void;
   readonly cloning: boolean;
   readonly className: string | undefined;
@@ -500,6 +523,16 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
   ChatDeadTileBannerReason,
   ChatDeadTileBannerCopy
 > = {
+  "sandbox-destroyed": {
+    message: (host) => <>{host} was destroyed. This chat stays readable.</>,
+    messageWithoutClone: (host) => (
+      <>{host} was destroyed. This chat stays readable.</>
+    ),
+    reportTitle: "Agent sandbox was destroyed",
+    reportMessage: "The agent’s sandbox was destroyed.",
+    offersClone: true,
+    actionLabel: () => "Continue on another host",
+  },
   // Leads with what the reader can do, beside the button that does it, and
   // keeps the cause: over a loaded transcript there is no body below to say
   // the host is offline, so this sentence is the only one that does.
@@ -764,6 +797,7 @@ function ownerSwappedCopy(props: ChatDeadTileBannerProps): {
   };
 } | null {
   if (
+    props.reason === "sandbox-destroyed" ||
     props.reason === "chat-no-longer-shared" ||
     props.reason === "sandbox-removed"
   ) {
@@ -826,17 +860,20 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           {copy.actionLabel(target)}
         </Button>
       ) : null}
-      <ReportIssueAction
-        context={createReportIssueContext({
-          title: report.reportTitle,
-          message: report.reportMessage,
-          code: null,
-          source: "Agent",
-        })}
-        presentation="icon"
-        variant="warning-ghost"
-        className="shrink-0"
-      />
+      {props.details}
+      {props.reason !== "sandbox-destroyed" ? (
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: report.reportTitle,
+            message: report.reportMessage,
+            code: null,
+            source: "Agent",
+          })}
+          presentation="icon"
+          variant="warning-ghost"
+          className="shrink-0"
+        />
+      ) : null}
     </div>
   );
 }

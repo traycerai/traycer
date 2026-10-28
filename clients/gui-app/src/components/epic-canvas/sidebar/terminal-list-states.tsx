@@ -98,6 +98,7 @@ export function TerminalsEmptyState(props: { readonly testIdPrefix: string }) {
       icon={TerminalIcon}
       title="No terminals yet."
       description={null}
+      action={null}
       testId={`${props.testIdPrefix}-empty`}
     />
   );

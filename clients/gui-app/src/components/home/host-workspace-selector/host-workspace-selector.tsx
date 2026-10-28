@@ -1,3 +1,4 @@
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import {
   firstTaskImports,
   firstTaskImportPending,
@@ -13,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useIsMutating } from "@tanstack/react-query";
+
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection, WorkspaceHostSwitcher } from "./host-section";
@@ -164,8 +165,11 @@ import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import { useOpenLandingStagedTerminal } from "@/components/composer/use-staged-sandbox-send";
 import {
+  useInTaskSandboxStagingSurface,
   useSandboxStaging,
+  type NewStagedSandboxTarget,
   type SandboxStaging,
   type SandboxStagingSurface,
 } from "@/components/composer/use-sandbox-staging";
@@ -237,6 +241,14 @@ type BoundOwnerSurface = {
    * that cannot fork at all (terminal agents), whose host section is locked.
    */
   readonly onForkOnHost: ((targetHostId: string) => void) | null;
+  /**
+   * Chat-only: the tile's handler for a New sandbox picked in the host chip,
+   * which forks the chat onto that new sandbox. `null` where a pick cannot
+   * fork (terminal agents).
+   */
+  readonly onForkOnNewSandbox:
+    | ((target: NewStagedSandboxTarget) => void)
+    | null;
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
@@ -392,10 +404,11 @@ function HomeSurface(props: HomeSurfaceProps) {
   // composer surface pin (pin ?? effective), so read the same primitive.
   const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
   const surfaceKey = useComposerSurfaceHostKey();
+  const openTerminalInstead = useOpenLandingStagedTerminal(surfaceKey);
   // The landing composer creates the task, so there is none yet.
   const sandboxStaging = useMemo<SandboxStagingSurface>(
-    () => ({ surfaceKey, task: null }),
-    [surfaceKey],
+    () => ({ surfaceKey, task: null, openTerminalInstead }),
+    [openTerminalInstead, surfaceKey],
   );
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
@@ -526,6 +539,7 @@ export function ActiveHostWorkspaceControls(
     surface: props.sandboxStaging,
     memoryHostId: activeHostId,
     hosts: hostOptions.hosts,
+    forkOnNew: null,
   });
   const visibleHostOptions = hostPickerOptionsForScope(
     props.hostScope,
@@ -702,6 +716,14 @@ export function ActiveHostWorkspaceControls(
   );
 }
 
+/**
+ * A chat chip's staging key: it never stages (its picks fork), so the key
+ * only keeps its shape sheet apart from every composer's.
+ */
+function chatForkSurfaceKey(ownerId: string): string {
+  return `chat-fork:${ownerId}`;
+}
+
 function stagingComposer(
   staging: SandboxStaging | null,
 ): HostSwitcherComposerMode | null {
@@ -748,6 +770,8 @@ function SandboxStagingExtras(props: {
         <ConsequencesBlock
           input={props.staging.consequences}
           onMoveFirst={null}
+          onOpenTerminalInstead={props.staging.openTerminalInstead}
+          onChooseAnotherHost={props.staging.chooseAnotherHost}
         />
       )}
       {props.staging.sheet}
@@ -839,7 +863,8 @@ function HomeWorkspaceRows(props: {
   const { announcement: primaryAnnouncement, announcePrimaryChange } =
     usePrimaryChangeAnnouncement();
   const addFolderPending =
-    useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
+    useIsMutatingOf({ mutationKey: workspaceMutationKeys.prepareFolders() }) >
+    0;
   const pickAndAddFolders = usePickAndAddWorkspaceFolders(
     activeHostClient,
     workspaceSource,
@@ -1967,6 +1992,24 @@ interface InEpicSurfaceProps {
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
   const hostOptions = useHostOptions();
+  // A chat's chip lists as the composer does (In this task first, Yours,
+  // Sandboxes you started, New), and every pick forks: a host row onto that
+  // host, a New row onto the sandbox it describes.
+  const chatStagingSurface = useInTaskSandboxStagingSurface(
+    surface.epicId,
+    chatForkSurfaceKey(surface.ownerId),
+    null,
+    null,
+  );
+  const chatStaging = useSandboxStaging({
+    surface:
+      surface.kind === "chat" && surface.onForkOnNewSandbox !== null
+        ? chatStagingSurface
+        : null,
+    memoryHostId: props.activeHostId,
+    hosts: hostOptions.hosts,
+    forkOnNew: surface.onForkOnNewSandbox,
+  });
   const pickerHosts =
     props.activeHostId === null ||
     findHostOption(hostOptions.hosts, props.activeHostId) !== null
@@ -3331,13 +3374,16 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       isLoading={hostOptions.isLoading}
       listsFailed={hostOptions.listsFailed}
       onRetryLists={hostOptions.retryLists}
-      composer={null}
+      composer={stagingComposer(chatStaging)}
       surface="inline"
       keepFocusableWhenDisabled={surface.kind === "terminal-agent"}
     />
   );
   const hostSwitcherSlot = (
-    <span className="flex w-full min-w-0">{hostSwitcher}</span>
+    <span className="flex w-full min-w-0">
+      {hostSwitcher}
+      {chatStaging === null ? null : chatStaging.sheet}
+    </span>
   );
 
   return (

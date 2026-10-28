@@ -21,6 +21,7 @@ import {
   continueSubagentRequestSchema,
   continueSubagentResponseSchema,
   createCommentThreadRequestSchema,
+  createCommentThreadRequestSchemaPreCanvasPoint,
   createCommentThreadRequestSchemaPreAnchor,
   createCommentThreadRequestSchemaPreHtml,
   createCommentThreadResponseSchema,
@@ -52,6 +53,7 @@ import {
   editCommentRequestSchemaPreHtml,
   editCommentResponseSchema,
   epicMentionArtifactsRequestSchema,
+  epicMentionArtifactsResponseSchema,
   epicMentionEpicsRequestSchema,
   epicMentionEpicsResponseSchema,
   epicMentionReviewsResponseSchema,
@@ -66,6 +68,7 @@ import {
   listCommentThreadsRequestSchemaPreHtml,
   listCommentThreadsResponseSchema,
   listCommentThreadsResponseSchemaPreAnchor,
+  listCommentThreadsResponseSchemaPreCanvasPoint,
   listEpicCollaboratorsRequestSchema,
   listEpicCollaboratorsResponseSchema,
   listEpicCollaboratorsResponseSchemaPre11,
@@ -866,6 +869,19 @@ export const epicMentionReviewsV10 = defineRpcContract({
 });
 
 /**
+ * HTML artifacts, canvases and files joined the `@` picker after the released
+ * floor was frozen, so they ride one optional method (registered with
+ * `degrade: { kind: "unsupported" }`): a host that predates it simply lists
+ * none, and the picker still shows the four markdown kinds.
+ */
+export const epicMentionArtifactsV10 = defineRpcContract({
+  method: "epic.mentionArtifacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: epicMentionArtifactsRequestSchema,
+  responseSchema: epicMentionArtifactsResponseSchema,
+});
+
+/**
  * The task's hosts, each with its owner principal and whether the reading
  * host's principal reaches it: a pass-through of traycer-server's task host
  * list with the request's own credential. Optional (non-floor): a host without
@@ -1456,10 +1472,11 @@ export const epicCreateCommentThreadUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/** 1.2 adds the element/text anchors; 1.1 keeps its frozen schemas. */
 export const epicCreateCommentThreadV12 = defineRpcContract({
   method: "epic.createCommentThread",
   schemaVersion: { major: 1, minor: 2 } as const,
-  requestSchema: createCommentThreadRequestSchema,
+  requestSchema: createCommentThreadRequestSchemaPreCanvasPoint,
   responseSchema: createCommentThreadResponseSchema,
 });
 export const epicCreateCommentThreadUpgradeV11ToV12 = defineUpgradePath<
@@ -1468,6 +1485,27 @@ export const epicCreateCommentThreadUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: epicCreateCommentThreadV11.schemaVersion,
   to: epicCreateCommentThreadV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * 1.3 adds the canvas-point anchor; 1.2 keeps its frozen union. The GUI
+ * refuses a point draft below 1.3 instead of sending a request the host's
+ * discriminated union rejects.
+ */
+export const epicCreateCommentThreadV13 = defineRpcContract({
+  method: "epic.createCommentThread",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: createCommentThreadRequestSchema,
+  responseSchema: createCommentThreadResponseSchema,
+});
+export const epicCreateCommentThreadUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicCreateCommentThreadV12,
+  typeof epicCreateCommentThreadV13
+>({
+  from: epicCreateCommentThreadV12.schemaVersion,
+  to: epicCreateCommentThreadV13.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1616,11 +1654,12 @@ export const epicListCommentThreadsUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/** 1.2 adds the anchor data fields; 1.1 keeps its frozen schemas. */
 export const epicListCommentThreadsV12 = defineRpcContract({
   method: "epic.listCommentThreads",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: listCommentThreadsRequestSchema,
-  responseSchema: listCommentThreadsResponseSchema,
+  responseSchema: listCommentThreadsResponseSchemaPreCanvasPoint,
 });
 export const epicListCommentThreadsUpgradeV11ToV12 = defineUpgradePath<
   typeof epicListCommentThreadsV11,
@@ -1628,6 +1667,27 @@ export const epicListCommentThreadsUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: epicListCommentThreadsV11.schemaVersion,
   to: epicListCommentThreadsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * 1.3 adds the canvas-point anchor kind, which is response VALUE growth
+ * over 1.2's frozen enum: the host projects a point thread to a
+ * whole-artifact anchor for pre-1.3 callers.
+ */
+export const epicListCommentThreadsV13 = defineRpcContract({
+  method: "epic.listCommentThreads",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: listCommentThreadsRequestSchema,
+  responseSchema: listCommentThreadsResponseSchema,
+});
+export const epicListCommentThreadsUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicListCommentThreadsV12,
+  typeof epicListCommentThreadsV13
+>({
+  from: epicListCommentThreadsV12.schemaVersion,
+  to: epicListCommentThreadsV13.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

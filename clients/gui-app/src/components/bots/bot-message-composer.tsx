@@ -1,13 +1,26 @@
-import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { SendHorizontal } from "lucide-react";
-import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendDelivery,
+  BotConversationSendResponse,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
-import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
+import {
+  BotQueuedNotice,
+  BotSendFailedNotice,
+} from "@/components/bots/bot-channel-notices";
 
 const MESSAGE_MAX = 100_000;
 
@@ -25,6 +38,10 @@ const MESSAGE_MAX = 100_000;
  * A send that fails before the host takes it leaves the text in the box and
  * says so above it (`failure`, which an option the person clicks reports to
  * as well), until they edit or send again.
+ *
+ * Edit on a message the bot failed to answer (`edit`) puts its text in the
+ * box; what the person sends then is a new message that replaces the failed
+ * one (`supersedes`), which stays where it is.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -33,12 +50,25 @@ export function BotMessageComposer(props: {
   readonly threadId: string | null;
   /** The question or proposal the reply answers, opening its thread; `null` otherwise. */
   readonly announcementId: string | null;
-  /** "Message #name" on a channel, "Reply…" in a thread, as Slack labels them. */
+  /** "Message name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
   readonly label: string;
   readonly testId: string;
   readonly failure: BotSendFailure;
+  /** The failed message being edited; `null` for a plain send. */
+  readonly edit: BotComposerEdit | null;
+  /** The edit was sent or cancelled. */
+  readonly onEditEnd: () => void;
+  /**
+   * The host accepted `text`, what the box held, and the box was cleared.
+   * Answers whether the owner says the send's delivery itself, where the
+   * person now looks; the box says it only when it does not.
+   */
+  readonly onSent: (
+    response: BotConversationSendResponse,
+    text: string,
+  ) => boolean;
 }): ReactNode {
   const {
     botId,
@@ -49,10 +79,27 @@ export function BotMessageComposer(props: {
     label,
     testId,
     failure,
+    edit,
+    onEditEnd,
+    onSent,
   } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
+  // A new edit replaces what the box holds with the message's text.
+  const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
+  if (edit !== loadedEdit) {
+    setLoadedEdit(edit);
+    if (edit !== null) setText(edit.text);
+  }
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The edit the box holds now, for a send that lands after the person moved
+  // on to another.
+  const currentEditRef = useRef<BotComposerEdit | null>(edit);
+  useEffect(() => {
+    currentEditRef.current = edit;
+    if (edit !== null) inputRef.current?.focus();
+  }, [edit]);
   const [lastDelivery, setLastDelivery] =
     useState<BotConversationSendDelivery | null>(null);
   const inputId = useId();
@@ -63,12 +110,30 @@ export function BotMessageComposer(props: {
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
+    const supersedes = edit?.requestId ?? null;
     send.mutate(
-      { botId, conversationId, text: trimmed, threadId, announcementId },
+      {
+        botId,
+        conversationId,
+        text: trimmed,
+        threadId,
+        announcementId,
+        redeliver: null,
+        supersedes,
+      },
       {
         onSuccess: (response) => {
+          // The box is cleared, the edit ended, the send's delivery said and
+          // the send reported, only while it still holds what was sent: an
+          // edit the person opened since keeps its draft, with nothing said
+          // under it.
+          if ((currentEditRef.current?.requestId ?? null) !== supersedes) {
+            return;
+          }
           setText("");
-          setLastDelivery(response.delivery);
+          if (supersedes !== null) onEditEnd();
+          const deliverySaid = onSent(response, trimmed);
+          setLastDelivery(deliverySaid ? null : response.delivery);
         },
         onError: failure.fail,
       },
@@ -99,7 +164,30 @@ export function BotMessageComposer(props: {
         <label htmlFor={inputId} className="sr-only">
           {label}
         </label>
+        {edit === null ? null : (
+          <div
+            className="flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
+            data-testid={`${testId}-editing`}
+          >
+            <span className="min-w-0 flex-1">
+              Sending replaces your message that failed.
+            </span>
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              data-testid={`${testId}-edit-cancel`}
+              onClick={() => {
+                setText("");
+                onEditEnd();
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
         <Textarea
+          ref={inputRef}
           id={inputId}
           value={text}
           variant="bare"
@@ -155,13 +243,12 @@ function ComposerStatus(props: {
     return <BotSendFailedNotice testId={`${props.testId}-send-failed`} />;
   }
   if (!props.queued) return null;
-  return (
-    <p
-      role="status"
-      className="text-ui-xs text-muted-foreground"
-      data-testid={`${props.testId}-queued`}
-    >
-      Saved. The bot will read it.
-    </p>
-  );
+  return <BotQueuedNotice testId={`${props.testId}-queued`} />;
 }
+
+/** A failed message loaded into the box to be edited and sent again. */
+export type BotComposerEdit = {
+  /** The failed message's request, which the edit replaces. */
+  readonly requestId: string;
+  readonly text: string;
+};

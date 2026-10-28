@@ -603,7 +603,10 @@ describe("optional-method capability negotiation", () => {
     // `major` is the canonical one a peer picks by default, `supportedMajors`
     // is the set it can still be talked down to.
     // `commandcode` then opened major 7 over the frozen 6.0 on all three, with
-    // parse-or-refuse v7->v6 bridges, so the installed set is [1..7].
+    // parse-or-refuse v7->v6 bridges, so the installed set is [1..7]. The
+    // 1.5.1 tags then shipped 7.0, and the Kimi rate-limit arm opened
+    // `agent.getProviderProfileRateLimits@8.0` alone (the other two carry no
+    // rate-limit union).
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 7,
       minor: 0,
@@ -611,7 +614,11 @@ describe("optional-method capability negotiation", () => {
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 7, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6, 7] });
+    ).toEqual({
+      major: 8,
+      minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5, 6, 7, 8],
+    });
     // `agent.configure@7.1` added the routing choice to the request.
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 7,

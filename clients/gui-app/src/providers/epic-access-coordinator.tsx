@@ -209,6 +209,12 @@ export function EpicAccessCoordinator() {
     };
 
     const runClose = (epicId: string, reason: DeadEpicReason): void => {
+      const ownerUserId = registry.peek(epicId)?.userId ?? null;
+      if (
+        ownerUserId !== null &&
+        (useAuthStore.getState().profile?.userId ?? null) !== ownerUserId
+      )
+        return;
       const wasActive = activeEpicIdRef.current === epicId;
       announceEpicLoss(epicId, reason);
       // A session's own deleted signal is the epic's deletion as its host
@@ -216,7 +222,7 @@ export function EpicAccessCoordinator() {
       if (reason.kind === "deleted") {
         useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
       }
-      tabCommandCoordinator.handleEpicAccessLoss([epicId]);
+      tabCommandCoordinator.handleEpicAccessLoss([epicId], ownerUserId);
       if (wasActive) {
         // `handleEpicAccessLoss` recomputes `activeTabId` to a neighbor as a
         // side effect; clear it so the route-driven strip highlight and the
@@ -280,7 +286,7 @@ export function EpicAccessCoordinator() {
       // coordinator transaction instead of firing a separate transaction
       // (and a separate persistence flush) per epic for what is semantically
       // one event.
-      tabCommandCoordinator.handleEpicAccessLoss(lostIds);
+      tabCommandCoordinator.handleEpicAccessLoss(lostIds, notification.userId);
       if (anyWasActive) {
         useEpicCanvasStore.setState({ activeTabId: null });
         void navigate({ ...LANDING_ROUTE, replace: true });

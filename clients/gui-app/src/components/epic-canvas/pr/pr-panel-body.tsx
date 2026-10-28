@@ -17,21 +17,14 @@ import type {
   PrLightItem,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
-import { WorkspaceHostSwitcher } from "@/components/home/host-workspace-selector/host-section";
-import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
-import {
-  useSurfaceHostPinWithDefault,
-  type SurfaceHostPin,
-} from "@/hooks/host/use-surface-host-pin";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
-import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { HoverCardGroup } from "@/components/ui/hover-card";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useRecordPrPresence } from "@/hooks/pr/use-pr-presence-probe";
@@ -65,32 +58,28 @@ import {
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * The per-view PR pin defaults to the task's sole agent host, then the canvas
- * host. Both header actions and list consume one selected-host subscription,
- * including on mobile. The header
- * stays mounted through empty, loading and failed reads so the user can always
- * choose another host. Merely opening an epic does not latch a pin.
+ * The panel follows the canvas host: every host serves the same cloud-backed
+ * PR list, so which machine answers only decides whose checkouts fill in
+ * owners, link groups, liveness and the local diff, and that is the canvas
+ * host's job. Header actions and the list share one subscription on that
+ * host, including on mobile.
  */
 export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
   const canvasHostId = useCanvasHostId();
-  const pin = useSurfaceHostPinWithDefault(
-    tabSurfaceKey("pull-requests", props.tabId),
-    canvasHostId,
-  );
-  const streamBinding = useSurfaceHostStreamBinding(pin.resolvedHostId);
+  const streamBinding = useSurfaceHostStreamBinding(canvasHostId);
   return (
     <StreamRuntimeContext.Provider value={streamBinding}>
-      <PrPanelBodyLive {...props} pin={pin} />
+      <PrPanelBodyLive {...props} hostId={canvasHostId} />
     </StreamRuntimeContext.Provider>
   );
 }
 
 function PrPanelBodyLive(
   props: LeftPanelSlotProps & {
-    readonly pin: SurfaceHostPin;
+    readonly hostId: string | null;
   },
 ): ReactNode {
-  const hostId = props.pin.resolvedHostId;
+  const hostId = props.hostId;
   const mainCollapsed = useMainPanelCollapsed(props.tabId);
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");
   const methodSupported = methodSupport !== "unsupported";
@@ -106,7 +95,8 @@ function PrPanelBodyLive(
     enabled,
   });
 
-  // Never attribute the selected host's rows to the canvas host's presence.
+  // Presence is recorded under the host that served these rows, which is the
+  // key the rail reads it back under.
   useRecordPrPresence(hostId, props.epicId, subscription.data?.items ?? null);
 
   return (
@@ -114,8 +104,7 @@ function PrPanelBodyLive(
       className="flex h-full min-h-0 flex-col"
       data-testid="pr-panel-surface"
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border/60 px-2 py-1.5">
-        <PrPanelHostPicker pin={props.pin} />
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 border-b border-border/60 px-2 py-1.5">
         <PrPanelActions
           key={hostId}
           subscription={subscription}
@@ -143,32 +132,6 @@ function PrPanelBodyLive(
   );
 }
 
-function PrPanelHostPicker(props: { readonly pin: SurfaceHostPin }): ReactNode {
-  const options = useHostOptions();
-  const { pin } = props;
-  return (
-    <div
-      className="flex min-w-0 flex-1 items-center gap-1"
-      data-testid="pr-panel-host-picker"
-    >
-      <WorkspaceHostSwitcher
-        hosts={options.hosts}
-        activeHostId={pin.resolvedHostId}
-        onSelect={pin.setSelection}
-        refusalByHostId={NO_HOST_OPTION_REFUSALS}
-        inertExceptHostId={null}
-        disabled={false}
-        isLoading={options.isLoading}
-        listsFailed={options.listsFailed}
-        onRetryLists={options.retryLists}
-        composer={null}
-        intent="pin"
-        surface="inline"
-      />
-    </div>
-  );
-}
-
 /**
  * The panel's list for rows already in hand. Exported for the sample
  * workspace's sidebar, which draws the same list from sample rows (F3).
@@ -184,7 +147,8 @@ export function PrPanelBodyContent(props: {
   readonly hasCachedData: boolean;
 }): ReactNode {
   const { openTile } = useEpicTileNavigation();
-  const openOnly = usePrPanelStore((state) => state.openOnly);
+  const stateFilter = usePrPanelStore((state) => state.stateFilter);
+  const setStateFilter = usePrPanelStore((state) => state.setStateFilter);
   // Grouped on the complete list, then filtered: stack membership is decided
   // with every row present, so hiding a merged dependent cannot turn its
   // siblings into a stack they are not in (see `filterPrRepoGroups`).
@@ -193,8 +157,11 @@ export function PrPanelBodyContent(props: {
     [props.items],
   );
   const groups = useMemo(
-    () => (openOnly ? filterPrRepoGroups(allGroups, isOpenPrItem) : allGroups),
-    [allGroups, openOnly],
+    () =>
+      stateFilter === "all"
+        ? allGroups
+        : filterPrRepoGroups(allGroups, (item) => item.state === stateFilter),
+    [allGroups, stateFilter],
   );
   const visibleCount = useMemo(
     () => groups.reduce((count, group) => count + group.items.length, 0),
@@ -312,6 +279,7 @@ export function PrPanelBodyContent(props: {
         icon={GitPullRequest}
         title="No pull requests found for this epic's chats yet"
         description="PRs are discovered from the branches chats worked on."
+        action={null}
         testId="pr-panel-empty"
       />
     );
@@ -347,14 +315,26 @@ export function PrPanelBodyContent(props: {
           testId="pr-panel-error-notice"
         />
       ) : null}
-      {visibleCount === 0 && props.items.length > 0 ? (
-        <p
-          role="status"
-          className="px-3 py-2 text-ui-xs text-muted-foreground"
-          data-testid="pr-panel-all-hidden"
-        >
-          {formatAllHiddenMessage(props.items.length)}
-        </p>
+      {/* Below the banners, so a stale or failed refresh still says so. */}
+      {stateFilter !== "all" && visibleCount === 0 && props.items.length > 0 ? (
+        <SidebarPanelEmptyState
+          icon={GitPullRequest}
+          title={`No ${stateFilter} pull requests`}
+          description={null}
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setStateFilter("all");
+              }}
+            >
+              Show all
+            </Button>
+          }
+          testId="pr-panel-filtered-empty"
+        />
       ) : null}
       {/* One clock for every row's owners card, across repos. */}
       <HoverCardGroup>
@@ -590,16 +570,6 @@ function formatAbsentLayers(count: number): string {
   return count === 1
     ? "1 layer not in this task"
     : `${count} layers not in this task`;
-}
-
-function isOpenPrItem(item: PrLightItem): boolean {
-  return item.state === "open";
-}
-
-function formatAllHiddenMessage(count: number): string {
-  return count === 1
-    ? "The only pull request is merged or closed"
-    : `All ${count} pull requests are merged or closed`;
 }
 
 function formatPrFallbackKey(item: PrLightItem): string {

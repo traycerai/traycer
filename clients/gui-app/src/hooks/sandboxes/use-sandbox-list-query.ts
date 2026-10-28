@@ -10,6 +10,18 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { recordListedDestroys } from "@/stores/sandboxes/ended-sandbox-hosts-store";
+
+const listReadStarts = new WeakMap<SandboxListResponse, number>();
+
+/** The exact query answer carries its request's send time, never its arrival time. */
+export function sandboxListReadSentAt(
+  data: SandboxListResponse | null | undefined,
+): number | null {
+  return data === null || data === undefined
+    ? null
+    : (listReadStarts.get(data) ?? null);
+}
 
 export function sandboxListQueryOptions(
   auth: AuthService | null,
@@ -26,8 +38,11 @@ export function sandboxListQueryOptions(
   return queryOptions<SandboxListResponse | null>({
     queryKey: sandboxQueryKeys.list(auth, userId),
     queryFn: async () => {
+      const sentAt = Date.now();
       const result = await auth.listSandboxes();
       if (result.kind === "ok") {
+        listReadStarts.set(result.response, sentAt);
+        recordListedDestroys(result.response.sandboxes);
         return result.response;
       }
       // Thrown, never `{ sandboxes: [] }`: an empty list would read as "every
@@ -36,6 +51,8 @@ export function sandboxListQueryOptions(
       throw new Error(sandboxFailureMessage(result));
     },
     enabled,
+    // The response identity owns its provenance, including identical-list refetches.
+    structuralSharing: false,
     refetchOnWindowFocus: true,
   });
 }

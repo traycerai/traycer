@@ -12,8 +12,8 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 export type PushPermissionQuery = UseQueryResult<PushPermissionState>;
 
 /**
- * This phone's OS push permission, for the Settings → Sounds "This
- * phone" row. Disabled - and therefore never fetched - on the shells that
+ * This phone's OS push permission, for the Settings → Alerts push
+ * permission row. Disabled - and therefore never fetched - on the shells that
  * have no OS push at all (desktop, dev web, tests), where the row is hidden
  * outright.
  *

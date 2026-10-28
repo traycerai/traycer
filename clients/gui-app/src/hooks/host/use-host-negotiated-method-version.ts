@@ -1,5 +1,9 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -38,7 +42,14 @@ export function useHostNegotiatedMethodVersion(
     [client],
   );
   const getSnapshot = useCallback((): NegotiatedMethodVersion => {
-    const hostId = client?.getActiveHostId() ?? null;
+    // The serving tier's manifest: the pool's for a pool-only method in a
+    // build that has one, wherever the client points.
+    const hostId = hostRpcServingTierHostId(
+      method,
+      client?.getActiveHostId() ?? null,
+      readProcessHostRpcTierPlan(),
+      null,
+    );
     if (hostId === null) return null;
     return readNegotiatedMethodVersion(hostId, method);
   }, [client, method]);

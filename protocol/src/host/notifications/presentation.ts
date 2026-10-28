@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV24,
+  type HostNotificationEntryV25,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -10,6 +10,11 @@ import {
   type HostNotificationRotationProducer,
   type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
+import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
+import {
+  sandboxSettingsFailureLine,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
@@ -33,7 +38,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV24,
+  entry: HostNotificationEntryV25,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -124,6 +129,151 @@ export function formatHostNotificationPresentation(
     case "team.host.returned":
     case "secret.removed":
       return environmentNotificationPresentation(entry.kind, known);
+    case "sandbox.notice":
+      return sandboxNoticePresentation(known, Date.now());
+  }
+}
+
+const SANDBOX_FILES_LINE =
+  "Files on this sandbox cannot be recovered; published chats stay readable.";
+
+/** The confirmed event's clock time in the viewer's current time zone. */
+function sandboxEventTime(at: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(at));
+}
+
+/**
+ * When a sandbox is destroyed, in the reader's own time zone: `at 10:36`
+ * today, `tomorrow at 10:36`, `on Oct 27 at 10:36` after that. The formats
+ * are built per call, so a zone changed while the app runs is read.
+ */
+export function sandboxDestroyWhen(destroyAt: number, now: number): string {
+  const at = new Date(destroyAt);
+  const time = sandboxEventTime(destroyAt);
+  const today = new Date(now);
+  const tomorrow = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() + 1,
+  );
+  const sameDay = (a: Date, b: Date): boolean =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(at, today)) return `at ${time}`;
+  if (sameDay(at, tomorrow)) return `tomorrow at ${time}`;
+  const date = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(at);
+  return `on ${date} at ${time}`;
+}
+
+/** The sandbox rows: what happened to one sandbox, by name. */
+function sandboxNoticePresentation(
+  known: HostNotificationKnownPayload | null,
+  now: number,
+): HostNotificationPresentation {
+  if (known?.kind !== "sandbox_notice") {
+    return { title: "Sandbox", body: "Open Details to see what happened" };
+  }
+  const name = known.sandboxName.length > 0 ? known.sandboxName : "A sandbox";
+  const notice = known.notice;
+  switch (notice.kind) {
+    case "resting_warning":
+      return {
+        title: `${name} is destroyed ${sandboxDestroyWhen(notice.destroyAt, now)} unless you use it`,
+        body: SANDBOX_FILES_LINE,
+      };
+    case "resting_destroyed":
+      return {
+        title: `${name} was destroyed after resting`,
+        body: SANDBOX_FILES_LINE,
+      };
+    case "frozen":
+      return {
+        title: `${name} is frozen`,
+        body:
+          notice.cause === "credits"
+            ? "Add credits to use it again."
+            : "Its paying member left the team.",
+      };
+    case "frozen_warning":
+      return {
+        title:
+          notice.daysLeft === 1
+            ? `${name} is deleted tomorrow`
+            : `${name} is deleted in ${notice.daysLeft} days`,
+        body: "Add credits to keep it; otherwise it is deleted with its files.",
+      };
+    case "frozen_deleting":
+      return {
+        title: `${name} is being deleted`,
+        body: "It was frozen for lack of credits for 30 days.",
+      };
+    case "frozen_destroyed":
+      return {
+        title: `${name} was deleted`,
+        body: "It was frozen for lack of credits for 30 days.",
+      };
+    case "create_failed":
+      return {
+        title: `${name} couldn't start`,
+        body: "Open Details to see why.",
+      };
+    case "lost":
+      return {
+        title: `${name} was lost`,
+        body: "The provider no longer has it; its files could not be kept.",
+      };
+    case "destroyed_by_member": {
+      const actor = notice.actorName ?? "A member";
+      if (notice.destroyedAt !== undefined) {
+        const time = sandboxEventTime(notice.destroyedAt);
+        return {
+          title: `${actor} destroyed ${name} at ${time}.`,
+          body: [
+            "Its files are gone.",
+            ...(notice.stoppedAgentTaskTitles ?? []).map(
+              (taskTitle) => `Your agent in ${taskTitle} was stopped.`,
+            ),
+          ].join(" "),
+        };
+      }
+      return {
+        title: `${actor} destroyed ${name}`,
+        body: SANDBOX_FILES_LINE,
+      };
+    }
+    case "manual_rest": {
+      const done = notice.verb === "suspend" ? "suspended" : "stopped";
+      const confirmed = notice.outcome === "confirmed";
+      if (confirmed && !notice.byYou && notice.confirmedAt !== undefined) {
+        return {
+          title: `${notice.actorName ?? "A member"} ${done} ${name} at ${sandboxEventTime(notice.confirmedAt)}.`,
+          body: "",
+        };
+      }
+      let title: string;
+      if (notice.byYou) {
+        title = confirmed
+          ? `${notice.verb === "suspend" ? "Suspended" : "Stopped"} ${name}`
+          : `Couldn't ${notice.verb} ${name}`;
+      } else {
+        const actor = notice.actorName ?? "A member";
+        title = confirmed
+          ? `${actor} ${done} ${name}`
+          : `${actor} couldn't ${notice.verb} ${name}`;
+      }
+      return {
+        title,
+        body: confirmed ? "Its files are kept." : "It is still running.",
+      };
+    }
   }
 }
 
@@ -146,20 +296,37 @@ function environmentNotificationPresentation(
             ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not in Personal yet`
             : "A computer's move to Personal stopped before it finished",
       };
-    case "environment.apply.failed":
+    case "environment.apply.failed": {
+      const sandbox =
+        known?.kind === "environment_apply_failed" ? known.sandbox : null;
+      if (sandbox !== null && sandbox !== undefined)
+        return {
+          title: sandboxSettingsFailureLine(
+            sandbox.name,
+            sandbox.configurationName,
+            "SBX-0520",
+          ),
+          body: [
+            "Compute is charged while it is awake.",
+            sandboxSettingsStepsLine(sandbox),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        };
       return {
         title: "Setting not applied",
         body:
           known?.kind === "environment_apply_failed"
-            ? `${known.hostName} • ${known.itemKey} could not be applied`
+            ? `${known.hostName} • A setting could not be applied`
             : "A host could not apply a setting",
       };
+    }
     case "team.role.changed":
       return {
         title: "Your role changed",
         body:
           known?.kind === "team_role_changed"
-            ? `${known.teamName} • You are now ${roleName(known.to)}, were ${roleName(known.from)}`
+            ? `${known.teamName} • You're now ${roleName(known.to)} (you were ${roleName(known.from)}).`
             : "Your role in a team changed",
       };
     case "team.host.returned":
@@ -185,13 +352,10 @@ function environmentNotificationPresentation(
 function roleName(role: string): string {
   switch (role) {
     case "owner":
-      return "an owner";
     case "admin":
-      return "an admin";
     case "editor":
-      return "an editor";
     case "viewer":
-      return "a viewer";
+      return withIndefiniteArticle(role);
     default:
       return role;
   }
@@ -305,6 +469,12 @@ function teamNotificationPresentation(
     case "team.member.removed": {
       if (known?.kind !== "team_member_removed") {
         return { title: "Member removed", body: "A team member was removed" };
+      }
+      if (known.toRemovedMember === true) {
+        return {
+          title: "No longer a member",
+          body: `You are no longer a member of ${known.teamName}.`,
+        };
       }
       const done = known.hosts.filter(
         (host) =>
@@ -506,6 +676,7 @@ export function hostOperationKnownCopy(
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return null;
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
@@ -606,6 +777,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return null;
   }
 }
@@ -638,6 +810,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return null;
   }
 }
@@ -670,6 +843,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return null;
   }
 }
@@ -707,6 +881,7 @@ function knownStoppedReason(
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return null;
   }
 }
@@ -743,6 +918,7 @@ function knownProviderId(
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return null;
   }
 }
@@ -791,6 +967,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return false;
   }
 }
@@ -825,6 +1002,7 @@ function knownBackgroundWorkRunning(
     case "team_role_changed":
     case "team_host_returned":
     case "secret_removed":
+    case "sandbox_notice":
       return false;
   }
 }

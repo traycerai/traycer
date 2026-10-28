@@ -7,6 +7,7 @@ import {
   parseSandboxAutomationOpenTarget,
   parseSandboxCreateRequest,
   parseSandboxLifecycleVerb,
+  parseSandboxVerbGesture,
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
 } from "../ipc-parsers";
@@ -69,6 +70,34 @@ describe("parseSandboxLifecycleVerb", () => {
     ]) {
       expect(() => parseSandboxLifecycleVerb(bad)).toThrow(
         'runSandboxVerb.verb must be "suspend", "resume", "stop" or "start"',
+      );
+    }
+  });
+});
+
+// The gesture crosses IPC as `unknown` too, and ends up in a JSON body the
+// control plane records: only `null` and the three known gestures pass.
+describe("parseSandboxVerbGesture", () => {
+  it("accepts null and exactly the three gestures", () => {
+    expect(parseSandboxVerbGesture(null)).toBeNull();
+    for (const gesture of ["open-terminal", "send", "open-files"] as const) {
+      expect(parseSandboxVerbGesture(gesture)).toBe(gesture);
+    }
+  });
+
+  it("throws on anything else, naming the field", () => {
+    for (const bad of [
+      "Open-terminal",
+      "open-terminal ",
+      "destroy",
+      "",
+      undefined,
+      42,
+      ["send"],
+      { gesture: "send" },
+    ]) {
+      expect(() => parseSandboxVerbGesture(bad)).toThrow(
+        'runSandboxVerb.gesture must be null, "open-terminal", "send" or "open-files"',
       );
     }
   });

@@ -22,6 +22,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import type { AnchoredDraftTidInsertion } from "@/components/comments/anchored-draft-popover";
 import { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
 import type { CanvasFrameEvents } from "../canvas-frame";
@@ -30,6 +31,8 @@ import { CanvasFrameEventsContext } from "../canvas-surface-context";
 import { CanvasLayoutStore } from "../canvas-layout-store";
 import { CanvasSelectionProvider } from "../canvas-selection-provider";
 import { useCanvasSelectionStore } from "../canvas-selection-store";
+import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 
 // The clipboard boundary, panels and annotation action are other tests' subjects,
 // and the real ones need a query client and the host's edit transport. The
@@ -79,16 +82,31 @@ vi.mock("../canvas-board-panel", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
+const commentsFlag = vi.hoisted(() => ({ enabled: false }));
 vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
-  useFrameCommentsEnabled: () => false,
+  useFrameCommentsEnabled: () => commentsFlag.enabled,
 }));
 vi.mock("../canvas-comments", () => ({
   CanvasCommentIndex: () => null,
   CanvasCommentPins: () => null,
   CanvasWholeCommentPin: () => null,
 }));
+// The popover's own behavior is another test's subject; its insertion callback
+// is how the provider learns a comment stamped a tid into the live document.
+const popover = vi.hoisted(() => ({
+  onTidInserted: null as
+    | ((insertion: AnchoredDraftTidInsertion) => Promise<void>)
+    | null,
+}));
 vi.mock("@/components/comments/anchored-draft-popover", () => ({
-  AnchoredDraftPopover: () => null,
+  AnchoredDraftPopover: (props: {
+    readonly onTidInserted: (
+      insertion: AnchoredDraftTidInsertion,
+    ) => Promise<void>;
+  }) => {
+    popover.onTidInserted = props.onTidInserted;
+    return null;
+  },
 }));
 
 const BOARD = "boards/home.html";
@@ -165,6 +183,7 @@ interface Deferred {
 
 /** A provider mounted over a board whose hit test answers only when told to. */
 interface MountedProvider {
+  readonly host: SandboxBridgeHost;
   readonly events: () => CanvasFrameEvents;
   readonly pick: () => Deferred;
   readonly setOverlayShown: (shown: boolean) => void;
@@ -235,6 +254,7 @@ function mountProvider(artifactId: string): MountedProvider {
     events().onServedSource?.(BOARD, SHA);
   });
   return {
+    host,
     events,
     pick: () => {
       const before = pending.length;
@@ -269,14 +289,28 @@ function selectedSelector(): string | null {
   return useCanvasSelectionStore.getState().selection?.element.selector ?? null;
 }
 
+function resetCommentThreads(): void {
+  useCommentThreadsStore.setState({
+    activeByEpicId: {},
+    hoverByEpicId: {},
+    flashByEpicId: {},
+    draftByEpicId: {},
+    artifactByEpicId: {},
+  });
+}
+
 beforeEach(() => {
   useCanvasSelectionStore.getState().clear();
+  resetCommentThreads();
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  commentsFlag.enabled = false;
+  useAnchoredDraftStore.setState({ byEpicId: {} });
   useCanvasSelectionStore.getState().clear();
+  resetCommentThreads();
 });
 
 describe("CanvasSelectionProvider picks", () => {
@@ -417,6 +451,104 @@ describe("CanvasSelectionProvider board selection", () => {
   });
 });
 
+/**
+ * A minimal `onCanvasView` report with comment mode wired to the given spy,
+ * matching the shape the toolbar/editor's real view supplies.
+ */
+function reportCommentingView(
+  provider: MountedProvider,
+  commenting: boolean,
+  setCommenting: Mock<(enabled: boolean) => void>,
+): void {
+  act(() =>
+    provider.events().onCanvasView?.({
+      tool: "select",
+      play: false,
+      commenting,
+      setCommenting,
+      order: [],
+      sourceForBoard: () => null,
+      revealBoard: () => true,
+      revealCanvasPoint: () => true,
+      clearNodeSelection: () => undefined,
+    }),
+  );
+}
+
+describe("CanvasSelectionProvider comment mode", () => {
+  const EPIC_ID = "epic-1";
+
+  it("clears the active comment thread on a pick while commenting, without touching the mode itself", async () => {
+    const provider = mountProvider("artifact-a");
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    reportCommentingView(provider, true, setCommenting);
+    act(() =>
+      useCommentThreadsStore.getState().setActiveThread(EPIC_ID, "thread-1"),
+    );
+
+    await answer(provider.pick(), element("div.a"));
+
+    expect(
+      useCommentThreadsStore.getState().activeByEpicId[EPIC_ID],
+    ).toBeNull();
+    expect(setCommenting).not.toHaveBeenCalled();
+  });
+
+  it("leaves an active comment thread alone when a pick happens outside comment mode", async () => {
+    const provider = mountProvider("artifact-a");
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    reportCommentingView(provider, false, setCommenting);
+    act(() =>
+      useCommentThreadsStore.getState().setActiveThread(EPIC_ID, "thread-1"),
+    );
+
+    await answer(provider.pick(), element("div.a"));
+
+    expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
+      "thread-1",
+    );
+  });
+
+  it("stores a canvas-point draft at the clicked spot's page and canvas coordinates", () => {
+    commentsFlag.enabled = true;
+    const provider = mountProvider("artifact-a");
+    act(() =>
+      useCommentThreadsStore.getState().setActiveThread(EPIC_ID, "thread-1"),
+    );
+
+    act(() =>
+      provider.events().onPaneComment?.({
+        screen: { x: 300, y: 200 },
+        canvas: { x: 40, y: -12 },
+        page: "flow",
+      }),
+    );
+
+    const draft = useAnchoredDraftStore.getState().byEpicId[EPIC_ID];
+    expect(draft?.anchor).toEqual({
+      kind: "canvas-point",
+      page: "flow",
+      x: 40,
+      y: -12,
+      label: "Pinned on canvas",
+    });
+    expect(draft?.rect).toEqual({ x: 300, y: 200, width: 0, height: 0 });
+    expect(
+      useCommentThreadsStore.getState().activeByEpicId[EPIC_ID],
+    ).toBeNull();
+  });
+
+  it("turns comment mode off on Escape, alongside the selection - composer lifecycle, not the editor's own state", () => {
+    const provider = mountProvider("artifact-a");
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    reportCommentingView(provider, true, setCommenting);
+
+    pressEscape();
+
+    expect(setCommenting).toHaveBeenCalledWith(false);
+  });
+});
+
 describe("CanvasSelectionProvider Escape", () => {
   it("clears the element first and the board only on the next press", async () => {
     const provider = mountProvider("artifact-a");
@@ -438,11 +570,12 @@ describe("CanvasSelectionProvider Escape", () => {
       provider.events().onCanvasView?.({
         tool: "select",
         play: false,
-        viewOnly: false,
+        commenting: false,
+        setCommenting: () => undefined,
         order: [],
         sourceForBoard: () => null,
         revealBoard: () => true,
-        setTool: () => undefined,
+        revealCanvasPoint: () => true,
         clearNodeSelection,
       }),
     );
@@ -462,11 +595,12 @@ describe("CanvasSelectionProvider Escape", () => {
       provider.events().onCanvasView?.({
         tool: "select",
         play: false,
-        viewOnly: false,
+        commenting: false,
+        setCommenting: () => undefined,
         order: [],
         sourceForBoard: () => null,
         revealBoard: () => true,
-        setTool: () => undefined,
+        revealCanvasPoint: () => true,
         clearNodeSelection,
       }),
     );
@@ -557,5 +691,49 @@ describe("CanvasSelectionProvider inspector board", () => {
     ).toBe("boards/other.html");
     expect(boardPanel()).not.toBeNull();
     expect(elementPanel()).toBeNull();
+  });
+});
+
+describe("CanvasSelectionProvider tid adoption", () => {
+  const insertion: AnchoredDraftTidInsertion = {
+    boardPath: BOARD,
+    marker: 1,
+    tagName: "div",
+    tid: "tid-1",
+    sha256Before: SHA,
+    sha256After: "sha-2",
+    splices: [{ start: 10, end: 10, replacement: ' data-tid="tid-1"' }],
+  };
+
+  async function adopt(provider: MountedProvider): Promise<void> {
+    render(<>{provider.events().renderCommentDraft?.()}</>);
+    const onTidInserted = popover.onTidInserted;
+    if (onTidInserted === null) throw new Error("no popover rendered");
+    await act(async () => {
+      await onTidInserted(insertion);
+    });
+  }
+
+  it("does not claim the revision when the live document lost a marker shift", async () => {
+    const provider = mountProvider("artifact-a");
+    vi.spyOn(provider.host, "stampTid").mockResolvedValue(true);
+    vi.spyOn(provider.host, "shiftMarkers").mockResolvedValue(false);
+
+    await adopt(provider);
+
+    expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(false);
+  });
+
+  it("stops claiming an adopted revision once a replacement document owns the board", async () => {
+    const provider = mountProvider("artifact-a");
+    vi.spyOn(provider.host, "stampTid").mockResolvedValue(true);
+    vi.spyOn(provider.host, "shiftMarkers").mockResolvedValue(true);
+
+    await adopt(provider);
+    expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(true);
+
+    act(() => provider.events().onBridge(BOARD, bridge()));
+
+    expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(false);
   });
 });

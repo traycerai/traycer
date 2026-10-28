@@ -165,6 +165,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
@@ -200,6 +201,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
+import type { TrackpadScrollEvent } from "../ipc-contracts/trackpad-scroll-phase-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -241,6 +243,7 @@ export interface DesktopPreloadBridge {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult>;
   patchSandbox(
     bearerToken: string,
@@ -255,6 +258,7 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
@@ -381,6 +385,8 @@ export interface DesktopPreloadBridge {
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
+  /** macOS only; `null` elsewhere (see `trackpad-scroll-phase-bridge.ts`). */
+  trackpadScrollPhase: DesktopTrackpadScrollPhaseBridge | null;
   browserView: BrowserViewBridge;
   sandboxArtifacts: SandboxArtifactBridge;
   hostManagement: DesktopHostManagementBridge;
@@ -651,6 +657,12 @@ export interface DesktopPowerBridge {
   setSleepBlocked(blocked: boolean): Promise<void>;
 }
 
+export interface DesktopTrackpadScrollPhaseBridge {
+  onEvent(handler: (event: TrackpadScrollEvent) => void): {
+    dispose: () => void;
+  };
+}
+
 export interface DesktopZoomBridge {
   readonly ladder: readonly ZoomPercent[];
   get(): Promise<ZoomPercent>;
@@ -854,6 +866,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly crashTelemetry: IRendererCrashTelemetryHost;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
+  readonly trackpadScrollPhase: DesktopTrackpadScrollPhaseBridge | null;
   readonly browserView: BrowserViewBridge;
   readonly sandboxArtifacts: SandboxArtifactBridge;
   readonly hostManagement: IHostManagement | null;
@@ -916,6 +929,14 @@ export class DesktopRunnerHost implements IRunnerHost {
       onChange: (handler) =>
         toDisposable(options.bridge.zoom.onChange(handler)),
     };
+    const trackpadScrollPhase = options.bridge.trackpadScrollPhase;
+    this.trackpadScrollPhase =
+      trackpadScrollPhase === null
+        ? null
+        : {
+            onEvent: (handler) =>
+              toDisposable(trackpadScrollPhase.onEvent(handler)),
+          };
 
     this.bridgeSubscriptions.push(
       this.bridge.onLocalHostChange((snapshot) => {
@@ -1223,8 +1244,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult> {
-    return this.bridge.destroySandbox(bearerToken, sandboxId);
+    return this.bridge.destroySandbox(bearerToken, sandboxId, onlyIfIdle);
   }
 
   patchSandbox(
@@ -1246,9 +1268,16 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult> {
-    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
+    return this.bridge.runSandboxVerb(
+      bearerToken,
+      sandboxId,
+      verb,
+      gesture,
+      timeoutMs,
+    );
   }
 
   getSandboxAutomation(

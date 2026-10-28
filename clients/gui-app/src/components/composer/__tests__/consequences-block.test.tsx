@@ -48,7 +48,13 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
 }
 
 function block(value: ConsequencesInput) {
-  return <ConsequencesBlock input={value} onMoveFirst={null} />;
+  return (
+    <ConsequencesBlock
+      input={value}
+      onMoveFirst={null}
+      onOpenTerminalInstead={null}
+    />
+  );
 }
 
 function subjectOf(value: ConsequencesInput): string {
@@ -178,11 +184,11 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
   });
 
-  it("at a short balance asks for credits and links to the configuration's billing page", () => {
-    render(block(input({ needsCredits: true })));
+  it("at a short balance asks for the team's credits and links to the configuration's billing page", () => {
+    render(block(input({ needsCredits: true, shortfallMc: 120 })));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Add credits to start a sandbox · from $0.12 an hour while awake",
+      "Your Acme allowance is short $0.12. $0.12 more starts this sandbox for an hour.",
     );
     const link = within(screen.getByTestId("consequences-block")).getByRole(
       "button",
@@ -192,6 +198,49 @@ describe("<ConsequencesBlock />", () => {
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://billing.test/acme",
       "account",
+    );
+  });
+
+  it("at a short balance on Personal asks for credits, without a team's name", () => {
+    render(
+      block(
+        input({
+          configuration: { kind: "personal" },
+          audience: "private",
+          needsCredits: true,
+          shortfallMc: 120,
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "Not enough credits. $0.12 more starts this sandbox for an hour.",
+    );
+  });
+
+  it("offers another host instead of a terminal at a short allowance", () => {
+    const choose = vi.fn<() => void>();
+    render(
+      <ConsequencesBlock
+        input={input({ needsCredits: true, shortfallMc: 210 })}
+        onMoveFirst={null}
+        onOpenTerminalInstead={vi.fn()}
+        onChooseAnotherHost={choose}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose another host" }),
+    );
+    expect(choose).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("button", { name: "Open terminal instead" }),
+    ).toBeNull();
+  });
+
+  it("says who takes over payment before a task wakes a team sandbox", () => {
+    render(block(input({ wakingName: "e2e-sbx-t1" })));
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "Waking e2e-sbx-t1 uses your Acme allowance and makes you the payer.",
     );
   });
 
@@ -214,7 +263,13 @@ describe("<ConsequencesBlock />", () => {
       audience: "private",
       unmovedComputer: "MacBook",
     });
-    render(<ConsequencesBlock input={withMove} onMoveFirst={onMoveFirst} />);
+    render(
+      <ConsequencesBlock
+        input={withMove}
+        onMoveFirst={onMoveFirst}
+        onOpenTerminalInstead={null}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Move them first" }));
     expect(onMoveFirst).toHaveBeenCalledTimes(1);

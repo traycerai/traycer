@@ -43,6 +43,8 @@ const MOBILE: SettingsAvailabilityContext = {
       get: () => Promise.resolve("granted"),
       request: () => Promise.resolve("granted"),
       openSettings: () => Promise.resolve(),
+      getMutedSeverities: () => Promise.resolve([]),
+      setMutedSeverities: () => Promise.resolve(),
       onChange: () => ({ dispose: () => undefined }),
     },
   }),
@@ -251,9 +253,9 @@ describe("settings search", () => {
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
-  it("opens Browser agent access on Permissions, and Secrets on its own words", () => {
+  it("opens Browser agent access on the Permissions Browser tab, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
-      "permissions#<top>",
+      "permissions#permissions-tab-browser",
     );
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
@@ -456,6 +458,33 @@ describe("settings search", () => {
           featureSettings: FEATURE_SETTINGS,
         }),
       ).toContain("Agent roles");
+    });
+
+    it("finds delivery words under Alerts and chime words under Sounds", () => {
+      // Sounds used to hold the OS and push rows and carried their words; it
+      // now holds only the chimes, so neither page answers the other's words.
+      const sectionsFor = (
+        query: string,
+        context: SettingsAvailabilityContext,
+      ): ReadonlyArray<string> =>
+        searchSettings(query, context).map((result) => result.entry.section);
+      for (const [query, context] of [
+        ["push", MOBILE],
+        ["push", DESKTOP],
+        ["banner", DESKTOP],
+        ["badge", DESKTOP],
+      ] as const) {
+        const sections = sectionsFor(query, context);
+        expect(sections[0], query).toBe("alerts");
+        expect(sections, query).not.toContain("app-notifications");
+      }
+      for (const query of ["chime", "sound"]) {
+        for (const context of [DESKTOP, MOBILE]) {
+          const sections = sectionsFor(query, context);
+          expect(sections[0], query).toBe("app-notifications");
+          expect(sections, query).not.toContain("alerts");
+        }
+      }
     });
 
     it("offers the phone's push row on mobile and withholds it on desktop", () => {

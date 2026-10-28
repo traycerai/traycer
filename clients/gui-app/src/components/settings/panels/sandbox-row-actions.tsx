@@ -26,6 +26,8 @@ import {
   SandboxStopDialog,
   SandboxSuspendDialog,
 } from "@/components/hosts/sandbox-confirm-dialogs";
+import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { restingVerb } from "@/components/composer/use-sandbox-staging";
 import {
   startStagedTerminal,
@@ -34,8 +36,19 @@ import {
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import {
+  useSandboxOperation,
+  type SandboxRowVerb,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
-import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
+import {
+  useSandboxGuestSetupRepairSupported,
+  useSandboxRepairGuestConfigurationOnHost,
+  useSandboxRepairGuestSetupOnHost,
+  useSandboxRetryApplyingSupported,
+  useSandboxSettingsOperation,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
@@ -47,7 +60,11 @@ import {
   type SandboxPageConfiguration,
   type SandboxRowAction,
 } from "@/lib/sandboxes/sandbox-row-lines";
-import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
+import {
+  DETAILS,
+  alreadyDestroyedLine,
+  sandboxVerbPendingLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -73,18 +90,23 @@ const DIALOG_OF: Partial<Record<SandboxRowAction, RowDialog>> = {
 /**
  * One row's actions, by Flow 6's matrix: the primary button, `Give it another
  * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
- * Interrupting and ending actions confirm in their dialogs; a wake on a team
- * row asks first, as every team wake does.
+ * Interrupting and ending actions confirm in their dialogs; a wake is one click
+ * after the row says who pays.
  */
 export function SandboxRowActions(props: {
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
+  readonly settingsFailed: boolean;
+  readonly onSettingsApplied?: () => void;
 }): ReactNode {
   const { summary, configuration } = props;
   const [dialog, setDialog] = useState<RowDialog | null>(null);
   const verb = useSandboxVerb(summary.id);
+  const destroy = useSandboxDestroy(summary);
+  const operation = useSandboxOperation(summary.id);
+  const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
   const patch = useSandboxPatch(summary.id);
   const create = useSandboxCreate();
   // One key per Retry until the server answers it: a press after an answer
@@ -92,18 +114,39 @@ export function SandboxRowActions(props: {
   // accepted instead of making a second sandbox.
   const [retryKey, setRetryKey] = useState(() => uuidv4());
   const repair = useSandboxRepairGuestConfigurationOnHost(summary.hostId);
+  const repairGuestSetup = useSandboxRepairGuestSetupOnHost(summary.hostId);
+  const applyingOperation = useSandboxSettingsOperation(summary.hostId);
   const openLink = useOpenLink();
   const runnerHost = useRunnerHost();
   const openOnLanding = useOpenSandboxOnLanding();
+  const openAutomationTerminal = useOpenAutomationTerminal({
+    existing: {
+      hostId: summary.hostId,
+      sandboxId: summary.id,
+      awake: summary.state === "awake",
+    },
+    teamEnvironmentId:
+      summary.kind === "automation" && configuration.kind === "team"
+        ? summary.environmentId
+        : null,
+  });
   const now = useSampledNow();
   const actions = sandboxRowActions({
     summary,
     unreachable: props.unreachable,
     frozenNeedsOwnCredits: props.frozenNeedsOwnCredits,
+    settingsFailed: props.settingsFailed,
   });
+  const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
   const busy =
-    verb.isPending || patch.isPending || create.isPending || repair.isPending;
+    pendingVerb !== null ||
+    patch.isPending ||
+    create.isPending ||
+    repair.isPending ||
+    repairGuestSetup.isPending ||
+    applyingOperation === "pending" ||
+    openAutomationTerminal.starting;
 
   // A team wake no longer asks first: its payer is said where it is picked.
   const wake = (pressed: SandboxLifecycleVerb): void => {
@@ -124,54 +167,58 @@ export function SandboxRowActions(props: {
         "account",
         null,
       ),
+    // A failed Automations start is retried by starting it again; any other
+    // failed row by its create.
     retry: () =>
-      create.mutate(
-        {
-          request: {
-            os: summary.os,
-            cpus: summary.cpus,
-            memoryMb: summary.memoryMb,
-            diskMb: summary.diskMb,
-            region: summary.region,
-            displayName: summary.displayName,
-            idleMinutes: summary.idleMinutes,
-            burst: false,
-            createdByHostId: null,
-            createdByAgentId: null,
-            environmentId: summary.environmentId,
-            // The row's `null` is never; on a create `null` is the
-            // configuration's default and `0` is never.
-            destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
-            createdByTaskId: null,
-            clientRequestId: retryKey,
-          },
-          teamName:
-            configuration.kind === "team" ? configuration.teamName : null,
-        },
-        {
-          onSuccess: () => setRetryKey(uuidv4()),
-          onError: (error) => {
-            if (createErrorNeedsFreshKey(error)) setRetryKey(uuidv4());
-          },
-        },
-      ),
+      summary.kind === "automation"
+        ? openAutomationTerminal.retry()
+        : create.mutate(
+            {
+              request: {
+                os: summary.os,
+                cpus: summary.cpus,
+                memoryMb: summary.memoryMb,
+                diskMb: summary.diskMb,
+                region: summary.region,
+                displayName: summary.displayName,
+                idleMinutes: summary.idleMinutes,
+                burst: false,
+                createdByHostId: null,
+                createdByAgentId: null,
+                environmentId: summary.environmentId,
+                // The row's `null` is never; on a create `null` is the
+                // configuration's default and `0` is never.
+                destroyAfterRestingMinutes:
+                  summary.destroyAfterRestingMinutes ?? 0,
+                createdByTaskId: null,
+                clientRequestId: retryKey,
+              },
+              teamName:
+                configuration.kind === "team" ? configuration.teamName : null,
+            },
+            {
+              onSuccess: () => setRetryKey(uuidv4()),
+              onError: (error) => {
+                if (createErrorNeedsFreshKey(error)) setRetryKey(uuidv4());
+              },
+            },
+          ),
     "retry-applying": () =>
       repair.mutate(
         {},
         {
-          onSuccess: (result) => {
-            if (!result.guestConfigured) {
-              toast.warning(
-                `${summary.displayName}'s settings still didn't apply`,
-              );
-            }
+          onSuccess: (outcome) => {
+            if (outcome.settingsApplied) props.onSettingsApplied?.();
           },
         },
       ),
+    "repair-setup": () => repairGuestSetup.mutate({}),
     "open-tab": () =>
       openOnLanding(summary, configuration, { terminal: false }),
     "open-terminal": () =>
-      openOnLanding(summary, configuration, { terminal: true }),
+      summary.kind === "automation"
+        ? openAutomationTerminal.run()
+        : openOnLanding(summary, configuration, { terminal: true }),
   };
 
   const run = (action: SandboxRowAction): void => {
@@ -185,6 +232,15 @@ export function SandboxRowActions(props: {
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2">
+      {openAutomationTerminal.failure ? (
+        <p role="alert" className="text-ui-xs text-destructive">
+          {openAutomationTerminal.failure}
+        </p>
+      ) : null}
+      <SettingsApplyFailure
+        operation={applyingOperation}
+        name={summary.displayName}
+      />
       {giveAnother === null ? null : (
         <Button
           type="button"
@@ -219,27 +275,23 @@ export function SandboxRowActions(props: {
           {giveAnother}
         </Button>
       )}
-      {actions.primary === null ? null : (
-        <Button
-          type="button"
-          variant={actions.primary === "destroy" ? "destructive" : "outline"}
-          size="sm"
-          disabled={busy}
-          data-testid={`sandbox-row-${actions.primary}`}
-          onClick={() => {
-            if (actions.primary !== null) run(actions.primary);
-          }}
-        >
-          {busy && dialog === null ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          {sandboxRowActionLabel(actions.primary, configuration)}
-        </Button>
-      )}
+      <SandboxRowPrimaryAction
+        primary={primary}
+        pendingVerb={pendingVerb}
+        configuration={configuration}
+        busy={busy}
+        dialogOpen={dialog !== null}
+        run={run}
+      />
+      <SandboxRowSettingsFailureActions
+        summary={summary}
+        configuration={configuration}
+        settingsFailed={props.settingsFailed}
+        menu={actions.menu}
+        pendingVerb={pendingVerb}
+        busy={busy}
+        run={run}
+      />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -254,7 +306,7 @@ export function SandboxRowActions(props: {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
           {actions.menu
-            .filter((action) => action !== "destroy")
+            .filter((action) => pendingVerb === null && action !== "destroy")
             .map((action) => (
               <DropdownMenuItem
                 key={action}
@@ -271,7 +323,7 @@ export function SandboxRowActions(props: {
           >
             {DETAILS}
           </DropdownMenuItem>
-          {actions.menu.includes("destroy") ? (
+          {pendingVerb === null && actions.menu.includes("destroy") ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -285,6 +337,22 @@ export function SandboxRowActions(props: {
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      <SandboxOperationFailure
+        sandboxId={summary.id}
+        name={summary.displayName}
+        configuration={configuration}
+        operation={operation}
+        busy={busy}
+        onRetry={(pressed) => {
+          if (pressed === "destroy")
+            destroy.mutate(
+              operation?.kind === "failed"
+                ? operation.destroyRequest
+                : undefined,
+            );
+          else wake(pressed);
+        }}
+      />
       <SandboxSuspendDialog
         sandbox={summary}
         open={dialog === "suspend"}
@@ -318,6 +386,123 @@ export function SandboxRowActions(props: {
       />
     </div>
   );
+}
+
+function useSandboxSettingsPrimaryAction(
+  summary: SandboxSummary,
+  primary: SandboxRowAction | null,
+): SandboxRowAction | null {
+  const retryApplyingSupported = useSandboxRetryApplyingSupported(
+    summary.hostId,
+  );
+  const repairGuestSetupSupported = useSandboxGuestSetupRepairSupported(
+    summary.hostId,
+  );
+  if (primary !== "retry-applying" || retryApplyingSupported) return primary;
+  return summary.guestConfigured === false && repairGuestSetupSupported
+    ? "repair-setup"
+    : null;
+}
+
+function SandboxRowSettingsFailureActions(props: {
+  readonly summary: SandboxSummary;
+  readonly configuration: SandboxPageConfiguration;
+  readonly settingsFailed: boolean;
+  readonly menu: readonly SandboxRowAction[];
+  readonly pendingVerb: SandboxRowVerb | null;
+  readonly busy: boolean;
+  readonly run: (action: SandboxRowAction) => void;
+}): ReactNode {
+  const chooseAnother = useChooseAnotherHost();
+  if (!props.settingsFailed && props.summary.guestConfigured !== false)
+    return null;
+  const actions =
+    props.pendingVerb === null
+      ? props.menu.filter(
+          (action) => action === "open-terminal" || action === "stop",
+        )
+      : [];
+  return (
+    <>
+      {actions.map((action) => (
+        <Button
+          key={action}
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.busy}
+          onClick={() => props.run(action)}
+        >
+          {sandboxRowActionLabel(action, props.configuration)}
+        </Button>
+      ))}
+      <Button type="button" variant="outline" size="sm" onClick={chooseAnother}>
+        Choose another host
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => openSandboxDetails(props.summary.id)}
+      >
+        Details
+      </Button>
+    </>
+  );
+}
+
+function SandboxRowPrimaryAction(props: {
+  readonly primary: SandboxRowAction | null;
+  readonly pendingVerb: SandboxRowVerb | null;
+  readonly configuration: SandboxPageConfiguration;
+  readonly busy: boolean;
+  readonly dialogOpen: boolean;
+  readonly run: (action: SandboxRowAction) => void;
+}): ReactNode {
+  const { primary, pendingVerb } = props;
+  if (pendingVerb !== null) {
+    return (
+      <Button type="button" variant="outline" size="sm" disabled>
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+        <span role="status">{sandboxVerbPendingLine(pendingVerb)}</span>
+      </Button>
+    );
+  }
+  if (primary === null) return null;
+  return (
+    <Button
+      type="button"
+      variant={primary === "destroy" ? "destructive" : "outline"}
+      size="sm"
+      disabled={props.busy}
+      data-testid={`sandbox-row-${primary}`}
+      onClick={() => props.run(primary)}
+    >
+      {props.busy && !props.dialogOpen ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {sandboxRowActionLabel(primary, props.configuration)}
+    </Button>
+  );
+}
+
+function useChooseAnotherHost(): () => void {
+  const surfaceKey = useComposerSurfaceHostKey();
+  const navigate = useNavigate();
+  const { close } = useSystemTabModalActions();
+  return () => {
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    close();
+    activateTabIntent(navigate, openNewEpicIntent(), undefined);
+  };
 }
 
 /**
@@ -384,8 +569,8 @@ function useOpenSandboxOnLanding(): (
         // starts the wake unless one is on its way.
         startStagedTerminal(surfaceKey, (fresh) =>
           runStaged(surfaceKey, fresh, {
-            fallbackName: summary.displayName,
             taskId: null,
+            resume: false,
           }),
         );
       }
@@ -397,4 +582,16 @@ function useOpenSandboxOnLanding(): (
     // A new task's tab, not only its route: Settings may be a tab of its own.
     activateTabIntent(navigate, openNewEpicIntent(), undefined);
   };
+}
+
+function SettingsApplyFailure(props: {
+  readonly operation: "pending" | "failed" | null;
+  readonly name: string;
+}): ReactNode {
+  if (props.operation !== "failed") return null;
+  return (
+    <p role="alert" className="text-ui-xs text-destructive">
+      {props.name}'s settings still didn't apply · SBX-0520
+    </p>
+  );
 }

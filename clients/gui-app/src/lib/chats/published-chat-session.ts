@@ -345,6 +345,7 @@ export function publishedChatSessionState(
     activeTurn: null,
     turnLifecycleRevision: 0,
     steerProtocolSupported: false,
+    queuedSteerRestartConfirmationSupported: () => false,
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
@@ -373,6 +374,8 @@ export function publishedChatSessionState(
     requestTranscriptOrdinal: () => undefined,
     findReadOrdinal: null,
     requestFindReadOrdinal: () => undefined,
+    heldReadOrdinals: [],
+    holdTranscriptOrdinal: () => () => undefined,
     accumulatedFileChangeSummaries: [],
     // A published transcript is not on the windowed line and streams no
     // chunks, so there is no generation to be waiting on.
@@ -483,6 +486,8 @@ export function publishedChatSessionState(
     queueSteerNow: () => null,
     queueAbortSteer: () => null,
     takeSteerRestartRefusal: () => null,
+    releaseSteerRestartInitiator: () => undefined,
+    claimSteerRestartRefusal: () => undefined,
     queueSettingsUpdate: () => null,
     updateActivePermissionMode: () => null,
     updateActiveProfile: () => null,
@@ -495,6 +500,7 @@ export function publishedChatSessionState(
     interviewDeliveryRetry: () => null,
     ackAcceptedAction: () => undefined,
     ackFailedSendRestoration: () => undefined,
+    ackRetainedRejectedSend: () => undefined,
     stateFailedSendRestoration: () => undefined,
     markNoticeDelivered: () => undefined,
     takeSetupFailedRestoration: () => null,

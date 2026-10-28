@@ -166,7 +166,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => ({ getActiveHostId: () => "host-a" }),
 }));
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => scripted.activity,
 }));
 vi.mock(
@@ -303,6 +304,7 @@ function replying(step: string | null): BotActivity {
       startedAt: Date.now() - 3 * 60_000,
       step,
       requestId: "req-1",
+      reason: null,
     },
     threads: {},
   };
@@ -459,6 +461,8 @@ describe("the fixed Tracy entry - top strip", () => {
     const scroller = screen.getByTestId("header-tab-strip-scroll");
 
     expect(entry.textContent).toContain("Tracy");
+    expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -798,9 +802,90 @@ describe("the fixed Tracy entry - signals", () => {
     expect(body.textContent).toContain("Reading the plan");
   });
 
+  it("shows the timer and the step while a thread replies and the trunk is idle", async () => {
+    scripted.activity = {
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
+      threads: {
+        "thread-1": {
+          state: "replying",
+          startedAt: Date.now() - 2 * 60_000,
+          step: "Reading the diff",
+          requestId: "req-9",
+          reason: null,
+        },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "2m",
+    );
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("Reading the diff");
+    expect(body.textContent).not.toContain("Idle");
+  });
+
+  it("shows the timer for a thread that replies while no trunk is open", async () => {
+    scripted.activity = {
+      trunk: null,
+      threads: {
+        "thread-1": {
+          state: "replying",
+          startedAt: Date.now() - 4 * 60_000,
+          step: null,
+          requestId: null,
+          reason: null,
+        },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "4m",
+    );
+  });
+
+  it("still says what Tracy is doing when a replying session has no start time", async () => {
+    scripted.activity = {
+      trunk: {
+        state: "replying",
+        startedAt: null,
+        step: "bun test",
+        requestId: null,
+        reason: null,
+      },
+      threads: {},
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("bun test");
+    expect(body.textContent).not.toContain("Idle");
+  });
+
   it("shows no timer and an Idle hover while Tracy is not replying", async () => {
     scripted.activity = {
-      trunk: { state: "idle", startedAt: null, step: null, requestId: null },
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
       threads: {},
     };
     mountTopStrip("/");
@@ -812,6 +897,27 @@ describe("the fixed Tracy entry - signals", () => {
     const body = await screen.findByTestId("tracy-entry-hover-body");
     expect(body.textContent).toContain("Idle");
   });
+
+  it.each([
+    { label: "no activity at all", activity: null },
+    {
+      label: "activity whose trunk no host has written",
+      activity: { trunk: null, threads: {} },
+    },
+  ])(
+    "says nothing of Tracy's state, not Idle, for $label",
+    async ({ activity }) => {
+      scripted.activity = activity;
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      await userEvent.hover(entry);
+
+      const body = await screen.findByTestId("tracy-entry-hover-body");
+      expect(body.textContent).toBe("Tracy");
+      expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+    },
+  );
 
   it.each([["unreadDone"], ["unreadFailure"]] as const)(
     "marks the entry and bolds its title with %s",
@@ -860,6 +966,42 @@ describe("the fixed Tracy entry - signals", () => {
       expect(entry.hasAttribute("data-unread")).toBe(unreadDone);
     },
   );
+});
+
+describe("the fixed Tracy entry - a main bot with any title", () => {
+  beforeEach(() => {
+    scripted.list = {
+      bots: [bot(TRACY, PERSONAL_ENV, "Release Notes", null)],
+      mainBotIds: { [PERSONAL_ENV]: TRACY },
+    };
+  });
+
+  it("is labelled Tracy with the Tracy glyph in the top strip, and the hover names the bot and its activity", async () => {
+    scripted.activity = replying("Reading the plan");
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.textContent).toContain("Tracy");
+    expect(entry.textContent).not.toContain("Release Notes");
+    expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent.startsWith("Release Notes")).toBe(true);
+    expect(body.textContent).toContain("Reading the plan");
+  });
+
+  it("is labelled Tracy with the Tracy glyph in the vertical strip", async () => {
+    mountSideStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.getAttribute("aria-label")).toBe("Tracy");
+    expect(entry.textContent).not.toContain("Release Notes");
+    expect(
+      within(entry).getAllByTestId("tracy-entry-icon").length,
+    ).toBeGreaterThan(0);
+  });
 });
 
 describe("the fixed Tracy entry - Alt-digit", () => {
@@ -920,6 +1062,11 @@ describe("the fixed Tracy entry - vertical strip", () => {
     const topBlock = screen.getByTestId("side-strip-top-block");
 
     expect(topBlock.contains(entry)).toBe(true);
+    expect(
+      within(entry).getAllByTestId("tracy-entry-icon").length,
+    ).toBeGreaterThan(0);
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expect(entry.getAttribute("aria-label")).toBe("Tracy");
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

@@ -791,6 +791,7 @@ describe("app-local notifications store", () => {
       instanceId: "terminal-instance",
       hostId: "host-a",
       hostLabel: "MacBook",
+      sandboxStopped: false,
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -815,6 +816,44 @@ describe("app-local notifications store", () => {
     });
   });
 
+  it("says a stopped sandbox was stopped, not that its host is unreachable", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    const target = {
+      kind: "terminal",
+      epicId: "epic-1",
+      terminalId: "terminal-tile-1",
+      tabId: "view-tab-1",
+      paneId: "pane-1",
+      tileInstanceId: "terminal-instance",
+    } as const;
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostId: "host-a",
+      hostLabel: "e2e-sbx-p1",
+      sandboxStopped: true,
+      target,
+    });
+    expect(
+      useAppLocalNotificationsStore.getState().byId[
+        "terminal.closed:terminal-instance"
+      ].message,
+    ).toBe("Terminal closed: e2e-sbx-p1 was stopped.");
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostId: "host-a",
+      hostLabel: "MacBook",
+      sandboxStopped: false,
+      target,
+    });
+    expect(
+      useAppLocalNotificationsStore.getState().byId[
+        "terminal.closed:terminal-instance"
+      ].message,
+    ).toBe('Terminal closed: host "MacBook" is unreachable.');
+  });
+
   it("refreshes a terminal-closed entry's target after the terminal moves", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-a");
 
@@ -822,6 +861,7 @@ describe("app-local notifications store", () => {
       instanceId: "terminal-instance",
       hostId: "host-a",
       hostLabel: "MacBook",
+      sandboxStopped: false,
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -847,6 +887,7 @@ describe("app-local notifications store", () => {
       instanceId: "terminal-instance",
       hostId: "host-a",
       hostLabel: "MacBook",
+      sandboxStopped: false,
       target: {
         kind: "terminal",
         epicId: "epic-1",

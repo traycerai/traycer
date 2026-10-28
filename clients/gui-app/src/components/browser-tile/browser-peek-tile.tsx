@@ -394,6 +394,7 @@ function ScreencastPeekSurface(props: {
         hidden={props.showStartPage}
         className={SCREENCAST_SURFACE_CLASS}
         aria-label="Browser screencast controls"
+        data-history-gesture-owner=""
         {...session.overlayHandlers}
       >
         {pixels}

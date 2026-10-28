@@ -8,6 +8,7 @@ import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
+  SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL,
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
@@ -18,6 +19,14 @@ import {
   SANDBOX_CREATE_ENVIRONMENT_UNAVAILABLE_LINE,
   sandboxNotAMemberLine,
 } from "@/components/hosts/sandbox-create-model";
+
+/** Keep the control-plane refusal available to the row and its diagnostics. */
+export class SandboxOperationError extends Error {
+  constructor(readonly failure: SandboxControlFailure) {
+    super(sandboxFailureMessage(failure));
+    this.name = "SandboxOperationError";
+  }
+}
 
 /** `shape_not_offered`'s `reason`, in words. */
 const SHAPE_REASON_COPY: Record<string, string> = {
@@ -43,13 +52,22 @@ function insufficientCreditCopy(
   }
   // Create, resume and start share one gate (an hour of the new rate on top
   // of what is already awake), so the sentence names no verb.
+  let pot = "Your credits";
+  if (failure.creditSource === "team-allowance") pot = "Your team allowance";
+  if (failure.creditSource === "team") pot = "The team's credits";
+  const cover = failure.creditSource === "team-allowance" ? "doesn't" : "don't";
+  const sentence = `${pot} ${cover} cover an hour of this sandbox.`;
   return failure.shortfallMc === null
-    ? "Your credits don't cover an hour of this sandbox."
-    : `Your credits don't cover an hour of this sandbox. Add ${formatCreditsRequired(failure.shortfallMc)} credits and try again.`;
+    ? sentence
+    : `${sentence} Add $${formatCreditsRequired(failure.shortfallMc)} and try again.`;
 }
 
 /** The refusals whose sentence depends on nothing but the code. */
 const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
+  [
+    SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
+    "Couldn't rename the sandbox. Try again in a moment.",
+  ],
   [
     SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
     "Sandboxes aren't available right now. Try again later.",

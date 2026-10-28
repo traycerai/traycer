@@ -985,6 +985,54 @@ export function closeTab(
   return closePane(state, paneId);
 }
 
+/**
+ * Replace the tab `instanceId` in `paneId` with `node`, in place.
+ *
+ * The replacement takes the old tab's slot: same index, active if the old
+ * one was active, the pane's preview if the old one was, and its place in the
+ * activation history. The old payload leaves `tilesByInstanceId`; nothing is
+ * appended, so no pane dissolves and no sibling moves.
+ *
+ * Dedup holds here as it does for {@link openTile}: when `node` is already
+ * open under another instance (same content id and bound host), that tab is
+ * the one focused and the old tab is simply closed - two tabs for one content
+ * on one host is what `findPaneTabForRef` exists to prevent.
+ *
+ * No-op (same reference) when `instanceId` is not a tab of `paneId`.
+ */
+export function replaceTab(
+  state: EpicCanvasState,
+  paneId: string,
+  instanceId: string,
+  node: EpicCanvasTileRef,
+): EpicCanvasState {
+  if (state.root === null) return state;
+  const pane = findPaneById(state.root, paneId);
+  if (pane === null || !pane.tabInstanceIds.includes(instanceId)) return state;
+  if (findPaneTabForRef(state, node) !== null) {
+    return openTile(closeTab(state, paneId, instanceId), node, false, null);
+  }
+  const rename = (id: string): string =>
+    id === instanceId ? node.instanceId : id;
+  const root = replacePane(state.root, paneId, (current) => ({
+    ...current,
+    tabInstanceIds: current.tabInstanceIds.map(rename),
+    activeTabId:
+      current.activeTabId === null ? null : rename(current.activeTabId),
+    previewTabId:
+      current.previewTabId === null ? null : rename(current.previewTabId),
+    activationHistory: current.activationHistory.map(rename),
+  }));
+  return {
+    ...state,
+    root,
+    tilesByInstanceId: withTile(
+      withoutTiles(state.tilesByInstanceId, [instanceId]),
+      node,
+    ),
+  };
+}
+
 /** Close every tab except `tabId` (an instanceId) in `paneId`. */
 export function closeOtherTabs(
   state: EpicCanvasState,

@@ -42,6 +42,11 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicLiveArtifactTitleGenerating: () => false,
 }));
+// The title hook's cloud-list arm (a TanStack query) - this suite mounts no
+// QueryClient, and no tile here is a chat the projection lacks a record for.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({ data: undefined }),
+}));
 
 /**
  * The host client the bar resolves for a terminal's bound host, and what the
@@ -63,15 +68,34 @@ vi.mock("@/hooks/terminal/use-terminal-display-title", () => ({
 interface TerminalAuthorityTestState {
   capability: "unknown" | "legacy" | "capable";
   displayTitle: string | null;
+  readonly tabHostIds: Array<string>;
 }
 
 const terminalAuthority = vi.hoisted((): TerminalAuthorityTestState => ({
   capability: "legacy",
   displayTitle: null,
+  /** The tab-scoped host each authority read resolved against. */
+  tabHostIds: [] as Array<string>,
 }));
 
-vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
-  useEpicTerminalAuthority: () => ({
+// The authority's one dependency on the bar is the tab-scoped host binding
+// (`useTabPlainTerminalAuthority` → `useTabHostId`), which throws outside a
+// `<TabHostProvider>`. The mock keeps that read REAL so the bar must bind the
+// terminal's host itself: it renders outside every tile's provider, and a
+// throw here lands above the tile error boundary.
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", async () => {
+  const { useTabHostId } =
+    await import("@/components/epic-canvas/hooks/use-tab-host-id");
+  return {
+    useEpicTerminalAuthority: () => {
+      terminalAuthority.tabHostIds.push(useTabHostId());
+      return terminalAuthorityResult();
+    },
+  };
+});
+
+function terminalAuthorityResult() {
+  return {
     capability: terminalAuthority.capability,
     projection: terminalAuthority.capability === "capable" ? {} : undefined,
     viewModel:
@@ -90,8 +114,8 @@ vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
     ensureRunning: {},
     rename: { mutate: () => undefined },
     close: { isPending: false, mutateAsync: () => Promise.resolve() },
-  }),
-}));
+  };
+}
 
 vi.mock("@/stores/managed-commands/managed-commands-for-chat", () => ({
   useManagedCommandOnHost: () => null,
@@ -264,7 +288,20 @@ describe("<MobileCurrentTileBar />", () => {
     beforeEach(() => {
       terminalAuthority.capability = "legacy";
       terminalAuthority.displayTitle = null;
+      terminalAuthority.tabHostIds.length = 0;
       terminalLegacy.titleReadClients.length = 0;
+    });
+
+    it("binds the terminal's own host for the authority read it mounts outside any tile", () => {
+      // Regression: the bar rendered the terminal control outside a
+      // `<TabHostProvider>`, so selecting a terminal tile on a phone threw
+      // above the tile's error boundary - and kept throwing on every reload,
+      // since the same tile was re-selected.
+      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      expect(terminalAuthority.tabHostIds.length).toBeGreaterThan(0);
+      expect(
+        terminalAuthority.tabHostIds.every((hostId) => hostId === "host-A"),
+      ).toBe(true);
     });
 
     it("on a capable host shows the authority's title and makes no legacy terminal.list read", () => {

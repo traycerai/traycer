@@ -421,7 +421,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
 
     const notice = screen.getByTestId("create-bot-no-host");
     expect(notice.textContent).toBe(
-      "This bot needs a computer that runs bots for Acme. Set one up in Settings.",
+      "This bot needs a host that runs bots for Acme. Set one up in Settings.",
     );
     expect(screen.getByTestId("create-bot-form").textContent).not.toMatch(
       /Runs on|host-/i,
@@ -438,7 +438,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
     });
 
     expect(screen.getByTestId("create-bot-no-host").textContent).toBe(
-      "This bot needs a computer that runs bots for Personal. Set one up in Settings.",
+      "This bot needs a host that runs bots for Personal. Set one up in Settings.",
     );
   });
 
@@ -480,7 +480,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
 
     const unchecked = screen.getByTestId("create-bot-unchecked");
     expect(unchecked.textContent).toContain(
-      "Some of your computers couldn't be checked.",
+      "Some of your hosts couldn't be checked.",
     );
     expect(unchecked.textContent).not.toMatch(/host-/);
     expect(retryFailed).not.toHaveBeenCalled();
@@ -496,7 +496,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
 
     expect(screen.queryByTestId("create-bot-no-host")).toBeNull();
     expect(
-      screen.getByText("Finding a computer that runs Acme's bots…"),
+      screen.getByText("Finding a host that runs Acme's bots…"),
     ).toBeTruthy();
     expect(submitButton().disabled).toBe(true);
   });
@@ -1185,6 +1185,7 @@ describe("<CreateBotForm /> Max Mode label", () => {
         store.getState().setCatalog({
           hostId: LOCAL,
           chatLineCarriesAutoMode: null,
+          keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",
           models: [],

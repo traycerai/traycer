@@ -16,6 +16,12 @@ export type EnvironmentNotificationDetail =
       readonly to: string;
     }
   | {
+      readonly kind: "team_member_welcome";
+      readonly environmentId: string;
+      readonly teamName: string;
+      readonly role: string;
+    }
+  | {
       readonly kind: "team_host_returned";
       readonly environmentId: string;
       readonly teamName: string;
@@ -36,6 +42,15 @@ export type EnvironmentNotificationDetail =
       readonly hostName: string;
       readonly itemKey: string;
       readonly reason: string;
+      readonly sandbox?: {
+        readonly sandboxId?: string | null;
+        readonly operationId?: string | null;
+        readonly name: string;
+        readonly configurationName: string;
+        readonly attemptId: string;
+        readonly applied: readonly string[];
+        readonly notApplied: readonly string[];
+      } | null;
     }
   | {
       readonly kind: "secret_removed";
@@ -57,6 +72,19 @@ export function environmentNotificationDetail(
       teamName: known.teamName,
       from: known.from,
       to: known.to,
+    };
+  }
+  // The newcomer's own row, when it names their role: the grant they got.
+  if (
+    known.kind === "team_member_joined" &&
+    known.toNewcomer &&
+    known.role !== undefined
+  ) {
+    return {
+      kind: "team_member_welcome",
+      environmentId: known.environmentId,
+      teamName: known.teamName,
+      role: known.role,
     };
   }
   if (known.kind === "team_host_returned") {
@@ -85,6 +113,7 @@ export function environmentNotificationDetail(
       hostName: known.hostName,
       itemKey: known.itemKey,
       reason: known.reason,
+      sandbox: known.sandbox ?? null,
     };
   }
   if (known.kind === "secret_removed") {

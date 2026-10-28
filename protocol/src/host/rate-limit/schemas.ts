@@ -137,6 +137,7 @@ export const rateLimitCapableProviderIdSchema = lazySchema(() =>
     "opencode",
     "cursor",
     "antigravity",
+    "kimi",
   ]),
 );
 export type RateLimitCapableProviderId = z.infer<
@@ -507,6 +508,21 @@ export type AntigravityRateLimitWindow = z.infer<
   typeof antigravityRateLimitWindowSchema
 >;
 
+// Kimi arm - httpFetch-class provider (one GET against the Kimi Code
+// `<base>/usages` endpoint with the token the `kimi` CLI stores, no
+// subprocess). Mirrors the three rows the CLI's own `/usage` command renders:
+// the 5-hour, weekly and monthly windows. A window is null when Kimi's backend
+// leaves it out, so a plan that carries no monthly quota sends no monthly bar.
+const kimiRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.kimi),
+    available: z.literal(true),
+    fiveHour: providerRateLimitWindowSchema.nullable(),
+    weekly: providerRateLimitWindowSchema.nullable(),
+    monthly: providerRateLimitWindowSchema.nullable(),
+  }),
+);
+
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
 // that provider, legitimately forward-compat as a bare string), every one of
@@ -652,16 +668,16 @@ export const providerRateLimitsSchemaV21 = lazySchema(() =>
 export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 
 // Latest provider union, carried by the unreleased heads
-// `host.getRateLimitUsage@5.0`, `agent.getProviderProfileRateLimits@6.0` and
-// `providers.refreshProfileStatus@2.0`. The unavailable arm's optional cache
+// `host.getRateLimitUsage@6.0`, `agent.getProviderProfileRateLimits@8.0` and
+// `providers.refreshProfileStatus@4.0`. The unavailable arm's optional cache
 // generation is stripped naturally by older object schemas.
 //
 // Adding an arm here GROWS EVERY LINE THAT BINDS THIS UNION immediately, so
 // each of those three heads must still be unreleased when an arm lands; once a
-// tag ships one, freeze it against a snapshot (as `host.getRateLimitUsage@4.0`
-// is frozen against `providerRateLimitsSchemaV80`) and open the next major.
-// The Antigravity arm is the first added since `host.getRateLimitUsage@4.0`
-// entered the released baseline, which is why it opened 5.0.
+// tag ships one, freeze it against a snapshot (as `host.getRateLimitUsage@5.0`
+// is frozen against `providerRateLimitsSchemaV151`) and open the next major.
+// The Kimi arm is the first added since the 1.5.1 tags shipped 5.0 / 7.0 / 3.0,
+// which is why it opened 6.0 / 8.0 / 4.0.
 export const providerRateLimitsSchema = lazySchema(() =>
   z.union([
     codexRateLimitsSchema,
@@ -673,6 +689,7 @@ export const providerRateLimitsSchema = lazySchema(() =>
     openCodeRateLimitsSchema,
     cursorRateLimitsSchema,
     antigravityRateLimitsSchema,
+    kimiRateLimitsSchema,
     unavailableProviderRateLimitsSchema,
   ]),
 );
@@ -772,6 +789,33 @@ export function mapCursorAvailableToUnavailable(
   ) {
     return {
       provider: "cursor",
+      available: false,
+      reason: "unsupported_provider",
+    };
+  }
+  return providerRateLimits;
+}
+
+/**
+ * The Kimi analogue of `mapCursorAvailableToUnavailable`, for every bridge
+ * below `host.getRateLimitUsage@6.0`, `providers.refreshProfileStatus@4.0` and
+ * `agent.getProviderProfileRateLimits@8.0`. A Kimi-available snapshot has no
+ * representation in any frozen union, so it degrades to the unavailable
+ * `unsupported_provider` shape - the exact row a pre-Kimi-usage host returns
+ * for it today. `"kimi"` is in every frozen `provider` enum from
+ * `providerIdSchemaV30` on, so the result reparses cleanly through every older
+ * union. Any other snapshot (or `null`) passes through unchanged.
+ */
+export function mapKimiAvailableToUnavailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available &&
+    providerRateLimits.provider === "kimi"
+  ) {
+    return {
+      provider: "kimi",
       available: false,
       reason: "unsupported_provider",
     };
@@ -1056,6 +1100,41 @@ export const providerRateLimitsSchemaV91 = lazySchema(() =>
 );
 export type ProviderRateLimitsV91 = z.infer<typeof providerRateLimitsSchemaV91>;
 
+/**
+ * Frozen provider union as the 1.5.1 tags shipped it: every available arm
+ * through Antigravity, and the live unavailable arm.
+ *
+ * Bound by `host.getRateLimitUsage@5.0`, `agent.getProviderProfileRateLimits@7.0`
+ * and `providers.refreshProfileStatus@3.0`. All three ranged over the live
+ * union until the Kimi available arm was added, which is what opened 6.0, 8.0
+ * and 4.0.
+ *
+ * The unavailable arm still names the live `providerIdSchema`: no provider id
+ * has been added since 1.5.1, so the live set is the shipped set. The next id
+ * added must pin this arm first, as `providerIdSchemaV91` pinned the 1.5.0
+ * union.
+ *
+ * Do NOT widen this schema - extend the latest union and use the 6.0 / 8.0 /
+ * 4.0 bridges.
+ */
+export const providerRateLimitsSchemaV151 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    antigravityRateLimitsSchema,
+    unavailableProviderRateLimitsSchema,
+  ]),
+);
+export type ProviderRateLimitsV151 = z.infer<
+  typeof providerRateLimitsSchemaV151
+>;
+
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see
 // `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
@@ -1137,20 +1216,36 @@ export type RateLimitUsageResponseV40 = z.infer<
   typeof rateLimitUsageResponseSchemaV40
 >;
 
-// v5.0 response - identical to v4.0 except the provider-account snapshot ranges
-// over the LIVE `providerRateLimitsSchema`, which adds the Antigravity available
-// arm. The request shape is unchanged from v4.0 (`rateLimitUsageRequestSchemaV40`,
-// `force` included).
+// v5.0 response - identical to v4.0 except the provider-account snapshot adds
+// the Antigravity available arm. The request shape is unchanged from v4.0
+// (`rateLimitUsageRequestSchemaV40`, `force` included).
 //
-// This is the LIVE line while `5` is unreleased. The moment a tag ships it,
-// freeze it against a snapshot union and open 6.0 for the next arm.
+// FROZEN on `providerRateLimitsSchemaV151`, the union the 1.5.1 tags shipped. It
+// ranged over the live union until the Kimi available arm was added, which is
+// what opened 6.0 below.
 export const rateLimitUsageResponseSchemaV50 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchema.nullable(),
+    providerRateLimits: providerRateLimitsSchemaV151.nullable(),
   }),
 );
 export type RateLimitUsageResponseV50 = z.infer<
   typeof rateLimitUsageResponseSchemaV50
+>;
+
+// v6.0 response - identical to v5.0 except the provider-account snapshot ranges
+// over the LIVE `providerRateLimitsSchema`, which adds the Kimi available arm.
+// The request shape is unchanged from v4.0 (`rateLimitUsageRequestSchemaV40`,
+// `force` included).
+//
+// This is the LIVE line while `6` is unreleased. The moment a tag ships it,
+// freeze it against a snapshot union and open 7.0 for the next arm.
+export const rateLimitUsageResponseSchemaV60 = lazySchema(() =>
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  }),
+);
+export type RateLimitUsageResponseV60 = z.infer<
+  typeof rateLimitUsageResponseSchemaV60
 >;
 
 /**
@@ -1196,8 +1291,8 @@ export type ProvidersRefreshProfileStatusResponseV10 = z.infer<
 /**
  * Frozen `providers.refreshProfileStatus@2.0` response: the 1.5.0 tags
  * shipped this line, so it stops tracking the live union and ranges over
- * `providerRateLimitsSchemaV91`. v3.0 carries the live union with fail-closed
- * bridges to both older lines.
+ * `providerRateLimitsSchemaV91`. v3.0 and v4.0 carry newer unions with
+ * fail-closed bridges to every older line.
  */
 export const providersRefreshProfileStatusResponseSchemaV20 = lazySchema(() =>
   z.object({
@@ -1206,6 +1301,22 @@ export const providersRefreshProfileStatusResponseSchemaV20 = lazySchema(() =>
 );
 export type ProvidersRefreshProfileStatusResponseV20 = z.infer<
   typeof providersRefreshProfileStatusResponseSchemaV20
+>;
+
+/**
+ * Frozen `providers.refreshProfileStatus@3.0` response: the 1.5.1 tags
+ * shipped this line, so it stops tracking the live union and ranges over
+ * `providerRateLimitsSchemaV151`. v4.0 carries the live union (Kimi); its
+ * bridges degrade a Kimi reading to `unsupported_provider` and fail closed on
+ * anything else an older line cannot represent.
+ */
+export const providersRefreshProfileStatusResponseSchemaV30 = lazySchema(() =>
+  z.object({
+    providerRateLimits: providerRateLimitsSchemaV151,
+  }),
+);
+export type ProvidersRefreshProfileStatusResponseV30 = z.infer<
+  typeof providersRefreshProfileStatusResponseSchemaV30
 >;
 
 /**

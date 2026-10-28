@@ -1,3 +1,4 @@
+import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 /**
  * This is the main orchestrator that composes extracted sub-components:
@@ -60,12 +61,10 @@ import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-wo
 import {
   useSurfaceHostClient,
   useSurfaceHostPin,
-  useSurfaceHostPinWithDefault,
   useTabSurfaceKey,
   type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
-import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -192,6 +191,7 @@ import {
 import { useEpicDeleteTuiAgentInBatch } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
+  isCreatableArtifactKind,
   isMarkdownArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
@@ -688,15 +688,11 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const hasActiveCommentableArtifact =
     activeArtifact !== null &&
     "kind" in activeArtifact &&
-    isMarkdownArtifactKind(activeArtifact.kind);
-  // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
+    isCommentArtifactKind(activeArtifact.kind);
+  // The PR panel records presence under the canvas host.
   const canvasHostId = useCanvasHostId();
-  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
-    tabSurfaceKey("pull-requests", tabId),
-    canvasHostId,
-  );
   const hasPullRequests = usePrPresenceStore(
-    selectPrScopeHasItems(hostId, epicId),
+    selectPrScopeHasItems(canvasHostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
@@ -759,15 +755,10 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const rail = useLayoutRail();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  // Share the PR resolver; task-agent hosts become available with the session.
-  const canvasHostId = useCanvasHostId();
-  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
-    tabSurfaceKey("pull-requests", tabId),
-    canvasHostId,
-  );
   // The persisted PR baseline is readable before the epic's Y.doc resolves.
+  const canvasHostId = useCanvasHostId();
   const hasPullRequests = usePrPresenceStore(
-    selectPrScopeHasItems(hostId, epicId),
+    selectPrScopeHasItems(canvasHostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
@@ -1325,6 +1316,7 @@ function CommentsPanelBodyLive(props: {
         icon={MessageSquareText}
         title="No artifact open"
         description="Open an artifact to see and add comments on it."
+        action={null}
         testId="epic-comments-empty"
       />
     );
@@ -1460,6 +1452,7 @@ function fileTreePanelBody(input: {
         icon={FolderOpen}
         title="No workspace linked."
         description={null}
+        action={null}
         testId="epic-file-tree-empty"
       />
     );
@@ -2200,8 +2193,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const addRoot = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate) return;
-      // This create menu authors Markdown bodies only.
-      if (!isMarkdownArtifactKind(type)) {
+      if (!isCreatableArtifactKind(type)) {
         return;
       }
       const pendingName = DEFAULT_EPIC_NODE_NAMES[type];
@@ -2223,7 +2215,9 @@ function TreePanelActions(props: TreePanelActionsProps) {
               pendingName,
             );
             openRootWhenProjected(result.artifactId, (node) => {
-              requestArtifactEditorFocus(node.id, node.instanceId);
+              // Only a markdown tile mounts the editor that consumes the mark.
+              if (isMarkdownArtifactKind(type))
+                requestArtifactEditorFocus(node.id, node.instanceId);
             });
           },
           onError: () => {

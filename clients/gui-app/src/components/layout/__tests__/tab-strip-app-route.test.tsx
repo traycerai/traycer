@@ -139,6 +139,12 @@ vi.mock("@/components/layout/tabs/tracy-entry-controller", () => ({
   TracyEntryController: () => null,
 }));
 
+// The shell's two-finger history swipe reads the desktop bridge through the
+// runner host, which this tree does not build. With no bridge it stays inert.
+vi.mock("@/hooks/runner/use-desktop-trackpad-scroll-phase-bridge", () => ({
+  useDesktopTrackpadScrollPhaseBridge: () => null,
+}));
+
 vi.mock("@/components/layout/host-status-footer", () => ({
   HostStatusFooter: () => null,
 }));

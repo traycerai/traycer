@@ -135,7 +135,11 @@ describe("TeamRows", () => {
         <DropdownMenuTrigger>open</DropdownMenuTrigger>
         <DropdownMenuContent>
           <DropdownMenuRadioGroup value="personal">
-            <TeamRows pick={{ kind: "personal" }} onPick={props.onPick} />
+            <TeamRows
+              pick={{ kind: "personal" }}
+              onPick={props.onPick}
+              onReview={() => undefined}
+            />
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -171,6 +171,7 @@ import {
   chatStreamErrorNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
+import { endedSandboxHost } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 import {
   liveChatCompletionAcknowledgementMatches,
   liveChatCompletionAcknowledgements,
@@ -333,6 +334,7 @@ export type ChatStreamClientHandle = Pick<
   Partial<
     Pick<
       ChatStreamClient,
+      | "queuedSteerRestartConfirmationSupported"
       | "interviewSettlementActionsProtocolSupported"
       // Optional for the same reason as its neighbour, and its ABSENCE is
       // read as `null` ("this handle cannot say") rather than `false`. A
@@ -639,10 +641,10 @@ export interface SteerRestartRefusal {
   readonly newSettings: ChatRunSettings | null;
   readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
   /**
-   * The tile that sent the steer. Only its dialog asks, so another pane on the
-   * same chat, focused or not, never takes the question from it.
+   * The tile answering the steer. Only its dialog asks while it is live;
+   * `null` after it closes lets a surviving or newly opened tile claim it.
    */
-  readonly initiatorId: string;
+  readonly initiatorId: string | null;
   /**
    * The turn running when the host refused. Confirming ends only that turn:
    * once another has started, the steer goes again unconfirmed and the host
@@ -1384,6 +1386,8 @@ export interface ChatSessionState {
   readonly steerProtocolSupported: boolean;
   /** Own stream's draft-blob bridge capability; false until open and on disconnect. */
   readonly draftBlobBridgeSupported: boolean;
+  /** Read the live session before deferring queued-steer consent to the host. */
+  readonly queuedSteerRestartConfirmationSupported: () => boolean;
   /** `chat.subscribe@1.7` support for detached interview delivery retries. */
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   /**
@@ -1484,6 +1488,14 @@ export interface ChatSessionState {
    * {@link requiredHydrationOrdinalsOf}.
    */
   readonly findReadOrdinal: number | null;
+  /**
+   * The rows a surface outside the transcript shows and so needs hydrated,
+   * one entry per hold: a bot thread's post, shown in its thread panel from
+   * the channel's row (Tracy Bots T65). Never a viewport move. Separate
+   * from the jump and the find read for the same reason they are separate
+   * from each other. See {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly heldReadOrdinals: ReadonlyArray<number>;
   /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
@@ -1915,10 +1927,10 @@ export interface ChatSessionState {
    * Each queued steer the host refused because it would end the running turn
    * and the person had not confirmed that, from a row's Steer button or a
    * queue edit's Cmd/Ctrl+Enter, oldest first. Two rows steered within one
-   * round trip are both refused, so each waits here until its own tile's
+   * round trip are both refused, so each waits here until its owning tile's
    * confirm dialog takes it ({@link ChatSessionState.takeSteerRestartRefusal}),
    * asks, and sends it again confirmed; the host's notice for a refusal is not
-   * shown.
+   * shown. A closing tile releases its ownership for another tile to claim.
    */
   readonly steerRestartRefusals: ReadonlyArray<SteerRestartRefusal>;
   /**
@@ -2015,6 +2027,8 @@ export interface ChatSessionState {
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   /** See the implementation - names the ordinal a find index read needs. */
   requestFindReadOrdinal: (ordinal: number | null) => void;
+  /** See the implementation - holds a row hydrated for a surface that shows it. */
+  holdTranscriptOrdinal: (ordinal: number) => () => void;
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -2063,6 +2077,8 @@ export interface ChatSessionState {
    * `epic.createChat`'s `initialMessage`, so the same message never double-runs.
    */
   sendSeededUserMessage: (input: {
+    readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
+    readonly deliveryPolicy?: ChatQueueDeliveryPolicy;
     readonly messageId: string;
     readonly clientActionId: string;
     readonly content: JsonContent;
@@ -2185,6 +2201,13 @@ export interface ChatSessionState {
   takeSteerRestartRefusal: (
     clientActionId: string,
   ) => SteerRestartRefusal | null;
+  /** Release a closed tile's pending and held steers without dropping their payloads. */
+  releaseSteerRestartInitiator: (initiatorId: string) => void;
+  /** Claim an orphan only if it is still unowned and this tile has no question yet. */
+  claimSteerRestartRefusal: (
+    clientActionId: string,
+    initiatorId: string,
+  ) => void;
   queueAbortSteer: (queueItemId: string) => string | null;
   queueSettingsUpdate: (
     queueItemId: string,
@@ -2240,6 +2263,8 @@ export interface ChatSessionState {
   ) => string | null;
   ackAcceptedAction: (clientActionId: string) => void;
   ackFailedSendRestoration: (clientActionId: string) => void;
+  /** A durable send record owns this rejected prompt and its recovery UI. */
+  ackRetainedRejectedSend: (clientActionId: string) => void;
   /**
    * Record that THIS notice reached the screen. Called by the toast layer,
    * which is the only thing that knows - see
@@ -3925,9 +3950,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessage: null,
     });
   };
-  // Each queued steer's settings and sending tile: a steer the host refuses
+  // Each queued steer's settings and owning tile: a steer the host refuses
   // unconfirmed is asked about in that tile and sent again confirmed with the
-  // same tuple. Held from before the frame goes out, since its ack can arrive
+  // same tuple. Closing the tile releases its ownership without losing the
+  // payload. Held from before the frame goes out, since its ack can arrive
   // synchronously, until the steer can no longer get one: its ack, a dispatch
   // the store refused, the reconnect sweep that drops it with its connection,
   // or disposal.
@@ -3935,7 +3961,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     string,
     {
       readonly newSettings: ChatRunSettings | null;
-      readonly initiatorId: string;
+      readonly initiatorId: string | null;
       readonly editSettings: ChatRunSettings | null;
     }
   >();
@@ -7055,6 +7081,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
           jumpTargetOrdinal: null,
           findReadOrdinal: null,
+          // `heldReadOrdinals` stays: each hold belongs to the surface still
+          // showing its row and ends only by that surface's release, so a
+          // re-upgrade keeps the row held and no earlier release can take
+          // a later hold of the same ordinal.
           accumulatedFileChangeSummaries: [],
           accumulatedSummaryGenerationSeated: false,
           accumulatedSummaryAssemblyStarted: false,
@@ -8307,11 +8337,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The FRAME's pair, not the store's: this runs before the snapshot's
           // judgement and pending list are published, and protecting the rows
           // the PREVIOUS snapshot was blocked on would protect the wrong ones
-          // for exactly the beat that matters.
-          pendingInterviewOrdinals(
-            frame.snapshot.derived.interviewAnswerability,
-            frame.snapshot.pendingInterviews,
-          ),
+          // for exactly the beat that matters. A held read (a bot thread's
+          // post on show) is the store's own and outlives every frame.
+          [
+            ...pendingInterviewOrdinals(
+              frame.snapshot.derived.interviewAnswerability,
+              frame.snapshot.pendingInterviews,
+            ),
+            ...get().heldReadOrdinals,
+          ],
         );
         // NOW the boundary decision, with the applied window in hand - the
         // fold runs FIRST, deliberately, so everything below reads post-fold
@@ -10296,7 +10330,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
           fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          if (options.fatalCloseNotification !== "silent") {
+          // A sandbox a member destroyed ends its session as a revocation;
+          // the chat says who destroyed it, and nothing needs attention.
+          if (
+            options.fatalCloseNotification !== "silent" &&
+            endedSandboxHost(options.hostId) === null
+          ) {
             notificationDependencies.appLocalNotifications
               .getState()
               .upsertRecurringFailure(
@@ -10488,6 +10527,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       turnLifecycleRevision: 0,
       steerProtocolSupported: false,
       draftBlobBridgeSupported: false,
+      queuedSteerRestartConfirmationSupported: () =>
+        !disposed &&
+        get().connectionStatus === "open" &&
+        streamClient?.queuedSteerRestartConfirmationSupported?.() === true,
       interviewDeliveryRetryProtocolSupported: false,
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
@@ -10514,6 +10557,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       jumpTargetOrdinal: null,
       findReadOrdinal: null,
+      heldReadOrdinals: [],
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
@@ -10587,6 +10631,29 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (get().findReadOrdinal === ordinal) return;
         set({ findReadOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
+      },
+
+      /**
+       * Holds the row at `ordinal` hydrated until the returned release: for
+       * a surface outside the transcript that shows the row, such as a bot
+       * thread's post in its panel. Like a find read, it never moves the
+       * viewport, so this is what fetches the row; held, not one-shot, so the
+       * row stays while the surface shows it.
+       */
+      holdTranscriptOrdinal: (ordinal: number) => {
+        set({ heldReadOrdinals: [...get().heldReadOrdinals, ordinal] });
+        requestPlannedHydration();
+        let released = false;
+        return () => {
+          if (released || disposed) return;
+          released = true;
+          const held = get().heldReadOrdinals;
+          const at = held.indexOf(ordinal);
+          if (at === -1) return;
+          set({
+            heldReadOrdinals: [...held.slice(0, at), ...held.slice(at + 1)],
+          });
+        };
       },
       wake: () => {
         if (disposed) return;
@@ -10959,7 +11026,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // dispatch as a sibling of the per-chat `settings`.
           accountContext: useAccountContextStore.getState().accountContext,
           sentFromHostId: sentFromHostIdSnapshot(),
-          deliveryPolicy: "auto",
+          deliveryPolicy: input.deliveryPolicy ?? "auto",
           // The handoff's intent rides the frame as well as `epic.create`. On
           // the deferred path this resend is a duplicate of the seeded message
           // and the frame is never read; on every SYNCHRONOUS path it can win
@@ -10969,7 +11036,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // turn. Sending `null` there would run the turn in the source
           // checkout if the resend won.
           worktreeIntent: input.worktreeIntent,
-          browserAnnotations: [],
+          browserAnnotations: [...(input.browserAnnotations ?? [])],
         };
         const sentClientActionId = sendAction({
           set,
@@ -10984,7 +11051,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
-            restore: { content: input.content, browserAnnotations: [] },
+            restore: {
+              content: input.content,
+              browserAnnotations: input.browserAnnotations ?? [],
+            },
             sender: input.sender,
             settings: input.settings,
             // Both copies, so a `WORKTREE_CREATE_FAILED` rejection of this
@@ -11024,7 +11094,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             accountContext: frame.accountContext,
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
-            restore: { content: input.content, browserAnnotations: [] },
+            restore: {
+              content: input.content,
+              browserAnnotations: input.browserAnnotations ?? [],
+            },
             // DELIBERATELY null while the pending ACTION above carries it. This
             // copy outlives the ack (it is what the accepted record restores
             // from on a dropped connection), and by then the intent has either
@@ -11677,6 +11750,39 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         return refusal;
       },
+      releaseSteerRestartInitiator: (initiatorId) => {
+        if (disposed) return;
+        for (const [actionId, steer] of steersAwaitingAck) {
+          if (steer.initiatorId === initiatorId) {
+            steersAwaitingAck.set(actionId, { ...steer, initiatorId: null });
+          }
+        }
+        const refusals = get().steerRestartRefusals;
+        if (!refusals.some((held) => held.initiatorId === initiatorId)) return;
+        set({
+          steerRestartRefusals: refusals.map((held) =>
+            held.initiatorId === initiatorId
+              ? { ...held, initiatorId: null }
+              : held,
+          ),
+        });
+      },
+      claimSteerRestartRefusal: (clientActionId, initiatorId) => {
+        if (disposed) return;
+        const refusals = get().steerRestartRefusals;
+        if (refusals.some((held) => held.initiatorId === initiatorId)) return;
+        const refusal = refusals.find(
+          (held) => held.clientActionId === clientActionId,
+        );
+        // Re-read ownership here: another pane can claim between rendering
+        // the orphan and running its effect. Only the first claimant asks.
+        if (refusal === undefined || refusal.initiatorId !== null) return;
+        set({
+          steerRestartRefusals: refusals.map((held) =>
+            held === refusal ? { ...held, initiatorId } : held,
+          ),
+        });
+      },
       queueAbortSteer: (queueItemId) => {
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
@@ -12065,6 +12171,35 @@ export function createChatSessionStoreWithNotificationDependencies(
                 reason: restoration.displacedReason,
               },
             },
+          };
+        });
+      },
+      ackRetainedRejectedSend: (clientActionId) => {
+        // The pending sandbox send keeps the content, sidecars and intent.
+        // Release only the revision this session restored, never a newer pick.
+        releaseStagingRevisionFor(clientActionId);
+        set((state) => {
+          const deliveredNoticeActionIds = new Set(
+            state.deliveredNoticeActionIds,
+          );
+          addWithFifoEviction(
+            deliveredNoticeActionIds,
+            clientActionId,
+            MAX_DELIVERED_CLIENT_ACTION_IDS,
+          );
+          return {
+            failedSendRestoration:
+              state.failedSendRestoration?.clientActionId === clientActionId
+                ? null
+                : state.failedSendRestoration,
+            lastCopyPrompts: withoutLastCopyPrompt(
+              state.lastCopyPrompts,
+              clientActionId,
+            ),
+            errorNotices: state.errorNotices.filter(
+              (notice) => notice.clientActionId !== clientActionId,
+            ),
+            deliveredNoticeActionIds,
           };
         });
       },
@@ -14808,6 +14943,7 @@ function pendingInterviewOrdinals(
  *
  * The find read is the same circle with no scroll at all at the end of it: it
  * never moves the viewport, so nothing but this list will ever fetch its row.
+ * A held read (a bot thread's post) is a find read that lasts while it is shown.
  */
 function requiredHydrationOrdinalsOf(
   state: ChatSessionState,
@@ -14819,7 +14955,11 @@ function requiredHydrationOrdinalsOf(
     state.pendingInterviews,
   );
   let ordinals = interviews;
-  for (const extra of [state.jumpTargetOrdinal, state.findReadOrdinal]) {
+  for (const extra of [
+    state.jumpTargetOrdinal,
+    state.findReadOrdinal,
+    ...state.heldReadOrdinals,
+  ]) {
     if (extra === null || ordinals.includes(extra)) continue;
     ordinals = [...ordinals, extra];
   }

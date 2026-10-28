@@ -44,8 +44,9 @@ function reasonSentence(
 /**
  * Shown when the owner steers a queued prompt that the running turn can't
  * take: a turn-start-baked setting differs (model / reasoning / service tier /
- * profile), the harness can't steer mid-turn, or the prompt carries images,
- * a slash command or skills the harness can't fold in. Confirming ends the
+ * profile), the harness can't steer mid-turn, or the prompt carries images.
+ * Legacy slash/skill reasons remain renderable; current hosts queue an
+ * unsupported command or skill for the next turn. Confirming ends the
  * current turn and sends the prompt as a new one; Cancel leaves the prompt
  * queued and the turn running. Enter confirms and Esc cancels, keeping the
  * steer flow keyboard-only. No in-dialog pending state - the queue/turn

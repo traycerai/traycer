@@ -1,8 +1,10 @@
 /**
  * The bot tab's sidebar (Tracy Bots, decision 41): every environment is a
- * section, every bot in it a `# name` channel, unread channels are marked. The
- * sections list channels only; a team's header carries a + and an empty team
- * a call to action, both opening that team's setup (T59), and the gate that
+ * section, every bot in it an avatar and name channel, unread channels are
+ * marked. The sections list channels only; every section the person can add
+ * to carries a + (the personal one opens the create form) and an empty one a
+ * call to action, both opening that section's setup (T59), a person in no
+ * team is offered "Create a team", and the gate that
  * locks a new team's chat until its GitHub set holds a repository still
  * disables its rows. The real sidebar, the real setup dialog and the real
  * onboarding gate run over mocked reads and the real bot-tabs store; the
@@ -10,6 +12,12 @@
  * the dialog's focus on closing is read off the real thing.
  */
 import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
+import {
+  act,
   cleanup,
   render,
   screen,
@@ -35,6 +43,8 @@ const mocks = vi.hoisted(() => {
   return {
     client: { stub: "tab-host-client" },
     navigate: vi.fn(),
+    openLink: vi.fn<(url: string, kind: string) => Promise<void>>(),
+    hasShell: true,
     navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
     bindings: { stub: "environment-bindings" },
     state: {
@@ -57,6 +67,13 @@ vi.mock("@/lib/tab-navigation", () => ({
     _extra: unknown,
   ) => mocks.navigateToTabIntent(intent),
 }));
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () =>
+    mocks.hasShell ? { signInUrl: "https://platform.traycer.ai" } : null,
+}));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -76,11 +93,26 @@ vi.mock("@/hooks/bots/use-bot-onboarding-query", () => ({
     return { status: data === undefined ? "pending" : "success", data };
   },
 }));
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    data: { environments: mocks.state.environments },
-  }),
-}));
+// A real query over the host's `environment.list`, which answers whatever the
+// test last set; `mount` seeds it, so the first render is synchronous.
+vi.mock("@/hooks/bots/use-environment-list-query", async () => {
+  const { queryOptions, useQuery } = await import("@tanstack/react-query");
+  const { hostQueryKeys } = await import("@/lib/query-keys/host-query-keys");
+  return {
+    useEnvironmentListQuery: () =>
+      useQuery(
+        queryOptions({
+          queryKey: [
+            ...hostQueryKeys.methodScope("host-tab", "environment.list"),
+            {},
+          ],
+          queryFn: () =>
+            Promise.resolve({ environments: mocks.state.environments }),
+          staleTime: Infinity,
+        }),
+      ),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({ data: { bots: mocks.state.bots } }),
 }));
@@ -119,6 +151,7 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
 }));
 
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const TAB_HOST = "host-tab";
@@ -200,11 +233,25 @@ function row(botId: string): HTMLElement {
 }
 
 function mount(activeBotId: string): void {
-  render(<BotChannelSidebar activeBotId={activeBotId} hostId={TAB_HOST} />);
+  const queryClient = new QueryClient();
+  const seeded = queryOptions({
+    queryKey: [...hostQueryKeys.methodScope(TAB_HOST, "environment.list"), {}],
+    queryFn: () => Promise.resolve({ environments: mocks.state.environments }),
+  });
+  queryClient.setQueryData(seeded.queryKey, {
+    environments: mocks.state.environments,
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <BotChannelSidebar activeBotId={activeBotId} hostId={TAB_HOST} />
+    </QueryClientProvider>,
+  );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.hasShell = true;
+  mocks.openLink.mockResolvedValue(undefined);
   mocks.state.environments = [
     environment("env-me", "Personal", "user"),
     environment("env-team", "Acme", "organization"),
@@ -230,7 +277,7 @@ afterEach(() => {
 });
 
 describe("<BotChannelSidebar /> sections", () => {
-  it("lists each environment as a section with its bots as # channels, an empty environment included", () => {
+  it("lists each environment as a section with its bots as avatar and name channels, an empty environment included", () => {
     mount("bot-release");
 
     const sections = screen.getAllByTestId("bot-channel-section");
@@ -239,14 +286,22 @@ describe("<BotChannelSidebar /> sections", () => {
       "env-team",
       "env-empty",
     ]);
+    // A section's header is its name and its +, with nothing to fold.
+    expect(within(section("env-team")).getByText("Acme")).toBeTruthy();
     expect(
-      within(section("env-team")).getByRole("button", { name: "Acme" }),
-    ).toBeTruthy();
+      screen
+        .getByTestId("bot-channel-sidebar")
+        .querySelectorAll("[aria-expanded]"),
+    ).toHaveLength(0);
     expect(
       within(section("env-team"))
         .getAllByTestId("bot-channel-row")
         .map((r) => r.textContent),
-    ).toEqual(["release-bot", "triage-bot"]);
+    ).toEqual(["RErelease-bot", "TRtriage-bot"]);
+    expect(
+      within(section("env-team")).getAllByTestId("bot-avatar"),
+    ).toHaveLength(2);
+    expect(section("env-team").textContent).not.toContain("#");
     expect(
       within(section("env-me"))
         .getAllByTestId("bot-channel-row")
@@ -340,7 +395,7 @@ describe("<BotChannelSidebar /> opening a channel", () => {
 });
 
 describe("<BotChannelSidebar /> team setup", () => {
-  it("draws a + on each team section and on no other", () => {
+  it("draws a + on each section the person can add to and on no other", () => {
     mocks.state.bots = [
       ...mocks.state.bots,
       bot("bot-orphan", "env-left", "orphan-bot"),
@@ -358,17 +413,16 @@ describe("<BotChannelSidebar /> team setup", () => {
       }),
     ).toBeTruthy();
     expect(
-      within(section("env-me")).queryByTestId("bot-channel-section-add"),
-    ).toBeNull();
+      within(section("env-me")).getByRole("button", { name: "New bot" }),
+    ).toBeTruthy();
     // An environment the person is no longer in has no team to set up.
     expect(
       within(section("env-left")).queryByTestId("bot-channel-section-add"),
     ).toBeNull();
-    expect(screen.getAllByTestId("bot-channel-section-add")).toHaveLength(2);
+    expect(screen.getAllByTestId("bot-channel-section-add")).toHaveLength(3);
   });
 
-  it("gives a team with no bots one call to action, and a team with bots none", async () => {
-    const user = userEvent.setup();
+  it("gives a team with no bots one call to action, and a team with bots none", () => {
     mocks.state.bots = [
       ...mocks.state.bots,
       bot("bot-orphan", "env-left", "orphan-bot"),
@@ -380,14 +434,41 @@ describe("<BotChannelSidebar /> team setup", () => {
         .textContent,
     ).toBe("Set up your team's bots");
     expect(screen.getAllByTestId("bot-channel-section-set-up")).toHaveLength(1);
+  });
 
-    // A collapsed section hides it with the rest of its body.
-    await user.click(
-      within(section("env-empty")).getByRole("button", {
-        name: "Quiet team",
-      }),
+  it("gives an empty personal section a New bot row, and opens the create form for the personal environment from the + and the row", async () => {
+    const user = userEvent.setup();
+    mocks.state.bots = mocks.state.bots.filter(
+      (b) => b.environmentId !== "env-me",
     );
-    expect(screen.queryByTestId("bot-channel-section-set-up")).toBeNull();
+    mount("bot-release");
+
+    expect(
+      within(section("env-me")).getByTestId("bot-channel-section-set-up")
+        .textContent,
+    ).toBe("New bot");
+
+    await user.click(
+      within(section("env-me")).getByTestId("bot-channel-section-add"),
+    );
+    const fromPlus = screen.getByTestId("team-bot-setup-dialog");
+    expect(within(fromPlus).getByText("New bot")).toBeTruthy();
+    expect(
+      within(fromPlus)
+        .getByTestId("stub-create-bot-form")
+        .getAttribute("data-environment-id"),
+    ).toBe("env-me");
+    expect(screen.queryByTestId("stub-bots-step")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(
+      within(section("env-me")).getByTestId("bot-channel-section-set-up"),
+    );
+    expect(
+      within(screen.getByTestId("team-bot-setup-dialog"))
+        .getByTestId("stub-create-bot-form")
+        .getAttribute("data-environment-id"),
+    ).toBe("env-me");
   });
 
   it("opens the setup for the team of the + or the call to action that was clicked", async () => {
@@ -491,5 +572,53 @@ describe("<BotChannelSidebar /> team onboarding", () => {
     expect(
       within(section("env-team")).getByTestId("bot-channel-section-add"),
     ).toBeTruthy();
+  });
+});
+
+describe("<BotChannelSidebar /> create a team", () => {
+  it("offers Create a team to a person in no team, opening the dashboard's create-team page", async () => {
+    const user = userEvent.setup();
+    mocks.state.environments = [environment("env-me", "Personal", "user")];
+    mount("bot-notes");
+
+    await user.click(screen.getByTestId("bot-channel-create-team"));
+
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink.mock.calls[0]?.[0]).toBe(
+      "https://platform.traycer.ai/settings?create-team=1",
+    );
+    expect(mocks.openLink.mock.calls[0]?.[1]).toBe("account");
+  });
+
+  it("re-reads the environment list when the window regains focus, so a team made on the dashboard replaces Create a team", async () => {
+    mocks.state.environments = [environment("env-me", "Personal", "user")];
+    mocks.state.bots = [];
+    mount("bot-notes");
+    expect(screen.getByTestId("bot-channel-create-team")).toBeTruthy();
+    expect(screen.queryAllByTestId("bot-channel-section")).toHaveLength(1);
+
+    mocks.state.environments = [
+      environment("env-me", "Personal", "user"),
+      environment("env-team", "Acme", "organization"),
+    ];
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
+    });
+    expect(within(section("env-team")).getByText("Acme")).toBeTruthy();
+  });
+
+  it("draws nothing when a team environment is present, or when there is no shell to open it", () => {
+    mount("bot-release");
+    expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
+    cleanup();
+
+    mocks.state.environments = [environment("env-me", "Personal", "user")];
+    mocks.hasShell = false;
+    mount("bot-notes");
+    expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
   });
 });

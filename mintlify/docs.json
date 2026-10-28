@@ -130,6 +130,7 @@
                       "settings/browser",
                       "settings/opening-behavior",
                       "settings/sounds",
+                      "settings/alerts",
                       "settings/keybindings",
                       "settings/diagnostics",
                       "settings/layout"

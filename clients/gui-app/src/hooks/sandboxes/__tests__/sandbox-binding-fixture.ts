@@ -14,6 +14,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 
 type ListSandboxes = () => Promise<SandboxListFetchResult>;
@@ -23,6 +24,7 @@ type CreateSandbox = (
 type RunSandboxVerb = (
   sandboxId: string,
   verb: SandboxLifecycleVerb,
+  gesture: SandboxVerbGesture | null,
   timeoutMs: number,
 ) => Promise<SandboxLifecycleVerbFetchResult>;
 type GetSandboxAutomation = (
@@ -31,7 +33,10 @@ type GetSandboxAutomation = (
 type OpenSandboxAutomation = (
   target: SandboxAutomationOpenTarget | null,
 ) => Promise<SandboxAutomationOpenFetchResult>;
-type DestroySandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
+type DestroySandbox = (
+  sandboxId: string,
+  onlyIfIdle: boolean,
+) => Promise<SandboxVerbFetchResult>;
 type PatchSandbox = (
   sandboxId: string,
   request: SandboxPatchRequest,

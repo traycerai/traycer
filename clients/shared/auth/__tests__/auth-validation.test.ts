@@ -416,6 +416,7 @@ describe("negotiated user record route, and frozen-route recovery", () => {
   // rather than a tautology against the module's own constant.
   const USER_RECORD_MAJORS_REQUEST_HEADER = "x-traycer-user-record-majors";
   const USER_RECORD_VERSION_RESPONSE_HEADER = "x-traycer-user-record-version";
+  const INVITE_ACCEPTANCE_REQUEST_HEADER = "x-traycer-invite-acceptance";
 
   interface UrlKeyedCall {
     readonly url: string;
@@ -563,6 +564,9 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     expect(urlCalls[0].url).toBe(NEGOTIATED_URL);
     expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
       "1,2,3",
+    );
+    expect(urlCalls[0].headers.get(INVITE_ACCEPTANCE_REQUEST_HEADER)).toBe(
+      "explicit",
     );
   });
 
@@ -724,6 +728,9 @@ describe("negotiated user record route, and frozen-route recovery", () => {
       FROZEN_URL,
     ]);
     expect(urlCalls[1].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
+      null,
+    );
+    expect(urlCalls[1].headers.get(INVITE_ACCEPTANCE_REQUEST_HEADER)).toBe(
       null,
     );
   });

@@ -94,6 +94,7 @@ import {
 } from "./landing-strip-rows";
 import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
 import { LandingTerminalTile } from "./landing-terminal-tile";
+import { AutomationTerminalPane } from "./automation-terminal-pane";
 import { LandingBrowserTile } from "./landing-browser-tile";
 import {
   isLandingBrowserHostWatched,
@@ -129,12 +130,10 @@ import {
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
 import { landingPaneAnchorDraftIds } from "./landing-pane-anchor-store";
 import {
-  stagedSandboxFallbackName,
-  startStagedTerminal,
+  openLandingStagedTerminal,
   useStagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
   useLandingTerminalGesture,
@@ -331,15 +330,15 @@ function dispatchLandingTerminalClose(args: {
  *
  * `target.availability` is the TERMINAL target host's verdict, and it decides
  * two things about this panel: whether the panel is mounted at all, and whether
- * its body is replaced by a status line. Both are correct for a terminal row,
- * which is served by that device.
+ * its body is replaced by a status line. Both are correct for a legacy terminal
+ * row, which needs that host's capability and launch context.
  *
- * A BROWSER row is not. It is maintained through its own device's independent
- * coordinator, its tile renders that device's own reconnecting and dormant
- * state, and none of that is the target's to answer for - so a target that is
- * unsupported, unselected or still resolving must not take a working page off
- * screen and replace it with a sentence about a machine it has nothing to do
- * with.
+ * A BROWSER row, and a terminal row its own host has acknowledged, are not.
+ * Each follows its own bound host's lifecycle and renders that host's own
+ * reconnecting and dormant state, and none of that is the target's to answer
+ * for - so a target that is unsupported, unselected or still resolving must
+ * not take a working tile off screen and replace it with a sentence about a
+ * machine it has nothing to do with.
  *
  * This is the rule in ONE place on purpose. It was first written as a term
  * inside the body's status branch, and the mount decision above that branch
@@ -350,7 +349,9 @@ function dispatchLandingTerminalClose(args: {
 function landingTargetVerdictGoverns(
   rows: ReadonlyArray<LandingPanelTabRef>,
 ): boolean {
-  return landingBrowserTabs(rows).length === 0;
+  return rows.every(
+    (row) => row.kind === "terminal" && row.hostAuthorityAcknowledged !== true,
+  );
 }
 
 /**
@@ -927,6 +928,7 @@ export function LandingTerminalPanel(): ReactNode {
             title: null,
             activeProcessName: null,
             currentCwd: cwd,
+            taskHome: null,
           }),
           titleSource: "default",
           hostAuthorityAcknowledged: false,
@@ -1006,20 +1008,7 @@ export function LandingTerminalPanel(): ReactNode {
     // the terminal opens on the handoff. Never on the host the composer falls
     // back to meanwhile, and no new-tab chooser is left waiting for it. A
     // staged sandbox that is up already opens it there now.
-    const ask = startStagedTerminal(composerSurfaceKey, (fresh) =>
-      runStaged(composerSurfaceKey, fresh, {
-        fallbackName: stagedSandboxFallbackName(""),
-        taskId: null,
-      }),
-    );
-    if (ask.kind === "awake") {
-      useSurfaceHostSelectionStore
-        .getState()
-        .setSelection(composerSurfaceKey, ask.hostId);
-      useLandingPanelStore
-        .getState()
-        .requestTerminal(composerSurfaceKey, ask.hostId);
-    }
+    const ask = openLandingStagedTerminal(composerSurfaceKey, runStaged);
     if (ask.kind !== "not-taken") {
       dismissPlaceholder();
       return;
@@ -1403,9 +1392,9 @@ export function LandingTerminalPanel(): ReactNode {
 
   // A folderless terminal asked for from outside the panel (a sandbox row's
   // Open terminal, a staged sandbox's handoff), one-shot for the landing visit
-  // it was filed for. It waits while the panel targets another host: the ask
-  // pinned the composer to its host, and a pin moved elsewhere drops it
-  // (`setSelection`). A host that cannot start one (an old host, no home
+  // it was filed for. The panel targets the asked host while it is unserved
+  // (`LandingTerminalGestureProvider`), whether or not the ask also pinned the
+  // composer to it, and a pin moved elsewhere drops it (`setSelection`). A host that cannot start one (an old host, no home
   // directory) never will, so that drops it too; a list that could not be
   // read says nothing permanent, so the request waits through it. It is bound to
   // the start page in front of the person, which drops it when it unmounts
@@ -1752,7 +1741,10 @@ export function LandingTerminalPanel(): ReactNode {
         tab.sessionId,
       );
       if (projection !== undefined) {
-        viewModels[tab.instanceId] = selectPlainTerminalViewModel(projection);
+        viewModels[tab.instanceId] = selectPlainTerminalViewModel(
+          projection,
+          null,
+        );
       }
     }
     return viewModels;
@@ -1786,7 +1778,8 @@ export function LandingTerminalPanel(): ReactNode {
       target.availability === "unsupported") &&
     // Every row, not the active one: the panel is the strip too, and unmounting
     // it takes away rows the verdict does not speak for.
-    landingTargetVerdictGoverns(tabs);
+    landingTargetVerdictGoverns(tabs) &&
+    placeholder?.automation === undefined;
 
   const renamePanelTab = (instanceId: string, name: string): void => {
     const tab = useLandingPanelStore
@@ -2723,6 +2716,7 @@ function LandingTerminalPanelBody(props: {
     props.availability === "unknown" &&
     props.directoryPicker === null &&
     !placeholderActive &&
+    props.placeholder?.automation === undefined &&
     landingTargetVerdictGoverns(activeTab === null ? [] : [activeTab])
   ) {
     return (
@@ -2744,26 +2738,18 @@ function LandingTerminalPanelBody(props: {
           props.directoryPicker !== null && "invisible pointer-events-none",
         )}
       >
-        {placeholderActive ? (
-          <div className="absolute inset-0 min-h-0">
-            <LandingNewTabChooser
-              terminal={{
-                disabledReason: props.createDisabledReason,
-                // The terminal pick has no in-flight window of its own: it
-                // either creates synchronously or raises the directory picker
-                // over this chooser, and the picker IS the wait.
-                pending: false,
-              }}
-              browser={{
-                disabledReason: props.browserDisabledReason,
-                pending: props.browserOpening,
-              }}
-              takeFocus={props.directoryPicker === null}
-              onPick={props.onPickNewTabKind}
-              onDismiss={props.onDismissPlaceholder}
-            />
-          </div>
-        ) : null}
+        {props.placeholder === null ? null : (
+          <LandingPlaceholderBody
+            placeholder={props.placeholder}
+            active={placeholderActive}
+            directoryPickerOpen={props.directoryPicker !== null}
+            createDisabledReason={props.createDisabledReason}
+            browserDisabledReason={props.browserDisabledReason}
+            browserOpening={props.browserOpening}
+            onPick={props.onPickNewTabKind}
+            onDismiss={props.onDismissPlaceholder}
+          />
+        )}
         {props.tabs.length === 0 && props.placeholder === null ? (
           <LandingTerminalEmptyState
             primaryWorkspacePath={props.primaryWorkspacePath}
@@ -2830,6 +2816,53 @@ function LandingTerminalPanelBody(props: {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function LandingPlaceholderBody(props: {
+  readonly placeholder: LandingPanelPlaceholder;
+  readonly active: boolean;
+  readonly directoryPickerOpen: boolean;
+  readonly createDisabledReason: string | null;
+  readonly browserDisabledReason: string | null;
+  readonly browserOpening: boolean;
+  readonly onPick: (kind: LandingNewTabKind) => void;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  const { placeholder } = props;
+  if (placeholder.automation !== undefined) {
+    return (
+      <div
+        className={cn(
+          "absolute inset-0 min-h-0",
+          !props.active && "invisible pointer-events-none",
+        )}
+      >
+        <AutomationTerminalPane
+          key={placeholder.instanceId}
+          request={placeholder.automation}
+          instanceId={placeholder.instanceId}
+        />
+      </div>
+    );
+  }
+  if (!props.active) return null;
+  return (
+    <div className="absolute inset-0 min-h-0">
+      <LandingNewTabChooser
+        terminal={{
+          disabledReason: props.createDisabledReason,
+          pending: false,
+        }}
+        browser={{
+          disabledReason: props.browserDisabledReason,
+          pending: props.browserOpening,
+        }}
+        takeFocus={!props.directoryPickerOpen}
+        onPick={props.onPick}
+        onDismiss={props.onDismiss}
+      />
     </div>
   );
 }

@@ -3450,9 +3450,10 @@ const draftImageAckCauseFields = {
  * - `harness`: the running harness cannot take a message mid-turn;
  * - `settings`: the prompt's model, reasoning effort, service tier or profile
  *   differs from the running turn's;
- * - `images`: the prompt carries images the harness cannot take mid-turn;
- * - `slash_command`: the prompt is a slash command;
- * - `skills`: the prompt invokes skills.
+ * - `images`: the prompt carries images the harness cannot take mid-turn.
+ *
+ * `slash_command` and `skills` remain decodable for compatibility. Hosts queue
+ * those prompts for the next turn when the running session cannot admit them.
  */
 export const chatQueueSteerRestartReasonSchema = lazySchema(() =>
   z.enum(["harness", "settings", "images", "slash_command", "skills"]),
@@ -8442,8 +8443,11 @@ export const chatSubscribeV138 = defineStreamRpcContract({
  * confirmation. `queueSteerNow` carries `restartConfirmed`; the host refuses
  * an unconfirmed restart with `QUEUE_STEER_RESTART_UNCONFIRMED` and every
  * cause in `steerRestartReasons` on the rejected ack, and stages nothing. A
- * peer below 1.39 keeps the old behaviour: its steer restarts the turn
- * unasked, and the host strips the reasons from its acks.
+ * peer below 1.39 cannot confirm a restart, and the host strips the reasons
+ * from its acks. Payloads the running session admits steer without adding a
+ * restart cause. Unsupported commands and skills fall back to the next turn;
+ * an unsupported image requires confirmation before a restart. Independent
+ * settings changes still require confirmation.
  */
 export const chatSubscribeV139 = defineStreamRpcContract({
   method: "chat.subscribe",

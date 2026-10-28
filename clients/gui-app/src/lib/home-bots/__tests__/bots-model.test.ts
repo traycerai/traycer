@@ -549,16 +549,19 @@ describe("homeBotState", () => {
       ).toBe("idle");
     });
 
-    it.each([false, true])(
-      "is idle for a team bot, never working or paused, while the registry has not answered (working: %s)",
-      (working) => {
+    it.each([
+      [false, "idle"],
+      [true, "working"],
+    ] as const)(
+      "reads a team bot's own activity (working: %s) as %s while the registry has not answered",
+      (working, expected) => {
         expect(
           state({
             working,
             environmentOwnerKind: "organization",
             personalHostIds: null,
           }),
-        ).toBe("idle");
+        ).toBe(expected);
       },
     );
 

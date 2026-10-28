@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -15,6 +16,10 @@ export interface AddressedEnvironment {
   readonly resolved: boolean;
 }
 
+interface PersonalEnvironment extends AddressedEnvironment {
+  readonly retry: () => void;
+}
+
 const HOST_OWN: AddressedEnvironment = { environmentId: null, resolved: true };
 const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
 
@@ -25,16 +30,20 @@ const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
 export function usePersonalEnvironment(
   client: HostClient<HostRpcRegistry> | null,
   enabled: boolean,
-): AddressedEnvironment {
+): PersonalEnvironment {
   const environments = useEnvironmentListQuery(client, enabled);
-  if (!enabled || environments.isError) return HOST_OWN;
-  if (environments.data === undefined) return PENDING;
+  const { refetch } = environments;
+  const retry = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+  if (!enabled || environments.isError) return { ...HOST_OWN, retry };
+  if (environments.data === undefined) return { ...PENDING, retry };
   const personal = environments.data.environments.find(
     (environment) => environment.ownerKind === "user",
   );
   return personal === undefined
-    ? HOST_OWN
-    : { environmentId: personal.environmentId, resolved: true };
+    ? { ...HOST_OWN, retry }
+    : { environmentId: personal.environmentId, resolved: true, retry };
 }
 
 /**

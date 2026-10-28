@@ -23,6 +23,7 @@ import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentDefinitionsRouteImport } from "./routes/settings.agent-definitions";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
+import { Route as SettingsAlertsRouteImport } from "./routes/settings.alerts";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
@@ -126,6 +127,11 @@ const SettingsAgentDefinitionsRoute =
 const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
   id: "/agents",
   path: "/agents",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsAlertsRoute = SettingsAlertsRouteImport.update({
+  id: "/alerts",
+  path: "/alerts",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsAppDiagnosticsRoute = SettingsAppDiagnosticsRouteImport.update({
@@ -310,6 +316,7 @@ export interface FileRoutesByFullPath {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
+  "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
@@ -357,6 +364,7 @@ export interface FileRoutesByTo {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
+  "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
@@ -407,6 +415,7 @@ export interface FileRoutesById {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
+  "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
@@ -458,6 +467,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agent-definitions"
     | "/settings/agents"
+    | "/settings/alerts"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
@@ -505,6 +515,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agent-definitions"
     | "/settings/agents"
+    | "/settings/alerts"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
@@ -554,6 +565,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agent-definitions"
     | "/settings/agents"
+    | "/settings/alerts"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
@@ -702,6 +714,13 @@ declare module "@tanstack/react-router" {
       path: "/agents";
       fullPath: "/settings/agents";
       preLoaderRoute: typeof SettingsAgentsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/alerts": {
+      id: "/settings/alerts";
+      path: "/alerts";
+      fullPath: "/settings/alerts";
+      preLoaderRoute: typeof SettingsAlertsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/app-diagnostics": {
@@ -953,6 +972,7 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 interface SettingsRouteChildren {
   SettingsAgentDefinitionsRoute: typeof SettingsAgentDefinitionsRoute;
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
+  SettingsAlertsRoute: typeof SettingsAlertsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
@@ -991,6 +1011,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentDefinitionsRoute: SettingsAgentDefinitionsRoute,
   SettingsAgentsRoute: SettingsAgentsRoute,
+  SettingsAlertsRoute: SettingsAlertsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,

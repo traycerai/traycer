@@ -597,6 +597,30 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
       `${HOST_NAME} is running a version that doesn't support this yet. Update it and this comes back on its own.`,
     );
     expect(screen.queryByTestId("settings-host-install-version")).toBeNull();
+    expect(
+      screen.queryByTestId("host-overview-installation-unsupported"),
+    ).toBeNull();
+  });
+
+  it("says one update sentence, not two degraded notices, when neither read is supported", async () => {
+    readyRemote(
+      undefined,
+      undefined,
+      OVERVIEW_METHODS.filter((m) => m !== "host.getInstallationInfo"),
+    );
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    const line = await screen.findByTestId(
+      "host-overview-installation-unsupported",
+    );
+    expect(line.textContent).toBe(
+      `Update ${HOST_NAME} to see its activity here.`,
+    );
+    expect(
+      screen.queryByTestId("host-overview-installation-degraded"),
+    ).toBeNull();
+    expect(screen.queryByTestId("host-overview-service-degraded")).toBeNull();
   });
 
   it("shows the running version, and a Build only when it differs from it", async () => {

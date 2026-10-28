@@ -6,9 +6,7 @@ import {
   Hand,
   MousePointer2,
   MessageSquarePlus,
-  PanelRight,
   Pen,
-  Play,
   Square,
   StickyNote,
   Type,
@@ -62,7 +60,6 @@ export function CanvasToolbar(props: {
   readonly commentsEnabled: boolean;
   readonly pages: ReactNode;
   readonly tool: CanvasTool;
-  readonly play: boolean;
   readonly onTool: (tool: CanvasTool) => void;
 }) {
   return (
@@ -91,13 +88,10 @@ export function CanvasToolbar(props: {
   );
 }
 
-/** Play, the inspector toggle, comments and the zoom menu at the top right. */
+/** Comments and the zoom menu at the top right. */
 export function CanvasViewControls(props: {
   readonly viewOnly: boolean;
-  readonly play: boolean;
-  readonly setPlay: (play: boolean) => void;
-  readonly inspectorOpen: boolean;
-  readonly toggleInspector: () => void;
+  readonly commenting?: boolean;
   readonly trailing: ReactNode;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -105,52 +99,17 @@ export function CanvasViewControls(props: {
   readonly canRedo: boolean;
   readonly zoom: CanvasZoomModel;
 }) {
-  // Leaving play returns to panning when the canvas is view-only.
-  const stopLabel = props.viewOnly ? "Pan" : "Edit";
-  const StopIcon = props.viewOnly ? Hand : MousePointer2;
-  const playLabel = props.play ? stopLabel : "Play";
   return (
     <div
       role="toolbar"
       aria-label="Canvas view"
       className="flex items-center gap-0.5 rounded-lg border bg-popover p-1 shadow-sm"
     >
-      <TooltipWrapper
-        label={props.play ? `Back to ${playLabel.toLowerCase()}` : "Play"}
-        side="bottom"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          variant={props.play ? "secondary" : "ghost"}
-          size="icon-sm"
-          aria-label={`${playLabel} canvas`}
-          aria-pressed={props.play}
-          onClick={() => props.setPlay(!props.play)}
-        >
-          {props.play ? <StopIcon /> : <Play />}
-        </Button>
-      </TooltipWrapper>
-      {props.viewOnly ? null : (
-        <TooltipWrapper
-          label={props.inspectorOpen ? "Hide inspector" : "Show inspector"}
-          side="bottom"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            variant={props.inspectorOpen ? "secondary" : "ghost"}
-            size="icon-sm"
-            aria-label="Inspector"
-            aria-pressed={props.inspectorOpen}
-            onClick={props.toggleInspector}
-          >
-            <PanelRight />
-          </Button>
-        </TooltipWrapper>
-      )}
       {props.trailing}
-      <ZoomMenu {...props} />
+      <ZoomMenu
+        {...props}
+        viewOnly={props.viewOnly || props.commenting === true}
+      />
     </div>
   );
 }
@@ -211,7 +170,6 @@ function ZoomMenu(props: {
 
 function ToolButton(props: {
   readonly tool: CanvasTool;
-  readonly play: boolean;
   readonly onTool: (tool: CanvasTool) => void;
   readonly item: {
     readonly tool: CanvasTool;
@@ -221,7 +179,7 @@ function ToolButton(props: {
   };
 }) {
   const { item } = props;
-  const active = props.tool === item.tool && !props.play;
+  const active = props.tool === item.tool;
   const Icon = item.icon;
   return (
     <TooltipWrapper
@@ -246,7 +204,6 @@ function ToolButton(props: {
 /** The four shapes share one slot showing the last one used, as in design tools. */
 function ShapeTools(props: {
   readonly tool: CanvasTool;
-  readonly play: boolean;
   readonly onTool: (tool: CanvasTool) => void;
 }) {
   const [lastShape, setLastShape] = useState<ShapeTool>("rect");

@@ -1,12 +1,9 @@
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import type { DetailsRecovery } from "@/lib/settings-details-entry";
 
-const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-export function detailsTime(at: number | null): string {
-  return at === null ? "unknown" : DATE_FORMAT.format(at);
+/** A time the app has. One it does not have is left out, never "unknown". */
+export function detailsTime(at: number): string {
+  return formatSettingsDate(at, true);
 }
 
 export function detailsRecoveryLabel(
@@ -15,7 +12,9 @@ export function detailsRecoveryLabel(
 ): string {
   switch (recovery.kind) {
     case "repair":
-      return `Repair on ${name}`;
+      return `Open ${name}`;
+    case "apply":
+      return "Retry applying";
     case "install":
       return `Install on ${name}`;
     case "retry":
@@ -27,7 +26,8 @@ export function detailsRecoveryLabel(
 
 /**
  * Retry reruns the setup script, so only a failed setup script offers it.
- * The host re-applies any other item itself; its row shows the reason alone.
+ * Other computer failures offer the setup or installation page when relevant;
+ * raw failure codes remain in the diagnostics export.
  */
 export function recoveryForHost(
   state: string,

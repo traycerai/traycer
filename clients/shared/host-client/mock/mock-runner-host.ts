@@ -38,6 +38,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "../../platform/uri-callback";
 import type { NotificationFeedOccurrence } from "../../notifications/feed-delivery";
@@ -665,12 +666,14 @@ export class MockRunnerHost implements IRunnerHost {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult> {
     return destroySandboxViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
       sandboxId,
+      onlyIfIdle,
     );
   }
 
@@ -699,6 +702,7 @@ export class MockRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult> {
     return runSandboxVerbViaHttp(
@@ -707,6 +711,7 @@ export class MockRunnerHost implements IRunnerHost {
       null,
       sandboxId,
       verb,
+      gesture,
       timeoutMs,
     );
   }

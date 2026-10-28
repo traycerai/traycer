@@ -9,7 +9,6 @@ import {
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
-import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import {
@@ -19,7 +18,7 @@ import {
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
@@ -44,18 +43,11 @@ interface SandboxVerbContext {
   readonly userId: string | null;
 }
 
-const VERB_FAILURE_TITLE: Record<SandboxLifecycleVerb, string> = {
-  suspend: "Couldn't suspend the sandbox.",
-  resume: "Couldn't resume the sandbox.",
-  stop: "Couldn't stop the sandbox.",
-  start: "Couldn't start the sandbox.",
-};
-
 /**
  * `POST /api/sandboxes/:id/{suspend,resume,stop,start}` for one sandbox, the
  * card's lifecycle actions. Bound to the sandbox at hook level, so a
- * re-render cannot re-point a verb already in flight; one mutation key per
- * sandbox, so the card disables the other verbs while any one runs.
+ * re-render cannot re-point a verb already in flight. `useSandboxOperation`
+ * observes every caller's mutation for this sandbox, including confirmations.
  *
  * Resolves to a {@link SandboxVerbOutcome}. `202` (still moving at the
  * server's deadline) and a `404` for a row destroyed meanwhile are success
@@ -90,6 +82,7 @@ export function useSandboxVerb(
       const result = await binding.auth.runSandboxVerb(
         sandboxId,
         verb,
+        null,
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
       if (result.kind === "ok") {
@@ -103,7 +96,7 @@ export function useSandboxVerb(
       ) {
         return { kind: "gone" };
       }
-      throw new Error(sandboxFailureMessage(result));
+      throw new SandboxOperationError(result);
     },
     onSettled: (_data, _error, _verb, context) => {
       // Settled, not success: a `sandbox_busy` refusal puts the row back to
@@ -118,10 +111,6 @@ export function useSandboxVerb(
       void queryClient.invalidateQueries({
         queryKey: sandboxQueryKeys.costsAll(),
       });
-    },
-    onError: (error, verb, context) => {
-      if (!settledForStartingAccount(context)) return;
-      toastFromAuthError(error, VERB_FAILURE_TITLE[verb]);
     },
   });
   return useAccountFencedMutation(mutation);

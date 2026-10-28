@@ -127,12 +127,13 @@ export const runnerMutationKeys = {
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
     ["runner.globalShortcuts.set", id] as const,
-  // Settings → Sounds → "This phone". Both act on the ONE device this
+  // Settings → Alerts, the push rows. Both act on the ONE device this
   // renderer runs on, so a static key is the whole scope - there is no second
   // OS permission to hold a separate entry for.
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
   pushPermissionOpenSettings: () =>
     ["runner.pushPermission.openSettings"] as const,
+  pushMutedSeveritiesSet: () => ["runner.pushMutedSeverities.set"] as const,
   notificationSystemSettingsOpen: () =>
     ["runner.notifications.systemSettings.open"] as const,
 };
@@ -366,10 +367,17 @@ export const runnerQueryKeys = {
     target: string,
   ) =>
     ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
-  // This phone's OS push permission (Settings → Sounds → "This
-  // phone"). Machine-local and singular - one renderer, one OS switch - so a
+  // This phone's OS push permission (Settings → Alerts, the push
+  // rows). Machine-local and singular - one renderer, one OS switch - so a
   // static key suffices, like `logLevels` and `installedFonts` above.
   pushPermission: () => ["runner.pushPermission"] as const,
+  // Which severities this phone is pushed for, per signed-in account: the
+  // phone keeps one set per account and this cache outlives a sign-out, so an
+  // unscoped entry would hand one account's answer to the next.
+  pushMutedSeverities: (userId: string | null) =>
+    ["runner.pushMutedSeverities", userId] as const,
+  // Every account's entry, for the phone's "re-read" signal.
+  pushMutedSeveritiesAll: () => ["runner.pushMutedSeverities"] as const,
   // Report-issue evidence strip's "Nth time on this install" line (ticket 06
   // ledger read). Scoped by fingerprint - each distinct defect caches
   // independently.

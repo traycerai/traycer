@@ -13,7 +13,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV14,
+  HostNotificationsCloudFeedRowV15,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -501,6 +501,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -528,6 +529,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -547,6 +549,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
@@ -594,11 +597,12 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       null,
     );
     const base = cloudRow("entry-stalled", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV14 = {
+    const row: HostNotificationsCloudFeedRowV15 = {
       ...base,
       coalesceKey: "environment.move.stalled:host-a",
       entry: {
@@ -626,12 +630,57 @@ describe("cloud notifications store", () => {
     close();
   });
 
+  it("lands a snapshot carrying a sandbox.notice row instead of rejecting the feed", () => {
+    const client = new ControlledWsStreamClient();
+    const close = openCloudNotificationsStream(
+      reconnectEngine,
+      client,
+      "user-a",
+      null,
+      null,
+    );
+    const base = cloudRow("entry-notice", 4, "host-a");
+    const row: HostNotificationsCloudFeedRowV15 = {
+      ...base,
+      coalesceKey: "sandbox-notice:sbx-1",
+      entry: {
+        ...base.entry,
+        kind: "sandbox.notice",
+        severity: "info",
+        outcome: "completed",
+        payload: {
+          kind: "sandbox_notice",
+          sandboxId: "sbx-1",
+          sandboxName: "build box",
+          notice: { kind: "resting_destroyed" },
+        },
+      },
+    };
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 4,
+      rows: [row],
+      summary,
+    });
+
+    const state = useCloudNotificationsStore.getState();
+    expect(state.rows).toEqual({
+      [cloudNotificationFeedId("entry-notice")]: row,
+    });
+    expect(state.connectionState).toBe("connected");
+    close();
+  });
+
   it("reports baseline rows as a snapshot even when there are no arrivals", () => {
     const client = new ControlledWsStreamClient();
     const onSnapshot = vi.fn();
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       onSnapshot,
     );
@@ -656,6 +705,7 @@ describe("cloud notifications store", () => {
     const close = openCloudNotificationsStream(
       reconnectEngine,
       client,
+      "user-a",
       null,
       onSnapshot,
     );
@@ -692,6 +742,7 @@ describe("cloud notifications store", () => {
     const closeOld = openCloudNotificationsStream(
       reconnectEngine,
       oldClient,
+      "user-a",
       null,
       null,
     );
@@ -702,6 +753,7 @@ describe("cloud notifications store", () => {
     const closeReplacement = openCloudNotificationsStream(
       reconnectEngine,
       replacementClient,
+      "user-a",
       null,
       null,
     );
@@ -731,5 +783,95 @@ describe("cloud notifications store", () => {
 
     closeOld();
     closeReplacement();
+  });
+  describe("session owner", () => {
+    it("stamps the opening account and clears it on reset", () => {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      expect(useCloudNotificationsStore.getState().accountId).toBe("user-a");
+
+      close();
+      useCloudNotificationsStore.getState().reset();
+
+      expect(useCloudNotificationsStore.getState().accountId).toBeNull();
+    });
+
+    it("opens a different account on a fresh session without the previous account's rows", () => {
+      const oldClient = new ControlledWsStreamClient();
+      const closeOld = openCloudNotificationsStream(
+        reconnectEngine,
+        oldClient,
+        "user-a",
+        null,
+        null,
+      );
+      oldClient.sessions[0].emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [cloudRow("entry-a", 1, "host-a")],
+        summary,
+      });
+      const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+
+      const newClient = new ControlledWsStreamClient();
+      const closeNew = openCloudNotificationsStream(
+        reconnectEngine,
+        newClient,
+        "user-b",
+        null,
+        null,
+      );
+
+      const state = useCloudNotificationsStore.getState();
+      expect(state.accountId).toBe("user-b");
+      expect(state.rows).toEqual({});
+      expect(state.sessionEpoch).toBeGreaterThan(epochBefore);
+
+      oldClient.sessions[0].emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 6,
+        rows: [cloudRow("entry-a-late", 2, "host-a")],
+        summary,
+      });
+      expect(useCloudNotificationsStore.getState().rows).toEqual({});
+      closeOld();
+      closeNew();
+    });
+
+    it("keeps the session when the same account reopens", () => {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+      close();
+
+      const reopened = openCloudNotificationsStream(
+        reconnectEngine,
+        new ControlledWsStreamClient(),
+        "user-a",
+        null,
+        null,
+      );
+
+      expect(useCloudNotificationsStore.getState().sessionEpoch).toBe(
+        epochBefore,
+      );
+      reopened();
+    });
   });
 });

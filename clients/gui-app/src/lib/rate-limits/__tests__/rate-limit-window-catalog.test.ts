@@ -104,6 +104,14 @@ const OPENCODE: ProviderRateLimits = wire({
   monthly: { ...windowOf(30, 2_500_000, 43_200), status: "ok" },
 });
 
+const KIMI: ProviderRateLimits = wire({
+  provider: "kimi",
+  available: true,
+  fiveHour: windowOf(10, 1_800_000, 300),
+  weekly: windowOf(20, 2_000_000, 10_080),
+  monthly: windowOf(30, 2_500_000, 43_200),
+});
+
 /**
  * A grok snapshot varying only the two fields its period label is built from,
  * so a label test states the payload it is about and nothing else.
@@ -256,6 +264,7 @@ describe("fixedProviderWindowKeys", () => {
     ["opencode", OPENCODE, []],
     ["grok", GROK, []],
     ["cursor", CURSOR, []],
+    ["kimi", KIMI, []],
     [
       "antigravity",
       ANTIGRAVITY,
@@ -296,11 +305,23 @@ describe("fixedProviderWindowKeys", () => {
   it("has none for antigravity - every window is discovered", () => {
     expect(fixedProviderWindowKeys("antigravity")).toEqual([]);
   });
+
+  it("names all three of kimi's windows before any reading, in the order a reading files them", () => {
+    expect(fixedProviderWindowKeys("kimi")).toEqual([
+      "kimi:fiveHour",
+      "kimi:weekly",
+      "kimi:monthly",
+    ]);
+  });
 });
 
 describe("isWindowedRateLimitProvider", () => {
   it("is true for antigravity", () => {
     expect(isWindowedRateLimitProvider("antigravity")).toBe(true);
+  });
+
+  it("is true for kimi", () => {
+    expect(isWindowedRateLimitProvider("kimi")).toBe(true);
   });
 
   it("is true for every provider whose fixture reports windowed entries", () => {
@@ -661,6 +682,37 @@ describe("providerWindowEntries", () => {
     ]);
   });
 
+  it("names the three Kimi windows statically, as plain durations", () => {
+    expect(
+      providerWindowEntries(KIMI).map((entry) => [
+        entry.windowKey,
+        entry.label,
+        entry.kind,
+        entry.labelIsDuration,
+      ]),
+    ).toEqual([
+      ["kimi:fiveHour", "5h", "session", true],
+      ["kimi:weekly", "wk", "weekly", true],
+      ["kimi:monthly", "mo", "monthly", true],
+    ]);
+  });
+
+  it("omits a Kimi window the backend left out", () => {
+    const entries = providerWindowEntries(
+      wire({
+        provider: "kimi",
+        available: true,
+        fiveHour: windowOf(10, 1_800_000, 300),
+        weekly: null,
+        monthly: windowOf(30, 2_500_000, 43_200),
+      }),
+    );
+    expect(entries.map((entry) => entry.windowKey)).toEqual([
+      "kimi:fiveHour",
+      "kimi:monthly",
+    ]);
+  });
+
   // The GROK fixture states no duration, so these three walk down
   // `grokPeriodLabel`'s order: duration, then the known-values table, then the
   // neutral word. What none of them may produce is the wire token itself -
@@ -873,6 +925,7 @@ describe("providerWindowEntries", () => {
     ["opencode", OPENCODE],
     ["grok", GROK],
     ["cursor", CURSOR],
+    ["kimi", KIMI],
     ["antigravity", ANTIGRAVITY],
     ["openrouter", OPENROUTER],
     ["kilocode", KILOCODE],

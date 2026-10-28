@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { formatEvidenceDate } from "@/components/settings/move/format-evidence-date";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { heldItemsLineText } from "@/components/settings/move/held-items-line-copy";
 import {
   RETURNED_FROM_TEAM_LINE,
@@ -23,6 +22,14 @@ import { stopSharingDescription } from "@/components/settings/move/stop-sharing-
 const OCT_20 = Date.UTC(2026, 9, 20, 12, 0, 0);
 
 describe("Overview dated lines", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12, 0, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns from a team in one sentence", () => {
     expect(RETURNED_FROM_TEAM_LINE).toBe(
       "This computer went back to your own settings.",
@@ -34,7 +41,6 @@ describe("Overview dated lines", () => {
   });
 
   it("dates an explicit stop", () => {
-    expect(formatEvidenceDate(OCT_20)).toBe("20 Oct");
     expect(stoppedSharingLine(OCT_20)).toBe(
       "This computer stopped using Personal on 20 Oct",
     );

@@ -37,9 +37,6 @@ export interface EnvironmentPickerHost {
 }
 
 export interface EnvironmentPickerModel {
-  readonly personalSubtitle: string;
-  /** The computers running Personal; one with a Local row is not among them. */
-  readonly runningPersonal: readonly EnvironmentPickerHost[];
   readonly localRows: readonly LocalPickerRow[];
   /** What the window opens on when the person has picked nothing. */
   readonly defaultPick: EnvironmentPick;
@@ -176,9 +173,9 @@ function hasUploadPastAccept(status: EnvironmentStatusResponseV11): boolean {
 }
 
 /**
- * `your settings · on MacBook Pro, dev-box`: the hosts running Personal,
- * two named, the rest counted, or `· not on any computer or sandbox` while
- * none does. A computer with a Local row is not among them.
+ * `your settings · on MacBook Pro, dev-box`: the hosts running Personal
+ * (`useHostsRunningPersonal`), two named, the rest counted, or `· not on any
+ * computer or sandbox` while none does.
  */
 export function personalSubtitle(names: readonly string[]): string {
   if (names.length === 0)
@@ -199,21 +196,17 @@ export function environmentPickerModel(input: {
   readonly windowHostId: string | null;
 }): EnvironmentPickerModel {
   const localRows: LocalPickerRow[] = [];
-  const runningPersonal: EnvironmentPickerHost[] = [];
   for (const host of input.hosts) {
-    const status = input.statuses.get(host.hostId) ?? null;
-    const version = input.versions.get(host.hostId) ?? null;
-    const row = localPickerRow(host, status, version);
+    const row = localPickerRow(
+      host,
+      input.statuses.get(host.hostId) ?? null,
+      input.versions.get(host.hostId) ?? null,
+    );
     if (row !== null) localRows.push(row);
-    if (hostRunsPersonal(host, status, version)) runningPersonal.push(host);
   }
   const windowRow =
     localRows.find((row) => row.hostId === input.windowHostId) ?? null;
   return {
-    personalSubtitle: personalSubtitle(
-      runningPersonal.map((host) => host.name),
-    ),
-    runningPersonal,
     localRows,
     defaultPick:
       windowRow !== null && !windowRow.needsUpdate && windowRow.defaultsToLocal

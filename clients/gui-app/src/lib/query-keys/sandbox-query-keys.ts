@@ -146,12 +146,29 @@ export const sandboxMutationKeys = {
   // minutes.
   automationOpen: (userId: string | null) =>
     ["auth", "sandbox", "automation-open", userId] as const,
+  // A row Retry owns both its pod lookup and wake for the clicked account and pod.
+  automationRetry: (
+    userId: string | null,
+    environmentId: string | null,
+    sandboxId: string | null,
+  ) =>
+    [
+      "auth",
+      "sandbox",
+      "automation-retry",
+      userId,
+      environmentId,
+      sandboxId,
+    ] as const,
   // Per request, so two approval cards never share a pending state.
   decideSecretRequest: (requestId: string) =>
     ["auth", "sandbox", "secret-request", "decide", requestId] as const,
   // A host RPC, not a control-plane call: the sandbox host repairs itself.
   repairGuestConfiguration: () =>
     ["host.sandbox.repairGuestConfiguration"] as const,
+  // Guest-only fallback stays outside the combined settings operation key.
+  repairGuestSetupOn: (hostId: string) =>
+    ["host.sandbox.repairGuestConfiguration", hostId, "guest-only"] as const,
   // Per host: Settings' `Retry applying` on one listed sandbox.
   repairGuestConfigurationOn: (hostId: string) =>
     ["host.sandbox.repairGuestConfiguration", hostId] as const,

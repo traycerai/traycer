@@ -31,11 +31,13 @@ const EMPTY_FRAME: CanvasSelectionFrame = {
 export interface CanvasCommentView {
   readonly tool: CanvasTool;
   readonly play: boolean;
-  readonly viewOnly: boolean;
+  readonly commenting: boolean;
+  readonly setCommenting: (enabled: boolean) => void;
   readonly order: readonly string[];
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly revealBoard: (path: string) => boolean;
-  readonly setTool: (tool: CanvasTool) => void;
+  /** Shows a canvas-point pin's page and centers its spot, once. */
+  readonly revealCanvasPoint: (page: string, x: number, y: number) => boolean;
   /** Deselects boards and notes; the editor owns those node flags. */
   readonly clearNodeSelection: () => void;
 }

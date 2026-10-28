@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPrestartRuntimeRequest } from "@traycer/protocol/host/agent/gui/prestart-runtime";
 
@@ -23,6 +29,17 @@ import { ChatComposer } from "../chat-composer";
  */
 
 const captured = vi.hoisted(() => ({
+  /** What a sandbox host's agent gate says about the agent picked. */
+  agentNotice: null as {
+    readonly kind: "refused";
+    readonly message: string;
+    readonly action: {
+      readonly label: string;
+      readonly onAction: () => void;
+    } | null;
+  } | null,
+  /** The pack gate's hint; the pack gate's wait outranks the refusal. */
+  packHint: null as string | null,
   onUserInput: null as ((wasEmpty: boolean) => void) | null,
   mutate: vi.fn<(request: ChatPrestartRuntimeRequest) => void>(),
   support: true as boolean | null,
@@ -51,6 +68,16 @@ const captured = vi.hoisted(() => ({
       ) => void;
     };
   } | null,
+}));
+
+// A chat composer on a sandbox host refuses an unrunnable agent at Send;
+// nothing in this suite sits on one.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({
+    blocked: captured.agentNotice !== null,
+    hint: captured.agentNotice === null ? null : captured.agentNotice.message,
+    notice: captured.agentNotice,
+  }),
 }));
 
 vi.mock("@/hooks/chats/use-chat-prestart-runtime", () => ({
@@ -204,8 +231,8 @@ vi.mock("../use-profile-eligibility-gate", () => ({
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   useProviderPackGateForClient: () => ({
-    blocked: false,
-    hint: null,
+    blocked: captured.packHint !== null,
+    hint: captured.packHint,
     preparing: null,
   }),
 }));
@@ -300,6 +327,8 @@ beforeEach(async () => {
   captured.paneFocused = true;
   captured.draftHasText = false;
   captured.stagedWorktree = false;
+  captured.agentNotice = null;
+  captured.packHint = null;
 });
 
 afterEach(() => {
@@ -307,7 +336,11 @@ afterEach(() => {
 });
 
 function mountComposer() {
-  return render(
+  return render(composerElement());
+}
+
+function composerElement() {
+  return (
     <ChatComposer
       taskId="chat-1"
       isActive
@@ -339,7 +372,7 @@ function mountComposer() {
       topSpacing="normal"
       topSlot={null}
       suggestedPrompt={undefined}
-    />,
+    />
   );
 }
 
@@ -475,6 +508,65 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
 
     expect(captured.mutate.mock.calls[0][0].settings.model).toBe(
       "claude-sonnet",
+    );
+  });
+});
+
+describe("ChatComposer on a sandbox host without Traycer Inference", () => {
+  const SENTENCE =
+    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+
+  function refusal(message: string, onAction: () => void) {
+    return {
+      kind: "refused" as const,
+      message,
+      action: { label: "Open Personal's Providers", onAction },
+    };
+  }
+
+  it("stands the refusal above the composer, with the Providers link", () => {
+    const openProviders = vi.fn();
+    captured.agentNotice = refusal(SENTENCE, openProviders);
+    mountComposer();
+
+    expect(screen.getByTestId("composer-host-notice").textContent).toContain(
+      SENTENCE,
+    );
+    fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+    expect(openProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows nothing when the host holds nothing", () => {
+    mountComposer();
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
+  it("leaves the pack gate's wait to speak alone while an install is running", () => {
+    captured.agentNotice = refusal(SENTENCE, vi.fn());
+    captured.packHint = "Installing Codex…";
+    mountComposer();
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+
+  it("stays dismissed for the same refusal and comes back when the refusal changes", () => {
+    captured.agentNotice = refusal(SENTENCE, vi.fn());
+    const view = mountComposer();
+
+    fireEvent.click(screen.getByTestId("composer-host-notice-dismiss"));
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    view.rerender(composerElement());
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+
+    captured.agentNotice = refusal(
+      "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
+      vi.fn(),
+    );
+    view.rerender(composerElement());
+    expect(screen.getByTestId("composer-host-notice").textContent).toContain(
+      "in Acme's Providers",
     );
   });
 });

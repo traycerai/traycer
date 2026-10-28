@@ -239,6 +239,13 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
     },
   ],
   [
+    "method-on-non-schema hostStatusV18.extend (protocol/src/host/status/contracts.ts)",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
+  ],
+  [
     "method-on-non-schema worktreeListAllForHostRequestSchemaV12.extend (protocol/src/host/worktree-schemas.ts)",
     {
       count: 1,

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/card";
 import { SandboxRunwayWarningLine } from "@/components/hosts/sandbox-balance-banner";
 import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import {
   formatSandboxDay,
@@ -51,14 +52,26 @@ import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutatio
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import {
+  useSandboxOperation,
+  type SandboxRowOperation,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
+import { sandboxRegionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   formatRunway,
   sandboxBalanceMc,
   sandboxCostTodayMc,
   sandboxRunwayMinutes,
 } from "@/lib/sandboxes/sandbox-balance";
-import { formatCredits, formatMemory } from "@/lib/sandboxes/sandbox-pricing";
+import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
+import {
+  awakeAndRestingRates,
+  formatSandboxCost,
+  formatSandboxDollars,
+  hourlyRate,
+  sandboxVerbPendingLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useSandboxEgressEvents } from "@/hooks/sandboxes/use-sandbox-egress-events";
@@ -112,7 +125,9 @@ export function SandboxCard(props: {
   const { summary, state, frozen, teamOwned } = props.sandbox;
   const word = sandboxStateWord(props.sandbox);
   const actions =
-    summary === null ? [] : sandboxCardActions(state, frozen, summary.kind);
+    summary === null
+      ? []
+      : sandboxCardActions(state, frozen, summary.kind, teamOwned);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   return (
     <Card
@@ -158,7 +173,11 @@ export function SandboxCard(props: {
               hostState={props.hostState}
             />
             {sandboxCardShowsCostView(teamOwned) ? (
-              <SandboxCostView sandboxId={summary.id} frozen={frozen} />
+              <SandboxCostView
+                sandboxId={summary.id}
+                frozen={frozen}
+                automation={summary.kind === "automation"}
+              />
             ) : null}
           </>
         )}
@@ -273,22 +292,28 @@ function SandboxFacts(props: {
       )
     : null;
   const now = useSampledNow();
+  const catalogue = useSandboxCatalogue(true).data ?? null;
   const provider =
-    useSandboxCatalogue(true).data?.providers.find(
+    catalogue?.providers.find(
       (p) => p.provider === summary.provider && p.os.includes(summary.os),
     ) ?? null;
   const keeps =
     provider === null
       ? null
       : sandboxSuspendKeepsLine(provider.suspendFidelity);
+  const regionLabel = sandboxRegionLabel(summary);
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
       <dd data-testid="sandbox-card-shape">
         {formatShape(summary.cpus, summary.memoryMb, summary.diskMb)}
       </dd>
-      <dt className="text-muted-foreground">Region</dt>
-      <dd data-testid="sandbox-card-region">{summary.region}</dd>
+      {regionLabel === null ? null : (
+        <>
+          <dt className="text-muted-foreground">Region</dt>
+          <dd data-testid="sandbox-card-region">{regionLabel}</dd>
+        </>
+      )}
       <dt className="text-muted-foreground">Rate</dt>
       <dd data-testid="sandbox-card-rate">
         {summary.kind === "automation"
@@ -438,11 +463,13 @@ function SandboxGuestConfigFailure(props: {
  * The cost view: what this sandbox accrues now, what it cost today, and what
  * the meter has charged since it was created (compute and storage), from the
  * control plane's ledger; then the balance and how long it covers the
- * account's awake burn, and the two-hour and thirty-minute warnings.
+ * account's awake burn, and the two-hour and thirty-minute warnings. The
+ * Automations host's day reads Free, as its rate does.
  */
 function SandboxCostView(props: {
   readonly sandboxId: string;
   readonly frozen: boolean;
+  readonly automation: boolean;
 }): ReactNode {
   // Also mounted by the host list's banner; the hook elects one owner, so a
   // change is still one invalidation (and a phone, which shows the card
@@ -467,7 +494,11 @@ function SandboxCostView(props: {
             </dd>
           </>
         ) : (
-          <SandboxCostFacts cost={cost} now={now} />
+          <SandboxCostFacts
+            cost={cost}
+            now={now}
+            automation={props.automation}
+          />
         )}
         <dt className="text-muted-foreground">Balance</dt>
         <dd data-testid="sandbox-card-balance">
@@ -482,6 +513,7 @@ function SandboxCostView(props: {
 function SandboxCostFacts(props: {
   readonly cost: SandboxCost;
   readonly now: number;
+  readonly automation: boolean;
 }): ReactNode {
   const { cost } = props;
   const charged =
@@ -492,17 +524,19 @@ function SandboxCostFacts(props: {
       <dd data-testid="sandbox-card-cost-now">
         {cost.currentRateMillicreditsPerHour === 0
           ? "Not billing"
-          : `${formatCredits(cost.currentRateMillicreditsPerHour)} credits/hour`}
+          : hourlyRate(cost.currentRateMillicreditsPerHour)}
       </dd>
       <dt className="text-muted-foreground">Today</dt>
       <dd data-testid="sandbox-card-cost-today">
-        {`${formatCredits(sandboxCostTodayMc(cost, props.now))} credits`}
+        {props.automation
+          ? "Free"
+          : formatSandboxCost(sandboxCostTodayMc(cost, props.now))}
       </dd>
       <dt className="text-muted-foreground">Charged</dt>
       <dd data-testid="sandbox-card-cost-charged">
-        {`${formatCredits(charged)} credits since ${formatSandboxDay(cost.charged.sinceCreatedAt)} (${formatCredits(cost.charged.computeMillicredits)} compute · ${formatCredits(cost.charged.storageMillicredits)} storage)`}
+        {`${formatSandboxCost(charged)} since ${formatSandboxDay(cost.charged.sinceCreatedAt)} (${formatSandboxCost(cost.charged.computeMillicredits)} compute · ${formatSandboxCost(cost.charged.storageMillicredits)} storage)`}
         {cost.pendingMillicredits > 0
-          ? ` · ${formatCredits(cost.pendingMillicredits)} pending`
+          ? ` · ${formatSandboxCost(cost.pendingMillicredits)} pending`
           : null}
       </dd>
     </>
@@ -561,6 +595,7 @@ function SandboxSecretsSection(props: {
           key={summary.hostId}
           hostId={summary.hostId}
           awake={awake}
+          guestConfigured={summary.guestConfigured}
           routeAddresses={sandboxRouteAddresses(grantsSummary)}
         />
       )}
@@ -730,6 +765,7 @@ function SandboxSecretsLive(props: {
   readonly hostId: string;
   readonly awake: boolean;
   readonly routeAddresses: ReadonlyMap<string, string>;
+  readonly guestConfigured: boolean | null | undefined;
 }): ReactNode {
   const events = useSandboxEgressEvents(props.awake ? props.hostId : null);
   const lines = sandboxCardEgressEventLines(events);
@@ -753,7 +789,12 @@ function SandboxSecretsLive(props: {
           ))}
         </ul>
       )}
-      {props.awake ? <SandboxRepairAction hostId={props.hostId} /> : null}
+      {props.awake ? (
+        <SandboxRepairAction
+          hostId={props.hostId}
+          guestConfigured={props.guestConfigured}
+        />
+      ) : null}
     </>
   );
 }
@@ -791,14 +832,17 @@ function SandboxEgressEventRow(props: {
  * Re-applies the sandbox's setup (trust files, host aliases, environment, git)
  * and refetches it. Offered only on a host that serves the verb.
  */
-function SandboxRepairAction(props: { readonly hostId: string }): ReactNode {
+function SandboxRepairAction(props: {
+  readonly hostId: string;
+  readonly guestConfigured: boolean | null | undefined;
+}): ReactNode {
   const supported = useHostSupportsMethod(
     props.hostId,
     "host.sandbox.repairGuestConfiguration",
   );
   const repair = useSandboxRepairGuestConfiguration();
   const list = useSandboxList();
-  if (!supported) return null;
+  if (!supported || props.guestConfigured !== false) return null;
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button
@@ -851,18 +895,18 @@ function SandboxCardFooter(props: {
   readonly teamOwned: boolean;
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
-  if (props.actions.length === 0) return null;
+  const operation = useSandboxOperation(props.summary.id);
+  if (props.actions.length === 0 && operation === null) return null;
   return (
     <CardFooter className="flex flex-wrap gap-2">
-      {props.actions.length === 0 ? null : (
-        <SandboxActions
-          summary={props.summary}
-          actions={props.actions}
-          frozen={props.frozen}
-          teamOwned={props.teamOwned}
-          onDestroyed={props.onDestroyed}
-        />
-      )}
+      <SandboxActions
+        summary={props.summary}
+        actions={props.actions}
+        frozen={props.frozen}
+        teamOwned={props.teamOwned}
+        onDestroyed={props.onDestroyed}
+        operation={operation}
+      />
     </CardFooter>
   );
 }
@@ -873,12 +917,25 @@ function SandboxActions(props: {
   readonly frozen: boolean;
   readonly teamOwned: boolean;
   readonly onDestroyed: (() => void) | null;
+  readonly operation: SandboxRowOperation | null;
 }): ReactNode {
   const { summary } = props;
   const verb = useSandboxVerb(summary.id);
-  const pendingVerb = verb.isPending ? verb.variables : null;
+  const destroy = useSandboxDestroy(summary);
+  const pendingVerb =
+    props.operation?.kind === "pending" ? props.operation.verb : null;
   return (
     <>
+      {pendingVerb !== null && !props.actions.includes(pendingVerb) ? (
+        <Button type="button" variant="outline" size="sm" disabled>
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+          <span role="status">{sandboxVerbPendingLine(pendingVerb)}</span>
+        </Button>
+      ) : null}
       {props.actions.map((action) =>
         action === "destroy" ? (
           // Not gated on a pending verb: a verb can wait out the server's
@@ -897,7 +954,7 @@ function SandboxActions(props: {
               action === "resume" || action === "start" ? "default" : "outline"
             }
             size="sm"
-            disabled={verb.isPending}
+            disabled={pendingVerb !== null}
             data-testid={`sandbox-card-${action}`}
             onClick={() => {
               const run = (): void => {
@@ -920,10 +977,40 @@ function SandboxActions(props: {
                 variant={undefined}
               />
             ) : null}
-            {SANDBOX_CARD_ACTION_LABEL[action]}
+            {pendingVerb === action ? (
+              <span role="status">{sandboxVerbPendingLine(action)}</span>
+            ) : (
+              SANDBOX_CARD_ACTION_LABEL[action]
+            )}
           </Button>
         ),
       )}
+      <SandboxOperationFailure
+        sandboxId={summary.id}
+        name={summary.displayName}
+        hostId={summary.hostId}
+        operation={props.operation}
+        busy={pendingVerb !== null}
+        onRetry={(pressed) => {
+          if (pressed === "destroy") {
+            destroy.mutate(
+              props.operation?.kind === "failed"
+                ? props.operation.destroyRequest
+                : undefined,
+              {
+                onSuccess: (gone) => {
+                  if (gone) props.onDestroyed?.();
+                },
+              },
+            );
+          } else {
+            verb.mutate(pressed, {
+              onSuccess: (outcome) =>
+                toastSandboxVerbOutcome(pressed, outcome, summary.displayName),
+            });
+          }
+        }}
+      />
     </>
   );
 }
@@ -933,25 +1020,30 @@ function SandboxDestroyAction(props: {
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const destroy = useSandboxDestroy(props.summary.id);
+  const operation = useSandboxOperation(props.summary.id);
+  const pending = operation?.kind === "pending" && operation.verb === "destroy";
   return (
     <>
       <Button
         type="button"
         variant="destructive"
         size="sm"
-        disabled={destroy.isPending}
+        disabled={pending}
         data-testid="sandbox-card-destroy"
         onClick={() => setConfirmOpen(true)}
       >
-        {destroy.isPending ? (
+        {pending ? (
           <AgentSpinningDots
             className={undefined}
             testId="sandbox-card-destroy-spinner"
             variant={undefined}
           />
         ) : null}
-        Destroy
+        {pending ? (
+          <span role="status">{sandboxVerbPendingLine("destroy")}</span>
+        ) : (
+          "Destroy"
+        )}
       </Button>
       <SandboxDestroyDialog
         sandbox={props.summary}
@@ -998,7 +1090,7 @@ function formatShape(cpus: number, memoryMb: number, diskMb: number): string {
 
 function formatRate(price: SandboxHourlyPrice | null): string {
   if (price === null) return "Not priced here";
-  return `${formatCredits(price.awakeMc)} credits/hour awake · ${formatCredits(price.suspendedMc)} suspended · ${formatCredits(price.stoppedMc)} stopped`;
+  return awakeAndRestingRates(price);
 }
 
 /**
@@ -1012,7 +1104,7 @@ function formatBalance(
   frozen: boolean,
 ): string {
   if (balanceMc === null) return "Loading…";
-  const balance = `${formatCredits(balanceMc)} credits`;
+  const balance = formatSandboxDollars(balanceMc);
   if (frozen || burnMcPerHour === null) return balance;
   const minutes = sandboxRunwayMinutes(balanceMc, burnMcPerHour);
   return minutes === null

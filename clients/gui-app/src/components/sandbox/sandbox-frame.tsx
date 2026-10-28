@@ -1,4 +1,8 @@
 import type {
+  CanvasPanGesture,
+  CanvasZoomGesture,
+} from "@/lib/sandbox/canvas-bridge";
+import type {
   CanvasPageError,
   CanvasElement,
   CanvasTextSelection,
@@ -138,6 +142,37 @@ interface ServedFrame {
   readonly forwardedShortcuts: readonly ForwardedShortcut[];
 }
 
+interface SandboxFrameState {
+  readonly source: SandboxSource;
+  readonly content: string;
+  readonly runnerHost: IRunnerHost | null;
+  readonly generation: number;
+}
+
+/** The next frame state, or `null` while the mounted one still matches. An
+ * equivalent replacement source keeps the generation, so the mounted document
+ * is retained rather than reloaded. */
+function advanceFrameState(
+  frame: SandboxFrameState,
+  next: Omit<SandboxFrameState, "generation">,
+  sourceEquivalent: SandboxFrameProps["sourceEquivalent"],
+): SandboxFrameState | null {
+  if (
+    sameSource(frame.source, next.source) &&
+    frame.content === next.content &&
+    frame.runnerHost === next.runnerHost
+  )
+    return null;
+  const adopted =
+    frame.content === next.content &&
+    frame.runnerHost === next.runnerHost &&
+    sourceEquivalent?.(frame.source, next.source) === true;
+  return {
+    ...next,
+    generation: adopted ? frame.generation : frame.generation + 1,
+  };
+}
+
 function currentServedFrame(
   source: SandboxSource,
   frame: ServedFrame | null,
@@ -160,6 +195,8 @@ function artifactUnavailable(
 
 export interface SandboxFrameProps {
   readonly onHtmlZoom?: (scale: number) => void;
+  readonly onCanvasZoom?: (gesture: CanvasZoomGesture) => void;
+  readonly onCanvasPan?: (gesture: CanvasPanGesture) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
@@ -190,6 +227,23 @@ export interface SandboxFrameProps {
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
   /** A served plain-html artifact's pages; `null` for everything else. */
   readonly pageNavigation: SandboxPageNavigation | null;
+  /**
+   * When a replacement source is declared equivalent to the one on screen -
+   * the served bytes are unchanged, or the live document already adopted the
+   * change in place - the frame keeps its mounted document instead of
+   * reloading. The stale server mount is refreshed by the next real change.
+   */
+  readonly sourceEquivalent?: (
+    previous: SandboxSource,
+    next: SandboxSource,
+  ) => boolean;
+  /**
+   * Changing this value forces a fresh mount even when the source is
+   * equivalent: an adopted document that must reload (a query navigation)
+   * needs a server mount built from the CURRENT manifest, not the one the
+   * retained document was served from.
+   */
+  readonly remountKey?: string;
   readonly ref: Ref<HTMLIFrameElement> | null;
 }
 
@@ -478,6 +532,12 @@ export function SandboxFrame(props: SandboxFrameProps) {
       behavior: "instant",
     });
   });
+  const onCanvasZoom = useEffectEvent((gesture: CanvasZoomGesture) =>
+    props.onCanvasZoom?.(gesture),
+  );
+  const onCanvasPan = useEffectEvent((gesture: CanvasPanGesture) =>
+    props.onCanvasPan?.(gesture),
+  );
   const onHtmlZoom = useEffectEvent((scale: number) =>
     props.onHtmlZoom?.(scale),
   );
@@ -497,20 +557,19 @@ export function SandboxFrame(props: SandboxFrameProps) {
 
   // One frame element per content. Keyed by a generation, not by the content
   // itself, which can be a 25 MiB string.
-  const content = `${loaderUrl}\n${kind}\n${networkPolicy}\n${csp ?? ""}`;
+  const content = `${loaderUrl}\n${kind}\n${networkPolicy}\n${csp ?? ""}\n${props.remountKey ?? ""}`;
   const [frame, setFrame] = useState({
     source,
     content,
     runnerHost,
     generation: 0,
   });
-  if (
-    !sameSource(frame.source, source) ||
-    frame.content !== content ||
-    frame.runnerHost !== runnerHost
-  ) {
-    setFrame({ source, content, runnerHost, generation: frame.generation + 1 });
-  }
+  const advanced = advanceFrameState(
+    frame,
+    { source, content, runnerHost },
+    props.sourceEquivalent,
+  );
+  if (advanced !== null) setFrame(advanced);
   const frameGeneration = frame.generation;
 
   useLayoutEffect(() => {
@@ -639,6 +698,8 @@ export function SandboxFrame(props: SandboxFrameProps) {
       post: (message) => iframe.contentWindow?.postMessage(message, "*"),
       events: {
         onHtmlZoom,
+        onCanvasZoom,
+        onCanvasPan,
         onDoubleClick,
         onTextSelection,
         onPageError,

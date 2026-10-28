@@ -719,7 +719,9 @@ export type HostNotificationRemovalHost = z.infer<
 /**
  * `team.member.removed`: a member left or was removed, with each host's facts.
  * `receiptId` is the receipt `environment.members.remove` answered for this
- * removal; absent or null on a row written without one.
+ * removal; absent or null on a row written without one. `toRemovedMember`
+ * marks the row told to the person removed, once, when their access ends;
+ * absent on the admins' rows and on rows written before it.
  */
 export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
   z
@@ -730,6 +732,7 @@ export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
       memberName: z.string(),
       hosts: z.array(hostNotificationRemovalHostSchema),
       receiptId: idSchema.nullable().optional(),
+      toRemovedMember: z.boolean().optional(),
     })
     .catchall(z.unknown()),
 );
@@ -740,6 +743,8 @@ export type HostNotificationTeamMemberRemovedPayload = z.infer<
 /**
  * `team.member.joined`: told to the admins, and to the newcomer
  * (`toNewcomer`), whose row carries the step to start working in the team.
+ * `role` is the newcomer's role, read as a string so a newer role still
+ * renders; absent on a row written before it.
  */
 export const hostNotificationTeamMemberJoinedPayloadSchema = lazySchema(() =>
   z
@@ -749,6 +754,7 @@ export const hostNotificationTeamMemberJoinedPayloadSchema = lazySchema(() =>
       teamName: z.string(),
       memberName: z.string(),
       toNewcomer: z.boolean(),
+      role: z.string().min(1).optional(),
     })
     .catchall(z.unknown()),
 );
@@ -881,6 +887,18 @@ export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
         hostName: z.string(),
         itemKey: z.string().min(1),
         reason: z.string().min(1),
+        sandbox: z
+          .object({
+            sandboxId: z.string().min(1).nullable().optional(),
+            operationId: z.string().min(1).nullable().optional(),
+            name: z.string(),
+            configurationName: z.string(),
+            attemptId: z.string(),
+            applied: z.array(z.string()),
+            notApplied: z.array(z.string()),
+          })
+          .nullable()
+          .optional(),
       })
       .catchall(z.unknown()),
 );
@@ -941,6 +959,82 @@ export type HostNotificationSecretRemovedPayload = z.infer<
   typeof hostNotificationSecretRemovedPayloadSchema
 >;
 
+/**
+ * What happened to a sandbox, by the control plane's notice kind. Times are
+ * epoch ms, so each reader formats them in its own time zone.
+ *
+ * - `resting_warning`: the resting clock destroys it at `destroyAt` unless it
+ *   is used; `periodMinutes` is its resting period, which a new rest starts
+ *   over.
+ * - `resting_destroyed`: the resting clock destroyed it.
+ * - `frozen`: its payer's credits ran out, or a team row's payer left.
+ * - `frozen_warning`: frozen for lack of credits, it is deleted in
+ *   `daysLeft` days unless credits are added.
+ * - `frozen_deleting` / `frozen_destroyed`: frozen for 30 days, it is being
+ *   deleted, or was.
+ * - `create_failed`, `lost`: its create failed for good; the provider no
+ *   longer has it.
+ * - `destroyed_by_member`: a member destroyed it (`actorName` when known).
+ *   New notices include the confirmed `destroyedAt` and the recipient's own
+ *   `stoppedAgentTaskTitles`, checked against their task access before send.
+ * - `manual_rest`: a Suspend or Stop settled, `byYou` when the reader asked
+ *   for it.
+ */
+export const hostNotificationSandboxNoticeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("resting_warning"),
+      destroyAt: z.number().int().nonnegative(),
+      periodMinutes: z.number().int().positive(),
+    }),
+    z.object({ kind: z.literal("resting_destroyed") }),
+    z.object({
+      kind: z.literal("frozen"),
+      cause: z.enum(["credits", "payer_removed"]),
+    }),
+    z.object({
+      kind: z.literal("frozen_warning"),
+      daysLeft: z.number().int().positive(),
+    }),
+    z.object({ kind: z.literal("frozen_deleting") }),
+    z.object({ kind: z.literal("frozen_destroyed") }),
+    z.object({ kind: z.literal("create_failed") }),
+    z.object({ kind: z.literal("lost") }),
+    z.object({
+      kind: z.literal("destroyed_by_member"),
+      actorName: z.string().nullable(),
+      destroyedAt: z.number().int().nonnegative().optional(),
+      stoppedAgentTaskTitles: z.array(z.string()).optional(),
+    }),
+    z.object({
+      kind: z.literal("manual_rest"),
+      verb: z.enum(["suspend", "stop"]),
+      outcome: z.enum(["confirmed", "failed"]),
+      byYou: z.boolean(),
+      actorName: z.string().nullable(),
+      confirmedAt: z.number().int().nonnegative().optional(),
+    }),
+  ]),
+);
+export type HostNotificationSandboxNotice = z.infer<
+  typeof hostNotificationSandboxNoticeSchema
+>;
+
+/** `sandbox.notice`: one sandbox, named, and what happened to it. */
+export const hostNotificationSandboxNoticePayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("sandbox_notice"),
+      sandboxId: idSchema,
+      sandboxName: z.string(),
+      notice: hostNotificationSandboxNoticeSchema,
+    })
+    .catchall(z.unknown()),
+);
+export type HostNotificationSandboxNoticePayload = z.infer<
+  typeof hostNotificationSandboxNoticePayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationChatStoppedPayloadSchema,
@@ -968,6 +1062,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationTeamRoleChangedPayloadSchema,
     hostNotificationTeamHostReturnedPayloadSchema,
     hostNotificationSecretRemovedPayloadSchema,
+    hostNotificationSandboxNoticePayloadSchema,
   ]),
 );
 export type HostNotificationKnownPayload = z.infer<
@@ -1066,5 +1161,7 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "team_host_returned";
     case "secret.removed":
       return payloadKind === "secret_removed";
+    case "sandbox.notice":
+      return payloadKind === "sandbox_notice";
   }
 }

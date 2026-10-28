@@ -11,14 +11,18 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 // The computers holding a copy are covered by `secret-remove-preview-computers`;
 // here Remove's preview is read with none.
-vi.mock("@/components/settings/personal/use-personal-computers", () => ({
-  usePersonalComputers: () => ({
-    computers: [],
-    statuses: new Map(),
-    versions: new Map(),
-    participants: [],
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+      reread: () => undefined,
+    }),
   }),
-}));
+);
 
 import {
   cleanup,
@@ -30,8 +34,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  EnvironmentSecret,
-  EnvironmentSecretRemoval,
+  EnvironmentSecretV12,
+  EnvironmentSecretRemovalV12,
   EnvironmentSecretsDestroyResponseV11,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
@@ -45,18 +49,19 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 
 /** The day and month a version is dated by, as the page formats them. */
 function dayMonth(at: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
   }).format(at);
 }
 
-function secretFixture(): EnvironmentSecret {
+function secretFixture(): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -68,6 +73,8 @@ function secretFixture(): EnvironmentSecret {
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: AT,
+    variables: [],
+    providerVariables: [],
   };
 }
 
@@ -95,8 +102,8 @@ function versionsFixture(): SecretVersion[] {
 }
 
 function removal(
-  outcome: EnvironmentSecretRemoval["outcome"],
-): EnvironmentSecretRemoval {
+  outcome: EnvironmentSecretRemovalV12["outcome"],
+): EnvironmentSecretRemovalV12 {
   return {
     outcome,
     revokedAt: AT,
@@ -108,15 +115,22 @@ function removal(
         hostName: "dev-box",
         state: outcome === "destroyed" ? "confirmed" : "requested",
         at: AT,
+        failedAt: null,
       },
     ],
   };
 }
 
 interface Host {
-  removal: EnvironmentSecretRemoval | null;
+  removal: EnvironmentSecretRemovalV12 | null;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
-  secrets: EnvironmentSecret[];
+  secrets: EnvironmentSecretV12[];
+  /** The list's `removed`: secrets revoked within the last 30 days. */
+  removed: {
+    id: string;
+    name: string;
+    removal: EnvironmentSecretRemovalV12;
+  }[];
 }
 
 function mountRow(host: Host): TeamPageHarness {
@@ -136,7 +150,7 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
     }),
     "environment.secrets.list": () => ({
       secrets: host.secrets,
-      removed: [],
+      removed: host.removed,
     }),
     "environment.secrets.versions": () => ({
       versions: versionsFixture(),
@@ -153,6 +167,7 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
     <SecretsPage
       client={client}
       hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
       hostName={(hostId) => hostId}
     />,
     { wrapper: harness.Wrapper },
@@ -187,7 +202,7 @@ function mountPersonalRowAtDestroy10(host: Host): TeamPageHarness {
       }),
       "environment.secrets.list": () => ({
         secrets: host.secrets,
-        removed: [],
+        removed: host.removed,
       }),
       "environment.secrets.versions": () => ({
         versions: versionsFixture(),
@@ -206,6 +221,7 @@ function mountPersonalRowAtDestroy10(host: Host): TeamPageHarness {
     <SecretsPage
       client={client}
       hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
       hostName={(hostId) => hostId}
     />,
     { wrapper: harness.Wrapper },
@@ -218,6 +234,7 @@ function freshHost(overrides: Partial<Host>): Host {
     removal: null,
     destroyAnswer: { outcome: "revoked" },
     secrets: [secretFixture()],
+    removed: [],
     ...overrides,
   };
 }
@@ -229,10 +246,13 @@ function destroyCalls(harness: TeamPageHarness) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   resetTeamPageHarness();
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -398,6 +418,7 @@ describe("a secret with a removal", () => {
               hostName: "laptop",
               state: "requested",
               at: AT,
+              failedAt: null,
             },
           ],
         },
@@ -523,5 +544,114 @@ describe("a viewer", () => {
     ]) {
       expect(harness.paramsOf(method)).toEqual([]);
     }
+  });
+});
+
+describe("a removed secret the list has moved to removed", () => {
+  // authn moves a secret out of `secrets` the moment Remove revokes it.
+  function removedHost(removed: EnvironmentSecretRemovalV12): Host {
+    return freshHost({
+      secrets: [],
+      removed: [{ id: "sec-1", name: "STRIPE_KEY", removal: removed }],
+      removal: removed,
+    });
+  }
+
+  it("keeps a Removing row naming the host, and no empty state", async () => {
+    mountRow(removedHost(removal("cleanup_requested")));
+
+    const row = await screen.findByTestId("removed-secret-row");
+    expect(row.getAttribute("data-secret-name")).toBe("STRIPE_KEY");
+    // The versions read settles first, then the status drops its spinner.
+    await waitFor(() => {
+      expect(within(row).getByTestId("secret-removal-status").textContent).toBe(
+        "Removing · no longer usable · waiting for dev-box to delete its copy · Retry",
+      );
+    });
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+  });
+
+  it("shows the empty state to a viewer who cannot see a pending removal row", async () => {
+    mountRowAs(removedHost(removal("cleanup_requested")), "viewer");
+
+    expect(await screen.findByTestId("secrets-empty")).toBeTruthy();
+    expect(screen.queryByTestId("removed-secret-row")).toBeNull();
+  });
+
+  it("counts the hosts still holding a copy", async () => {
+    const pending = removal("cleanup_requested");
+    mountRow(
+      removedHost({
+        ...pending,
+        targets: [
+          ...pending.targets,
+          {
+            target: "host",
+            hostId: "host-b",
+            hostName: "laptop",
+            state: "requested",
+            at: AT,
+            failedAt: null,
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("secret-removal-status").textContent).toBe(
+        "Removing · no longer usable · waiting for 2 hosts to delete their copies · Retry",
+      );
+    });
+  });
+
+  it("shows no row for a destroyed removal, only the empty state", async () => {
+    mountRow(removedHost(removal("destroyed")));
+
+    expect(await screen.findByTestId("secrets-empty")).toBeTruthy();
+    expect(screen.queryByTestId("removed-secret-row")).toBeNull();
+  });
+
+  it("retries by reading the versions, then destroying the current one", async () => {
+    const host = removedHost(removal("cleanup_requested"));
+    const harness = mountRow(host);
+    const user = userEvent.setup();
+
+    const status = await screen.findByTestId("secret-removal-status");
+    await user.click(within(status).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(destroyCalls(harness)).toHaveLength(1);
+    });
+    const [call] = destroyCalls(harness);
+    expect(call.params).toEqual({
+      secretId: "sec-1",
+      versionId: "ver-2",
+      environmentId: "env-a",
+    });
+    const order = harness.messenger.calls
+      .map((entry) => entry.method)
+      .filter(
+        (method) =>
+          method === "environment.secrets.versions" ||
+          method === "environment.secrets.destroy",
+      );
+    expect(order.indexOf("environment.secrets.versions")).toBeLessThan(
+      order.indexOf("environment.secrets.destroy"),
+    );
+  });
+
+  it("uses the shared removal retry's refusal line for a removed row", async () => {
+    const host = removedHost(removal("cleanup_requested"));
+    host.destroyAnswer = { outcome: "refused", code: "version_current" };
+    const harness = mountRow(host);
+    const user = userEvent.setup();
+    const status = await screen.findByTestId("secret-removal-status");
+
+    await user.click(within(status).getByRole("button", { name: "Retry" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "This is the current value. Replace or revoke it first.",
+    );
+    expect(destroyCalls(harness)).toHaveLength(1);
   });
 });

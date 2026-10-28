@@ -18,9 +18,10 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   BotConversationSendRequest,
+  BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -40,6 +41,13 @@ interface IndicatorState {
 
 const mocks = vi.hoisted(() => {
   const chats: Record<string, IndicatorState> = {};
+  // What the host answers a box's accepted send with.
+  const sendResponse: BotConversationSendResponse = {
+    messageId: "post-new",
+    requestId: "request-new",
+    delivery: "written",
+    threadId: "thread-new",
+  };
   return {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
@@ -58,6 +66,7 @@ const mocks = vi.hoisted(() => {
       },
     },
     postIds: [] as string[],
+    sendResponse,
     threadListCalls: [] as Array<{
       botId: string;
       enabled: boolean;
@@ -82,7 +91,10 @@ const mocks = vi.hoisted(() => {
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => mocks.state.threadListSupported,
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
@@ -115,6 +127,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
     mutate: mocks.send,
     isPending: mocks.state.sending,
+    variables: { redeliver: null },
   }),
 }));
 vi.mock("@/lib/host-error-toast", () => ({
@@ -132,7 +145,16 @@ vi.mock(
 // What the bot is doing reaches the view through one hook; these cases pin
 // the thread lines and the boxes with the bot idle
 // (`bot-channel-typing.test.tsx` drives it).
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
+// The thread panel reads its post's text from the channel's session; none is
+// loaded here, so the anchor shows without text.
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
+  useChatSessionHandleForContainer: () => null,
+}));
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
 vi.mock("@/components/bots/bot-chat-transcript", () => ({
@@ -182,6 +204,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     placeholder: string;
     testId: string;
     failure: { readonly failed: boolean };
+    onSent: (response: BotConversationSendResponse, text: string) => boolean;
   }) => (
     <div
       data-testid={`stub-${props.testId}`}
@@ -193,6 +216,12 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
       {props.failure.failed ? (
         <BotSendFailedNotice testId={`${props.testId}-send-failed`} />
       ) : null}
+      {/* The host accepting what the box sent, answering `mocks.sendResponse`. */}
+      <button
+        type="button"
+        data-testid={`stub-${props.testId}-sent`}
+        onClick={() => props.onSent(mocks.sendResponse, POSTED_TEXT)}
+      />
     </div>
   ),
 }));
@@ -231,6 +260,13 @@ function PostStub(props: {
             : String(line.lastReplyAt)
         }
         data-unread={line === null ? "" : String(line.unread)}
+        data-participants={
+          line === null
+            ? ""
+            : line.participants
+                .map((entry) => (entry.kind === "bot" ? "bot" : entry.name))
+                .join(",")
+        }
       />
       {openThread === null ? null : (
         <button
@@ -253,9 +289,12 @@ function PostStub(props: {
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+/** What the stub box reports it sent. */
+const POSTED_TEXT = "Ship the release today?";
 const HOST_ID = "host-bound";
 
 const resolveMember: BotMemberResolver = (userId) =>
@@ -276,7 +315,6 @@ function thread(
       messageId: postId,
       requestId: `req-${threadId}`,
       senderUserId: "user-teammate",
-      text: `Post ${postId}`,
       sentAt: 1_000,
       resolvedAt: null,
     },
@@ -296,7 +334,6 @@ function indicator(
 }
 
 interface MountOptions {
-  readonly paused: boolean;
   /** A member's post whose thread is open; `null` for none. */
   readonly openThreadPostId: string | null;
 }
@@ -304,6 +341,7 @@ interface MountOptions {
 const QUESTION_1: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
+  sent: null,
 };
 
 function mount(options: MountOptions): {
@@ -313,8 +351,6 @@ function mount(options: MountOptions): {
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
-  /** Renders the view again with the channel paused or resumed. */
-  readonly setPaused: (paused: boolean) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
@@ -326,10 +362,10 @@ function mount(options: MountOptions): {
           <BotChannelView
             botId={BOT_ID}
             hostId={HOST_ID}
+            boundHostId={HOST_ID}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
-            paused={currentPaused}
             resolveMember={resolveMember}
             openThread={openThread}
             onOpenThread={onOpenThread}
@@ -339,11 +375,14 @@ function mount(options: MountOptions): {
       </TooltipProvider>
     </QueryClientProvider>
   );
-  let currentPaused = options.paused;
   let current: BotOpenThread | null =
     options.openThreadPostId === null
       ? null
-      : { anchorMessageId: options.openThreadPostId, announcement: false };
+      : {
+          anchorMessageId: options.openThreadPostId,
+          announcement: false,
+          sent: null,
+        };
   const result = render(tree(current));
   return {
     onOpenThread,
@@ -351,10 +390,6 @@ function mount(options: MountOptions): {
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
-      result.rerender(tree(current));
-    },
-    setPaused: (paused) => {
-      currentPaused = paused;
       result.rerender(tree(current));
     },
   };
@@ -382,6 +417,12 @@ beforeEach(() => {
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.postIds = [];
+  mocks.sendResponse = {
+    messageId: "post-new",
+    requestId: "request-new",
+    delivery: "written",
+    threadId: "thread-new",
+  };
   // jsdom reports no focus until an element takes it; the window starts in
   // the person's foreground here, and a case that needs it elsewhere says so.
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -394,7 +435,7 @@ afterEach(() => {
 
 describe("<BotChannelView /> channel", () => {
   it("posts at the channel's top level on the conversation the bot record names", () => {
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     const composer = screen.getByTestId("stub-bot-channel-composer");
     expect(composer.getAttribute("data-conversation-id")).toBe(
@@ -403,7 +444,7 @@ describe("<BotChannelView /> channel", () => {
     expect(composer.getAttribute("data-thread-id")).toBe("none");
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
     expect(composer.getAttribute("data-placeholder")).toBe(
-      "Message #Release Bot",
+      "Message Release Bot",
     );
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(
@@ -419,7 +460,7 @@ describe("<BotChannelView /> channel", () => {
       { conversationId: "conversation-backdated", createdAt: 1 },
       { conversationId: "conversation-channel", createdAt: 1_000 },
     ];
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(
       screen
@@ -437,7 +478,7 @@ describe("<BotChannelView /> channel", () => {
     mocks.state.conversations = [
       { conversationId: "conversation-other", createdAt: 1 },
     ];
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(screen.getByTestId("bot-channel-empty")).toBeTruthy();
     expect(screen.queryByTestId("stub-bot-channel-composer")).toBeNull();
@@ -445,7 +486,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("falls back to the earliest conversation only when the host names none", () => {
     mocks.state.appConversationChatId = null;
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(
       screen
@@ -454,17 +495,13 @@ describe("<BotChannelView /> channel", () => {
     ).toBe("conversation-channel");
   });
 
-  it("reads the thread list, and not at all while paused or unsupported", () => {
-    mount({ paused: false, openThreadPostId: null });
+  it("reads the thread list, and not at all while unsupported", () => {
+    mount({ openThreadPostId: null });
     expect(lastThreadListCall()).toEqual({ botId: BOT_ID, enabled: true });
     cleanup();
 
-    mount({ paused: true, openThreadPostId: null });
-    expect(lastThreadListCall().enabled).toBe(false);
-    cleanup();
-
     mocks.state.threadListSupported = false;
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(lastThreadListCall().enabled).toBe(false);
   });
 
@@ -481,7 +518,7 @@ describe("<BotChannelView /> channel", () => {
       "thread-c": indicator(false, true),
     };
     mocks.postIds = ["post-a", "post-b", "post-c", "post-d", "post-new"];
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     const line = (postId: string): HTMLElement =>
       screen.getByTestId(`stub-line-${postId}`);
@@ -498,11 +535,27 @@ describe("<BotChannelView /> channel", () => {
     expect(line("post-new").getAttribute("data-has-line")).toBe("false");
   });
 
+  it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 0 }),
+      thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 8_000 }),
+    ];
+    mocks.postIds = ["post-a", "post-b"];
+    mount({ openThreadPostId: null });
+
+    const participants = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-participants");
+    expect(participants("post-a")).toBe("Tess Teammate");
+    expect(participants("post-b")).toBe("Tess Teammate,bot");
+  });
+
   it("asks the host to open a post's thread when its line is clicked", async () => {
     const user = userEvent.setup();
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
     mocks.postIds = ["post-a"];
-    const { onOpenThread } = mount({ paused: false, openThreadPostId: null });
+    const { onOpenThread } = mount({ openThreadPostId: null });
 
     await user.click(screen.getByTestId("stub-open-post-a"));
 
@@ -510,6 +563,7 @@ describe("<BotChannelView /> channel", () => {
     expect(onOpenThread).toHaveBeenCalledWith({
       anchorMessageId: "post-a",
       announcement: false,
+      sent: null,
     });
   });
 
@@ -517,7 +571,6 @@ describe("<BotChannelView /> channel", () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];
     const { onOpenThread, reopen } = mount({
-      paused: false,
       openThreadPostId: null,
     });
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
@@ -530,7 +583,6 @@ describe("<BotChannelView /> channel", () => {
     reopen(QUESTION_1);
 
     const panel = screen.getByTestId("bot-thread-panel");
-    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
     const composer = within(panel).getByTestId("stub-bot-thread-composer");
     expect(composer.getAttribute("data-announcement-id")).toBe("question-1");
@@ -543,10 +595,14 @@ describe("<BotChannelView /> channel", () => {
   it("shows the question's thread, not the box that starts one, once the thread is listed", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];
-    const { reopen } = mount({ paused: false, openThreadPostId: null });
+    const { reopen } = mount({ openThreadPostId: null });
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
     reopen(QUESTION_1);
-    expect(screen.getByTestId("bot-thread-unopened")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-announcement-id"),
+    ).toBe("question-1");
 
     mocks.state.threads = [
       thread("thread-q", "question-1", { replyCount: 1, lastReplyAt: 7_000 }),
@@ -555,27 +611,47 @@ describe("<BotChannelView /> channel", () => {
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-q");
-    expect(within(panel).queryByTestId("bot-thread-unopened")).toBeNull();
     const composer = within(panel).getByTestId("stub-bot-thread-composer");
     expect(composer.getAttribute("data-thread-id")).toBe("thread-q");
+    expect(composer.getAttribute("data-announcement-id")).toBe("none");
+  });
+
+  it("makes a member post's own thread wait for the host rather than offering the box that starts one", () => {
+    mocks.postIds = ["post-a"];
+    const { reopen } = mount({ openThreadPostId: null });
+
+    reopen({ anchorMessageId: "post-a", announcement: false, sent: null });
+
+    const waiting = screen.getByTestId("bot-thread-panel");
+    expect(within(waiting).getByTestId("bot-thread-loading")).toBeTruthy();
+    expect(
+      within(waiting).queryByTestId("stub-bot-thread-composer"),
+    ).toBeNull();
+
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 0 })];
+    reopen({ anchorMessageId: "post-a", announcement: false, sent: null });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
+    const composer = within(panel).getByTestId("stub-bot-thread-composer");
+    expect(composer.getAttribute("data-thread-id")).toBe("thread-a");
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
   });
 
   it("shows the box that starts a question's thread when the view mounts again with it open, as after a switch between the tab's views", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];
-    const first = mount({ paused: false, openThreadPostId: null });
+    const first = mount({ openThreadPostId: null });
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
     const opened = first.onOpenThread.mock.calls.at(-1)?.[0] ?? null;
     // The tab holds what was opened; the view itself is unmounted and mounted
     // fresh, so nothing it remembered survives.
     cleanup();
 
-    const again = mount({ paused: false, openThreadPostId: null });
+    const again = mount({ openThreadPostId: null });
     again.reopen(opened);
 
     const panel = screen.getByTestId("bot-thread-panel");
-    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
     expect(
       within(panel)
@@ -586,7 +662,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("posts a direct reply's chosen option as a new top-level post in the channel", async () => {
     const user = userEvent.setup();
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.send).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId("stub-choose"));
@@ -598,45 +674,24 @@ describe("<BotChannelView /> channel", () => {
       text: "Ship it",
       threadId: null,
       announcementId: null,
+      redeliver: null,
+      supersedes: null,
     });
   });
 
   it("offers no option to pick while an earlier pick is still being sent", () => {
     mocks.state.sending = true;
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(screen.getByTestId("stub-choose-unavailable")).toBeTruthy();
     expect(screen.queryByTestId("stub-choose")).toBeNull();
-  });
-
-  it("says in the channel's box when a pick could not be sent, and raises no toast", async () => {
-    const user = userEvent.setup();
-    mount({ paused: false, openThreadPostId: null });
-    await user.click(screen.getByTestId("stub-choose"));
-    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
-    const failure = new HostRpcError({
-      code: "RPC_ERROR",
-      message: "host refused the pick",
-      requestId: "req-1",
-      method: "bot.conversation.send",
-      fatalDetails: null,
-    });
-
-    act(() => {
-      mocks.send.mock.calls[0][1].onError(failure);
-    });
-
-    expect(
-      screen.getByTestId("bot-channel-composer-send-failed").textContent,
-    ).toBe("Couldn't send. Edit and try again.");
-    expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 });
 
 describe("<BotChannelView /> channel read mark", () => {
   it("marks the channel read when it is shown unread, and leaves a read one alone", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
     expect(mocks.markRead).toHaveBeenCalledWith({
       epicId: BOT_ID,
@@ -646,20 +701,20 @@ describe("<BotChannelView /> channel read mark", () => {
     mocks.markRead.mockClear();
 
     mocks.state.chats = { "conversation-channel": indicator(false, false) };
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
 
   it("marks the channel read for a failure as well as a done mark", () => {
     mocks.state.chats = { "conversation-channel": indicator(false, true) };
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the channel unread while its tab is not on screen, and reads it when the person comes back", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
     mocks.state.paneVisible = false;
-    const { rerender } = mount({ paused: false, openThreadPostId: null });
+    const { rerender } = mount({ openThreadPostId: null });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
@@ -674,7 +729,7 @@ describe("<BotChannelView /> channel read mark", () => {
   it("leaves the channel unread while the window is in the background, and reads it when the window returns", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     hasFocus.mockReturnValue(true);
@@ -682,23 +737,6 @@ describe("<BotChannelView /> channel read mark", () => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the channel unread while it is paused behind its placeholder, and reads it once it resumes", () => {
-    mocks.state.chats = { "conversation-channel": indicator(true, false) };
-    const { setPaused } = mount({ paused: true, openThreadPostId: null });
-    expect(screen.getByTestId("bot-transcript-paused")).toBeTruthy();
-    expect(screen.queryByTestId("stub-transcript-channel")).toBeNull();
-    expect(mocks.markRead).not.toHaveBeenCalled();
-
-    setPaused(false);
-    expect(screen.queryByTestId("bot-transcript-paused")).toBeNull();
-    expect(screen.getByTestId("stub-transcript-channel")).toBeTruthy();
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
-      epicId: BOT_ID,
-      chatId: "conversation-channel",
-    });
   });
 });
 
@@ -758,7 +796,7 @@ describe("<BotChannelView /> channel read mark beside an open thread", () => {
 
   it("leaves the channel unread while it is hidden beside the thread, and reads it when the pane is wide enough to show it", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     // Not measured yet: the channel is taken as hidden.
     expect(mocks.markRead).not.toHaveBeenCalled();
@@ -778,7 +816,7 @@ describe("<BotChannelView /> channel read mark beside an open thread", () => {
 
   it("leaves the channel unread beside an open thread where nothing can measure it", () => {
     vi.stubGlobal("ResizeObserver", undefined);
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
@@ -799,8 +837,12 @@ describe("<BotChannelView /> open thread", () => {
     mocks.postIds = ["post-a", "post-b"];
   });
 
+  afterEach(() => {
+    useBotPaneWidthsStore.getState().resetWidth("thread");
+  });
+
   it("reads the thread's chat in the panel and replies into that thread", () => {
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
@@ -815,10 +857,10 @@ describe("<BotChannelView /> open thread", () => {
       "conversation-channel",
     );
     expect(composer.getAttribute("data-placeholder")).toBe("Reply…");
-    // The anchor post is drawn above the replies, under the member's name.
+    // The anchor post is drawn above the replies, under the member's name;
+    // its text comes from the channel's row (`bot-thread-panel.test.tsx`).
     const anchor = within(panel).getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
-    expect(within(anchor).getByText("Post post-a")).toBeTruthy();
     // The channel's own box keeps posting at the top level beside it.
     expect(
       screen
@@ -827,12 +869,29 @@ describe("<BotChannelView /> open thread", () => {
     ).toBe("none");
   });
 
+  it("draws the thread in a pane as wide as the person set it, beside a channel labelled by the bot's title", () => {
+    useBotPaneWidthsStore.getState().setWidthPx("thread", 700);
+    mount({ openThreadPostId: "post-a" });
+
+    const pane = screen.getByTestId("bot-thread-pane");
+    expect(pane.style.getPropertyValue("--bot-pane-width")).toBe("700px");
+    expect(within(pane).getByTestId("bot-thread-panel")).toBeTruthy();
+    expect(
+      within(pane)
+        .getByTestId("bot-thread-pane-resize-handle")
+        .getAttribute("aria-label"),
+    ).toBe("Resize thread");
+    expect(screen.getByRole("region", { name: "Release Bot" })).toBe(
+      screen.getByTestId("bot-channel"),
+    );
+  });
+
   it("shows the thread's cost in the header only when the host can say", () => {
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-cost").textContent).toBe("$0.42");
     cleanup();
 
-    mount({ paused: false, openThreadPostId: "post-b" });
+    mount({ openThreadPostId: "post-b" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-cost")).toBeNull();
   });
@@ -840,7 +899,6 @@ describe("<BotChannelView /> open thread", () => {
   it("opens the thread's session under the hood", async () => {
     const user = userEvent.setup();
     const { onOpenUnderTheHood } = mount({
-      paused: false,
       openThreadPostId: "post-a",
     });
 
@@ -853,7 +911,6 @@ describe("<BotChannelView /> open thread", () => {
   it("closes the thread from its header", async () => {
     const user = userEvent.setup();
     const { onOpenThread } = mount({
-      paused: false,
       openThreadPostId: "post-a",
     });
 
@@ -864,7 +921,7 @@ describe("<BotChannelView /> open thread", () => {
 
   it("marks an unread thread read when it is opened, and leaves a read one alone", () => {
     mocks.state.chats = { "thread-a": indicator(true, false) };
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
     expect(mocks.markRead).toHaveBeenCalledWith({
       epicId: BOT_ID,
@@ -874,14 +931,14 @@ describe("<BotChannelView /> open thread", () => {
     mocks.markRead.mockClear();
 
     mocks.state.chats = { "thread-b": indicator(false, false) };
-    mount({ paused: false, openThreadPostId: "post-b" });
+    mount({ openThreadPostId: "post-b" });
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
 
   it("leaves a verdict unread while the tab is not on screen, and reads it when the person comes back", () => {
     mocks.state.chats = { "thread-a": indicator(true, false) };
     mocks.state.paneVisible = false;
-    const { rerender } = mount({ paused: false, openThreadPostId: "post-a" });
+    const { rerender } = mount({ openThreadPostId: "post-a" });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
@@ -896,7 +953,7 @@ describe("<BotChannelView /> open thread", () => {
   it("leaves a verdict unread while the window is in the background, and reads it when the window returns", () => {
     mocks.state.chats = { "thread-a": indicator(true, false) };
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     hasFocus.mockReturnValue(true);
@@ -905,13 +962,6 @@ describe("<BotChannelView /> open thread", () => {
     });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
   });
-
-  it("does not read a cached thread's verdict while the channel is paused", () => {
-    mocks.state.chats = { "thread-a": indicator(true, false) };
-    mount({ paused: true, openThreadPostId: "post-a" });
-    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    expect(mocks.markRead).not.toHaveBeenCalled();
-  });
 });
 
 describe("<BotChannelView /> thread list unavailable", () => {
@@ -919,7 +969,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
     mocks.state.threadListSupported = false;
     mocks.state.threadListAnswered = false;
     mocks.postIds = ["post-a"];
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
 
     expect(screen.queryByTestId("stub-open-post-a")).toBeNull();
     expect(screen.queryByTestId("stub-open-announcement-post-a")).toBeNull();
@@ -931,7 +981,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
     const user = userEvent.setup();
     mocks.state.threadListAnswered = false;
     mocks.state.threadListError = true;
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
@@ -942,11 +992,159 @@ describe("<BotChannelView /> thread list unavailable", () => {
 
   it("waits for a just-posted thread the list has not answered yet", () => {
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
-    mount({ paused: false, openThreadPostId: "post-new" });
+    mount({ openThreadPostId: "post-new" });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
-    expect(within(panel).queryByTestId("bot-thread-unopened")).toBeNull();
+    expect(within(panel).queryByTestId("stub-bot-thread-composer")).toBeNull();
+  });
+});
+
+describe("<BotChannelView /> a post whose answer lands in a thread", () => {
+  const POSTED: BotOpenThread = {
+    anchorMessageId: "post-new",
+    announcement: false,
+    sent: {
+      threadId: "thread-new",
+      requestId: "request-new",
+      text: POSTED_TEXT,
+      senderUserId: null,
+      sentAt: 5_000,
+      delivery: "written",
+    },
+  };
+
+  /** The thread the channel opened, as the tab's store would hold it. */
+  function opened(
+    onOpenThread: Mock<(open: BotOpenThread | null) => void>,
+  ): BotOpenThread {
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    const open = onOpenThread.mock.calls[0][0];
+    if (open === null) throw new Error("the channel closed the thread");
+    return open;
+  }
+
+  it("opens the post's thread as the channel's box reports the send, before the list has it", async () => {
+    const user = userEvent.setup();
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    const open = opened(onOpenThread);
+    // Accepted just now; the rest is what the box sent and the host answered.
+    expect(open.sent?.sentAt).toBeGreaterThan(0);
+    expect({
+      ...open,
+      sent: open.sent === null ? null : { ...open.sent, sentAt: 5_000 },
+    }).toEqual(POSTED);
+    reopen(open);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-new");
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    // The channel has no row for the post yet: it is drawn as it was sent.
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText(POSTED_TEXT)).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-queued")).toBeNull();
+    const composer = within(panel).getByTestId("stub-bot-thread-composer");
+    expect(composer.getAttribute("data-thread-id")).toBe("thread-new");
+    expect(composer.getAttribute("data-announcement-id")).toBe("none");
+  });
+
+  it("opens the thread of a post the host queued for a paused bot, on the post as sent and saying it was saved", async () => {
+    const user = userEvent.setup();
+    mocks.sendResponse = { ...mocks.sendResponse, delivery: "queued" };
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    const open = opened(onOpenThread);
+    expect(open.sent?.delivery).toBe("queued");
+    reopen(open);
+    const panel = screen.getByTestId("bot-thread-panel");
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText(POSTED_TEXT)).toBeTruthy();
+    expect(within(panel).getByTestId("bot-thread-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
+  });
+
+  it("keeps the box beside a failed read of the thread list, and reads it again on Retry", async () => {
+    const user = userEvent.setup();
+    mocks.state.threadListAnswered = false;
+    mocks.state.threadListError = true;
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(POSTED);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("stub-bot-thread-composer")).toBeTruthy();
+    const failure = within(panel).getByTestId("bot-thread-error");
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens nothing for a post the bot answers in the channel", async () => {
+    const user = userEvent.setup();
+    mocks.sendResponse = { ...mocks.sendResponse, threadId: null };
+    const { onOpenThread } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing on a host without the thread list", async () => {
+    const user = userEvent.setup();
+    mocks.state.threadListSupported = false;
+    const { onOpenThread } = mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("replaces the thread open beside the channel with the new post's", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
+    mocks.postIds = ["post-a"];
+    const { onOpenThread, reopen } = mount({ openThreadPostId: "post-a" });
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-a");
+
+    await user.click(screen.getByTestId("stub-bot-channel-composer-sent"));
+    const open = opened(onOpenThread);
+    expect(open.sent?.threadId).toBe("thread-new");
+    reopen(open);
+
+    expect(
+      screen.getByTestId("bot-thread-panel").getAttribute("data-thread-id"),
+    ).toBe("thread-new");
+  });
+
+  it("leaves the open thread as it is when its own box sends", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
+    mocks.sendResponse = {
+      ...mocks.sendResponse,
+      messageId: "reply-new",
+      threadId: "thread-a",
+    };
+    const { onOpenThread } = mount({ openThreadPostId: "post-a" });
+
+    await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("leaves a question's thread as it is when the box under it sends", async () => {
+    const user = userEvent.setup();
+    const { onOpenThread, reopen } = mount({ openThreadPostId: null });
+    reopen(QUESTION_1);
+
+    await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
+
+    expect(onOpenThread).not.toHaveBeenCalled();
   });
 });

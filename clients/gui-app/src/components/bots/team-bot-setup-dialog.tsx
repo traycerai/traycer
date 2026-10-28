@@ -24,9 +24,11 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 
-/** One team's section, as the setup reads it. */
+/** One environment's section, as the setup reads it. */
 export interface TeamBotSetupTarget {
   readonly environmentId: string;
+  /** A team's section; `false` for the personal one, which has no onboarding. */
+  readonly isTeam: boolean;
   readonly teamName: string;
   readonly botCount: number;
   /** The control that opened the setup; focus returns to it on dismissal. */
@@ -34,10 +36,11 @@ export interface TeamBotSetupTarget {
 }
 
 /**
- * Where a team's bots are set up, behind its section's + in the channel
- * sidebar (Tracy Bots T59). While the team's onboarding is open it walks it:
- * GitHub, then the bots the team starts with, then Create, with a back arrow
- * between the two. Otherwise it is the create form for one more bot. On
+ * Where a section's bots are set up, behind its + in the channel sidebar
+ * (Tracy Bots T59). While a team's onboarding is open it walks it: GitHub,
+ * then the bots the team starts with, then Create, with a back arrow
+ * between the two. Otherwise, and always for the personal section, it is
+ * the create form for one more bot in the section's environment. On
  * success the new channel opens and the dialog closes, leaving focus to the
  * channel; dismissed, it returns focus to its opener while that is still on
  * the page.
@@ -110,7 +113,7 @@ function TeamBotSetup(props: {
     client: useTabHostClient(),
     hostId: useTabHostId(),
     environmentId: team.environmentId,
-    isTeam: true,
+    isTeam: team.isTeam,
     botCount: team.botCount,
   });
   const data = onboarding.data;
@@ -133,7 +136,10 @@ function TeamBotSetup(props: {
   if (gate === "none" || data === undefined) {
     return (
       <>
-        <SetupHeader title={`Add a bot to ${team.teamName}`} back={null}>
+        <SetupHeader
+          title={team.isTeam ? `Add a bot to ${team.teamName}` : "New bot"}
+          back={null}
+        >
           The bot gets its own channel.
         </SetupHeader>
         <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto px-5 py-4">

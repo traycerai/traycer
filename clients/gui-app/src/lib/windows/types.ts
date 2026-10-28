@@ -214,6 +214,39 @@ export interface DesktopZoomBridge {
   onChange(handler: (percent: number) => void): { dispose: () => void };
 }
 
+/**
+ * The macOS trackpad scroll stream from the shell's NSEvent monitor: phase and
+ * deltas in one ordered sequence. Absent everywhere else (Windows, Linux,
+ * browser, mobile), which is how the history swipe knows it has no lift
+ * signal and stays off.
+ */
+export type DesktopTrackpadScrollKind =
+  | "began"
+  | "changed"
+  | "ended"
+  | "cancelled"
+  | "momentum-began"
+  | "momentum-changed"
+  | "momentum-ended"
+  | "momentum-cancelled";
+
+export interface DesktopTrackpadScrollEvent {
+  readonly kind: DesktopTrackpadScrollKind;
+  /** `NSEvent.scrollingDeltaX` in pixels: positive reveals content to the left. */
+  readonly scrollingDeltaX: number;
+  /** `NSEvent.scrollingDeltaY` in pixels: positive reveals content above. */
+  readonly scrollingDeltaY: number;
+  /** Seconds, exact to the input event. */
+  readonly timestamp: number;
+  readonly modified: boolean;
+}
+
+export interface DesktopTrackpadScrollPhaseBridge {
+  onEvent(handler: (event: DesktopTrackpadScrollEvent) => void): {
+    dispose: () => void;
+  };
+}
+
 // Field-for-field match with main's `SupportLogTarget`
 // (`ipc-contracts/window-types.ts`). `browserTelemetry`/`browserTrace` name
 // the two browser diagnostic files - absence of the trace file is the
@@ -855,22 +888,32 @@ export interface DesktopWindowsBridge {
     };
   };
   /**
-   * Whether THIS window is on screen (shown and not minimised) as main sees
-   * it. Renderer parking's window-level input: the Page Visibility API is
-   * inert in the desktop app because every window runs with
-   * `backgroundThrottling: false`, so minimising changes nothing the renderer
-   * can observe on its own.
-   *
-   * Optional + capability-probed like `epicVisibility`, for the same skew
-   * reason. Absent, the renderer keeps answering "visible" and parking waits
-   * for a tab hide, which is the pre-channel behaviour. Probed at the install
-   * site (`lib/epics/desktop-window-visibility.ts`).
+   * Main's shown/not-minimised signal, AND-ed with Page Visibility, which
+   * stays visible through minimise and hide while a WebRTC video plane keeps
+   * background throttling off (see `backgroundRendering`). Optional for older
+   * preloads.
    */
   windowVisibility?: {
     snapshot(): Promise<boolean>;
     onChange(handler: (onScreen: boolean) => void): {
       dispose(): void;
     };
+  };
+  /**
+   * Turns background throttling off for THIS window while a browser tile's
+   * WebRTC video plane needs its timers and `requestVideoFrameCallback` to
+   * keep running unseen, and back on afterwards. Each document re-asserts its
+   * demand at install, and main also restores throttling once a main-frame
+   * navigation commits or the renderer process is gone, so a reload never
+   * inherits a stale demand.
+   *
+   * Optional + capability-probed: a preload built before this channel has no
+   * `backgroundRendering`, and its main never throttles a GUI window at all,
+   * so there is nothing to ask for. Installed by
+   * `lib/browser-view/tiles/desktop-background-rendering.ts`.
+   */
+  backgroundRendering?: {
+    setRequired(required: boolean): Promise<void>;
   };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;

@@ -42,6 +42,8 @@ import {
   serviceTierFromChatRunSettings,
 } from "@/lib/composer/chat-run-settings";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 
@@ -85,6 +87,13 @@ export interface ComposerToolbarCatalogScope {
    * the mode this composer actually sends.
    */
   readonly chatLineCarriesAutoMode: boolean | null;
+  /**
+   * The pin key a sandbox may be staged under for this composer, or `null` on
+   * a surface that stages none. While one is staged the send runs on that
+   * sandbox with the person's own pick (`pickedRunSettings`), so the toolbar
+   * shows that pick rather than swapping it for one this host can run.
+   */
+  readonly stagedSurfaceKey: string | null;
 }
 
 /**
@@ -133,7 +142,13 @@ export function useComposerToolbarStore(
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   catalog: ComposerToolbarCatalogScope,
 ): ComposerToolbarStore {
-  const { hostClient, hostId, tuiOnly, chatLineCarriesAutoMode } = catalog;
+  const {
+    hostClient,
+    hostId,
+    tuiOnly,
+    chatLineCarriesAutoMode,
+    stagedSurfaceKey,
+  } = catalog;
   const activityEnabled = useSurfaceActivity();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
@@ -265,6 +280,12 @@ export function useComposerToolbarStore(
   // on `harnessId`, so `data` resets to undefined during a cross-harness switch
   // until the new harness's models land). Never inferred from `models.length`.
   const modelsLoaded = modelsQuery.data !== undefined;
+  const staged = useStagedSandboxStore(
+    (s) =>
+      stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
+  );
+  const keepsUnavailablePick =
+    useSandboxHostConfiguration(hostId) !== null || staged;
   useEffect(() => {
     store.getState().setCatalog({
       hostId,
@@ -274,6 +295,7 @@ export function useComposerToolbarStore(
       modelsLoaded,
       tuiOnly,
       chatLineCarriesAutoMode,
+      keepsUnavailablePick,
     });
   }, [
     store,
@@ -284,6 +306,7 @@ export function useComposerToolbarStore(
     harnessId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    keepsUnavailablePick,
   ]);
 
   // The palette commits too, so it is held to the same team-sandbox rule as the

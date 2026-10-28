@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useEffect } from "react";
 import { create } from "zustand";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -68,14 +69,13 @@ interface TeamViewingHost {
 }
 
 /**
- * The team's host inventory is read through the surface's own host, which
- * forwards it on the viewer's session (the server pool does not serve it).
- * Live facts and room files share the explicit team host picked from it, or
- * no host; neither can fall through to Personal.
+ * The team's host inventory is read through its serving tier on the viewer's
+ * session. Host-local facts and file previews use the explicit team host
+ * picked from that list, or no host; neither falls through to Personal.
  */
 export function useTeamViewingHost(): TeamViewingHost {
   const source = useConfigurationSource();
-  const surfaceClient = useHostClient();
+  const surfaceClient = usePoolTierHostClient(useHostClient());
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),

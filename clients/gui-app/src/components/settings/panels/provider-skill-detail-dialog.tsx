@@ -47,7 +47,6 @@ import {
   SKILL_CONFLICT_LABEL,
   SKILL_CONFLICT_TONE,
   SKILL_CONFLICT_TOOLTIP,
-  SKILL_SOURCE_LABEL,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
 
@@ -56,6 +55,8 @@ type SkillEditValues = Pick<SkillEditTarget, "name" | "description" | "body">;
 
 export function ProviderSkillDetailDialog(props: {
   readonly skill: ProviderSkill;
+  /** The source badge's words: the caller's, as its list names the source. */
+  readonly sourceLabel: string;
   readonly removal: SkillRemovability;
   readonly removePending: boolean;
   readonly removeDisabled: boolean;
@@ -120,6 +121,7 @@ export function ProviderSkillDetailDialog(props: {
         {editableContent === null ? (
           <ReadOnlySkillDetail
             skill={props.skill}
+            sourceLabel={props.sourceLabel}
             removal={props.removal}
             removePending={props.removePending}
             actionsDisabled={props.removeDisabled}
@@ -139,6 +141,7 @@ export function ProviderSkillDetailDialog(props: {
           <EditableSkillDetail
             onCloseRequestChange={registerGuardedClose}
             skill={props.skill}
+            sourceLabel={props.sourceLabel}
             raw={editableContent}
             removal={props.removal}
             removePending={props.removePending}
@@ -167,6 +170,7 @@ export function ProviderSkillDetailDialog(props: {
 function EditableSkillDetail(props: {
   readonly onCloseRequestChange: (request: (() => void) | null) => void;
   readonly skill: ProviderSkill;
+  readonly sourceLabel: string;
   readonly raw: string;
   readonly removal: SkillRemovability;
   readonly removePending: boolean;
@@ -426,6 +430,7 @@ function EditableSkillDetail(props: {
             </form.Field>
           }
           skill={props.skill}
+          sourceLabel={props.sourceLabel}
           editing={editing}
           origin={props.origin}
           canUpdate={props.canUpdate}
@@ -584,6 +589,7 @@ function EditableSkillHeader(props: {
   readonly nameField: ReactNode;
   readonly descriptionField: ReactNode;
   readonly skill: ProviderSkill;
+  readonly sourceLabel: string;
   readonly editing: boolean;
   readonly origin: string | null;
   readonly canUpdate: boolean;
@@ -609,7 +615,7 @@ function EditableSkillHeader(props: {
         <div className="flex min-w-0 items-start gap-2">
           {props.nameField}
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 pt-1">
-            <SkillBadges skill={props.skill} />
+            <SkillBadges skill={props.skill} sourceLabel={props.sourceLabel} />
           </div>
         </div>
 
@@ -711,6 +717,7 @@ function UnsavedSkillChangesDialog(props: {
 
 function ReadOnlySkillDetail(props: {
   readonly skill: ProviderSkill;
+  readonly sourceLabel: string;
   readonly removal: SkillRemovability;
   readonly removePending: boolean;
   readonly actionsDisabled: boolean;
@@ -730,6 +737,7 @@ function ReadOnlySkillDetail(props: {
     <>
       <ReadOnlySkillHeader
         skill={props.skill}
+        sourceLabel={props.sourceLabel}
         origin={props.origin}
         canUpdate={props.canUpdate}
         updatePending={props.updatePending}
@@ -775,6 +783,7 @@ function ReadOnlySkillDetail(props: {
 
 function ReadOnlySkillHeader(props: {
   readonly skill: ProviderSkill;
+  readonly sourceLabel: string;
   readonly origin: string | null;
   readonly canUpdate: boolean;
   readonly updatePending: boolean;
@@ -796,7 +805,7 @@ function ReadOnlySkillHeader(props: {
             {props.skill.name}
           </p>
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 pt-1">
-            <SkillBadges skill={props.skill} />
+            <SkillBadges skill={props.skill} sourceLabel={props.sourceLabel} />
           </div>
         </div>
 
@@ -844,14 +853,20 @@ function ReadOnlySkillHeader(props: {
   );
 }
 
-function SkillBadges({ skill }: { readonly skill: ProviderSkill }): ReactNode {
+function SkillBadges({
+  skill,
+  sourceLabel,
+}: {
+  readonly skill: ProviderSkill;
+  readonly sourceLabel: string;
+}): ReactNode {
   return (
     <>
       <Badge
         variant="outline"
         className={cn("rounded-full", SKILL_SOURCE_TONE[skill.source])}
       >
-        {SKILL_SOURCE_LABEL[skill.source]}
+        {sourceLabel}
       </Badge>
       {skill.conflict === true ? (
         <TooltipWrapper

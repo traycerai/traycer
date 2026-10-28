@@ -28,6 +28,7 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   composerSurfaceKey,
@@ -1342,8 +1343,22 @@ describe("tab command coordinator transactions", () => {
     // openEpicTab reuses? Actually openEpicTab always creates a new tab id for
     // the same epicId. Ensure both tabs share epicId for access loss.
     // openEpicTab(epicId) creates distinct tabIds - good.
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
     const session = captureSession();
-    tabCommandCoordinator.handleEpicAccessLoss(["shared-epic"]);
+    try {
+      tabCommandCoordinator.handleEpicAccessLoss(["shared-epic"], "user-1");
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
     session.dispose();
 
     session.assertAllSafe();

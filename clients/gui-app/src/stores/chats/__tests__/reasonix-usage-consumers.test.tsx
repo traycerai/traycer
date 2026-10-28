@@ -151,6 +151,7 @@ function bodyProps(meta: Parameters<typeof AssistantMessageBody>[0]["meta"]) {
     elapsedStartedAt: 1_000,
     turnHasOnlyAutonomousResumeSegments: false,
     autonomousResumeOwed: false,
+    foldedBackgroundEvents: undefined,
     showCompletionFooter: true,
     pausedDurationMs: 0,
     pausedSinceMs: null,

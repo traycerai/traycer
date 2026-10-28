@@ -1,7 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  useMutationState,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
@@ -12,6 +11,10 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { BatchDeleteItemResult } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import {
   useHostBinding,
   useHostClient,
@@ -586,7 +589,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           new Set(lostIds),
         );
         clearDeletedEpicRunSettings(scopes);
-        tabCommandCoordinator.handleEpicAccessLoss(lostIds);
+        tabCommandCoordinator.handleEpicAccessLoss(lostIds, ctx.userId);
         if (ctx.userId !== null) {
           // Tombstone each success in the scope its deletion actually had.
           //
@@ -789,13 +792,13 @@ export function useEpicBatchDelete(): UseMutationResult<
  * be in flight at once and each row must track its own.
  */
 export function usePendingDeleteEpicIds(): ReadonlySet<string> {
-  const pendingVariables = useMutationState({
-    filters: {
+  const pendingVariables = useMutationStateOf(
+    {
       mutationKey: epicMutationKeys.batchDelete(),
       status: "pending",
     },
-    select: (mutation) => mutation.state.variables,
-  });
+    selectMutationVariables,
+  );
   return useMemo(
     () => pendingDeleteEpicIdsFromVariables(pendingVariables),
     [pendingVariables],

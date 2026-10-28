@@ -26,21 +26,29 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentReviewEntry } from "@traycer/protocol/host/environment-schemas";
+import type {
+  ConfigEnvLocalOverrideClearRequest,
+  ConfigEnvLocalOverrideResponse,
+  EnvironmentReviewEntry,
+  EnvironmentSecretV12,
+  LocalOverride,
+} from "@traycer/protocol/host/environment-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
@@ -50,28 +58,49 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { EnvOverrideValue } from "../env-override-editor";
 import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 
 const mocks = vi.hoisted(() => ({
-  setOverrideMutate: vi.fn(),
-  deleteOverrideMutate: vi.fn(),
+  setOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
+  deleteOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
   /** What `useHostCredentialRefusal` answers; `null` is a host that takes env overrides. */
   credentialRefusal: null as string | null,
 }));
 
-vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
-  useProvidersSetEnvOverride: () => ({
-    mutate: mocks.setOverrideMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-set-env-override-mutation",
+  async () => {
+    const { useMutation } = await import("@tanstack/react-query");
+    return {
+      useProvidersSetEnvOverride: () =>
+        useMutation({ mutationFn: mocks.setOverrideMutate }),
+    };
+  },
+);
 
-vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
-  useProvidersDeleteEnvOverride: () => ({
-    mutate: mocks.deleteOverrideMutate,
-    isPending: false,
-  }),
+vi.mock(
+  "@/hooks/providers/use-providers-delete-env-override-mutation",
+  async () => {
+    const { useMutation } = await import("@tanstack/react-query");
+    return {
+      useProvidersDeleteEnvOverride: () =>
+        useMutation({ mutationFn: mocks.deleteOverrideMutate }),
+    };
+  },
+);
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
 }));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -85,7 +114,21 @@ afterEach(() => {
   hostBindingMock.current = null;
   vi.clearAllMocks();
   mocks.credentialRefusal = null;
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
+
+/** The bare section reads and writes through the query client the app provides. */
+function withQueryClient(children: ReactNode): ReactNode {
+  return (
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      {children}
+    </QueryClientProvider>
+  );
+}
 
 type EnvOverrideScope =
   ProviderCliState["nativeCapabilities"]["envOverrideScope"];
@@ -95,12 +138,14 @@ function renderSection(input: {
   readonly envOverrideScope: EnvOverrideScope;
 }): void {
   render(
-    <ProviderEnvOverridesSection
-      providerId={input.providerId}
-      onOpenAccount={null}
-      overrides={[]}
-      envOverrideScope={input.envOverrideScope}
-    />,
+    withQueryClient(
+      <ProviderEnvOverridesSection
+        providerId={input.providerId}
+        onOpenAccount={null}
+        overrides={[]}
+        envOverrideScope={input.envOverrideScope}
+      />,
+    ),
   );
 }
 
@@ -118,7 +163,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
         /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/Applied when Traycer spawns the/)).toBeNull();
+    expect(screen.queryByText(/each time it starts/)).toBeNull();
   });
 
   it("uses the native-config-only copy for any providerId when the descriptor says so", () => {
@@ -132,31 +177,51 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
         /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/spawns the Codex harness/)).toBeNull();
+    expect(screen.queryByText(/each time it starts/)).toBeNull();
   });
 
-  it("uses the harness spawn copy for the default harness-and-native-config scope", () => {
+  it("says where Personal's variables are set for the default harness-and-native-config scope", () => {
     renderSection({
       providerId: "cursor",
       envOverrideScope: "harness-and-native-config",
     });
 
     expect(
-      screen.getByText(/Applied when Traycer spawns the Cursor harness/),
+      screen.getByText(
+        "Set for Cursor each time it starts, on every computer and sandbox running Personal. Unset removes a variable Cursor would otherwise get from the shell.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
-  it("uses the harness spawn copy when envOverrideScope is omitted (old hosts)", () => {
+  it("says the same when envOverrideScope is omitted (old hosts)", () => {
     renderSection({
       providerId: "codex",
       envOverrideScope: undefined,
     });
 
     expect(
-      screen.getByText(/Applied when Traycer spawns the Codex harness/),
+      screen.getByText(
+        "Set for Codex each time it starts, on every computer and sandbox running Personal. Unset removes a variable Codex would otherwise get from the shell.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
+  });
+
+  it("limits the reach to this computer on a Local row", () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-a", hostName: "dev-box" },
+    });
+    renderSection({
+      providerId: "cursor",
+      envOverrideScope: "harness-and-native-config",
+    });
+
+    expect(
+      screen.getByText(
+        "Set for Cursor each time it starts, on this computer only. Unset removes a variable Cursor would otherwise get from the shell.",
+      ),
+    ).toBeTruthy();
   });
 });
 
@@ -165,14 +230,16 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
 
   function renderWithOverride(): void {
     render(
-      <ProviderEnvOverridesSection
-        providerId="cursor"
-        onOpenAccount={null}
-        overrides={[
-          { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
-        ]}
-        envOverrideScope="harness-and-native-config"
-      />,
+      withQueryClient(
+        <ProviderEnvOverridesSection
+          providerId="cursor"
+          onOpenAccount={null}
+          overrides={[
+            { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
+          ]}
+          envOverrideScope="harness-and-native-config"
+        />,
+      ),
     );
   }
 
@@ -228,6 +295,26 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   const HOST_ID = "host-a";
   const HELD_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
 
+  /** What the host answers for its own values and for the secrets that set names. */
+  interface HostFacts {
+    readonly localOverrides: readonly LocalOverride[];
+    readonly secrets: readonly EnvironmentSecretV12[];
+  }
+  const NO_FACTS: HostFacts = { localOverrides: [], secrets: [] };
+  const clearOverride = vi.fn(
+    (
+      _request: ConfigEnvLocalOverrideClearRequest,
+    ): Promise<ConfigEnvLocalOverrideResponse> =>
+      Promise.resolve({ outcome: "saved", overrides: [] }),
+  );
+
+  beforeEach(() => {
+    useAuthStore.setState({ status: "signed-in" });
+  });
+  afterEach(() => {
+    useAuthStore.setState({ status: "signed-out" });
+  });
+
   function heldEntry(key: string): EnvironmentReviewEntry {
     return {
       entryId: "entry-1",
@@ -242,13 +329,36 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   function mountOnPersonalPage(
     review: readonly EnvironmentReviewEntry[],
+    facts: HostFacts,
     section: ReactNode,
-  ): void {
+  ): RenderResult {
     const { client } = buildEnvironmentClient({
       hostId: HOST_ID,
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
-        "environment.localOverrides": () => ({ overrides: [] }),
+        "environment.localOverrides": () => ({
+          overrides: [...facts.localOverrides],
+        }),
+        "config.env.localOverride.clear": clearOverride,
+        "environment.list": () => ({
+          environments: [
+            {
+              environmentId: "env-personal",
+              ownerKind: "user" as const,
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner" as const,
+              kind: "personal" as const,
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        }),
+        "environment.secrets.list": () => ({
+          secrets: [...facts.secrets],
+          removed: [],
+        }),
         "environment.review": () => ({
           // The `@1.2` facts each row carries, none of them known here.
           entries: review.map((entry) => ({
@@ -271,6 +381,9 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       "environment.status": { major: 1, minor: 1 },
       "environment.localOverrides": { major: 1, minor: 0 },
       "environment.review": { major: 1, minor: 0 },
+      "environment.list": { major: 1, minor: 0 },
+      "environment.secrets.list": { major: 1, minor: 2 },
+      "config.env.localOverride.clear": { major: 1, minor: 0 },
     });
     scopeOverrides.current = {
       host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
@@ -279,7 +392,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       client,
     };
     hostBindingMock.current = { hostClient: client };
-    render(
+    return render(
       <QueryClientProvider
         client={
           new QueryClient({
@@ -297,6 +410,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   function renderOnPersonalPage(review: readonly EnvironmentReviewEntry[]) {
     mountOnPersonalPage(
       review,
+      NO_FACTS,
       <ProviderEnvOverridesSection
         providerId="cursor"
         onOpenAccount={null}
@@ -314,9 +428,10 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     providerId: ProviderCliState["providerId"],
     onOpenAccount: (() => void) | null,
     overrides: readonly EnvOverrideValue[],
-  ): void {
-    mountOnPersonalPage(
+  ): RenderResult {
+    return mountOnPersonalPage(
       [],
+      NO_FACTS,
       <ProviderEnvOverridesSection
         providerId={providerId}
         onOpenAccount={onOpenAccount}
@@ -514,8 +629,10 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       await screen.findByRole("button", { name: "Remove KIRO_API_KEY" }),
     );
 
-    expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteOverrideMutate).toHaveBeenCalledWith({
+    await waitFor(() =>
+      expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.deleteOverrideMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "kiro",
       key: "KIRO_API_KEY",
     });
@@ -551,5 +668,226 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
     ).toBe(HELD_VALUE);
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+  });
+
+  const OWN_URL = "https://own.example.invalid";
+
+  function ownBaseUrl(value: string): LocalOverride {
+    return {
+      target: {
+        kind: "env_override",
+        providerId: "claude-code",
+        key: "ANTHROPIC_BASE_URL",
+      },
+      os: "any",
+      value,
+      setAt: 1,
+    };
+  }
+
+  function renderClaudeEnvTab(
+    facts: HostFacts,
+    overrides: readonly EnvOverrideValue[],
+  ): RenderResult {
+    return mountOnPersonalPage(
+      [],
+      facts,
+      <ProviderEnvOverridesSection
+        providerId="claude-code"
+        onOpenAccount={null}
+        overrides={overrides}
+        envOverrideScope="harness-and-native-config"
+      />,
+    );
+  }
+
+  const SHARED_URL: readonly EnvOverrideValue[] = [
+    { key: "ANTHROPIC_BASE_URL", value: "https://shared.example.invalid" },
+  ];
+
+  it("reads what the host uses for a provider variable it keeps its own value for", async () => {
+    renderClaudeEnvTab(
+      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      SHARED_URL,
+    );
+
+    const note = await screen.findByTestId("env-row-own-value");
+    expect(note.textContent).toBe(`dev-box uses: ${OWN_URL} · Use everywhere`);
+  });
+
+  it("saves the host's value for everyone, then stops the host keeping its own", async () => {
+    renderClaudeEnvTab(
+      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      SHARED_URL,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "claude-code",
+      key: "ANTHROPIC_BASE_URL",
+      value: OWN_URL,
+      executableWriteGrant: null,
+    });
+    // The clear RPC follows the save's resolved promise.
+    await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
+    expect(clearOverride).toHaveBeenCalledWith({
+      target: {
+        kind: "env_override",
+        providerId: "claude-code",
+        key: "ANTHROPIC_BASE_URL",
+      },
+    });
+  });
+
+  it("clears a provider's own value after its save resolves, even if the section unmounts", async () => {
+    let resolveSave: (() => void) | undefined;
+    mocks.setOverrideMutate.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const view = renderClaudeEnvTab(
+      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      SHARED_URL,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(clearOverride).not.toHaveBeenCalled();
+
+    view.unmount();
+    if (resolveSave === undefined) throw new Error("save did not start");
+    act(() => resolveSave?.());
+
+    await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
+    expect(clearOverride).toHaveBeenCalledWith({
+      target: {
+        kind: "env_override",
+        providerId: "claude-code",
+        key: "ANTHROPIC_BASE_URL",
+      },
+    });
+  });
+
+  it("keeps a provider's own value when saving it for everyone fails", async () => {
+    let rejectSave: ((error: Error) => void) | undefined;
+    const save = new Promise<void>((_resolve, reject) => {
+      rejectSave = reject;
+    });
+    mocks.setOverrideMutate.mockImplementationOnce(() => save);
+    renderClaudeEnvTab(
+      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      SHARED_URL,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    if (rejectSave === undefined) throw new Error("save did not start");
+    await act(async () => {
+      rejectSave?.(new Error("save failed"));
+      await save.catch(() => undefined);
+    });
+
+    expect(clearOverride).not.toHaveBeenCalled();
+  });
+
+  it("deletes the old provider variable after a renamed save resolves, even if the section unmounts", async () => {
+    let resolveSave: (() => void) | undefined;
+    mocks.setOverrideMutate.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const view = renderProviderEnvTab("cursor", null, [
+      { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
+    ]);
+    const nameField = await screen.findByLabelText("Name for CURSOR_BASE_URL");
+    fireEvent.change(nameField, {
+      target: { value: "CURSOR_PROXY_URL" },
+    });
+    fireEvent.blur(nameField);
+
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    // Reset the still-mounted draft so row cleanup doesn't submit the same
+    // rename a second time while the first save remains in flight.
+    fireEvent.change(nameField, {
+      target: { value: "CURSOR_BASE_URL" },
+    });
+
+    view.unmount();
+    expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
+    if (resolveSave === undefined) throw new Error("save did not start");
+    act(() => resolveSave?.());
+
+    await waitFor(() =>
+      expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.deleteOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "cursor",
+      key: "CURSOR_BASE_URL",
+    });
+  });
+
+  describe("a variable a secret sets for the provider", () => {
+    const TOKEN_ROW: readonly EnvOverrideValue[] = [
+      { key: "ANTHROPIC_AUTH_TOKEN", value: HELD_VALUE },
+    ];
+    const secretSettingIt: EnvironmentSecretV12 = {
+      secretId: "sec-1",
+      name: "CLAUDE_TOKEN",
+      kind: "api_key",
+      protocol: "https",
+      destinations: ["api.anthropic.com"],
+      mode: "exposed",
+      state: "live",
+      currentVersionId: "ver-1",
+      revoked: false,
+      updatedAt: 1,
+      variables: [],
+      providerVariables: [
+        { providerId: "claude-code", name: "ANTHROPIC_AUTH_TOKEN" },
+      ],
+    };
+
+    it("reads the name as the secret's, with no value and no key refusal", async () => {
+      renderClaudeEnvTab(
+        { localOverrides: [], secrets: [secretSettingIt] },
+        TOKEN_ROW,
+      );
+
+      const row = await screen.findByTestId("env-claimed-row");
+      expect(row.textContent).toBe(
+        "ANTHROPIC_AUTH_TOKEN · from the secret CLAUDE_TOKEN · Secrets",
+      );
+      expect(screen.queryByTestId("env-masked-row")).toBeNull();
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+      expect(document.body.textContent).not.toContain(HELD_VALUE);
+    });
+
+    it("control: with the name unclaimed the saved key-shaped value is masked and refused", async () => {
+      renderClaudeEnvTab({ localOverrides: [], secrets: [] }, TOKEN_ROW);
+
+      const row = await screen.findByTestId("env-masked-row");
+      expect(within(row).getByTestId("env-key-refusal")).toBeTruthy();
+      expect(screen.queryByTestId("env-claimed-row")).toBeNull();
+    });
   });
 });

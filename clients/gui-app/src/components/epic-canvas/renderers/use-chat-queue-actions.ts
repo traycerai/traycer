@@ -156,8 +156,9 @@ export function useChatQueueActions(
   // edit's Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.39` refused
   // because it would end the running turn. Read, not taken: it stays in the
   // store until this tile's dialog is answered, so a pane that was unfocused
-  // when the refusal arrived asks once it is focused again, and another pane
-  // on the same chat never claims it. This tile's oldest refusal is asked
+  // when the refusal arrived asks once it is focused again. A closed tile
+  // releases its questions for another tile to claim, including a steer whose
+  // refusal arrives after it closed. This tile's oldest refusal is asked
   // first; the next one opens once it is answered. An older host never
   // refuses: it restarts the turn as it always did.
   const ownRefusal = useStore(
@@ -167,6 +168,41 @@ export function useChatQueueActions(
         (refusal) => refusal.initiatorId === tileInstanceId,
       ) ?? null,
   );
+  const orphanRefusalId = useStore(
+    handle.store,
+    (state) =>
+      state.steerRestartRefusals.find((refusal) => refusal.initiatorId === null)
+        ?.clientActionId ?? null,
+  );
+  const mountedSteerOwner = useRef<{
+    readonly store: ChatSessionStoreHandle["store"];
+    readonly initiatorId: string;
+  } | null>(null);
+  useEffect(() => {
+    const owner = { store: handle.store, initiatorId: tileInstanceId };
+    mountedSteerOwner.current = owner;
+    return () => {
+      mountedSteerOwner.current = null;
+      // StrictMode replays effects without closing the tile. Let that setup
+      // keep ownership, but release a real teardown or a changed binding.
+      queueMicrotask(() => {
+        const mounted = mountedSteerOwner.current;
+        if (
+          mounted?.store === owner.store &&
+          mounted.initiatorId === owner.initiatorId
+        ) {
+          return;
+        }
+        owner.store.getState().releaseSteerRestartInitiator(owner.initiatorId);
+      });
+    };
+  }, [handle.store, tileInstanceId]);
+  useEffect(() => {
+    if (ownRefusal !== null || orphanRefusalId === null) return;
+    handle.store
+      .getState()
+      .claimSteerRestartRefusal(orphanRefusalId, tileInstanceId);
+  }, [handle.store, orphanRefusalId, ownRefusal, tileInstanceId]);
   const steerRestartPrompt: {
     readonly queueItemId: string;
     readonly newSettings: ChatRunSettings | null;
@@ -379,6 +415,13 @@ export function useChatQueueActions(
       // (the store assigns a fresh object every snapshot, so depending on it would
       // re-create this callback every streamed token → lowerQueue → composerModel
       // churn -> composer re-render).
+      if (handle.store.getState().queuedSteerRestartConfirmationSupported()) {
+        chatActions.queueSteerNow(item.queueItemId, nextStepSettings, false, {
+          initiatorId: tileInstanceId,
+          editSettings: null,
+        });
+        return;
+      }
       const decision = decideSteerSettings(
         handle.store.getState().activeTurn,
         nextStepSettings,
@@ -397,7 +440,7 @@ export function useChatQueueActions(
         // one still lands and costs the judge on a turn the user can re-run.
         //
         // Sent unconfirmed: if the host would still have to end the turn
-        // (images, a slash command, skills, a harness that cannot steer), it
+        // (images or a harness that cannot steer), it
         // refuses and names why, and the dialog asks.
         chatActions.queueSteerNow(item.queueItemId, nextStepSettings, false, {
           initiatorId: tileInstanceId,

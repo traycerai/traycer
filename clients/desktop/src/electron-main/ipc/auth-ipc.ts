@@ -57,6 +57,7 @@ import {
   parseSandboxAutomationOpenTarget,
   parseSandboxCreateRequest,
   parseSandboxLifecycleVerb,
+  parseSandboxVerbGesture,
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseStoredAuthTokens,
@@ -301,14 +302,22 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.destroySandbox,
-    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      onlyIfIdle: unknown,
+    ) => {
       assertString(bearerToken, "destroySandbox.bearerToken");
       assertString(sandboxId, "destroySandbox.sandboxId");
+      const idle = onlyIfIdle === undefined ? false : onlyIfIdle;
+      assertBoolean(idle, "destroySandbox.onlyIfIdle");
       return destroySandboxViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
         sandboxId,
+        idle,
       );
     },
   );
@@ -355,18 +364,21 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       bearerToken: unknown,
       sandboxId: unknown,
       verb: unknown,
+      gesture: unknown,
       timeoutMs: unknown,
     ) => {
       assertString(bearerToken, "runSandboxVerb.bearerToken");
       assertString(sandboxId, "runSandboxVerb.sandboxId");
       assertNumber(timeoutMs, "runSandboxVerb.timeoutMs");
       const parsedVerb = parseSandboxLifecycleVerb(verb);
+      const parsedGesture = parseSandboxVerbGesture(gesture);
       return runSandboxVerbViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
         sandboxId,
         parsedVerb,
+        parsedGesture,
         timeoutMs,
       );
     },

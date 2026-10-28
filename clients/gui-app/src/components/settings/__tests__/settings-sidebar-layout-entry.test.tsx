@@ -37,6 +37,19 @@ vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersions: () => new Map(),
 }));
+// The picker's Personal row reads the hosts running Personal from one hook;
+// these suites are about the sidebar around it.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined }),
 }));
@@ -51,6 +64,9 @@ vi.mock("@/components/settings/environment/team-pick-label", () => ({
 }));
 vi.mock("@/components/settings/environment/team-rows", () => ({
   TeamRows: () => null,
+}));
+vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
+  InviteAcceptDialog: () => null,
 }));
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
@@ -106,10 +122,6 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
 // does not mount. It is irrelevant to navigation, and has its own suite.
 vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
   SandboxBalanceBanner: () => null,
-}));
-// Same reasoning: the Automations entry reads its own `useQuery`.
-vi.mock("@/components/hosts/automations-host-entry", () => ({
-  AutomationsHostEntry: () => <div data-testid="automations-entry-probe" />,
 }));
 
 function buildRouter(initialPath: string) {

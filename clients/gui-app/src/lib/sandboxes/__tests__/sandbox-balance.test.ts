@@ -168,6 +168,8 @@ describe("sandboxCostTodayMc", () => {
       pendingMillicredits: 0,
       segments,
       todayMillicredits: 0,
+      todayAwakeMs: null,
+      history: [],
     };
   }
 

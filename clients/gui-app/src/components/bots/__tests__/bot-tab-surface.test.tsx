@@ -1,13 +1,14 @@
 /**
  * The bot tab's surface (Tracy Bots): the tab asks `bot.open` through its own
- * host and follows the answer - serving here, moving to a host this client can
- * dial, or paused with a reason - and never names the machine a bot runs on.
+ * host and follows the answer - serving, or paused with a reason - and never
+ * names the machine a bot runs on or moves to it (T65).
  * Also: the stream's states, the re-subscribe and re-open when the pane comes
  * back into view, the tab closing when the bot is gone from `bot.list`, and a
  * team whose onboarding locks its chat (the real gate, over a mocked read).
  * The three views are replaced by stubs that expose their props, so what the
  * surface PASSES them is what is asserted.
  */
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { StrictMode, type ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -119,16 +120,27 @@ vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
 // The members of the bot's environment, as the channel view's resolver:
 // one teammate it knows by name.
 vi.mock("@/hooks/bots/use-environment-members-query", () => ({
-  useEnvironmentMembers: (
+  useEnvironmentMemberDirectory: (
     _client: unknown,
     environmentId: string | null,
     enabled: boolean,
   ) => {
     mocks.membersQueries.push({ environmentId, enabled });
-    return (userId: string) =>
-      enabled && userId === "user-teammate"
-        ? { displayName: "Tess Teammate", avatarUrl: null }
-        : null;
+    return {
+      resolve: (userId: string) =>
+        enabled && userId === "user-teammate"
+          ? { displayName: "Tess Teammate", avatarUrl: null }
+          : null,
+      members: enabled
+        ? [
+            {
+              userId: "user-teammate",
+              displayName: "Tess Teammate",
+              avatarUrl: null,
+            },
+          ]
+        : null,
+    };
   },
 }));
 
@@ -140,9 +152,15 @@ vi.mock("@/components/epic-canvas/tab-host-provider", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.hostClient,
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => mocks.state.paneVisible,
-}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-tabs/pane-visibility-context")
+    >()),
+    usePaneVisible: () => mocks.state.paneVisible,
+  }),
+);
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   useBotSubscriptionForHost: () => ({
     snapshot: mocks.state.snapshot,
@@ -210,9 +228,9 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
     hostId: string;
+    boundHostId: string | null;
     botTitle: string;
     appConversationChatId: string | null;
-    paused: boolean;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -220,9 +238,9 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     <div
       data-testid="stub-channel"
       data-host-id={props.hostId}
+      data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-paused={String(props.paused)}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
       }
@@ -230,26 +248,46 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
   ),
 }));
 vi.mock("@/components/bots/bot-under-the-hood-panel", () => ({
-  BotUnderTheHoodPanel: (props: { paused: boolean }) => (
-    <div data-testid="stub-under-the-hood" data-paused={String(props.paused)} />
+  BotUnderTheHoodPanel: (props: {
+    boundHost: { hostId: string; isThisHost: boolean } | null;
+  }) => (
+    <div
+      data-testid="stub-under-the-hood"
+      data-bound-host-id={props.boundHost?.hostId ?? "none"}
+      data-is-this-host={String(props.boundHost?.isThisHost)}
+    />
   ),
 }));
-// The panel takes the bot, whether it is main and whether its environment is
-// a person's own, and nothing else: no prop says which host serves the tab,
-// so no control can be gated on it. The stub lists the props it was given.
+// The panel takes the bot, whether it is main, whether its environment is a
+// person's own, its channel, its environment's bots and how to close, and
+// nothing else: no prop says which host serves the tab, so no control can be
+// gated on it. The stub lists the props it was given.
 vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotSettingsPanel: (props: { isMain: boolean | null; personal: boolean }) => (
+  BotChannelSettingsPanel: (props: {
+    isMain: boolean | null;
+    personal: boolean;
+    channelId: string | null;
+    onClose: () => void;
+  }) => (
     <div
       data-testid="stub-settings"
       data-prop-names={Object.keys(props).join(",")}
       data-is-main={String(props.isMain)}
       data-personal={String(props.personal)}
-    />
+      data-channel-id={props.channelId ?? "none"}
+    >
+      <button
+        type="button"
+        data-testid="stub-settings-close"
+        onClick={props.onClose}
+      />
+    </div>
   ),
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -341,6 +379,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // A case that signs a viewer in leaves no one signed in for the next.
+  useAuthStore.setState({ profile: null });
 });
 
 describe("<BotTabSurface /> on a host without bot.open", () => {
@@ -367,11 +407,11 @@ describe("<BotTabSurface /> on a host without bot.open", () => {
     expect(mocks.open).not.toHaveBeenCalled();
   });
 
-  it("draws nothing, and opens nothing, until the handshake has answered either way", () => {
+  it("shows the connecting state, never nothing, and opens nothing, until the handshake has answered either way", () => {
     mocks.state.support = null;
-    const { container } = render(surface());
+    render(surface());
 
-    expect(container.textContent).toBe("");
+    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(mocks.open).not.toHaveBeenCalled();
   });
@@ -490,6 +530,10 @@ describe("<BotTabSurface /> while the team's onboarding locks its chat", () => {
 });
 
 describe("<BotTabSurface /> bot.open", () => {
+  afterEach(() => {
+    useBotPaneWidthsStore.getState().resetWidth("sidebar");
+  });
+
   it("opens the bot once on mount, for this bot", () => {
     render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
 
@@ -506,13 +550,25 @@ describe("<BotTabSurface /> bot.open", () => {
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
   });
 
-  it("shows the full tab, unpaused and with no banner, when this host serves the bot", () => {
+  it("draws the channel sidebar in a pane as wide as the person set it, with a handle on its channel edge", () => {
+    useBotPaneWidthsStore.getState().setWidthPx("sidebar", 300);
+    render(surface());
+
+    const pane = screen.getByTestId("bot-channel-sidebar-pane");
+    expect(pane.style.getPropertyValue("--bot-pane-width")).toBe("300px");
+    expect(within(pane).getByTestId("stub-sidebar")).toBeTruthy();
+    expect(
+      within(pane)
+        .getByTestId("bot-channel-sidebar-pane-resize-handle")
+        .getAttribute("aria-label"),
+    ).toBe("Resize channels");
+  });
+
+  it("shows the full tab, with no banner, when this host serves the bot", () => {
     const { container } = render(surface());
 
     expect(screen.getByTestId("bot-tab-title").textContent).toBe("Release Bot");
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "false",
-    );
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
     expect(screen.queryByTestId("bot-tab-error")).toBeNull();
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
@@ -538,63 +594,37 @@ describe("<BotTabSurface /> bot.open", () => {
 });
 
 describe("<BotTabSurface /> another host serves the bot", () => {
-  const SERVED_ELSEWHERE = answer({
-    kind: "serve-on-bound-host",
-    hostId: BOUND_HOST,
-    why: "reachable",
-  });
+  it.each(["reachable", "claimed-concurrently"] as const)(
+    "keeps the tab on its own host and renders the channel there (%s)",
+    (why) => {
+      mocks.state.openResult = answer({
+        kind: "serve-on-bound-host",
+        hostId: BOUND_HOST,
+        why,
+      });
+      const { container } = render(surface());
 
-  it("moves the tab to that host silently when this client can dial it", () => {
-    mocks.state.openResult = SERVED_ELSEWHERE;
-    const { container } = render(surface());
+      expect(tabHostIdInStore()).toBe(TAB_HOST);
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-host-id"),
+      ).toBe(TAB_HOST);
+      expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+      expectNoMachineWording(container);
+    },
+  );
 
-    expect(tabHostIdInStore()).toBe(BOUND_HOST);
-    // Until the surface remounts on the new host: a spinner, no banner.
-    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
-    expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-    expectNoMachineWording(container);
-  });
-
-  it("moves it as well when another host claimed the bot while this one was deciding", () => {
+  it("keeps the tab on its host while the directory has not answered", () => {
     mocks.state.openResult = answer({
       kind: "serve-on-bound-host",
       hostId: BOUND_HOST,
-      why: "claimed-concurrently",
+      why: "reachable",
     });
-    render(surface());
-
-    expect(tabHostIdInStore()).toBe(BOUND_HOST);
-  });
-
-  it("pauses on the opening host, with no move, when this client cannot dial that host", () => {
-    mocks.state.openResult = SERVED_ELSEWHERE;
-    mocks.state.connectable = { hostIds: [TAB_HOST], resolved: true };
-    const { container } = render(surface());
-
-    expect(tabHostIdInStore()).toBe(TAB_HOST);
-    const banner = screen.getByTestId("bot-tab-paused");
-    expect(banner.getAttribute("data-reason")).toBe("bound-host-not-dialable");
-    expect(banner.textContent).toContain("Acme");
-    expect(within(banner).queryByRole("button")).toBeNull();
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "true",
-    );
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-host-id"),
-    ).toBe(TAB_HOST);
-    expectNoMachineWording(container);
-  });
-
-  it("neither calls the host undialable nor moves the tab before the directory has answered", () => {
-    mocks.state.openResult = SERVED_ELSEWHERE;
     mocks.state.connectable = { hostIds: [], resolved: false };
     render(surface());
 
-    expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
-    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
-    // Moving now could strand the tab on a host this client never reaches.
     expect(tabHostIdInStore()).toBe(TAB_HOST);
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
 });
 
@@ -606,17 +636,17 @@ describe("<BotTabSurface /> paused", () => {
   }> = [
     {
       reason: "host-not-in-environment",
-      text: "Paused: the computer this bot runs on is away, and this one doesn't run Acme's bots. Messages you send are delivered when it's back.",
+      text: "Paused: the host this bot runs on is away, and this one doesn't run Acme's bots. Messages you send are delivered when it's back.",
       retry: false,
     },
     {
       reason: "bound-to-sandbox",
-      text: "This bot's channel can't be shown here. Messages you send still reach it.",
+      text: "Couldn't check whether this bot is running. Messages you send still reach it.",
       retry: false,
     },
     {
       reason: "bound-host-not-observable",
-      text: "This bot's channel can't be shown here. Messages you send still reach it.",
+      text: "Couldn't check whether this bot is running. Messages you send still reach it.",
       retry: false,
     },
     {
@@ -648,16 +678,25 @@ describe("<BotTabSurface /> paused", () => {
     },
   );
 
-  it("hands the channel view the paused flag, whose placeholder names no machine", () => {
+  it("still renders the channel under the paused banner", () => {
     mocks.state.openResult = answer({
       kind: "paused",
       reason: "host-not-in-environment",
     });
     render(surface());
 
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "true",
-    );
+    expect(screen.getByTestId("bot-tab-paused")).toBeTruthy();
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-host-id"),
+    ).toBe(TAB_HOST);
+  });
+
+  it("hands the channel view the tab's host for its reads and sends, and the bot's bound host for signing a provider in again", () => {
+    render(surface());
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-host-id")).toBe(TAB_HOST);
+    expect(channel.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
   });
 
   it("hands the channel view the conversation the bot record names as its channel", () => {
@@ -696,7 +735,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("unresolved");
   });
 
-  it("hands the under-the-hood view the paused flag too", async () => {
+  it("hands the under-the-hood view the bound host, paused or not", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -705,12 +744,12 @@ describe("<BotTabSurface /> paused", () => {
     render(surface());
 
     await user.click(screen.getByTestId("bot-tab-view-under-the-hood"));
-    expect(
-      screen.getByTestId("stub-under-the-hood").getAttribute("data-paused"),
-    ).toBe("true");
+    const panel = screen.getByTestId("stub-under-the-hood");
+    expect(panel.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
+    expect(panel.getAttribute("data-is-this-host")).toBe("false");
   });
 
-  it("keeps Settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
+  it("keeps the channel settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -718,10 +757,10 @@ describe("<BotTabSurface /> paused", () => {
     });
     render(surface());
 
-    await user.click(screen.getByTestId("bot-tab-view-settings"));
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot,isMain,personal");
+    ).toBe("bot,isMain,personal,channelId,environmentBots,onClose");
   });
 
   it.each<readonly [string, "user" | "organization", string]>([
@@ -736,10 +775,73 @@ describe("<BotTabSurface /> paused", () => {
       ];
       render(surface());
 
-      await user.click(screen.getByTestId("bot-tab-view-settings"));
+      await user.click(screen.getByTestId("bot-channel-settings-open"));
       expect(
         screen.getByTestId("stub-settings").getAttribute("data-personal"),
       ).toBe(expected);
+    },
+  );
+
+  it("opens the channel's settings beside the channel from the ⋮, for the bot's channel, and closes them back to the ⋮, from their close or the ⋮ again", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    const open = screen.getByTestId("bot-channel-settings-open");
+    expect(open.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+
+    await user.click(open);
+    const panel = screen.getByTestId("stub-settings");
+    expect(open.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.getAttribute("data-channel-id")).toBe("conversation-app");
+    // The channel stays: the panel sits beside it, not instead of it.
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+
+    await user.click(within(panel).getByTestId("stub-settings-close"));
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+    expect(document.activeElement).toBe(open);
+
+    // The ⋮ closes them too.
+    await user.click(open);
+    expect(screen.getByTestId("stub-settings")).toBeTruthy();
+    await user.click(open);
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+    expect(open.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it.each([
+    ["a team's", "organization", "Acme", "Members of Acme"],
+    ["a person's own", "user", "Olive Owner", "Only you"],
+  ] as const)(
+    "opens the bot's card from the header for %s bot, naming its owner and who may message it, with its activity a click away",
+    async (_name, ownerKind, owner, access) => {
+      const user = userEvent.setup();
+      useAuthStore.setState({
+        profile: {
+          userId: "user-viewer",
+          userName: "Olive Owner",
+          email: "olive@example.com",
+          avatarUrl: null,
+        },
+      });
+      mocks.state.environments = [
+        { environmentId: "env-team", label: "Acme", ownerKind },
+      ];
+      render(surface());
+
+      await user.click(screen.getByTestId("bot-tab-avatar"));
+      const card = await screen.findByTestId("bot-profile-card");
+      expect(card.textContent).toContain(`Managed by ${owner}`);
+      expect(within(card).getByTestId("bot-profile-access").textContent).toBe(
+        access,
+      );
+
+      await user.click(within(card).getByTestId("bot-profile-view-activity"));
+      expect(
+        screen
+          .getByTestId("bot-tab-view-under-the-hood")
+          .getAttribute("aria-selected"),
+      ).toBe("true");
     },
   );
 
@@ -750,7 +852,7 @@ describe("<BotTabSurface /> paused", () => {
     ];
     render(surface());
 
-    await user.click(screen.getByTestId("bot-tab-view-settings"));
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-personal"),
     ).toBe("false");
@@ -770,9 +872,7 @@ describe("<BotTabSurface /> paused", () => {
 
     expect(mocks.open).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "false",
-    );
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
 });
 
@@ -874,7 +974,7 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the channel's name and its tabs only, even for the environment's main bot", () => {
+  it("draws the header as the bot's picture, the channel's name, its two views and the settings ⋮ only, even for the environment's main bot", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -885,10 +985,13 @@ describe("<BotTabSurface /> main bot", () => {
       within(header)
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
-    ).toEqual(["Messages", "Under the hood", "Settings"]);
+    ).toEqual(["Messages", "Under the hood"]);
     expect(header.textContent).toBe(
-      `${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hoodSettings`,
+      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hood`,
     );
+    expect(
+      within(header).getByRole("button", { name: "Channel settings" }),
+    ).toBe(screen.getByTestId("bot-channel-settings-open"));
   });
 
   it.each([
@@ -903,7 +1006,7 @@ describe("<BotTabSurface /> main bot", () => {
       mocks.state.mainBotIds = mainBotIds;
       render(surface());
 
-      await user.click(screen.getByTestId("bot-tab-view-settings"));
+      await user.click(screen.getByTestId("bot-channel-settings-open"));
       expect(
         screen.getByTestId("stub-settings").getAttribute("data-is-main"),
       ).toBe(expected);

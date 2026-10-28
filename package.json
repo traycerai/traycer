@@ -48,6 +48,7 @@
     "eslint-plugin-react-hooks": "catalog:",
     "eslint-plugin-react-refresh": "catalog:",
     "globals": "catalog:",
+    "node-gyp": "12.4.0",
     "nx": "^23.3.0",
     "oxfmt": "0.65.0",
     "oxlint": "1.80.0",

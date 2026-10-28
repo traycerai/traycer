@@ -21,6 +21,7 @@ import type {
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { HostListFetchResult } from "../host-client/remote-fetcher";
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
+import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/host-notifications";
 import type { LiveHostAvailability } from "../host-client/host-directory";
 import type {
   UpdateHostVersionPolicyFetchResult,
@@ -50,6 +51,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -404,6 +406,7 @@ export interface IRunnerHost {
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
+    onlyIfIdle: boolean,
   ): Promise<SandboxVerbFetchResult>;
   patchSandbox(
     bearerToken: string,
@@ -418,6 +421,7 @@ export interface IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
@@ -1142,9 +1146,15 @@ export interface IStatusBarTapHost {
 export type PushPermissionState = "prompt" | "granted" | "denied";
 
 /**
+ * A severity a phone can stop being pushed for: the host's own notification
+ * severity, so the vocabulary has one owner.
+ */
+export type PushSeverity = HostNotificationSeverity;
+
+/**
  * Read/repair surface for the device's OS push permission, backing the
- * Settings → Sounds "this phone" row. Only reachable where
- * `IRunnerHost.pushPermission` is non-null.
+ * Settings → Alerts push rows, plus which severities this phone is pushed
+ * for. Only reachable where `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {
   /** Local OS read; never prompts. */
@@ -1159,9 +1169,26 @@ export interface IPushPermissionHost {
   /** Jumps to this app's notification page in the OS Settings app. */
   openSettings(): Promise<void>;
   /**
+   * The severities this phone is not pushed for, as this phone stored them
+   * for the signed-in account; `[]` until one is turned off. A local read:
+   * the phone is the authority, and the server only keeps a copy of what the
+   * phone last sent.
+   */
+  getMutedSeverities(): Promise<readonly PushSeverity[]>;
+  /**
+   * Replaces the muted set with `set` (the whole set, not a change to it) and
+   * resolves once this phone has stored it. Sending it to the server is
+   * best-effort: it goes with the next token registration, which follows
+   * shortly when permission is granted and is retried on a later foreground
+   * resume if that send fails.
+   */
+  setMutedSeverities(set: readonly PushSeverity[]): Promise<void>;
+  /**
    * Fires when the state MAY have changed - a foreground resume (the person
-   * may have just changed it in OS Settings) or a completed `request()`.
-   * Subscribers re-read via `get()`; the signal carries no state itself.
+   * may have just changed it in OS Settings), a completed `request()`, a
+   * completed `setMutedSeverities()`, or a change of login session (the muted
+   * set is kept per account). Subscribers re-read via `get()` and
+   * `getMutedSeverities()`; the signal carries no state itself.
    */
   onChange(handler: () => void): Disposable;
 }

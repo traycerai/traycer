@@ -15,7 +15,8 @@
  * Allowed dependencies: `zod` and other protocol modules only - this file
  * must stay browser-safe.
  */
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { artifactMentionContextType } from "@traycer/protocol/common/composer-mention-attrs";
 import {
   commonRecordRegistry,
   EpicArtifactKindSchemaPreHtml,
@@ -1717,7 +1718,7 @@ export type EpicMentionEpicSuggestion = z.infer<
 >;
 
 function epicMentionArtifactSuggestionSchemaFor<
-  const Kind extends MarkdownArtifactKind,
+  const Kind extends EpicArtifactKind,
 >(kind: Kind) {
   return z.object({
     kind: z.literal("epic-artifact"),
@@ -1766,12 +1767,37 @@ export type EpicMentionReviewSuggestion = z.infer<
   typeof epicMentionReviewSuggestionSchema
 >;
 
+// HTML artifacts, canvases and files carry no status; `status` is always null.
+export const epicMentionHtmlArtifactSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("html"),
+);
+export type EpicMentionHtmlArtifactSuggestion = z.infer<
+  typeof epicMentionHtmlArtifactSuggestionSchema
+>;
+
+export const epicMentionCanvasSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("canvas"),
+);
+export type EpicMentionCanvasSuggestion = z.infer<
+  typeof epicMentionCanvasSuggestionSchema
+>;
+
+export const epicMentionFileArtifactSuggestionSchema = lazySchema(() =>
+  epicMentionArtifactSuggestionSchemaFor("file"),
+);
+export type EpicMentionFileArtifactSuggestion = z.infer<
+  typeof epicMentionFileArtifactSuggestionSchema
+>;
+
 export const epicMentionArtifactSuggestionSchema = lazySchema(() =>
   z.discriminatedUnion("artifactType", [
     epicMentionSpecSuggestionSchema,
     epicMentionTicketSuggestionSchema,
     epicMentionStorySuggestionSchema,
     epicMentionReviewSuggestionSchema,
+    epicMentionHtmlArtifactSuggestionSchema,
+    epicMentionCanvasSuggestionSchema,
+    epicMentionFileArtifactSuggestionSchema,
   ]),
 );
 export type EpicMentionArtifactSuggestion = z.infer<
@@ -1784,21 +1810,25 @@ export type EpicMentionArtifactSuggestion = z.infer<
  * builder so the cloud and local copies of the same artifact produce identical
  * ids and de-dupe to a single mention entry. Keep the two formats in lock-step
  * here rather than hand-rolling the template strings at each call site.
+ *
+ * Both are prefixed with the kind's mention context type rather than the kind
+ * itself: the token becomes the chip's `path`, which the legacy parser reads
+ * back, and a file artifact spells itself `file-artifact` there.
  */
 export function epicArtifactMentionId(
-  kind: MarkdownArtifactKind,
+  kind: EpicArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
-  return `${kind}:${epicId}:${artifactId}`;
+  return `${artifactMentionContextType(kind)}:${epicId}:${artifactId}`;
 }
 
 export function epicArtifactMentionToken(
-  kind: MarkdownArtifactKind,
+  kind: EpicArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
-  return `${kind}:${epicId}/${artifactId}`;
+  return `${artifactMentionContextType(kind)}:${epicId}/${artifactId}`;
 }
 
 export const epicMentionSuggestionSchema = lazySchema(() =>
@@ -1852,6 +1882,20 @@ export const epicMentionReviewsResponseSchema = lazySchema(() =>
 );
 export type EpicMentionReviewsResponse = z.infer<
   typeof epicMentionReviewsResponseSchema
+>;
+
+/**
+ * `epic.mentionArtifacts` answers with any artifact kind. Today it serves the
+ * kinds the four per-kind methods above do not (html, canvas, file); the
+ * discriminated union leaves room for those four to fold into it.
+ */
+export const epicMentionArtifactsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(epicMentionArtifactSuggestionSchema),
+  }),
+);
+export type EpicMentionArtifactsResponse = z.infer<
+  typeof epicMentionArtifactsResponseSchema
 >;
 
 // ─── Collaborator mutation primitives ────────────────────────────────────────
@@ -3008,9 +3052,44 @@ export const createCommentThreadRequestSchemaPreAnchor = lazySchema(() =>
   }),
 );
 /** Durable HTML/canvas anchors; offsets refer to normalized element text. */
+export const commentAnchorSchemaPreCanvasPoint = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("artifact") }),
+    z.object({
+      kind: z.literal("element"),
+      artboard: z.string(),
+      elementId: z.string(),
+      label: z.string(),
+    }),
+    z
+      .object({
+        kind: z.literal("text"),
+        artboard: z.string(),
+        elementId: z.string(),
+        startOffset: z.number().int().nonnegative(),
+        endOffset: z.number().int().nonnegative(),
+        label: z.string(),
+      })
+      .refine((anchor) => anchor.endOffset >= anchor.startOffset, {
+        message: "Text anchor end must not precede its start",
+        path: ["endOffset"],
+      }),
+  ]),
+);
+/**
+ * 1.3 adds `canvas-point`: a spot pinned on a canvas page outside every
+ * board, in canvas-space coordinates. 1.2 keeps its frozen anchor union.
+ */
 export const commentAnchorSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("artifact") }),
+    z.object({
+      kind: z.literal("canvas-point"),
+      page: z.string(),
+      x: z.number().finite(),
+      y: z.number().finite(),
+      label: z.string(),
+    }),
     z.object({
       kind: z.literal("element"),
       artboard: z.string(),
@@ -3035,6 +3114,12 @@ export const commentAnchorSchema = lazySchema(() =>
 export type CommentAnchor = z.infer<typeof commentAnchorSchema>;
 
 /** 1.2 adds anchors; negotiation keeps anchored writes off older hosts. */
+export const createCommentThreadRequestSchemaPreCanvasPoint = lazySchema(() =>
+  createCommentThreadRequestSchemaPreAnchor.extend({
+    anchor: commentAnchorSchemaPreCanvasPoint.optional(),
+  }),
+);
+/** 1.3 adds the canvas-point anchor; 1.2 keeps its frozen union. */
 export const createCommentThreadRequestSchema = lazySchema(() =>
   createCommentThreadRequestSchemaPreAnchor.extend({
     anchor: commentAnchorSchema.optional(),
@@ -3211,7 +3296,7 @@ export const commentThreadDataSchemaPreAnchor = lazySchema(() =>
   }),
 );
 
-export const commentThreadDataSchema = lazySchema(() =>
+export const commentThreadDataSchemaPreCanvasPoint = lazySchema(() =>
   commentThreadDataSchemaPreAnchor.extend({
     anchorKind: z.enum(["artifact", "element", "text"]).optional(),
     artboard: z.string().optional(),
@@ -3219,6 +3304,18 @@ export const commentThreadDataSchema = lazySchema(() =>
     startOffset: z.number().int().nonnegative().optional(),
     endOffset: z.number().int().nonnegative().optional(),
     label: z.string().optional(),
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
+export const commentThreadDataSchema = lazySchema(() =>
+  commentThreadDataSchemaPreCanvasPoint.extend({
+    anchorKind: z
+      .enum(["artifact", "canvas-point", "element", "text"])
+      .optional(),
+    /** A canvas-point anchor's page and canvas-space position. */
+    page: z.string().optional(),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
   }),
 );
 
@@ -3229,6 +3326,11 @@ export const commentThreadWireSchemaPreAnchor = lazySchema(() =>
     createdAt: z.number(),
     comments: z.array(commentEntrySchema),
     data: commentThreadDataSchemaPreAnchor,
+  }),
+);
+export const commentThreadWireSchemaPreCanvasPoint = lazySchema(() =>
+  commentThreadWireSchemaPreAnchor.extend({
+    data: commentThreadDataSchemaPreCanvasPoint,
   }),
 );
 export const commentThreadWireSchema = lazySchema(() =>
@@ -3258,6 +3360,12 @@ export const listCommentThreadsResponseSchemaPreAnchor = lazySchema(() =>
     threads: z.array(commentThreadWireSchemaPreAnchor),
   }),
 );
+export const listCommentThreadsResponseSchemaPreCanvasPoint = lazySchema(() =>
+  listCommentThreadsResponseSchemaPreAnchor.extend({
+    threads: z.array(commentThreadWireSchemaPreCanvasPoint),
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
 export const listCommentThreadsResponseSchema = lazySchema(() =>
   listCommentThreadsResponseSchemaPreAnchor.extend({
     threads: z.array(commentThreadWireSchema),

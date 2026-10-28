@@ -158,6 +158,7 @@ describe("useChatFindController - chain-open on reveal", () => {
           EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
         );
         controller = useChatFindController({
+          splitLongTurns: true,
           instanceId: TILE_INSTANCE_ID,
           messages: currentMessages,
           messagesRef,

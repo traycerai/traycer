@@ -117,7 +117,7 @@ describe("the canvas bootstrap is a separate script", () => {
     expect(canvasScript).toContain('"styleProperties":["display"');
   });
 
-  it("is the only difference from the ordinary document, apart from the stamps", () => {
+  it("differs from the ordinary document only in its channel, stamps and readiness flags", () => {
     const ordinary = buildArtifactDocument(html, optionsFor(false));
     const canvas = buildArtifactDocument(html, optionsFor(true));
     const [, canvasScript] = scriptsOf(canvas);
@@ -128,6 +128,7 @@ describe("the canvas bootstrap is a separate script", () => {
       canvas
         .replace(canvasScript, "")
         .replace(STAMP_PATTERN, "")
+        .replace('"canvas":true', '"canvas":false')
         .replace('"artifactPage":null', '"artifactPage":"found"'),
     ).toBe(ordinary.replace(buildHtmlViewerPrelude(), ""));
   });
@@ -637,18 +638,209 @@ describe("the canvas bootstrap in a running page", () => {
       expect(shortcutPosts(page)).toEqual([]);
     });
 
-    it("leaves Escape to the page in play mode", () => {
+    it("tells the app about a bare Escape in play mode too, so it can leave Play", () => {
       const page = runCanvasPage(MARKUP);
       loaded(page);
       page.deliver(request(1, "set-mode", { mode: "play" }));
-      expect(pressEscape(page, {})).toBe(true);
-      expect(shortcutPosts(page)).toEqual([]);
+      expect(pressEscape(page, {})).toBe(false);
+      expect(shortcutPosts(page)).toHaveLength(1);
     });
 
     it("says nothing before the page has loaded", () => {
       const page = runCanvasPage(MARKUP);
       pressEscape(page, {});
       expect(shortcutPosts(page)).toEqual([]);
+    });
+  });
+
+  describe("left and right arrows", () => {
+    const shortcutPosts = (page: Page) =>
+      page.posted.filter(
+        (message) => message.method === "traycer/notifications/shortcut",
+      );
+    /**
+     * Returns whether the page kept the event (not cancelled), after the
+     * page's deferred verdict callbacks, captured from its own window timer
+     * and run once the whole dispatch is over, have run.
+     */
+    function pressArrow(
+      page: Page,
+      target: Element,
+      init: KeyboardEventInit,
+    ): boolean {
+      const deferred: Array<() => void> = [];
+      const pageSetTimeout = page.window.setTimeout;
+      page.window.setTimeout = (handler) => {
+        if (typeof handler !== "function") {
+          throw new Error("expected a callback timer in the arrow fixture");
+        }
+        return deferred.push(() => {
+          Reflect.apply(handler, page.window, []);
+        });
+      };
+      try {
+        const kept = target.dispatchEvent(
+          new page.window.KeyboardEvent("keydown", {
+            code: "ArrowRight",
+            key: "ArrowRight",
+            bubbles: true,
+            cancelable: true,
+            ...init,
+          }),
+        );
+        for (const callback of deferred.splice(0)) callback();
+        return kept;
+      } finally {
+        page.window.setTimeout = pageSetTimeout;
+      }
+    }
+    function playing(markup: string): Page {
+      const page = runCanvasPage(markup);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      return page;
+    }
+
+    it("tells the app about a bare arrow the playing page left alone, and never cancels it", () => {
+      const page = playing(MARKUP);
+      let pageSaw = 0;
+      page.window.document.body.addEventListener("keydown", () => {
+        pageSaw += 1;
+      });
+      expect(pressArrow(page, page.window.document.body, {})).toBe(true);
+      expect(pageSaw).toBe(1);
+      expect(shortcutPosts(page)).toEqual([
+        {
+          jsonrpc: "2.0",
+          method: "traycer/notifications/shortcut",
+          params: {
+            key: "ArrowRight",
+            code: "ArrowRight",
+            ctrl: false,
+            meta: false,
+            alt: false,
+            shift: false,
+            nonce: NONCE,
+          },
+        },
+      ]);
+    });
+
+    it.each([
+      ["on the body", (page: Page) => page.window.document.body],
+      // The page's own listener on window was added after the prelude's, so
+      // it runs after it; the prelude still honours its cancellation.
+      ["on the window, added after the prelude", (page: Page) => page.window],
+    ])(
+      "leaves an arrow the page cancelled %s to the page",
+      (_label, target) => {
+        const page = playing(MARKUP);
+        target(page).addEventListener("keydown", (event: Event) => {
+          event.preventDefault();
+        });
+        pressArrow(page, page.window.document.body, {});
+        expect(shortcutPosts(page)).toEqual([]);
+      },
+    );
+
+    it.each([
+      ["a text field", `<input id="t">`],
+      ["a slider", `<div id="t" role="slider" tabindex="0"></div>`],
+      [
+        "a tab inside a tab list",
+        `<div role="tablist"><button id="t" role="tab">a</button></div>`,
+      ],
+    ])("leaves an arrow pressed in %s to the page", (_label, markup) => {
+      const page = playing(markup);
+      const target = page.window.document.getElementById("t");
+      if (target === null) throw new Error("no target");
+      pressArrow(page, target, {});
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it.each([
+      ["Shift", { shiftKey: true }],
+      ["Alt", { altKey: true }],
+      ["ArrowDown", { code: "ArrowDown", key: "ArrowDown" }],
+    ])("leaves %s to the page", (_label, init) => {
+      const page = playing(MARKUP);
+      pressArrow(page, page.window.document.body, init);
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it("leaves arrows to the page while editing", () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      pressArrow(page, page.window.document.body, {});
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+  });
+
+  describe("a wheel on the playing page", () => {
+    const panPosts = (page: Page) =>
+      page.posted.filter((message) => message.method === "traycer/canvas/pan");
+    /** Returns true when the page kept the event (not cancelled). */
+    function wheel(page: Page, target: Element, deltaY: number): boolean {
+      return target.dispatchEvent(
+        new page.window.WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY,
+        }),
+      );
+    }
+    function playing(markup: string): Page {
+      const page = runCanvasPage(markup);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      return page;
+    }
+    /** jsdom has no layout, so scrollability is written onto the element. */
+    function scroller(page: Page): Element {
+      const element = page.window.document.querySelector("#scroller");
+      if (element === null) throw new Error("no scroller in the fixture");
+      Object.defineProperty(element, "scrollHeight", { value: 200 });
+      Object.defineProperty(element, "clientHeight", { value: 50 });
+      return element;
+    }
+    const SCROLLER = `<div id="scroller" style="overflow-y: auto"><p>tall</p></div>`;
+
+    it("hands a gesture nothing under the cursor can scroll to the canvas as a pan", () => {
+      const page = playing(MARKUP);
+      expect(wheel(page, page.window.document.body, 40)).toBe(false);
+      expect(panPosts(page)).toEqual([
+        {
+          jsonrpc: "2.0",
+          method: "traycer/canvas/pan",
+          params: { dx: 0, dy: 40, nonce: NONCE },
+        },
+      ]);
+    });
+
+    it("leaves the wheel to an element that can still scroll that way, momentum included", () => {
+      const page = playing(SCROLLER);
+      const target = scroller(page);
+      expect(wheel(page, target, 40)).toBe(true);
+      // The element reaches its end mid-gesture: the 250ms latch keeps the
+      // rest of this gesture off the canvas instead of flipping it into a pan.
+      target.scrollTop = 150;
+      wheel(page, target, 40);
+      expect(panPosts(page)).toEqual([]);
+    });
+
+    it("pans with the next gesture once the element sits at its end", () => {
+      const page = playing(SCROLLER);
+      const target = scroller(page);
+      target.scrollTop = 150;
+      expect(wheel(page, target, 40)).toBe(false);
+      expect(panPosts(page)).toHaveLength(1);
+    });
+
+    it("never pans while editing; the base wheel chaining keeps the event", () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      wheel(page, page.window.document.body, 40);
+      expect(panPosts(page)).toEqual([]);
     });
   });
 
@@ -1482,8 +1674,18 @@ describe("the canvas bootstrap in a running page", () => {
       expect(linkPosts(page)).toEqual([]);
     });
 
+    it("forwards a link that keeps this path but changes the query, even with a hash", () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      // The page is served at /page.html with no query, so this reloads it.
+      expect(clickAnchor(page, "page.html?step=2#details")).toBe(false);
+      expect(linkPosts(page)).toHaveLength(1);
+    });
+
     it.each([
       ["a hash within this page", "#section"],
+      ["a hash on this page's own path and query", "page.html#details"],
       ["an external page", "https://example.com/x.html"],
     ])("forwards nothing for %s in play", (_label, href) => {
       const page = runCanvasPage(MARKUP);

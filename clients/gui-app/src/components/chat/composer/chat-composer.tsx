@@ -16,7 +16,11 @@ import {
 import { useStore } from "zustand";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  GuiHarnessId,
+  HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type {
   ChatActiveTurn,
   ChatQueueDeliveryPolicy,
@@ -67,6 +71,7 @@ import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
@@ -76,6 +81,10 @@ import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
+import {
+  ComposerHostNotice,
+  type ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
 import { ChatSecretExportNotices } from "./chat-secret-export-notices";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
@@ -221,6 +230,7 @@ interface ChatComposerProps {
    * read, so the flag is the chat's own, never an app-wide one.
    */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
   /**
    * Reads the live active turn at submit time (not a reactive prop) so the
    * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
@@ -251,8 +261,9 @@ interface ChatComposerProps {
   readonly topSlot: ReactNode | null;
   /**
    * The provider's predicted next prompt (`chat.subscribe@1.20`), offered as
-   * the empty composer's placeholder: → or a tap fills it. `undefined` offers
-   * nothing - which is also every host below `1.20`.
+   * the empty composer's placeholder: the accept key (→ unless rebound) or a
+   * rightward swipe fills it. `undefined` offers nothing - which is also every
+   * host below `1.20`.
    */
   readonly suggestedPrompt: string | undefined;
 }
@@ -299,6 +310,64 @@ function ProfileDisabledRecovery(props: {
   );
 }
 
+/**
+ * Whether the picked agent can run on the tab's host, for Send's block.
+ *
+ * The managed-pack gate is scoped to the TAB's host - a tab bound to another
+ * host must gate on that host's packs, never the app-wide default's. Same
+ * shape as the reauth gate: block send and say why, so a doomed turn can't
+ * start. The host resolver still refuses independently; this is the UX half.
+ *
+ * A sandbox keeps the agent picked even when it cannot run there; the send
+ * is refused instead, never moved to another agent. Ranked with the pack
+ * gate: both say the agent cannot run here yet. `refusal` is the sandbox's
+ * notice, while no pack hint outranks it.
+ */
+function useAgentRunGate(
+  hostClient: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  harnessId: GuiHarnessId | null,
+  focused: boolean,
+): {
+  readonly hint: string | null;
+  readonly blocked: boolean;
+  readonly refusal: ComposerHostNoticeState | null;
+} {
+  const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
+  const sandboxAgentGate = useSandboxAgentGate({
+    hostId,
+    client: hostClient,
+    harnessId,
+    active: focused,
+  });
+  return {
+    hint: packGate.hint ?? sandboxAgentGate.hint,
+    blocked: packGate.blocked || sandboxAgentGate.blocked,
+    refusal: packGate.hint === null ? sandboxAgentGate.notice : null,
+  };
+}
+
+/**
+ * The sandbox agent gate's refusal, standing above the composer while it
+ * holds, with the configuration's Providers: the disabled Send's hint
+ * carries no link. Dismissed, it stays away until the refusal changes.
+ */
+function SandboxAgentRefusalNotice(props: {
+  readonly notice: ComposerHostNoticeState | null;
+}): ReactNode {
+  const { notice } = props;
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  if (notice === null || notice.message === dismissed) return null;
+  return (
+    <div className="mb-3 w-full">
+      <ComposerHostNotice
+        notice={notice}
+        onDismiss={() => setDismissed(notice.message)}
+      />
+    </div>
+  );
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -330,6 +399,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
     getDraftBlobBridgeSupported,
+    getQueuedSteerRestartConfirmationSupported,
     suggestedPrompt,
   } = props;
   const readingWidth = useReadingWidthStyle();
@@ -467,6 +537,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       // mode actually sent - the toolbar's own gate only decides what is
       // offered, and a sticky `auto` would otherwise survive both.
       chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
+      stagedSurfaceKey: null,
     },
   );
   const prestartSupport = useHostMethodSupport(
@@ -537,16 +608,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
-  // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
-  // must gate on that host's packs, never the app-wide default's. Same shape as
-  // the reauth gate above: block send and say why, so a doomed turn can't
-  // start. The host resolver still refuses independently; this is the UX half.
-  const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
+  const agentRunGate = useAgentRunGate(
+    hostClient,
+    tabHostId,
+    harnessId,
+    focused,
+  );
   const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,
-    packPreparingHint: packGate.hint,
-    packBlocked: packGate.blocked,
+    packPreparingHint: agentRunGate.hint,
+    packBlocked: agentRunGate.blocked,
     profileDisabled: profileEligibility.disabled,
     sendDisabled,
     sendDisabledHint,
@@ -719,6 +791,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       onSubmitMessage: submitWithGuide,
       onSideChat,
       targetHostId: tabHostId,
@@ -772,8 +845,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
-  // Accepting the suggestion (→, or a rightward swipe on touch) FILLS and
-  // focuses - it never sends.
+  // Accepting the suggestion (the "Accept suggested reply" key, → unless
+  // rebound, or a rightward swipe on touch) FILLS and focuses - it never sends.
   const fillSuggestedPrompt = useCallback(
     (suggestion: string): boolean =>
       fillComposerWithSuggestion(editorRef.current, suggestion),
@@ -909,6 +982,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               }
             />
           ) : null}
+          <SandboxAgentRefusalNotice notice={agentRunGate.refusal} />
           {topSlot}
           <div className="relative flex flex-col gap-3">
             <ComposerTileIdProvider tileId={taskId}>

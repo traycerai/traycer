@@ -105,6 +105,14 @@ export function sampleProviderRateLimits(
         displayMessage: null,
       };
     }
+    case "kimi":
+      return {
+        provider: "kimi",
+        available: true,
+        fiveHour: window(0, FIVE_HOURS),
+        weekly: window(1, WEEK),
+        monthly: window(2, MONTH),
+      };
     // Antigravity has only payload-discovered windows, never fixed sample slots.
     case "antigravity":
     case "openrouter":

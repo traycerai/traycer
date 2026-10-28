@@ -190,11 +190,13 @@ both through the one seam (`useMakeActiveHost`); no other picker writes it, and
 `HostDirectoryService.selectById` is lint-restricted to the one authority
 bridge. Surface pickers write a per-surface pin (`useSurfaceHostPin`), and a
 surface with no usable pin resolves its default before `useEffectiveHostId()`.
-Task panels (git diff, pull requests, file tree, browsers, new terminal) first
-default to the sole known host across the task's GUI and terminal agents.
-Zero or multiple agent hosts retain the existing fallback (the canvas host
-for PRs, otherwise `effective`). This derived default never writes a pin;
-composers and already-open tiles keep their separate placement/binding rules.
+Task panels (git diff, file tree, browsers, new terminal) first default to
+the sole known host across the task's GUI and terminal agents. Zero or
+multiple agent hosts fall back to `effective`. This derived default never
+writes a pin; composers and already-open tiles keep their separate
+placement/binding rules. The Pull Requests panel has no pin and no picker: it
+follows the canvas host (`useCanvasHostId`), because every host serves the
+same cloud-backed list.
 Git Diff's automatic root selection must not latch a host: workspace bindings
 can arrive before GUI/TUI agent records. Explicit workspace picks still latch.
 Palette browser and new-terminal flows read the target task projection and

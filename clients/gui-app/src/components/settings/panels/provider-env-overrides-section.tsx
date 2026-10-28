@@ -1,3 +1,5 @@
+import { useMutation } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
@@ -10,15 +12,23 @@ import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refus
 import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
 import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
 import {
+  usePersonalPageHost,
+  usePersonalRowNotes,
+} from "@/components/settings/personal/personal-page-context";
+import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
+import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
+import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { environmentMutationKeys } from "@/lib/query-keys";
+import {
   EnvOverrideEditor,
   type KeyRefusal,
   type KeyRefusalFor,
 } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
+import { providerEnvSubtitle } from "./provider-env-subtitle";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 type ProviderId = ProviderCliState["providerId"];
-
-const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
 
 /**
  * A provider's variables refuse a key the way Variables does, except the
@@ -63,6 +73,9 @@ export function ProviderEnvOverridesSection({
   readonly envOverrideScope: ProviderCliState["nativeCapabilities"]["envOverrideScope"];
 }) {
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
+  // A team is read from the cloud (`TeamProviders`): this tab is Personal on
+  // a host running it, or a Local row's computer.
+  const local = useEnvironmentPick().kind === "local";
   const setOverride = useProvidersSetEnvOverride();
   const deleteOverride = useProvidersDeleteEnvOverride();
   // A provider's env overrides are where its keys live (`ANTHROPIC_API_KEY`,
@@ -75,10 +88,73 @@ export function ProviderEnvOverridesSection({
     "env_override",
     `${providerIdToGuiHarnessId(providerId)}:`,
   );
+  // Use everywhere: this host's own value becomes Personal's, then the host
+  // stops keeping one; cleared only after the save landed.
+  const pageHost = usePersonalPageHost();
+  const clearOwnValue = useHostScopedMutationForClient(pageHost.client, {
+    method: "config.env.localOverride.clear",
+    mutationKey: environmentMutationKeys.localOverrideClear(),
+    errorMessage: "Couldn't stop this computer keeping its own value.",
+    scope: { id: "config.env.localOverride" },
+    invalidateMethods: ["environment.localOverrides", "providers.list"],
+  });
+  const useEverywhere = useMutation({
+    mutationFn: async (entry: {
+      readonly key: string;
+      readonly value: string;
+    }) => {
+      await setOverride.mutateAsync({
+        providerId,
+        ...entry,
+        executableWriteGrant: null,
+      });
+      await clearOwnValue.mutateAsync({
+        target: { kind: "env_override", providerId, key: entry.key },
+      });
+    },
+  });
+  const commitOverride = useMutation({
+    mutationFn: async (entry: {
+      readonly oldKey: string;
+      readonly newKey: string;
+      readonly value: string | null;
+    }) => {
+      await setOverride.mutateAsync({
+        providerId,
+        key: entry.newKey,
+        value: entry.value,
+        executableWriteGrant: null,
+      });
+      if (entry.oldKey.length > 0 && entry.oldKey !== entry.newKey) {
+        await deleteOverride.mutateAsync({ providerId, key: entry.oldKey });
+      }
+    },
+  });
   const disabled =
     setOverride.isPending ||
     deleteOverride.isPending ||
+    clearOwnValue.isPending ||
+    useEverywhere.isPending ||
+    commitOverride.isPending ||
     credentialRefusal !== null;
+  const notes = usePersonalRowNotes({
+    kind: "env_override",
+    providerId,
+    keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
+  });
+  const claimedBy = useSecretClaimedNames({ kind: "provider", providerId });
+  const rowNotes = new Map<string, ReactNode>();
+  for (const [key, note] of notes) {
+    rowNotes.set(
+      key,
+      <PersonalRowNoteText
+        name={key}
+        note={note}
+        disabled={disabled}
+        onUseEverywhere={(key, value) => useEverywhere.mutate({ key, value })}
+      />,
+    );
+  }
 
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
@@ -88,16 +164,7 @@ export function ProviderEnvOverridesSection({
     value: string | null,
   ): void => {
     if (credentialRefusal !== null) return;
-    setOverride.mutate(
-      { providerId, key: newKey, value, executableWriteGrant: null },
-      {
-        onSuccess: () => {
-          if (oldKey.length > 0 && oldKey !== newKey) {
-            deleteOverride.mutate({ providerId, key: oldKey });
-          }
-        },
-      },
-    );
+    commitOverride.mutate({ oldKey, newKey, value });
   };
 
   return (
@@ -115,8 +182,10 @@ export function ProviderEnvOverridesSection({
             </p>
           ) : (
             <p className="text-ui-xs text-muted-foreground">
-              Applied when Traycer spawns the {providerName} harness. Use Unset
-              to drop a variable inherited from your shell.
+              {providerEnvSubtitle(
+                providerName,
+                local ? { kind: "local" } : { kind: "personal" },
+              )}
             </p>
           )}
         </div>
@@ -126,8 +195,9 @@ export function ProviderEnvOverridesSection({
       </div>
       <CredentialRefusalNote refusal={credentialRefusal} />
       <EnvOverrideEditor
-        rowNotes={NO_ROW_NOTES}
+        rowNotes={rowNotes}
         onHold={onHold}
+        claimedBy={claimedBy}
         keyRefusal={providerKeyRefusal(
           keyShaped.refusal,
           envNamePlaceholder(providerId),
