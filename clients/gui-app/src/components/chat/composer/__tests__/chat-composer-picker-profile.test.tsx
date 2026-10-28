@@ -94,6 +94,7 @@ vi.mock("@/lib/layout-overrides", () => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ fileDrops: {} }),
+  useRunnerHostOrNull: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,

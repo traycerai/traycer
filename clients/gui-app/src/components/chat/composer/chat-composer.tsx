@@ -75,6 +75,8 @@ import {
   useRestingSandboxAgentGate,
   useSandboxAgentGate,
 } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { useBoundSandboxRemedies } from "@/hooks/sandboxes/use-bound-sandbox-remedies";
+import type { SandboxAgentRemedies } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
@@ -103,6 +105,7 @@ import {
   promptSuggestionAllowed,
 } from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
+import { clearChatComposerDraft } from "./clear-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
@@ -324,28 +327,38 @@ function ProfileDisabledRecovery(props: {
  * notice, while no pack hint outranks it.
  *
  * A resting sandbox's chat reads no host: `hostClient` is `null` for it (see
- * `runHostClient`), and the catalogue decides alone.
+ * `runHostClient`), and what the client last read of that sandbox's own
+ * switch and the catalogue decide.
  */
 function useAgentRunGate(input: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly harnessId: GuiHarnessId | null;
   readonly focused: boolean;
-  readonly resting: boolean;
+  readonly restingSandbox: RestingChatSandbox | null;
+  readonly remedies: SandboxAgentRemedies;
 }): {
   readonly hint: string | null;
   readonly blocked: boolean;
   readonly refusal: ComposerHostNoticeState | null;
 } {
-  const { hostClient, hostId, harnessId, focused, resting } = input;
+  const { hostClient, hostId, harnessId, focused, remedies } = input;
+  const restingHostId = input.restingSandbox?.sandbox.hostId ?? null;
+  const resting = restingHostId !== null;
   const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
   const liveAgentGate = useSandboxAgentGate({
+    ...remedies,
     hostId: resting ? null : hostId,
     client: hostClient,
     harnessId,
     active: focused,
   });
-  const restingAgentGate = useRestingSandboxAgentGate({ resting, harnessId });
+  const restingAgentGate = useRestingSandboxAgentGate({
+    ...remedies,
+    resting,
+    hostId: restingHostId,
+    harnessId,
+  });
   const sandboxAgentGate = resting ? restingAgentGate : liveAgentGate;
   return {
     hint: packGate.hint ?? sandboxAgentGate.hint,
@@ -357,13 +370,20 @@ function useAgentRunGate(input: {
 /**
  * The sandbox agent gate's refusal, standing above the composer while it
  * holds, with the configuration's Providers: the disabled Send's hint
- * carries no link. Dismissed, it stays away until the refusal changes.
+ * carries no link. Dismissed, it stays away until the refusal changes, and so
+ * it does once its message is cancelled (`cancelledMessages` counts them).
  */
 function SandboxAgentRefusalNotice(props: {
   readonly notice: ComposerHostNoticeState | null;
+  readonly cancelledMessages: number;
 }): ReactNode {
-  const { notice } = props;
+  const { notice, cancelledMessages } = props;
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [seenCancels, setSeenCancels] = useState(cancelledMessages);
+  if (cancelledMessages !== seenCancels) {
+    setSeenCancels(cancelledMessages);
+    setDismissed(notice?.message ?? null);
+  }
   if (notice === null || notice.message === dismissed) return null;
   return (
     <div className="mb-3 w-full">
@@ -632,12 +652,28 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
+  // "Cancel the message": withdrawn, not sent - the composer clears as a send
+  // clears it, and the refusal it answered closes.
+  const [cancelledMessages, setCancelledMessages] = useState(0);
+  const cancelMessage = useCallback((): void => {
+    clearChatComposerDraft({ taskId, pickerStore, editorRef });
+    setCancelledMessages((count) => count + 1);
+  }, [pickerStore, taskId]);
+  const boundSandboxRemedies = useBoundSandboxRemedies({
+    chatId: taskId,
+    epicId: currentEpicId,
+    viewTabId,
+    hostId: tabHostId,
+    restingSandbox,
+    onCancelMessage: cancelMessage,
+  });
   const agentRunGate = useAgentRunGate({
     hostClient: runHostClient,
     hostId: tabHostId,
     harnessId,
     focused,
-    resting,
+    restingSandbox,
+    remedies: boundSandboxRemedies,
   });
   const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
@@ -1006,7 +1042,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
               }
             />
           ) : null}
-          <SandboxAgentRefusalNotice notice={agentRunGate.refusal} />
+          <SandboxAgentRefusalNotice
+            notice={agentRunGate.refusal}
+            cancelledMessages={cancelledMessages}
+          />
           {topSlot}
           <div className="relative flex flex-col gap-3">
             <ComposerTileIdProvider tileId={taskId}>

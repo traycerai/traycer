@@ -84,7 +84,6 @@ import {
   handPendingSandboxSend,
   returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
-import { PERSONAL_CONFIGURATION_ID } from "@/lib/settings-environment-pages";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
@@ -123,6 +122,8 @@ import {
   PendingSandboxSendsDriver,
   SandboxReadyLineForChat,
 } from "../pending-sandbox-sends";
+import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
+import { registerActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { StoppedSandboxSendReceiptStrip } from "../stopped-sandbox-send-receipts";
 import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
@@ -319,8 +320,7 @@ const OCCUPIED_NEW_CHAT_CONTENT: JsonContent = {
     },
   ],
 };
-const PERSONAL_SENTENCE =
-  "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+const NO_AGENT_SENTENCE = "Agents can't run on api-refactor.";
 
 interface FakeClient {
   readonly hostId: string;
@@ -351,19 +351,6 @@ const mocks = vi.hoisted(() => ({
   createChatDeferred: null as Promise<CreateChatResponseV12> | null,
   createChatRefusal: null as CreateChatResponseV12["refusal"] | null,
   openTile: vi.fn<(intent: unknown) => void>(),
-  openEnvironmentPage:
-    vi.fn<
-      (address: {
-        readonly configurationId: string;
-        readonly pageId: string;
-      }) => void
-    >(),
-  /** The account's environments, as `environment.list` answers them. */
-  environments: [] as Array<{
-    readonly environmentId: string;
-    readonly ownerKind: "user" | "organization";
-    readonly ownerId: string;
-  }>,
   /** The control plane. */
   createSandbox:
     vi.fn<
@@ -666,12 +653,9 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: mocks.openTile }),
 }));
-vi.mock("@/components/settings/environment/open-environment-page", () => ({
-  openEnvironmentPage: mocks.openEnvironmentPage,
-}));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
-    data: { environments: mocks.environments },
+    data: { environments: [] },
   }),
 }));
 vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
@@ -939,6 +923,12 @@ const CODEX_NOT_OFFERED: HostAnswers = {
   providers: [providerRow("claude-code", { status: "installed" })],
 };
 
+/** The woken sandbox's own Traycer Inference switch is off. */
+const TRAYCER_OFF: HostAnswers = {
+  harnesses: [harnessRow("traycer", { enabled: false })],
+  providers: [{ ...providerRow("traycer", null), enabled: false }],
+};
+
 interface SeedOptions {
   readonly send: Partial<PendingSandboxSend>;
   readonly target: StagedSandboxTarget;
@@ -1161,8 +1151,6 @@ beforeEach(() => {
   mocks.createChatDeferred = null;
   mocks.createChatRefusal = null;
   mocks.openTile.mockReset();
-  mocks.openEnvironmentPage.mockReset();
-  mocks.environments = [];
   mocks.createSandbox.mockReset();
   mocks.stopSandbox.mockReset();
   toastSpies.show.mockClear();
@@ -1221,6 +1209,7 @@ beforeEach(() => {
   useSurfaceHostSelectionStore.getState().resetForTests();
   useSettingsEnvironmentPickStore.setState({ pick: null });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useComposerDraftStore.setState({ drafts: {} });
 });
 
 afterEach(() => {
@@ -1786,7 +1775,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     });
 
     const line = await screen.findByTestId("sandbox-refusal-line");
-    expect(within(line).getByText(PERSONAL_SENTENCE)).toBeDefined();
+    expect(within(line).getByText(NO_AGENT_SENTENCE)).toBeDefined();
     expect(readStagedSandbox(SURFACE)?.failure).toEqual({
       kind: "no-provider",
     });
@@ -1796,7 +1785,8 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(createChatCalls()).toEqual([]);
   });
 
-  it("refuses a Personal send whose agent cannot run there, uses no other agent, and opens Personal's Providers", async () => {
+  it("refuses a Personal send whose agent cannot run there, uses no other agent, offers Choose a model, and links no Providers", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
     seed({
       ...SEEDED,
       send: { settings: { ...PICKED_SETTINGS, harnessId: "traycer" } },
@@ -1815,7 +1805,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     mount();
 
     const line = await screen.findByTestId("sandbox-refusal-line");
-    expect(within(line).getByText(PERSONAL_SENTENCE)).toBeDefined();
+    expect(within(line).getByText(NO_AGENT_SENTENCE)).toBeDefined();
     expect(createChatCalls()).toEqual([]);
     expect(readStagedSandbox(SURFACE)?.failure).toEqual({
       kind: "no-provider",
@@ -1825,15 +1815,10 @@ describe("a send waiting for the requested agent on its sandbox", () => {
       "fix the login bug",
     );
 
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Open Personal's Providers" }),
-    );
-
-    expect(mocks.openEnvironmentPage).toHaveBeenCalledTimes(1);
-    expect(mocks.openEnvironmentPage).toHaveBeenCalledWith({
-      configurationId: PERSONAL_CONFIGURATION_ID,
-      pageId: "providers",
-    });
+    expect(
+      await within(line).findByRole("button", { name: "Choose a model" }),
+    ).toBeDefined();
+    expect(line.textContent).not.toContain("Providers");
   });
 
   it("keeps the Traycer picker remedy out of an occupied new-chat draft until it clears", async () => {
@@ -2077,9 +2062,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(readStagedSandbox(SURFACE)?.failure).toEqual({
       kind: "no-provider",
     });
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Open Personal's Providers" }),
-    );
+    expect(within(line).getByText(NO_AGENT_SENTENCE)).toBeDefined();
 
     answerHost(SANDBOX_HOST, CODEX_READY);
 
@@ -2107,67 +2090,40 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
-  describe("on a team's sandbox", () => {
-    const SIGNED_OUT: HostAnswers = {
-      harnesses: [
-        harnessRow("codex", { available: false, availabilityPending: false }),
-        harnessRow("claude", { available: true }),
-      ],
-      providers: [providerRow("codex", null), providerRow("claude-code", null)],
-    };
+  // Traycer Inference is that sandbox's own switch, so the line names the
+  // sandbox, not its configuration, and no Settings page reaches it.
+  describe("on a woken sandbox whose own Traycer Inference is off", () => {
+    it.each([
+      ["Personal's", NEW_TARGET],
+      ["a team's", TEAM_TARGET],
+    ] as const)(
+      "on %s sandbox, names its switch, offers Choose a model, links no Providers, and delivers nothing",
+      async (_label, target) => {
+        onTestFinished(installImmediateExclusiveLocks());
+        seed({
+          ...SEEDED,
+          target,
+          send: { settings: { ...PICKED_SETTINGS, harnessId: "traycer" } },
+        });
+        answerHost(SANDBOX_HOST, TRAYCER_OFF);
+        mount();
 
-    it("shows the team's Traycer Inference remedy and opens that team's Providers by its environment", async () => {
-      mocks.environments = [
-        { environmentId: "env-personal", ownerKind: "user", ownerId: "user-1" },
-        {
-          environmentId: "env-other",
-          ownerKind: "organization",
-          ownerId: "team-1",
-        },
-        {
-          environmentId: "env-acme",
-          ownerKind: "organization",
-          ownerId: "team-9",
-        },
-      ];
-      seed({ ...SEEDED, target: TEAM_TARGET });
-      answerHost(SANDBOX_HOST, SIGNED_OUT);
-      mount();
-
-      const line = await screen.findByTestId("sandbox-refusal-line");
-      expect(
-        within(line).getByText(
-          "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
-        ),
-      ).toBeDefined();
-      fireEvent.click(
-        within(line).getByRole("button", { name: "Open Acme's Providers" }),
-      );
-
-      expect(mocks.openEnvironmentPage).toHaveBeenCalledTimes(1);
-      expect(mocks.openEnvironmentPage).toHaveBeenCalledWith({
-        configurationId: "env-acme",
-        pageId: "providers",
-      });
-    });
-
-    it("offers no Providers link when the team's environment is not among the account's", async () => {
-      mocks.environments = [
-        {
-          environmentId: "env-other",
-          ownerKind: "organization",
-          ownerId: "team-1",
-        },
-      ];
-      seed({ ...SEEDED, target: TEAM_TARGET });
-      answerHost(SANDBOX_HOST, SIGNED_OUT);
-      mount();
-
-      const line = await screen.findByTestId("sandbox-refusal-line");
-      expect(
-        within(line).queryByRole("button", { name: "Open Acme's Providers" }),
-      ).toBeNull();
-    });
+        const line = await screen.findByTestId("sandbox-refusal-line");
+        expect(
+          within(line).getByText(
+            "Traycer Inference is off on api-refactor, so agents can't run on it.",
+          ),
+        ).toBeDefined();
+        expect(
+          await within(line).findByRole("button", { name: "Choose a model" }),
+        ).toBeDefined();
+        expect(line.textContent).not.toContain("Providers");
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "traycer-off",
+        });
+        expect(createChatCalls()).toEqual([]);
+      },
+    );
   });
 
   it("refuses an agent whose install failed with the host's sentence, offers Open terminal instead and no sign-in, and opens a terminal on the sandbox", async () => {
@@ -2296,13 +2252,6 @@ describe("a send that survives a reload", () => {
   });
 
   it("resumes a team's requested agent after rehydrating the provider refusal, without creating another sandbox or chat", async () => {
-    mocks.environments = [
-      {
-        environmentId: "env-acme",
-        ownerKind: "organization",
-        ownerId: "team-9",
-      },
-    ];
     seed({ ...SEEDED, target: TEAM_TARGET });
     answerHost(SANDBOX_HOST, CODEX_UNAVAILABLE);
     mount();
@@ -2311,9 +2260,7 @@ describe("a send that survives a reload", () => {
     expect(readStagedSandbox(SURFACE)?.failure).toEqual({
       kind: "no-provider",
     });
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Open Acme's Providers" }),
-    );
+    expect(within(line).getByText(NO_AGENT_SENTENCE)).toBeDefined();
 
     await reload();
     expect(readStagedSandbox(SURFACE)?.failure).toEqual({
@@ -3420,6 +3367,144 @@ describe("a message for an existing chat whose sandbox rests", () => {
       expect(mocks.createSandbox).not.toHaveBeenCalled();
     },
   );
+
+  describe("refused by its woken sandbox", () => {
+    const BOUND_REMEDIES = [
+      "Choose a model",
+      "Open terminal instead",
+      "Choose another host",
+      "Cancel the message",
+      "Details",
+    ];
+
+    function seedRefused(answers: HostAnswers): void {
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        send: { request: MESSAGE_REQUEST },
+        phase: "handoff",
+        created: true,
+      });
+      mocks.wake.mockResolvedValue({ kind: "awake" });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn("awake")];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+      answerHost(SANDBOX_HOST, answers);
+    }
+
+    async function refusalLine(
+      failure: Partial<StagedSandboxFailure>,
+    ): Promise<HTMLElement> {
+      const line = await screen.findByTestId("sandbox-refusal-line");
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject(failure);
+      });
+      return line;
+    }
+
+    const NOT_OFFERED: StagedSandboxFailure = {
+      kind: "agent-not-offered",
+      harnessId: "codex",
+    };
+
+    it.each([
+      ["an agent sandboxes don't offer", CODEX_NOT_OFFERED, NOT_OFFERED],
+      ["its own Traycer Inference off", TRAYCER_OFF, { kind: "traycer-off" }],
+      ["no agent it can run", CODEX_UNAVAILABLE, { kind: "no-provider" }],
+      ["a failed install", CODEX_SETUP_FAILED, { kind: "agent-setup-failed" }],
+    ] as const)(
+      "offers the bound chat's remedies in order, and no shape change, for %s",
+      async (_label, answers, failure) => {
+        const restoreLocks = installImmediateExclusiveLocks();
+        try {
+          seedRefused(answers);
+          mountInChat();
+
+          const line = await refusalLine(failure);
+
+          await waitFor(() => {
+            expect(
+              within(line)
+                .getAllByRole("button")
+                .map((button) => button.textContent)
+                .filter((label) => BOUND_REMEDIES.includes(label)),
+            ).toEqual(BOUND_REMEDIES);
+          });
+          expect(
+            within(line).queryByRole("button", { name: /Change shape/ }),
+          ).toBeNull();
+          expect(createChatCalls()).toEqual([]);
+        } finally {
+          restoreLocks();
+        }
+      },
+    );
+
+    it("Choose another host hands the message back to the chat's composer, then opens the chat's clone flow", async () => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      const openClone = vi.fn<() => void>();
+      const unregister = registerChatCloneOpener("existing-chat", openClone);
+      try {
+        seedRefused(CODEX_NOT_OFFERED);
+        mountInChat();
+        const line = await refusalLine(NOT_OFFERED);
+
+        fireEvent.click(
+          await within(line).findByRole("button", {
+            name: "Choose another host",
+          }),
+        );
+
+        await waitFor(() => {
+          expect(openClone).toHaveBeenCalledOnce();
+        });
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+        expect(
+          useComposerDraftStore.getState().drafts["existing-chat"]?.content,
+        ).toEqual(MESSAGE_CONTENT);
+        expect(createChatCalls()).toEqual([]);
+      } finally {
+        unregister();
+        restoreLocks();
+      }
+    });
+
+    it("Choose a model hands the message back to the chat's composer and opens its picker on Traycer", async () => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      const openForHarness =
+        vi.fn<
+          (
+            harnessId: string,
+            offeredAgents: ReadonlyArray<string> | null,
+          ) => void
+        >();
+      const unregister = registerActiveModelPicker({
+        toggle: () => undefined,
+        openForHarness,
+        getSelectionSummary: () => null,
+      });
+      try {
+        seedRefused(CODEX_NOT_OFFERED);
+        mountInChat();
+        const line = await refusalLine(NOT_OFFERED);
+
+        fireEvent.click(
+          await within(line).findByRole("button", { name: "Choose a model" }),
+        );
+
+        expect(openForHarness).toHaveBeenCalledWith("traycer", null);
+        await waitFor(() => {
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+        });
+        expect(
+          useComposerDraftStore.getState().drafts["existing-chat"]?.content,
+        ).toEqual(MESSAGE_CONTENT);
+      } finally {
+        unregister();
+        restoreLocks();
+      }
+    });
+  });
 
   describe("cancelling while its sandbox rests", () => {
     const OCCUPIED_CHAT_DOC = {

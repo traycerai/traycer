@@ -223,9 +223,6 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
       }),
     }),
 }));
-vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
-  useConfigurationProvidersOpener: () => () => undefined,
-}));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
 }));
@@ -1405,7 +1402,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
       failure: { kind: "no-provider" },
     });
     expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
-      "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.",
+      "Agents can't run on api-refactor.",
     );
     expect(screen.getByTestId("sandbox-refusal-details")).toBeDefined();
 

@@ -139,6 +139,16 @@ vi.mock("@/hooks/auto-mode/use-auto-judge-set-mutation", () => ({
   useAutoJudgeSetMutation: () => ({ mutate: setJudgeMutate, isPending: false }),
 }));
 
+// The picker's cloud read of Traycer's models, made only when a sandbox
+// refusal opens it; nothing here opens one.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({
+    data: undefined,
+    error: null,
+    isPending: false,
+  }),
+}));
+
 // The catalog, the providers list and the host plumbing the REAL
 // `HarnessModelPicker` reads, all answering from `judge-test-support`.
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>

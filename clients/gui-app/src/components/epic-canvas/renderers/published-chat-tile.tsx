@@ -292,7 +292,7 @@ function copyOwnerLabel(
     case "none":
       return publishedCopyOwnerLabel(hostId, label);
     case "pending":
-      return state.name ?? "This chat's sandbox";
+      return state.name;
     case "destroyed":
       return state.ended.name;
     case "moving":

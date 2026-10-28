@@ -28,10 +28,10 @@ const ROW_VIEWER: ChatSandboxViewer = {
 };
 
 /**
- * A locked chat row's line for its sandbox, or `null` for a person's host, no
- * host or a row that is not locked: the resolver's line, from what a row can
- * read - the task's end record and names, and the host's directory row - so a
- * row never calls a sandbox an offline machine.
+ * A locked chat row's line for its sandbox, or `null` for a host nothing
+ * names as a sandbox, no host or a row that is not locked: the resolver's
+ * line, from what a row can read - the task's end record and names, and the
+ * host's directory row - so a row never calls a sandbox an offline machine.
  */
 export function useChatSandboxRowLine(
   ownerHostId: string | null,

@@ -17,8 +17,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Sandbox state precedes generic transport reachability on every chat copy:
- * the task's end record, then a listed row's state, then unknown. Only a read
- * that answered with a person's host says the chat is not a sandbox's.
+ * the task's end record, then a listed row's state, then a sandbox something
+ * names. A host nothing names as a sandbox is not one: the surface takes its
+ * own path.
  */
 export function useChatSandboxState(
   epicId: string,
@@ -91,23 +92,19 @@ function unsettledSandboxState(
 
 /**
  * A host the viewer's sandbox list does not hold, or a surface that cannot
- * read the list (a sidebar row): a sandbox when the task or the directory
- * names one, not a sandbox when either names it as a person's, and unknown
- * otherwise - a failed, disabled or missing read proves nothing.
+ * read the list (a sidebar row): a sandbox, its state not known here, when
+ * the task or the directory names one; otherwise not a sandbox.
  */
 export function unlistedHostState(
   task: TaskSandboxHost,
   entry: HostDirectoryEntry | null,
 ): ChatSandboxState {
   if (task.kind === "sandbox") return { kind: "pending", name: task.name };
-  if (entry !== null) {
-    return isRemoteHostDirectoryEntry(entry) && entry.sandbox !== null
-      ? { kind: "pending", name: entry.label }
-      : { kind: "none" };
-  }
-  return task.kind === "person"
-    ? { kind: "none" }
-    : { kind: "pending", name: null };
+  return entry !== null &&
+    isRemoteHostDirectoryEntry(entry) &&
+    entry.sandbox !== null
+    ? { kind: "pending", name: entry.label }
+    : { kind: "none" };
 }
 
 function lastSeenAt(entry: HostDirectoryEntry | null): number | null {

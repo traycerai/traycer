@@ -117,6 +117,7 @@ import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
+import { carryComposerDraft } from "@/lib/drafts/carry-composer-draft";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
@@ -199,6 +200,13 @@ export interface ChatForkDialogTarget {
    * stages nothing; `initialHostId` and `onlyHostIds` are `null` with it.
    */
   readonly stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }> | null;
+  /**
+   * The source composer's unsent draft moves to the clone's composer once the
+   * clone exists, never sent (a sandbox refusal's "Choose another host"). A
+   * fork that is cancelled or fails leaves it where it is, and so does a fork
+   * onto a New sandbox, whose clone does not exist when the dialog closes.
+   */
+  readonly carriesComposerDraft: boolean;
 }
 
 interface ChatForkDialogProps {
@@ -1072,6 +1080,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               source: "direct_ui",
               include_history: true,
             });
+            if (target.carriesComposerDraft)
+              carryComposerDraft(target.sourceChatId, result.chatId);
             clearForkWorkspaces();
             const cancel = openCreatedChatWhenProjectedWithNavigation({
               intent: {
