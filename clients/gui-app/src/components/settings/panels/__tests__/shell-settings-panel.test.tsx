@@ -1663,7 +1663,7 @@ function inputValue(element: HTMLElement): string {
 }
 
 describe("<ShellSettingsPanel /> an accepted variable write", () => {
-  function renderInitialRead(
+  function renderWithEnvRead(
     transport: "rpc" | "bridge",
     read: () => Promise<{ entries: { key: string; value: string | null }[] }>,
   ): void {
@@ -1675,6 +1675,9 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       renderShellPanelStoppedLocal({
         configure: (cli) => {
           cli.envOverrideList = async () => (await read()).entries;
+          // Reads below own the simulated store. Keep the mock's enumerable
+          // fields stable so its legacy object query key retains cached data.
+          cli.envOverrideSet = () => Promise.resolve();
         },
       });
     }
@@ -1689,7 +1692,7 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       const initialRead = new Promise<{ entries: [] }>((resolve) => {
         releaseRead = () => resolve({ entries: [] });
       });
-      renderInitialRead(transport, () => initialRead);
+      renderWithEnvRead(transport, () => initialRead);
       const add = await screen.findByRole("button", { name: "Add a variable" });
       expect(add).toHaveProperty("disabled", true);
       fireEvent.click(add);
@@ -1712,7 +1715,7 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
     "retries an initial environment read failure over %s before enabling Add",
     async (transport) => {
       let reads = 0;
-      renderInitialRead(transport, () => {
+      renderWithEnvRead(transport, () => {
         reads += 1;
         return reads === 1
           ? Promise.reject(new Error("Read refused"))
@@ -1732,6 +1735,54 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
         "disabled",
         false,
       );
+    },
+  );
+
+  it.each(["rpc", "bridge"] as const)(
+    "keeps cached environment rows disabled after a post-write read fails over %s until retry succeeds",
+    async (transport) => {
+      let failReads = false;
+      let currentValue = "original";
+      renderWithEnvRead(transport, () =>
+        failReads
+          ? Promise.reject(new Error("Post-write read refused"))
+          : Promise.resolve({
+              entries: [{ key: "EDITOR", value: currentValue }],
+            }),
+      );
+      const field = await screen.findByLabelText("Value for EDITOR");
+      failReads = true;
+      fireEvent.change(field, { target: { value: "updated" } });
+      fireEvent.blur(field);
+
+      await screen.findByTestId("shell-config-read-failed");
+      await screen.findByRole("alert");
+      await waitFor(() =>
+        expect(screen.getByLabelText("Value for EDITOR")).toHaveProperty(
+          "disabled",
+          true,
+        ),
+      );
+      const add = screen.getByRole("button", { name: "Add a variable" });
+      expect(add).toHaveProperty("disabled", true);
+
+      currentValue = "updated";
+      failReads = false;
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Value for EDITOR")).toHaveProperty(
+          "disabled",
+          false,
+        ),
+      );
+      expect(screen.getByLabelText("Value for EDITOR")).toHaveProperty(
+        "value",
+        "updated",
+      );
+      expect(
+        screen.getByRole("button", { name: "Add a variable" }),
+      ).toHaveProperty("disabled", false);
+      expect(screen.queryByTestId("shell-config-read-failed")).toBeNull();
     },
   );
 

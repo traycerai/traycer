@@ -73,7 +73,7 @@ export interface ShellConfigController {
   readonly overrides: readonly ConfigEnvEntry[];
   /** Any shell-config write is in flight. */
   readonly shellPending: boolean;
-  /** Environment rows have not loaded yet, or a write is in flight. */
+  /** Environment rows are unavailable, or a write is in flight. */
   readonly envPending: boolean;
   readonly probeSource: ShellProbeSource;
   readonly setShell: (

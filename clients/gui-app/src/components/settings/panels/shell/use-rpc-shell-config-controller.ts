@@ -251,6 +251,7 @@ export function useRpcShellConfigController(props: {
       revertMutation.isPending,
     envPending:
       envListQuery.data === undefined ||
+      envListQuery.isError ||
       envSetMutation.isPending ||
       envDeleteMutation.isPending ||
       envRenameMutation.isPending,
