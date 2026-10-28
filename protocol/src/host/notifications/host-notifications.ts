@@ -1883,10 +1883,17 @@ export type HostNotificationsIndicatorStateResponseV11 = z.infer<
   typeof hostNotificationsIndicatorStateResponseSchemaV11
 >;
 
+/**
+ * `@1.2` also says whether the answer is the host's whole origin (`complete:
+ * true`), or the empty local partition it serves while its cloud lane carries
+ * its rows (`false`). `null` only when an `@1.1` host answered, which did not
+ * say: a client keeps what the cloud lane told it then.
+ */
 export const hostNotificationsIndicatorStateResponseSchema = lazySchema(() =>
   z.object({
     epics: z.record(z.string(), hostNotificationsIndicatorStateSchema),
     chats: z.record(z.string(), hostNotificationsIndicatorStateSchema),
+    complete: z.boolean().nullable(),
   }),
 );
 export type HostNotificationsIndicatorStateResponse = z.infer<
@@ -2905,7 +2912,8 @@ export const hostNotificationsIndicatorStateV11 = defineRpcContract({
   responseSchema: hostNotificationsIndicatorStateResponseSchemaV11,
 });
 
-/** `@1.2` adds each entity's `unreadCount`; the request is `@1.1`'s. */
+/** `@1.2` adds each entity's `unreadCount` and the answer's `complete`; the
+ * request is `@1.1`'s. */
 export const hostNotificationsIndicatorStateV12 = defineRpcContract({
   method: "host.notifications.indicatorState",
   schemaVersion: { major: 1, minor: 2 } as const,
@@ -2964,7 +2972,8 @@ function addPendingForkDefault(
 /**
  * A v1.1 peer did not count. Its entities say `unreadCount: null`, which a
  * client reads as "draw the flags", never as zero: a zero would hide an
- * unread entity the flags still light.
+ * unread entity the flags still light. Nor did it say whether it answered its
+ * whole origin, so `complete` is `null`.
  */
 export const hostNotificationsIndicatorStateUpgradeV11ToV12 = defineUpgradePath<
   typeof hostNotificationsIndicatorStateV11,
@@ -2976,6 +2985,7 @@ export const hostNotificationsIndicatorStateUpgradeV11ToV12 = defineUpgradePath<
   upgradeResponse: (response) => ({
     epics: addUnknownUnreadCount(response.epics),
     chats: addUnknownUnreadCount(response.chats),
+    complete: null,
   }),
 });
 

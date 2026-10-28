@@ -12,6 +12,8 @@ import {
   selectCloudNotificationIndicatorProjection,
   selectCloudNotificationIndicators,
   selectNotificationIndicatorState,
+  type NotificationIndicatorRecords,
+  type RequestedIndicatorIds,
 } from "@/stores/notifications/notification-indicator-state";
 
 /** An entity whose unread rows light no glyph: they are counted and nothing
@@ -860,22 +862,33 @@ describe("cloud notification indicator derivation", () => {
 });
 
 describe("an entity's unread count", () => {
+  const BOTH: RequestedIndicatorIds = {
+    epicIds: ["epic-1"],
+    chatIds: ["chat-1"],
+  };
+
   /** One origin's rows as the cloud holds them, on an epic and a chat. */
-  function partition(
-    count: number | null,
-  ): HostNotificationsIndicatorStateResponse {
+  function partition(count: number | null): NotificationIndicatorRecords {
     return {
       epics: { "epic-1": counted(count) },
       chats: { "chat-1": counted(count) },
     };
   }
 
-  it("counts a notification once when the retained cloud snapshot and the fallback host answer both hold it", () => {
+  /** A host's `home: "local"` answer. */
+  function answer(
+    records: NotificationIndicatorRecords,
+    complete: boolean | null,
+  ): HostNotificationsIndicatorStateResponse {
+    return { ...records, complete };
+  }
+
+  it("counts a notification once when the cloud snapshot and the host's whole-origin answer both hold it", () => {
     const merged = mergeLocalPartitionIntoCloudIndicators(
       { ...partition(1), byOriginHostId: { "host-a": partition(1) } },
-      partition(1),
+      answer(partition(1), true),
       "host-a",
-      false,
+      BOTH,
     );
 
     expect(merged.epics).toEqual({ "epic-1": counted(1) });
@@ -883,7 +896,33 @@ describe("an entity's unread count", () => {
     expect(merged.byOriginHostId).toEqual({ "host-a": partition(1) });
   });
 
-  it("keeps the cloud's count while its lane serves, whatever the host answers", () => {
+  it.each([
+    { name: "the empty partition", complete: false },
+    { name: "an answer that does not say", complete: null },
+  ])(
+    "keeps a thread's count from the cloud when the bound host answers $name",
+    ({ complete }) => {
+      const merged = mergeLocalPartitionIntoCloudIndicators(
+        {
+          epics: {},
+          chats: { "thread-1": counted(1) },
+          byOriginHostId: {
+            "host-b": { epics: {}, chats: { "thread-1": counted(1) } },
+          },
+        },
+        { epics: {}, chats: {}, complete },
+        "host-b",
+        { epicIds: [], chatIds: ["thread-1"] },
+      );
+
+      expect(merged.chats).toEqual({ "thread-1": counted(1) });
+      expect(merged.byOriginHostId?.["host-b"].chats).toEqual({
+        "thread-1": counted(1),
+      });
+    },
+  );
+
+  it("keeps the cloud's count, and takes the host's flags, when the answer does not say it is the whole origin", () => {
     const merged = mergeLocalPartitionIntoCloudIndicators(
       {
         epics: { "epic-1": counted(2) },
@@ -892,15 +931,18 @@ describe("an entity's unread count", () => {
           "host-a": { epics: { "epic-1": counted(2) }, chats: {} },
         },
       },
-      {
-        epics: {
-          "epic-1": counted(5),
-          "epic-2": { ...counted(4), pendingFork: true },
+      answer(
+        {
+          epics: {
+            "epic-1": counted(5),
+            "epic-2": { ...counted(4), pendingFork: true },
+          },
+          chats: {},
         },
-        chats: {},
-      },
+        null,
+      ),
       "host-a",
-      true,
+      { epicIds: ["epic-1", "epic-2"], chatIds: [] },
     );
 
     expect(merged.epics).toEqual({
@@ -912,15 +954,15 @@ describe("an entity's unread count", () => {
     );
   });
 
-  it("lets the host's answer replace the bound origin's cloud count but keeps every other origin's rows", () => {
+  it("lets the host's whole-origin answer replace the bound origin's cloud count but keeps every other origin's rows", () => {
     const merged = mergeLocalPartitionIntoCloudIndicators(
       {
         ...partition(3),
         byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
       },
-      partition(1),
+      answer(partition(1), true),
       "host-a",
-      false,
+      BOTH,
     );
 
     expect(merged.epics).toEqual({ "epic-1": counted(3) });
@@ -934,24 +976,32 @@ describe("an entity's unread count", () => {
         ...partition(3),
         byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
       },
-      { epics: {}, chats: {} },
+      answer({ epics: {}, chats: {} }, true),
       "host-a",
-      false,
+      BOTH,
     );
 
     expect(merged.epics).toEqual({ "epic-1": counted(2) });
-    expect(merged.byOriginHostId?.["host-a"]).toEqual({
-      epics: { "epic-1": counted(null) },
-      chats: { "chat-1": counted(null) },
-    });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(0));
+  });
+
+  it("counts an asked id the whole-origin answer omits as zero in the bound origin's bucket", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { epics: {}, chats: {}, byOriginHostId: { "host-a": partition(1) } },
+      answer({ epics: {}, chats: {} }, true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(0));
   });
 
   it("leaves a host that does not count unknown where the cloud holds nothing", () => {
     const merged = mergeLocalPartitionIntoCloudIndicators(
       { epics: {}, chats: {}, byOriginHostId: { "host-a": partition(1) } },
-      { epics: { "epic-9": counted(null) }, chats: {} },
+      answer({ epics: { "epic-9": counted(null) }, chats: {} }, true),
       "host-a",
-      false,
+      { epicIds: ["epic-9"], chatIds: [] },
     );
 
     expect(merged.epics).toEqual({ "epic-9": counted(null) });
@@ -960,48 +1010,102 @@ describe("an entity's unread count", () => {
     );
   });
 
+  it("leaves an entity unknown when a host that does not count overlaps the cloud rows it would replace", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { ...partition(1), byOriginHostId: { "host-a": partition(1) } },
+      answer(partition(null), true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(null) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(null));
+  });
+
+  it("keeps another origin's count for an entity whose host cannot count", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        ...partition(3),
+        byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
+      },
+      answer(partition(null), true),
+      "host-a",
+      BOTH,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(null));
+  });
+
+  it("leaves an id the answer was not asked about at the cloud's count", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        epics: { "epic-1": counted(2) },
+        chats: { "chat-1": counted(3) },
+        byOriginHostId: {
+          "host-a": {
+            epics: { "epic-1": counted(2) },
+            chats: { "chat-1": counted(3) },
+          },
+        },
+      },
+      answer({ epics: {}, chats: { "chat-1": counted(1) } }, true),
+      "host-a",
+      { epicIds: [], chatIds: ["chat-1"] },
+    );
+
+    expect(merged.chats).toEqual({ "chat-1": counted(1) });
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual({
+      epics: { "epic-1": counted(2) },
+      chats: { "chat-1": counted(1) },
+    });
+  });
+
   it("counts from the cloud alone when the host answers with no origin to attribute it to", () => {
     const merged = mergeLocalPartitionIntoCloudIndicators(
       partition(2),
-      partition(1),
+      answer(partition(1), true),
       null,
-      false,
+      BOTH,
     );
 
     expect(merged.epics).toEqual({ "epic-1": counted(2) });
     expect(merged.chats).toEqual({ "chat-1": counted(2) });
   });
 
-  it("ORs the flags across planes in either lane state", () => {
-    const hostLit = {
-      epics: { "epic-1": { ...counted(1), pendingFork: true } },
-      chats: {},
-    };
-    const cloudLit = {
-      epics: { "epic-1": { ...counted(1), unreadFailure: true } },
-      chats: {},
-      byOriginHostId: {
-        "host-a": {
+  it.each([true, false, null])(
+    "ORs the flags across planes when the answer's completeness is %s",
+    (complete) => {
+      const merged = mergeLocalPartitionIntoCloudIndicators(
+        {
           epics: { "epic-1": { ...counted(1), unreadFailure: true } },
           chats: {},
+          byOriginHostId: {
+            "host-a": {
+              epics: { "epic-1": { ...counted(1), unreadFailure: true } },
+              chats: {},
+            },
+          },
         },
-      },
-    };
-
-    for (const serving of [true, false]) {
-      const merged = mergeLocalPartitionIntoCloudIndicators(
-        cloudLit,
-        hostLit,
+        answer(
+          {
+            epics: { "epic-1": { ...counted(1), pendingFork: true } },
+            chats: {},
+          },
+          complete,
+        ),
         "host-a",
-        serving,
+        BOTH,
       );
+
       expect(merged.epics["epic-1"]).toMatchObject({
         pendingFork: true,
         unreadFailure: true,
         unreadCount: 1,
       });
-    }
-  });
+    },
+  );
 
   it.each([
     { name: "a count above zero", state: counted(1), unread: true },

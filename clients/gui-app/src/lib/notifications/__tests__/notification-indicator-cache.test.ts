@@ -200,6 +200,7 @@ describe("notification indicator cache invalidation", () => {
           },
         },
         chats: {},
+        complete: true,
       });
       requests[1].resolve({
         epics: {
@@ -213,6 +214,7 @@ describe("notification indicator cache invalidation", () => {
           },
         },
         chats: {},
+        complete: true,
       });
     });
 
@@ -229,6 +231,7 @@ describe("notification indicator cache invalidation", () => {
           },
         },
         chats: {},
+        complete: true,
       });
     });
   });

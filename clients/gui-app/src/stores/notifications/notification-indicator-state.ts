@@ -29,17 +29,23 @@ export interface NotificationIndicatorState {
   readonly unreadDone: boolean;
 }
 
+/** An answer's per-entity records: the host response less whether it was
+ * the whole origin, which only the cloud-mode fold reads. */
+export type NotificationIndicatorRecords = Omit<
+  HostNotificationsIndicatorStateResponse,
+  "complete"
+>;
+
 /**
  * GUI-only enrichment of the released host response. Aggregate surfaces read
  * `epics` / `chats` exactly as before; host-bound tabs use the per-origin
  * projection so another host's same-id lineage cannot decorate the tab.
  */
-export type SurfaceNotificationIndicators =
-  HostNotificationsIndicatorStateResponse & {
-    readonly byOriginHostId?: Readonly<
-      Record<string, HostNotificationsIndicatorStateResponse>
-    >;
-  };
+export type SurfaceNotificationIndicators = NotificationIndicatorRecords & {
+  readonly byOriginHostId?: Readonly<
+    Record<string, NotificationIndicatorRecords>
+  >;
+};
 
 export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadFailure: false,
@@ -162,8 +168,10 @@ export function useNotificationIndicatorState(
   );
 }
 
-export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResponse =
-  { epics: {}, chats: {} };
+export const EMPTY_INDICATOR_STATE_RESPONSE: NotificationIndicatorRecords = {
+  epics: {},
+  chats: {},
+};
 
 function selectHostIndicatorState(
   indicators: SurfaceNotificationIndicators,
@@ -209,15 +217,15 @@ export function selectCloudNotificationIndicators(
   rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV15>>>,
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
-): HostNotificationsIndicatorStateResponse {
+): NotificationIndicatorRecords {
   return selectCloudNotificationIndicatorProjection(rows, epicIds, chatIds)
     .aggregate;
 }
 
 export interface CloudNotificationIndicatorProjection {
-  readonly aggregate: HostNotificationsIndicatorStateResponse;
+  readonly aggregate: NotificationIndicatorRecords;
   readonly byOriginHostId: Readonly<
-    Record<string, HostNotificationsIndicatorStateResponse>
+    Record<string, NotificationIndicatorRecords>
   >;
 }
 
@@ -255,10 +263,7 @@ export function selectCloudNotificationIndicatorProjection(
     }
     collectCloudIndicatorEntry(originAccumulator, row);
   }
-  const byOriginHostId: Record<
-    string,
-    HostNotificationsIndicatorStateResponse
-  > = {};
+  const byOriginHostId: Record<string, NotificationIndicatorRecords> = {};
   for (const [originHostId, originAccumulator] of originAccumulators) {
     byOriginHostId[originHostId] =
       finalizeCloudIndicatorAccumulator(originAccumulator);
@@ -297,7 +302,7 @@ function createCloudIndicatorAccumulator(
 
 function finalizeCloudIndicatorAccumulator(
   accumulator: CloudIndicatorAccumulator,
-): HostNotificationsIndicatorStateResponse {
+): NotificationIndicatorRecords {
   const { epics, chats, epicTerminalWinners, chatTerminalWinners } =
     accumulator;
   for (const [epicId, terminalWinners] of epicTerminalWinners) {
@@ -573,37 +578,39 @@ function mergeIndicatorFlags(
 /**
  * Folds the host's `home: "local"` answer into the cloud partition.
  *
- * Flags OR. While the cloud lane serves, the host answers an EMPTY local
- * partition (the cloud feed is the whole feed); while it does not, the host
- * answers its WHOLE origin, and the GUI still holds the cloud rows it last
- * received. Either way an OR of booleans neither drops a lit flag nor
- * invents one, which is why this used to be the whole rule.
+ * Flags OR. The host answers either its WHOLE origin or, while its cloud lane
+ * carries its rows, an EMPTY partition, and the GUI still holds the cloud
+ * rows it last received. An OR of booleans neither drops a lit flag nor
+ * invents one either way, which is why this used to be the whole rule.
  *
- * Counts are not booleans: in the fallback the same notification is in both
- * inputs, and adding them counts it twice. So one plane is authoritative per
- * origin at any moment, chosen by `cloudLaneServing` (the GUI's own view of
- * the lane, `selectCloudLaneServing`): while it serves, every origin's count
- * comes from the cloud rows; while it does not, this host's origin
- * (`originHostId`) counts from the host's answer and every other origin from
- * the cloud rows retained for it. With no origin to attribute the host's rows
- * to, the cloud rows count alone.
+ * Counts are not booleans: in the whole-origin answer the same notification
+ * is in both inputs, and adding them counts it twice. So one plane is
+ * authoritative per origin, and the answer itself says which
+ * (`complete`): a whole-origin answer replaces the cloud's count for its
+ * origin (`originHostId`), every other origin still counting from the cloud
+ * rows; an empty partition, or a host that does not say, leaves the cloud's
+ * counts standing. The lane decision is the answering host's own, which is
+ * why it rides the answer rather than this GUI's view of its own lane.
  *
- * `byOriginHostId` gets the same treatment for the ACTIVE host's bucket alone:
- * the host's answer belongs to that origin and to no other, so merging it
- * into every bucket would let one host's rows decorate a tab bound to
+ * Only the ids the answer was asked about (`requested`) take its counts: an
+ * id it was not asked about is absent from it, which is not a zero.
+ *
+ * `byOriginHostId` gets the same treatment for the answering host's bucket
+ * alone: the host's answer belongs to that origin and to no other, so merging
+ * it into every bucket would let one host's rows decorate a tab bound to
  * another.
  */
 export function mergeLocalPartitionIntoCloudIndicators(
   cloud: SurfaceNotificationIndicators,
   hostLocal: HostNotificationsIndicatorStateResponse,
   originHostId: string | null,
-  cloudLaneServing: boolean,
+  requested: RequestedIndicatorIds,
 ): SurfaceNotificationIndicators {
   const scoped =
     originHostId === null || cloud.byOriginHostId === undefined
       ? null
       : (cloud.byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE);
-  const hostCounts = !cloudLaneServing && originHostId !== null;
+  const hostCounts = hostLocal.complete === true && originHostId !== null;
   const aggregate = mergePartitions(
     cloud,
     hostLocal,
@@ -613,6 +620,7 @@ export function mergeLocalPartitionIntoCloudIndicators(
           cloudOwn: scoped ?? EMPTY_INDICATOR_STATE_RESPONSE,
         }
       : CLOUD_COUNTS,
+    requested,
   );
   if (originHostId === null || scoped === null) {
     return { ...aggregate, byOriginHostId: cloud.byOriginHostId };
@@ -625,9 +633,16 @@ export function mergeLocalPartitionIntoCloudIndicators(
         scoped,
         hostLocal,
         hostCounts ? HOST_COUNTS : CLOUD_COUNTS,
+        requested,
       ),
     },
   };
+}
+
+/** The ids an indicator answer was asked about. */
+export interface RequestedIndicatorIds {
+  readonly epicIds: ReadonlyArray<string>;
+  readonly chatIds: ReadonlyArray<string>;
 }
 
 /**
@@ -641,40 +656,47 @@ type CountAuthority =
   | { readonly kind: "host" }
   | {
       readonly kind: "host-and-other-origins";
-      readonly cloudOwn: HostNotificationsIndicatorStateResponse;
+      readonly cloudOwn: NotificationIndicatorRecords;
     };
 
 const CLOUD_COUNTS: CountAuthority = { kind: "cloud" };
 const HOST_COUNTS: CountAuthority = { kind: "host" };
 
 function mergePartitions(
-  cloud: HostNotificationsIndicatorStateResponse,
-  host: HostNotificationsIndicatorStateResponse,
+  cloud: NotificationIndicatorRecords,
+  host: NotificationIndicatorRecords,
   counts: CountAuthority,
-): HostNotificationsIndicatorStateResponse {
+  requested: RequestedIndicatorIds,
+): NotificationIndicatorRecords {
   return {
-    epics: mergePartitionRecords(
-      cloud.epics,
-      host.epics,
+    epics: mergePartitionRecords(cloud.epics, host.epics, {
       counts,
-      counts.kind === "host-and-other-origins" ? counts.cloudOwn.epics : {},
-    ),
-    chats: mergePartitionRecords(
-      cloud.chats,
-      host.chats,
+      cloudOwn:
+        counts.kind === "host-and-other-origins" ? counts.cloudOwn.epics : {},
+      requested: new Set(requested.epicIds),
+    }),
+    chats: mergePartitionRecords(cloud.chats, host.chats, {
       counts,
-      counts.kind === "host-and-other-origins" ? counts.cloudOwn.chats : {},
-    ),
+      cloudOwn:
+        counts.kind === "host-and-other-origins" ? counts.cloudOwn.chats : {},
+      requested: new Set(requested.chatIds),
+    }),
   };
 }
 
 function mergePartitionRecords(
-  cloud: HostNotificationsIndicatorStateResponse["epics"],
-  host: HostNotificationsIndicatorStateResponse["epics"],
-  counts: CountAuthority,
-  cloudOwn: HostNotificationsIndicatorStateResponse["epics"],
-): HostNotificationsIndicatorStateResponse["epics"] {
-  const merged: HostNotificationsIndicatorStateResponse["epics"] = {};
+  cloud: NotificationIndicatorRecords["epics"],
+  host: NotificationIndicatorRecords["epics"],
+  authority: {
+    readonly counts: CountAuthority;
+    /** The cloud's records for the answering origin. */
+    readonly cloudOwn: NotificationIndicatorRecords["epics"];
+    /** The ids the answer was asked about. */
+    readonly requested: ReadonlySet<string>;
+  },
+): NotificationIndicatorRecords["epics"] {
+  const { counts, cloudOwn, requested } = authority;
+  const merged: NotificationIndicatorRecords["epics"] = {};
   for (const id of new Set([...Object.keys(cloud), ...Object.keys(host)])) {
     const fromCloud = Object.hasOwn(cloud, id) ? cloud[id] : undefined;
     const fromHost = Object.hasOwn(host, id) ? host[id] : undefined;
@@ -686,7 +708,7 @@ function mergePartitionRecords(
     merged[id] = {
       ...flags,
       unreadCount: entityUnreadCount(
-        counts,
+        requested.has(id) ? counts : CLOUD_COUNTS,
         fromCloud,
         fromHost,
         Object.hasOwn(cloudOwn, id) ? cloudOwn[id] : undefined,
@@ -702,20 +724,22 @@ function entityUnreadCount(
   fromHost: HostNotificationsIndicatorState | undefined,
   cloudOwn: HostNotificationsIndicatorState | undefined,
 ): number | null {
-  const hostCount = fromHost === undefined ? null : fromHost.unreadCount;
+  // A whole-origin answer that holds no record for an id it was asked about
+  // has no rows for it.
+  const hostCount = fromHost === undefined ? 0 : fromHost.unreadCount;
   switch (counts.kind) {
     case "cloud":
       return fromCloud?.unreadCount ?? 0;
     case "host":
       return hostCount;
     case "host-and-other-origins": {
-      // Every other origin's rows, as the cloud holds them; `null` where the
-      // cloud holds nothing for the entity, so an uncounting host stays unknown.
+      // Every other origin's rows, as the cloud holds them.
       const otherOrigins =
-        fromCloud === undefined
-          ? null
-          : (fromCloud.unreadCount ?? 0) - (cloudOwn?.unreadCount ?? 0);
-      return addUnreadCounts(otherOrigins, hostCount);
+        (fromCloud?.unreadCount ?? 0) - (cloudOwn?.unreadCount ?? 0);
+      // A host that cannot count stays unknown unless another origin's rows
+      // give the entity a count of their own.
+      if (hostCount === null) return otherOrigins > 0 ? otherOrigins : null;
+      return otherOrigins + hostCount;
     }
   }
 }
@@ -731,7 +755,7 @@ function entityUnreadCount(
  */
 export function mergeHostPendingForkIntoCloudIndicators(
   cloud: SurfaceNotificationIndicators,
-  host: HostNotificationsIndicatorStateResponse,
+  host: NotificationIndicatorRecords,
   originHostId: string | null,
 ): SurfaceNotificationIndicators {
   const pendingChats = Object.entries(host.chats).filter(
@@ -754,11 +778,11 @@ export function mergeHostPendingForkIntoCloudIndicators(
 }
 
 function mergePendingForkChats(
-  response: HostNotificationsIndicatorStateResponse,
+  response: NotificationIndicatorRecords,
   pendingChats: ReadonlyArray<
     readonly [string, HostNotificationsIndicatorState]
   >,
-): HostNotificationsIndicatorStateResponse {
+): NotificationIndicatorRecords {
   const chats = { ...response.chats };
   for (const [chatId] of pendingChats) {
     chats[chatId] = {
@@ -782,9 +806,9 @@ function mergePendingForkChats(
  * hosts' rows are their own, so their counts add.
  */
 export function mergeIndicatorStateResponses(
-  base: HostNotificationsIndicatorStateResponse,
-  next: HostNotificationsIndicatorStateResponse,
-): HostNotificationsIndicatorStateResponse {
+  base: NotificationIndicatorRecords,
+  next: NotificationIndicatorRecords,
+): NotificationIndicatorRecords {
   return {
     epics: mergeIndicatorRecords(base.epics, next.epics),
     chats: mergeIndicatorRecords(base.chats, next.chats),

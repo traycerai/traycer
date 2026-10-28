@@ -89,7 +89,7 @@ import { managedCommandSchema } from "@traycer/protocol/host/managed-command/una
 /** Stub host RPC data while keeping indicator selection and the overlay provider real. */
 const hostIndicatorTestState = vi.hoisted(
   (): { data: HostNotificationsIndicatorStateResponse } => ({
-    data: { epics: {}, chats: {} },
+    data: { epics: {}, chats: {}, complete: true },
   }),
 );
 
@@ -1216,7 +1216,11 @@ describe("<EpicRootDragOverlayContent />", () => {
     afterEach(() => {
       cleanup();
       queryClient.clear();
-      hostIndicatorTestState.data = { epics: {}, chats: {} };
+      hostIndicatorTestState.data = {
+        epics: {},
+        chats: {},
+        complete: true,
+      };
       useTabsStore.setState(useTabsStore.getInitialState(), true);
       useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
       useEpicCanvasStore.getState().clearAllTitleGenerationPending();
@@ -1321,6 +1325,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           },
         },
         chats: {},
+        complete: true,
       };
       startDrag(ordinary);
       renderOverlay();

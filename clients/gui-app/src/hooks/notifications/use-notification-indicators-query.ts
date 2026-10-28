@@ -4,10 +4,7 @@ import {
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import {
-  selectCloudLaneServing,
-  useCloudNotificationsStore,
-} from "@/stores/notifications/cloud-notifications-store";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   mergeLocalPartitionIntoCloudIndicators,
@@ -27,9 +24,9 @@ import {
  * the cloud rows are the whole answer; while it does not, the host answers
  * its whole origin and the cloud rows are what this client last received.
  * Flags OR across the two either way, which drops no lit flag and invents
- * none. Counts take each origin from one plane, chosen by the lane
- * (`mergeLocalPartitionIntoCloudIndicators`), because adding the two would
- * count a notification held by both twice.
+ * none. Counts take each origin from one plane, chosen by the host's answer
+ * itself (`complete`, `mergeLocalPartitionIntoCloudIndicators`), because
+ * adding the two would count a notification held by both twice.
  *
  * `pendingFork` comes from the host in both modes, as one flag of its answer:
  * fork truth lives on the connected host's notice board, which is part of
@@ -105,7 +102,6 @@ export function useNotificationIndicators(
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
-  const cloudLaneServing = useCloudNotificationsStore(selectCloudLaneServing);
   const cloudIndicators = useMemo<SurfaceNotificationIndicators>(() => {
     if (!isMixed || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
     const projection = selectCloudNotificationIndicatorProjection(
@@ -123,7 +119,7 @@ export function useNotificationIndicators(
         cloudIndicators,
         hostIndicators.data,
         readHostId,
-        cloudLaneServing,
+        { epicIds: args.epicIds, chatIds: args.chatIds },
       )
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
 }

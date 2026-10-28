@@ -336,6 +336,7 @@ function indicatorResponse(
         unreadCount: 0,
       },
     },
+    complete: true,
   };
 }
 

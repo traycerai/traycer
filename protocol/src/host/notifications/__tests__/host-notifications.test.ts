@@ -490,6 +490,7 @@ describe("host.notifications.indicatorState", () => {
           },
         },
         chats: {},
+        complete: true,
       }).success,
     ).toBe(false);
   });
@@ -545,10 +546,14 @@ describe("host.notifications.indicatorState", () => {
     unreadCount: 2,
   } as const;
 
-  it("carries each entity's unread count at @1.2, and an @1.1 peer's parse drops it", () => {
+  it("carries each entity's unread count and the answer's completeness at @1.2, and an @1.1 peer's parse drops both", () => {
     const line = hostRpcRegistry["host.notifications.indicatorState"][1];
     expect(line.latestMinor).toBe(2);
-    const response = { epics: { "epic-1": counted }, chats: {} };
+    const response = {
+      epics: { "epic-1": counted },
+      chats: {},
+      complete: true,
+    };
 
     expect(line.versions[2].contract.responseSchema.parse(response)).toEqual(
       response,
@@ -575,6 +580,7 @@ describe("host.notifications.indicatorState", () => {
       line.versions[2].contract.responseSchema.safeParse({
         epics: { "epic-1": uncounted },
         chats: {},
+        complete: true,
       }).success,
     ).toBe(false);
     expect(
@@ -585,7 +591,26 @@ describe("host.notifications.indicatorState", () => {
     ).toEqual({
       epics: { "epic-1": { ...uncounted, unreadCount: null } },
       chats: { "chat-1": { ...uncounted, unreadCount: null } },
+      complete: null,
     });
+  });
+
+  it("refuses an @1.2 answer that does not say whether it is complete, and takes a partition that says it is not", () => {
+    const line = hostRpcRegistry["host.notifications.indicatorState"][1];
+
+    expect(
+      line.versions[2].contract.responseSchema.safeParse({
+        epics: { "epic-1": counted },
+        chats: {},
+      }).success,
+    ).toBe(false);
+    expect(
+      line.versions[2].contract.responseSchema.parse({
+        epics: {},
+        chats: {},
+        complete: false,
+      }),
+    ).toEqual({ epics: {}, chats: {}, complete: false });
   });
 });
 

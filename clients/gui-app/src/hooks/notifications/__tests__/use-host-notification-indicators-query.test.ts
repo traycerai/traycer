@@ -156,7 +156,11 @@ describe("useHostNotificationIndicators recovery", () => {
       registry: hostRpcRegistry,
       requestId: () => "request-floor",
       handlers: {
-        "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+        "host.notifications.indicatorState": () => ({
+          epics: {},
+          chats: {},
+          complete: true,
+        }),
       },
     });
     const spine = new HostClient<HostRpcRegistry>({
@@ -265,10 +269,12 @@ describe("useHostNotificationIndicators recovery", () => {
         },
       },
       chats: {},
+      complete: true,
     };
     const clearResponse: HostNotificationsIndicatorStateResponse = {
       epics: {},
       chats: {},
+      complete: true,
     };
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -331,6 +337,7 @@ describe("useHostNotificationIndicators recovery", () => {
     });
     expect(requestCount.value).toBe(1);
     expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
+    expect(result.current.data.complete).toBe(true);
 
     responseMode.value = "error";
     await act(async () => {
@@ -397,12 +404,15 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
               epicIds: params.epicIds,
               chatIds: params.chatIds,
             });
-            // The epic's rows do not depend on which chats rode along.
+            // The epic's rows do not depend on which chats rode along. The
+            // first chunk answers its whole origin, the second the empty
+            // partition.
             return {
               epics: { "epic-a": counted(2) },
               chats: Object.fromEntries(
                 params.chatIds.map((chatId) => [chatId, counted(1)]),
               ),
+              complete: requests.length === 1,
             };
           },
         },
@@ -441,6 +451,8 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
     });
 
     expect(requests).toHaveLength(2);
+    // A partition among the chunks makes the combined answer a partition.
+    expect(result.current.data.complete).toBe(false);
     expect(result.current.data.epics["epic-a"].unreadCount).toBe(2);
     expect(Object.keys(result.current.data.chats)).toHaveLength(chatIds.length);
     expect(

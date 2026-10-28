@@ -226,9 +226,11 @@ function createHarness(
   };
 }
 
+/** The empty partition a host answers while its cloud lane carries its rows. */
 const EMPTY_HOST_RESPONSE: HostNotificationsIndicatorStateResponse = {
   epics: {},
   chats: {},
+  complete: false,
 };
 
 /** Serializes the flags so an assertion names the exact indicator the
@@ -718,6 +720,7 @@ describe("mixed-plane notification indicators", () => {
 
   it("keeps a host-derived pending fork lit when its cloud row is marked read", async () => {
     const harness = createHarness({
+      complete: false,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -836,7 +839,36 @@ describe("mixed-plane notification indicators", () => {
     expect(indicatorText("row-read")).toBe("unread");
   });
 
-  it("counts a notification once when the host answers for the same row the retained cloud snapshot holds, until the lane serves again", async () => {
+  it("keeps the cloud's count for a row on the host's origin while the host answers the empty partition", async () => {
+    const heldByCloud = cloudRow({
+      entryId: "entry-a",
+      originHostId: CONNECTED_HOST_ID,
+      readAt: null,
+    });
+    const harness = createHarness({
+      epics: {},
+      chats: {},
+      complete: false,
+    });
+    applyCloudSnapshot([heldByCloud], 1);
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: <CountProbe chatId={CHAT_ID} testId="count" />,
+    });
+
+    await waitFor(() => {
+      expect(indicatorText("count")).toBe("1");
+    });
+    await expectSingleLocalIndicatorRequest(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+    });
+    expect(indicatorText("count")).toBe("1");
+  });
+
+  it("counts a notification once when the host answers its whole origin for the same row the cloud snapshot holds", async () => {
     const heldByBoth = cloudRow({
       entryId: "entry-a",
       originHostId: CONNECTED_HOST_ID,
@@ -854,9 +886,9 @@ describe("mixed-plane notification indicators", () => {
           unreadCount: 1,
         },
       },
+      complete: true,
     });
     applyCloudSnapshot([heldByBoth], 1);
-    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
 
     renderSurface(harness, {
       epicIds: [],
@@ -864,11 +896,6 @@ describe("mixed-plane notification indicators", () => {
       children: <CountProbe chatId={CHAT_ID} testId="count" />,
     });
 
-    await waitFor(() => {
-      expect(indicatorText("count")).toBe("1,pendingFork");
-    });
-
-    applyCloudSnapshot([heldByBoth], 2);
     await waitFor(() => {
       expect(indicatorText("count")).toBe("1,pendingFork");
     });
@@ -899,6 +926,7 @@ describe("local-mode notification indicators", () => {
   it("still derives from the host response on a methodless host", async () => {
     feedMode.value = "local";
     const harness = createHarness({
+      complete: true,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -939,6 +967,7 @@ describe("local-mode notification indicators", () => {
   it("does not decorate another host's bound tab with the active host response", async () => {
     feedMode.value = "local";
     const harness = createHarness({
+      complete: true,
       epics: {},
       chats: {
         [CHAT_ID]: {
@@ -982,6 +1011,7 @@ describe("local-mode notification indicators", () => {
   it("folds unread app-local failures into the host response", async () => {
     feedMode.value = "local";
     const harness = createHarness({
+      complete: true,
       epics: {},
       chats: {
         [CHAT_ID]: {

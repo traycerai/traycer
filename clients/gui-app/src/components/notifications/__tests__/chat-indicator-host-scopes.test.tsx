@@ -1,4 +1,4 @@
-import { createElement, type ReactNode } from "react";
+import { createElement, useContext, type ReactNode } from "react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +18,10 @@ import type {
 } from "@traycer/protocol/host/notifications/contracts";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import {
+  NotificationIndicatorsContext,
+  useSurfaceNotificationIndicatorState,
+} from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
@@ -137,7 +140,7 @@ function createHarness(ownedEntries: OwnedIndicatorRows): Harness {
             for (const chatId of params.chatIds) {
               if (Object.hasOwn(rows, chatId)) chats[chatId] = rows[chatId];
             }
-            return { epics: {}, chats };
+            return { epics: {}, chats, complete: true };
           },
         },
       }),
@@ -191,6 +194,16 @@ function EpicProbe(): ReactNode {
   );
   return (
     <span data-testid="probe-epic-1">{state.unreadDone ? "done" : ""}</span>
+  );
+}
+
+/** The inherited epic's unread count as the aggregate holds it. */
+function EpicCountProbe(): ReactNode {
+  const indicators = useContext(NotificationIndicatorsContext);
+  return (
+    <span data-testid="probe-epic-1-count">
+      {String(indicators.epics["epic-1"].unreadCount)}
+    </span>
   );
 }
 
@@ -338,9 +351,13 @@ describe("ChatIndicatorHostScopes", () => {
     const harness = createHarness([
       [HOST_A, { "chat-a": lit({ pendingFork: true }) }],
     ]);
+    const inheritedEpic = lit({ unreadDone: true, unreadCount: 2 });
     const inherited: SurfaceNotificationIndicators = {
-      epics: { "epic-1": lit({ unreadDone: true }) },
+      epics: { "epic-1": inheritedEpic },
       chats: {},
+      byOriginHostId: {
+        [HOST_A]: { epics: { "epic-1": inheritedEpic }, chats: {} },
+      },
     };
 
     render(
@@ -352,6 +369,7 @@ describe("ChatIndicatorHostScopes", () => {
             ])}
           >
             <EpicProbe />
+            <EpicCountProbe />
             <Probe hostId={HOST_A} chatId="chat-a" />
           </ChatIndicatorHostScopes>
         </NotificationIndicatorsProvider>
@@ -364,6 +382,9 @@ describe("ChatIndicatorHostScopes", () => {
         "fork",
       );
     });
+    // The host answered its whole origin, but only about the chat: the epic it
+    // was not asked about keeps the count it was inherited with.
+    expect(screen.getByTestId("probe-epic-1-count").textContent).toBe("2");
   });
 
   it("lights a host-bound tab from the cloud row its host produced, in that host's bucket", async () => {

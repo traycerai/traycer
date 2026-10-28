@@ -14,9 +14,11 @@ import { NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR } from "@/lib/notificat
 import { notificationsQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+/** No answer yet: nothing held, and not known to be the whole origin. */
 const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
   epics: {},
   chats: {},
+  complete: null,
 };
 
 export interface UseHostNotificationIndicatorsArgs {
@@ -239,13 +241,29 @@ function mergeIndicatorResponses(
         response !== undefined,
     );
   if (responses.length === 0) return EMPTY_INDICATOR_STATE;
-  return responses.reduce<HostNotificationsIndicatorStateResponse>(
-    (combined, response) => ({
-      epics: mergeEntityIndicatorStates(combined.epics, response.epics),
-      chats: mergeEntityIndicatorStates(combined.chats, response.chats),
-    }),
-    EMPTY_INDICATOR_STATE,
-  );
+  return {
+    epics: responses.reduce(
+      (combined, response) =>
+        mergeEntityIndicatorStates(combined, response.epics),
+      EMPTY_INDICATOR_STATE.epics,
+    ),
+    chats: responses.reduce(
+      (combined, response) =>
+        mergeEntityIndicatorStates(combined, response.chats),
+      EMPTY_INDICATOR_STATE.chats,
+    ),
+    complete: combinedCompleteness(responses),
+  };
+}
+
+/** The chunks together are the whole origin only when every one says so; a
+ * partition among them makes them a partition, and otherwise it is unknown. */
+function combinedCompleteness(
+  responses: ReadonlyArray<HostNotificationsIndicatorStateResponse>,
+): boolean | null {
+  if (responses.every((response) => response.complete === true)) return true;
+  if (responses.some((response) => response.complete === false)) return false;
+  return null;
 }
 
 function mergeEntityIndicatorStates(
