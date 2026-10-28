@@ -8,6 +8,7 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { sandboxListReadSentAt } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxNoticeListQuery } from "@/components/notifications/use-sandbox-notice-list-query";
 import {
   useMergedNotificationRows,
@@ -64,6 +65,7 @@ function ActiveSettingsNotices(props: {
       notices.push(notice);
     }
   }
+  const sentAt = list.isSuccess ? sandboxListReadSentAt(list.data) : null;
   return [...noticesBySandbox].map(([sandboxId, notices]) => (
     <SettingsNoticeObserver
       key={sandboxId}
@@ -73,6 +75,7 @@ function ActiveSettingsNotices(props: {
           ? (list.data?.sandboxes.find((row) => row.id === sandboxId) ?? null)
           : null
       }
+      sentAt={sentAt}
     />
   ));
 }
@@ -80,25 +83,50 @@ function ActiveSettingsNotices(props: {
 function SettingsNoticeObserver(props: {
   readonly notices: readonly SettingsNotice[];
   readonly summary: SandboxSummary | null;
+  /** When the list read the summary came from was sent; null when unknown. */
+  readonly sentAt: number | null;
 }): null {
   const status = useNoticeSettingsStatus(props.summary);
   const actions = useMergedNotificationsActions();
+  const state = props.summary?.state ?? null;
   useEffect(() => {
+    if (props.sentAt !== null && settingsNoticeHostGone(state)) {
+      for (const notice of props.notices) {
+        // An older list answer cannot retire a failure written after it.
+        if (props.sentAt >= notice.row.createdAt) {
+          actions.retireNotice(notice.row);
+        }
+      }
+      return;
+    }
     if (props.summary?.guestConfigured === true && status.isSuccess) {
       for (const notice of props.notices) {
         if (settingsNoticeApplied(status.data, notice.operationId)) {
-          actions.resolveNotice(notice.row);
+          actions.retireNotice(notice.row);
         }
       }
     }
   }, [
     actions,
     props.notices,
+    props.sentAt,
     props.summary?.guestConfigured,
+    state,
     status.data,
     status.isSuccess,
   ]);
   return null;
+}
+
+/**
+ * A sandbox that suspended, stopped or was destroyed can no longer apply the
+ * settings: its failure notices retire. The list is visibility-filtered, so
+ * an absent row proves nothing and keeps them.
+ */
+function settingsNoticeHostGone(
+  state: SandboxSummary["state"] | null,
+): boolean {
+  return state === "suspended" || state === "stopped" || state === "destroyed";
 }
 
 /** One receipt per sandbox episode, shared by every warning for that sandbox. */

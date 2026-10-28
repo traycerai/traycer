@@ -162,6 +162,7 @@ export function CreateBotForm(props: {
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
       stagedSurfaceKey: null,
+      sendsToRestingSandbox: false,
     },
   );
   const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);

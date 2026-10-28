@@ -169,10 +169,18 @@ export interface CatalogQueryActivityOptions extends QueryActivityOptions {
   readonly modelsFetch: "all-harnesses" | "cached-only";
 }
 
+/**
+ * Why a harness's models could not be listed: the host's error, or, for a
+ * sandbox's Traycer models, the cloud catalog's.
+ */
+export interface CatalogModelsError {
+  readonly message: string;
+}
+
 export interface GuiHarnessCatalogEntry extends GuiHarnessOption {
   readonly models: ListGuiAgentModelsResponse["models"];
   readonly modelsLoading: boolean;
-  readonly modelsError: HostRpcError | null;
+  readonly modelsError: CatalogModelsError | null;
 }
 
 export interface GuiHarnessCatalog {

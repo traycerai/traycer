@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
+import {
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -12,20 +15,20 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 /**
  * The classification a chat's footer and send path read, over the real hook.
  * Only its data sources are replaced: the task's projected hosts, the viewer's
- * sandbox list and configurations, the host directory row and the clock.
+ * sandbox list and configurations, and the host directory row.
  */
 
 const NOW = Date.UTC(2026, 9, 27, 12, 0);
 
 const sources = vi.hoisted(
   (): {
-    ended: TaskSandboxEndedHost | null;
-    sandboxes: SandboxSummary[];
+    task: TaskSandboxHost;
+    /** `null`: the list read failed, or is disabled, with nothing cached. */
+    sandboxes: SandboxSummary[] | null;
     configurations: SandboxConfigurations;
     entry: HostDirectoryEntry | null;
-    now: number;
   } => ({
-    ended: null,
+    task: { kind: "other" },
     sandboxes: [],
     configurations: {
       configurations: [{ kind: "personal" }],
@@ -33,15 +36,17 @@ const sources = vi.hoisted(
       complete: true,
     },
     entry: null,
-    now: 0,
   }),
 );
 
 vi.mock("@/hooks/epic/use-task-sandbox-end", () => ({
-  useTaskSandboxEnd: () => sources.ended,
+  useTaskSandboxHost: () => sources.task,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
-  useSandboxList: () => ({ data: { sandboxes: sources.sandboxes } }),
+  useSandboxList: () => ({
+    data:
+      sources.sandboxes === null ? undefined : { sandboxes: sources.sandboxes },
+  }),
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
@@ -54,10 +59,6 @@ vi.mock(
 );
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => sources.entry,
-}));
-vi.mock("@/lib/relative-time", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/relative-time")>()),
-  useSampledNow: () => sources.now,
 }));
 
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
@@ -82,7 +83,7 @@ function stateOf(reachable: boolean) {
 }
 
 beforeEach(() => {
-  sources.ended = null;
+  sources.task = { kind: "other" };
   sources.sandboxes = [];
   sources.configurations = {
     configurations: [
@@ -98,7 +99,6 @@ beforeEach(() => {
     complete: true,
   };
   sources.entry = null;
-  sources.now = NOW;
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: VIEWER, userName: "V", email: "v@example.com" },
@@ -112,16 +112,17 @@ afterEach(() => {
 
 describe("useChatSandboxState", () => {
   it("lets the task's projected end win over a stale listed row", () => {
-    const ended: TaskSandboxEndedHost = {
+    const ended = {
       name: "e2e-sbx",
       end: {
         state: "destroyed",
         destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
         cause: "resting",
         actor: null,
+        idleMinutes: null,
       },
-    };
-    sources.ended = ended;
+    } as const;
+    sources.task = { kind: "ended", ended };
     sources.sandboxes = [row({ state: "suspended" })];
 
     expect(stateOf(false)).toEqual({ kind: "destroyed", ended });
@@ -152,19 +153,81 @@ describe("useChatSandboxState", () => {
     });
   });
 
-  it("knows nothing of a resting team sandbox whose configuration is not among the viewer's", () => {
-    sources.sandboxes = [
-      row({
-        state: "suspended",
-        environmentId: "env-elsewhere",
-        createdBy: { userId: OTHER, displayName: "Other" },
-      }),
-    ];
+  it("keeps a resting team sandbox resting before its configuration resolves, changing no payer", () => {
+    const sandbox = row({
+      state: "suspended",
+      environmentId: "env-elsewhere",
+      createdBy: { userId: OTHER, displayName: "Other" },
+      wakePayer: { userId: OTHER, displayName: "Other" },
+    });
+    sources.sandboxes = [sandbox];
+
+    expect(stateOf(false)).toEqual({
+      kind: "resting",
+      sandbox,
+      configuration: null,
+      wakeChangesPayer: false,
+    });
+  });
+
+  it.each([
+    ["failed", { kind: "failed" }],
+    ["released", { kind: "released" }],
+    ["destroyed", { kind: "moving", state: "destroying" }],
+  ] as const)(
+    "reads a listed %s sandbox by its own state, never as unknown",
+    (state, expected) => {
+      const sandbox = row({ state });
+      sources.sandboxes = [sandbox];
+
+      expect(stateOf(false)).toEqual({ ...expected, sandbox });
+    },
+  );
+
+  it.each([
+    "creating",
+    "resuming",
+    "starting",
+    "suspending",
+    "stopping",
+    "destroying",
+  ] as const)(
+    "reads a %s sandbox as moving, with its row, never as unknown or not a sandbox",
+    (state) => {
+      const sandbox = row({ state });
+      sources.sandboxes = [sandbox];
+
+      expect(stateOf(false)).toEqual({ kind: "moving", sandbox, state });
+    },
+  );
+
+  it("reads an unlisted host the task names as a sandbox as pending, by the task's name", () => {
+    sources.task = { kind: "sandbox", name: "e2e-sbx-p1" };
+
+    expect(stateOf(false)).toEqual({ kind: "pending", name: "e2e-sbx-p1" });
+  });
+
+  it("reads an unlisted host the directory knows as a sandbox as pending, by its directory label", () => {
+    sources.entry = remoteEntry(HOST, sandboxFacts(null));
+
+    expect(stateOf(false)).toEqual({ kind: "pending", name: `label-${HOST}` });
+  });
+
+  it("reads a host nothing names as a sandbox as not one, even when the list read failed", () => {
+    expect(stateOf(false)).toEqual({ kind: "none" });
+
+    sources.sandboxes = null;
+    expect(stateOf(false)).toEqual({ kind: "none" });
+  });
+
+  it("reads a host the directory knows as a person's as not a sandbox, without waiting on the task", () => {
+    sources.sandboxes = null;
+    sources.entry = remoteEntry(HOST, null);
 
     expect(stateOf(false)).toEqual({ kind: "none" });
   });
 
-  it("reads an awake sandbox the transport cannot reach as unreachable, with the minutes since the directory last saw it", () => {
+  it("reads an awake sandbox the transport cannot reach as unreachable, with when the directory last saw it", () => {
     sources.sandboxes = [row({ state: "awake" })];
     const base = remoteEntry(HOST, null);
     const seen: RemoteHostDirectoryEntry = {
@@ -178,17 +241,17 @@ describe("useChatSandboxState", () => {
 
     expect(stateOf(false)).toMatchObject({
       kind: "unreachable",
-      lastContactMinutes: 7,
+      lastSeenAt: NOW - 7 * 60_000 - 20_000,
     });
   });
 
-  it("says no last contact when the directory has none, and nothing at all while reachable", () => {
+  it("says no last sighting when the directory has none, and nothing at all while reachable", () => {
     sources.sandboxes = [row({ state: "awake" })];
     sources.entry = remoteEntry(HOST, null);
 
     expect(stateOf(false)).toMatchObject({
       kind: "unreachable",
-      lastContactMinutes: null,
+      lastSeenAt: null,
     });
     expect(stateOf(true)).toEqual({ kind: "none" });
   });

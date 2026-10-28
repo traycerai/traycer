@@ -202,6 +202,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     tuiOnly,
     chatLineCarriesAutoMode: null,
     stagedSurfaceKey: null,
+    sendsToRestingSandbox: false,
   };
 }
 
@@ -1708,6 +1709,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
         stagedSurfaceKey: null,
+        sendsToRestingSandbox: false,
       }),
     );
 
@@ -1730,6 +1732,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
         stagedSurfaceKey: null,
+        sendsToRestingSandbox: false,
       }),
     );
 
@@ -1760,6 +1763,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
           stagedSurfaceKey: null,
+          sendsToRestingSandbox: false,
         }),
       { initialProps: { hostClient: hostAClient, hostId: "host-a" } },
     );
@@ -1788,6 +1792,7 @@ describe("useComposerToolbarStore on a sandbox host", () => {
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
       stagedSurfaceKey: null,
+      sendsToRestingSandbox: false,
     };
   }
 

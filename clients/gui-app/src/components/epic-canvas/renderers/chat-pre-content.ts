@@ -150,6 +150,11 @@ export interface ChatTilePreContentFrame {
   readonly cloneAllowed: boolean;
   /** See `ChatPreContentInput.hasReadySession`. */
   readonly hasReadySession: boolean;
+  /**
+   * A resting or unreachable sandbox's footer under the tile says why the
+   * chat is not loading, so the body narrates no offline host of its own.
+   */
+  readonly sandboxFooter: boolean;
 }
 
 /**

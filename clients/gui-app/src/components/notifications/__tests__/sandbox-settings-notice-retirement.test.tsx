@@ -127,6 +127,7 @@ let currentStatus: EnvironmentStatusResponseV11;
 let statusRead: () => Promise<EnvironmentStatusResponseV11>;
 let statusReads: number;
 let resolvedIds: string[];
+let clearedIds: string[];
 let repairSucceeds: boolean;
 
 type EnvironmentApplyFailedRow = HostNotificationsCloudFeedRowV16 & {
@@ -345,6 +346,7 @@ beforeEach(() => {
   currentStatus = status(OPERATION_ID, "failed");
   statusReads = 0;
   resolvedIds = [];
+  clearedIds = [];
   repairSucceeds = true;
   statusRead = () => Promise.resolve(currentStatus);
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -358,6 +360,10 @@ beforeEach(() => {
       "host.notifications.cloudFeed.resolve": (params) => {
         resolvedIds.push(params.entryId);
         return Promise.resolve({ status: "applied", version: 2 });
+      },
+      "host.notifications.cloudFeed.clear": (params) => {
+        clearedIds.push(params.entryId);
+        return Promise.resolve({ status: "applied", version: 3 });
       },
       "host.sandbox.repairGuestConfiguration": () =>
         Promise.resolve({
@@ -673,7 +679,62 @@ describe("sandbox settings warnings in the notification center", () => {
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
     ).toBe("Notifications");
     expect(resolvedIds).toEqual(["warning"]);
+    await waitFor(() => expect(clearedIds).toEqual(["warning"]));
     expect(auth.auth.listSandboxes).toHaveBeenCalledTimes(1);
+  });
+  it.each(["suspended", "stopped", "destroyed"] as const)(
+    "leaves the bell once the list shows the sandbox %s: no Needs attention, no Recent row",
+    async (state) => {
+      auth.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            sandboxSummaryFixture({ id: SANDBOX_ID, hostId: HOST_ID, state }),
+          ],
+        },
+      });
+      seed([notice("warning", OPERATION_ID)]);
+      mount(true);
+      await waitFor(() => expect(clearedIds).toEqual(["warning"]));
+      expect(resolvedIds).toEqual(["warning"]);
+      expect(screen.queryByText("Needs attention")).toBeNull();
+      expect(screen.queryByText(/build-box/)).toBeNull();
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe("Notifications");
+      expect(statusReads).toBe(0);
+    },
+  );
+  it("keeps a failure written after the list read that showed the sandbox suspended", async () => {
+    auth.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: {
+        sandboxes: [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: HOST_ID,
+            state: "suspended",
+          }),
+        ],
+      },
+    });
+    const later = notice("warning", OPERATION_ID);
+    seed([
+      {
+        ...later,
+        entry: { ...later.entry, updatedAt: Date.now() + 60 * 60_000 },
+      },
+    ]);
+    mount(false);
+    await waitFor(() =>
+      expect(auth.auth.listSandboxes).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(resolution("warning")).toBeNull();
+    expect(clearedIds).toEqual([]);
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, 1 needs you");
   });
   it.each(["applied", "failed", "unsupported"])(
     "a different operation's %s item does not retire the notice",

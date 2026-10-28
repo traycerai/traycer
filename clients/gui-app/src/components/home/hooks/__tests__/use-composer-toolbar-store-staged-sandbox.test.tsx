@@ -160,6 +160,7 @@ function renderLandingToolbar() {
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
         stagedSurfaceKey: SURFACE,
+        sendsToRestingSandbox: false,
       },
     ),
   );

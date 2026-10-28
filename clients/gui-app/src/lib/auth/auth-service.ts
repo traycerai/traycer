@@ -48,6 +48,7 @@ import type {
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
+  TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   EnvironmentProvidersFetchResult,
@@ -3119,6 +3120,16 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getSandboxCatalogue(bearer);
+  }
+
+  async getTraycerModels(): Promise<TraycerModelsFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getTraycerModels(bearer);
   }
 
   async createSandbox(

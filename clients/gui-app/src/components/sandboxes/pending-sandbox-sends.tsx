@@ -80,7 +80,6 @@ import {
 } from "@/hooks/harnesses/chat-opencode-line-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import {
   useSandboxList,
   sandboxListReadSentAt,
@@ -117,6 +116,8 @@ import {
   isOpencodeFamilyHarness,
 } from "@/lib/chat/opencode-line";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { openChatClone } from "@/lib/chats/chat-clone-registry";
+import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   confirmAttachmentsByHash,
@@ -1067,6 +1068,7 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
         ? "stop"
         : "settings";
     case "no-provider":
+    case "traycer-off":
     case "agent-not-offered":
     case "agent-setup-failed":
       return "provider";
@@ -1195,6 +1197,9 @@ function agentNotReady(
     case "not-offered":
       next = { kind: "agent-not-offered", harnessId };
       break;
+    case "traycer-off":
+      next = { kind: "traycer-off" };
+      break;
     case "unusable":
       next = { kind: "no-provider" };
       break;
@@ -1214,6 +1219,7 @@ function agentNotReady(
 function isAgentReadinessFailure(failure: StagedSandbox["failure"]): boolean {
   return (
     failure?.kind === "no-provider" ||
+    failure?.kind === "traycer-off" ||
     failure?.kind === "agent-not-offered" ||
     failure?.kind === "agent-setup-failed"
   );
@@ -1992,12 +1998,14 @@ async function runPendingDispatch(
     return;
   dispatchesInFlight.add(send.id);
   try {
-    registerDispatchHandoff(send, dispatch);
     const response = await createChat(dispatch.input);
     if (response.refusal !== undefined) {
       refusePendingDispatch(send, dispatch);
       return;
     }
+    // The agent's tile opens once its chat exists on the sandbox; until then
+    // the pending send shows the setup line and the message.
+    registerDispatchHandoff(send, dispatch);
     const receiptOwnership = ownsPendingSandboxSend(send.id);
     const recorded = usePendingSandboxSendStore
       .getState()
@@ -2139,10 +2147,16 @@ function finishDispatchUi(
   });
 }
 
-function PendingDispatchLine(props: {
+/**
+ * A claimed send. Until the sandbox takes the request, its setup line stays
+ * above the message; only a refusal or a failure replaces it with the
+ * dispatch line.
+ */
+function PendingDispatchItem(props: {
   readonly id: string;
   readonly userId: string | null;
   readonly dispatch: PendingSandboxSendDispatch;
+  readonly tabId: string;
 }): ReactNode {
   const row = usePendingSandboxRowFacts(
     props.dispatch.delivery.sandboxId,
@@ -2155,6 +2169,7 @@ function PendingDispatchLine(props: {
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
+  const stage = useStagedSandbox(pendingSendSurfaceKey(props.id));
   if (send === null) return null;
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
@@ -2169,52 +2184,60 @@ function PendingDispatchLine(props: {
     sandboxObservation(props.dispatch.blocker ?? "none", environment),
     pendingSandboxSendFacts(props.id, environment),
   );
+  if (stage !== null && (view.line === "waiting" || view.line === "creating"))
+    return <PendingStagedSendItem send={send} tabId={props.tabId} />;
   return (
     <div
-      className="flex flex-wrap items-center gap-2 text-ui-xs"
-      data-testid="pending-sandbox-dispatch"
+      className="flex w-full flex-col gap-2"
+      data-testid="pending-sandbox-send"
     >
-      {view.line === "uncertain" ||
-      view.line === "credits" ||
-      view.line === "settings" ||
-      view.line === "not-sent" ? null : (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      )}
-      <span>
-        {view.line === "settings"
-          ? pendingSettingsTitle(row.row, settings.data)
-          : pendingDispatchLineCopy(send.request.kind, view.line)}
-      </span>
-      {view.line === "settings" ? (
-        <PendingDispatchSettingsDetail row={row.row} status={settings.data} />
-      ) : null}
-      {view.line === "credits" || view.line === "settings" ? (
-        <PendingDispatchRemedy
-          id={props.dispatch.delivery.sandboxId}
-          userId={props.userId}
-          row={row.row}
-          failure={view.line}
-        />
-      ) : null}
-      {view.canRetry ? (
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          data-testid="pending-sandbox-dispatch-retry"
-          onClick={() => {
-            usePendingSandboxSendStore
-              .getState()
-              .requestDispatchRetry(props.id);
-          }}
-        >
-          Retry
-        </Button>
-      ) : null}
+      <div
+        className="flex flex-wrap items-center gap-2 text-ui-xs"
+        data-testid="pending-sandbox-dispatch"
+      >
+        {view.line === "uncertain" ||
+        view.line === "credits" ||
+        view.line === "settings" ||
+        view.line === "not-sent" ? null : (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        )}
+        <span>
+          {view.line === "settings"
+            ? pendingSettingsTitle(row.row, settings.data)
+            : pendingDispatchLineCopy(send.request.kind, view.line)}
+        </span>
+        {view.line === "settings" ? (
+          <PendingDispatchSettingsDetail row={row.row} status={settings.data} />
+        ) : null}
+        {view.line === "credits" || view.line === "settings" ? (
+          <PendingDispatchRemedy
+            id={props.dispatch.delivery.sandboxId}
+            userId={props.userId}
+            row={row.row}
+            failure={view.line}
+          />
+        ) : null}
+        {view.canRetry ? (
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            data-testid="pending-sandbox-dispatch-retry"
+            onClick={() => {
+              usePendingSandboxSendStore
+                .getState()
+                .requestDispatchRetry(props.id);
+            }}
+          >
+            Retry
+          </Button>
+        ) : null}
+      </div>
+      <PendingSendMessage send={send} />
     </div>
   );
 }
@@ -2435,17 +2458,12 @@ function PendingSendItem(props: {
   if (dispatch === null)
     return <PendingStagedSendItem send={send} tabId={props.tabId} />;
   return (
-    <div
-      className="flex w-full flex-col gap-2"
-      data-testid="pending-sandbox-send"
-    >
-      <PendingDispatchLine
-        id={send.id}
-        userId={send.userId}
-        dispatch={dispatch}
-      />
-      <PendingSendMessage send={send} />
-    </div>
+    <PendingDispatchItem
+      id={send.id}
+      userId={send.userId}
+      dispatch={dispatch}
+      tabId={props.tabId}
+    />
   );
 }
 
@@ -2789,6 +2807,41 @@ function PendingStopFallback(props: {
   );
 }
 
+type PendingLineRemedies = Pick<
+  SandboxSetupLineActions,
+  "onChooseModel" | "onChooseAnotherHost"
+>;
+
+/**
+ * A message to an existing chat is handed back to that chat's composer first:
+ * "Choose a model" then opens its picker on what sandboxes run, and "Choose
+ * another host" the chat's clone flow, which carries the message to the clone
+ * unsent. A message the composer could not take went to Drafts instead, and
+ * nothing is carried. Every other request takes `otherwise`.
+ */
+function pendingMessageRemedies(
+  send: PendingSandboxSend,
+  offeredAgents: ReadonlyArray<string> | null,
+  otherwise: PendingLineRemedies,
+): PendingLineRemedies {
+  const request = send.request;
+  if (request.kind !== "message") return otherwise;
+  return {
+    onChooseModel: () => {
+      void returnPendingSandboxMessage(send.id, false).catch(() => undefined);
+      openActiveModelPickerForHarness("traycer", null, offeredAgents);
+    },
+    onChooseAnotherHost: () => {
+      void returnPendingSandboxMessage(send.id, false).then(
+        (returned) => {
+          if (returned.kind === "chat") openChatClone(request.chatId);
+        },
+        () => undefined,
+      );
+    },
+  };
+}
+
 /** Model recovery needs an undispatched message and an empty destination draft. */
 function pendingSandboxModelRecovery(input: {
   readonly send: PendingSandboxSend;
@@ -2811,6 +2864,7 @@ function pendingSandboxModelRecovery(input: {
       stage: input.stage,
       tabId: input.tabId,
       restage: false,
+      keepHost: true,
       modelPickerHarnessId: "traycer",
     });
   };
@@ -2849,9 +2903,6 @@ function PendingStagedSendItem(props: {
   });
   const sandboxList = useSandboxList();
   const { openTile } = useEpicTileNavigation();
-  const providersOpener = useConfigurationProvidersOpener(
-    stage?.target.configuration.kind === "team",
-  );
   const epicId = send.epicId;
   const run = useCallback(
     (fresh: boolean): void => {
@@ -2912,8 +2963,17 @@ function PendingStagedSendItem(props: {
   if (stage === null || facts === null) {
     return <PendingSendMessage send={send} />;
   }
-  const backToComposer = (restage: boolean): ReturnedPendingSandboxSend => {
-    return endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
+  const backToComposer = (
+    restage: boolean,
+    keepHost: boolean,
+  ): ReturnedPendingSandboxSend => {
+    return endSendBackToComposer({
+      send,
+      stage,
+      tabId: props.tabId,
+      restage,
+      keepHost,
+    });
   };
   const stop = (): void => {
     void stopPendingSend(
@@ -2922,7 +2982,9 @@ function PendingStagedSendItem(props: {
       () => {
         attention.current = {
           userId: send.userId,
-          giveBack: () => backToComposer(false),
+          // Back in this task's composer, still on the stopped sandbox: its
+          // send starts it again.
+          giveBack: () => backToComposer(false, true),
         };
         stopAttention.set(send.id, attention.current);
       },
@@ -2939,6 +3001,10 @@ function PendingStagedSendItem(props: {
     tabId: props.tabId,
     canWithdraw,
     draftOccupied: taskDraftOccupied,
+  });
+  const lineRemedies = pendingMessageRemedies(send, facts.offeredAgents, {
+    onChooseModel: chooseModel,
+    onChooseAnotherHost: () => backToComposer(false, false),
   });
   return (
     <div
@@ -2972,7 +3038,7 @@ function PendingStagedSendItem(props: {
                 );
                 return;
               }
-              const returned = backToComposer(false);
+              const returned = backToComposer(false, false);
               if (
                 !Object.hasOwn(
                   usePendingSandboxSendStore.getState().sends,
@@ -2981,11 +3047,11 @@ function PendingStagedSendItem(props: {
               )
                 recordCancelledSandboxSend(send, returned);
             },
-            onChooseAnotherHost: () => backToComposer(false),
+            onChooseAnotherHost: lineRemedies.onChooseAnotherHost,
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),
-            onChangeShape: () => backToComposer(true),
+            onChangeShape: () => backToComposer(true, false),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,
@@ -2993,9 +3059,7 @@ function PendingStagedSendItem(props: {
             applyingError: newHost.applyingError,
             onStop: stop,
             onOpenTerminal: newHost.onOpenTerminal,
-            // The configuration's own Providers, a team's included.
-            onOpenProviders: providersOpener(stage.target.configuration),
-            onChooseModel: chooseModel,
+            onChooseModel: lineRemedies.onChooseModel,
           }}
         />
       )}
@@ -3015,7 +3079,7 @@ function PendingSendMessage(props: {
   return <PendingSandboxMessage text={props.send.text} />;
 }
 
-/** Existing chats keep their binding, so their setup offers only bound remedies. */
+/** An existing chat keeps its binding, so its message changes no shape. */
 function PendingSendSetupLine(props: {
   readonly requestKind: PendingSandboxSendRequest["kind"];
   readonly stage: StagedSandbox;
@@ -3028,16 +3092,7 @@ function PendingSendSetupLine(props: {
   if (requestKind !== "message")
     return <SandboxSetupLine {...line} actions={actions} />;
   return (
-    <SandboxSetupLine
-      {...line}
-      actions={{
-        ...actions,
-        onChooseAnotherHost: null,
-        onOpenTerminal: null,
-        onChangeShape: null,
-        onChooseModel: null,
-      }}
-    />
+    <SandboxSetupLine {...line} actions={{ ...actions, onChangeShape: null }} />
   );
 }
 
@@ -3166,14 +3221,17 @@ function useOpenTerminalWhenUp(
 /**
  * Ends the send and puts the message back in this task's new-agent
  * composer, where the person picks a host again; `restage` stages the same
- * sandbox there, for a shape change. A fork has no message to put back: it
- * ends, and the chat it came from is where to fork again.
+ * sandbox there, for a shape change, and `keepHost` names the sandbox the
+ * send was made on (a Stop's give-back, a model recovery). A fork has no
+ * message to put back: it ends, and the chat it came from is where to fork
+ * again.
  */
 function endSendBackToComposer(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly tabId: string;
   readonly restage: boolean;
+  readonly keepHost: boolean;
   readonly modelPickerHarnessId?: GuiHarnessId;
 }): ReturnedPendingSandboxSend {
   const { send } = input;
@@ -3200,10 +3258,7 @@ function endSendBackToComposer(input: {
     useStagedSandboxStore.getState().stage(key, input.stage.target);
     openStagedShapeSheet(key);
   }
-  if (
-    input.modelPickerHarnessId !== undefined &&
-    input.stage.createdHostId !== null
-  ) {
+  if (input.keepHost && input.stage.createdHostId !== null) {
     useSurfaceHostSelectionStore
       .getState()
       .setSelection(
@@ -3216,7 +3271,9 @@ function endSendBackToComposer(input: {
     tabId: input.tabId,
     placement: returned.kind === "task" ? returned.placement : null,
     parentId: returned.kind === "task" ? returned.parentId : null,
-    hostId: null,
+    // Named, not only pinned: a pin on an offline sandbox falls back to
+    // another host, and a named one sends there or nowhere.
+    hostId: input.keepHost ? input.stage.createdHostId : null,
     modelPickerHarnessId: input.modelPickerHarnessId,
   });
   return returned;

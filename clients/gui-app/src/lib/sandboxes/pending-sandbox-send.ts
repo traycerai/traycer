@@ -84,7 +84,9 @@ export type RequestedAgentReadiness =
   | { readonly kind: "ready"; readonly opencodeLine: OpencodeLine | null }
   /** Sandbox hosts do not offer this agent. */
   | { readonly kind: "not-offered" }
-  /** Offered, but the sandbox's configuration cannot run it. */
+  /** The sandbox's own Traycer Inference switch is off, so no agent runs there. */
+  | { readonly kind: "traycer-off" }
+  /** Offered, but the sandbox cannot run it. */
   | { readonly kind: "unusable" }
   /** Its install there failed; `detail` is the host's sentence for it. */
   | { readonly kind: "setup-failed"; readonly detail: string };
@@ -111,15 +113,29 @@ function catalogRefusesWithoutSetup(
 }
 
 /**
+ * Whether a host's own providers list has Traycer Inference switched off.
+ * The switch is that computer's own: a sandbox seeds it on, and turning it
+ * off there leaves nothing a sandbox runs. `false` while the list is unread.
+ */
+export function traycerInferenceOff(
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+): boolean {
+  return (
+    providers?.find((row) => row.providerId === "traycer")?.enabled === false
+  );
+}
+
+/**
  * The requested agent's readiness on the sandbox, from the sandbox host's own
  * harness catalog and provider list (sandboxes redesign Flow 1: the message
  * is delivered when the setup the requested agent needs is ready, not merely
  * when the control plane says awake). A install in flight or an availability
- * still being probed is a wait; a failed install and an agent that cannot run
- * there are refusals. Never another agent: the model the person picked is the
- * one the message runs on. Bound chats pass their recorded line; a new chat
- * gets the destination's resolved line back with its ready result and carries
- * that same line in the create.
+ * still being probed is a wait; Traycer Inference switched off there, a failed
+ * install and an agent that cannot run there are refusals, the switch first.
+ * Never another agent: the model the person picked is the one the message
+ * runs on. Bound chats pass their recorded line; a new chat gets the
+ * destination's resolved line back with its ready result and carries that
+ * same line in the create.
  */
 export function requestedAgentReadiness(
   harnessId: GuiHarnessId,
@@ -130,6 +146,7 @@ export function requestedAgentReadiness(
   if (harnesses === undefined || providers === undefined) {
     return { kind: "waiting" };
   }
+  if (traycerInferenceOff(providers)) return { kind: "traycer-off" };
   const harness = harnesses.find((row) => row.id === harnessId);
   if (harness === undefined) return { kind: "not-offered" };
   if (!harness.enabled) return { kind: "unusable" };

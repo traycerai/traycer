@@ -2507,6 +2507,24 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("says Traycer Inference's switch changes this computer only, on its row alone", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    // OpenCode, ranked first, is selected: its row says nothing of the kind.
+    expect(screen.queryByText(/this computer only/)).toBeNull();
+
+    fireEvent.click(railProviderRow(/Traycer/i, false));
+
+    expect(
+      screen.getByText(
+        "Traycer's managed harness uses the selected OpenCode CLI binary. Turning it on or off changes this computer only.",
+      ),
+    ).toBeDefined();
+  });
+
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
     render(
       <TooltipProvider>

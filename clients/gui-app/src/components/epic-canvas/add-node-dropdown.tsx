@@ -335,6 +335,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
     stagedSurfaceKey: null,
+    sendsToRestingSandbox: false,
   });
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;

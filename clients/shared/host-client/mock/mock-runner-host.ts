@@ -3,6 +3,7 @@ import {
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
@@ -17,6 +18,7 @@ import {
   type SandboxListFetchResult,
   type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
+  type TraycerModelsFetchResult,
 } from "../sandbox-control";
 import {
   decideSecretRequestViaHttp,
@@ -654,6 +656,10 @@ export class MockRunnerHost implements IRunnerHost {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
     return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
+    return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
   createSandbox(

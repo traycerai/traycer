@@ -16,6 +16,7 @@ const END = {
   destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
   cause: "resting",
   actor: null,
+  idleMinutes: null,
 };
 
 describe("TaskHostRow.sandboxEnd", () => {
@@ -31,6 +32,23 @@ describe("TaskHostRow.sandboxEnd", () => {
     expect(
       taskHostRowSchema.parse({ ...ROW, sandboxEnd: byAgent }).sandboxEnd,
     ).toEqual(byAgent);
+  });
+
+  it("parses null idle minutes for an end from a server that does not send them", () => {
+    const older = {
+      state: END.state,
+      destroyedAt: END.destroyedAt,
+      cause: "idle",
+      actor: null,
+    };
+    expect(taskSandboxEndSchema.parse(older).idleMinutes).toBeNull();
+  });
+
+  it("retains the idle minutes the server reports", () => {
+    expect(
+      taskSandboxEndSchema.parse({ ...END, cause: "idle", idleMinutes: 12 })
+        .idleMinutes,
+    ).toBe(12);
   });
 
   it("strips a field a newer server adds to the end", () => {
