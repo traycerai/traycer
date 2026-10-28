@@ -79,7 +79,7 @@ import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-w
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import { environmentMutationKeys } from "@/lib/query-keys";
+import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
 import {
   ALL_CONFIG_RPC_METHODS,
   CONFIG_SHELL_METHODS,
@@ -106,6 +106,13 @@ const CAT = {
   source: "detected" as const,
   missing: false,
 };
+
+/** Opening an editor requires its first successful environment read. */
+async function openEnvAdd(): Promise<void> {
+  const add = await screen.findByRole("button", { name: "Add a variable" });
+  await waitFor(() => expect(add).toHaveProperty("disabled", false));
+  fireEvent.click(add);
+}
 
 const SAVED_FLASH_MS = 1600;
 
@@ -1260,9 +1267,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     name: string,
     value: string,
   ): Promise<void> {
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add a variable" }),
-    );
+    await openEnvAdd();
     fireEvent.change(screen.getByPlaceholderText(placeholder), {
       target: { value: name },
     });
@@ -1335,9 +1340,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     credentialRefusal.current = REFUSAL;
     renderShellPanelOverRpc({ cli: envCli() });
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add a variable" }),
-    );
+    await openEnvAdd();
 
     expect(screen.getByPlaceholderText("NODE_ENV")).toBeTruthy();
     expect(screen.queryByPlaceholderText("OPENAI_API_KEY")).toBeNull();
@@ -1352,9 +1355,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
       overrideHandlers: { "config.env.set": set },
     });
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add a variable" }),
-    );
+    await openEnvAdd();
     expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText("OPENAI_API_KEY"), {
       target: { value: "REPO_URL" },
@@ -1412,9 +1413,7 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
   }
 
   async function addVariable(name: string, value: string): Promise<void> {
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add a variable" }),
-    );
+    await openEnvAdd();
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: name },
     });
@@ -1662,6 +1661,304 @@ function inputValue(element: HTMLElement): string {
   }
   return element.value;
 }
+
+describe("<ShellSettingsPanel /> an accepted variable write", () => {
+  function renderWithEnvRead(
+    transport: "rpc" | "bridge",
+    read: () => Promise<{ entries: { key: string; value: string | null }[] }>,
+  ): void {
+    if (transport === "rpc") {
+      renderShellPanelOverRpc({
+        overrideHandlers: { "config.env.list": read },
+      });
+    } else {
+      renderShellPanelStoppedLocal({
+        configure: (cli) => {
+          cli.envOverrideList = async () => (await read()).entries;
+          // Reads below own the simulated store. Keep the mock's enumerable
+          // fields stable so its legacy object query key retains cached data.
+          cli.envOverrideSet = () => Promise.resolve();
+        },
+      });
+    }
+  }
+
+  it.each(["rpc", "bridge"] as const)(
+    "disables Add until the initial environment read succeeds over %s",
+    async (transport) => {
+      let releaseRead: () => void = () => {
+        throw new Error("read has not started");
+      };
+      const initialRead = new Promise<{ entries: [] }>((resolve) => {
+        releaseRead = () => resolve({ entries: [] });
+      });
+      renderWithEnvRead(transport, () => initialRead);
+      const add = await screen.findByRole("button", { name: "Add a variable" });
+      expect(add).toHaveProperty("disabled", true);
+      fireEvent.click(add);
+      expect(screen.queryByLabelText("New variable name")).toBeNull();
+
+      await act(async () => {
+        releaseRead();
+        await initialRead;
+      });
+      await waitFor(() => expect(add).toHaveProperty("disabled", false));
+      fireEvent.click(add);
+      expect(screen.getByLabelText("New variable name")).toHaveProperty(
+        "disabled",
+        false,
+      );
+    },
+  );
+
+  it.each(["rpc", "bridge"] as const)(
+    "retries an initial environment read failure over %s before enabling Add",
+    async (transport) => {
+      let reads = 0;
+      renderWithEnvRead(transport, () => {
+        reads += 1;
+        return reads === 1
+          ? Promise.reject(new Error("Read refused"))
+          : Promise.resolve({ entries: [] });
+      });
+      await screen.findByTestId("shell-config-read-failed");
+      const add = screen.getByRole("button", { name: "Add a variable" });
+      expect(add).toHaveProperty("disabled", true);
+      fireEvent.click(add);
+      expect(screen.queryByLabelText("New variable name")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(add).toHaveProperty("disabled", false));
+      expect(screen.queryByTestId("shell-config-read-failed")).toBeNull();
+      fireEvent.click(add);
+      expect(screen.getByLabelText("New variable name")).toHaveProperty(
+        "disabled",
+        false,
+      );
+    },
+  );
+
+  it.each(["rpc", "bridge"] as const)(
+    "keeps cached environment rows disabled after a post-write read fails over %s until retry succeeds",
+    async (transport) => {
+      let failReads = false;
+      let currentValue = "original";
+      renderWithEnvRead(transport, () =>
+        failReads
+          ? Promise.reject(new Error("Post-write read refused"))
+          : Promise.resolve({
+              entries: [{ key: "EDITOR", value: currentValue }],
+            }),
+      );
+      const field = await screen.findByLabelText("Value for EDITOR");
+      failReads = true;
+      fireEvent.change(field, { target: { value: "updated" } });
+      fireEvent.blur(field);
+
+      await screen.findByTestId("shell-config-read-failed");
+      await screen.findByRole("alert");
+      await waitFor(() =>
+        expect(screen.getByLabelText("Value for EDITOR")).toHaveProperty(
+          "disabled",
+          true,
+        ),
+      );
+      const add = screen.getByRole("button", { name: "Add a variable" });
+      expect(add).toHaveProperty("disabled", true);
+
+      currentValue = "updated";
+      failReads = false;
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Value for EDITOR")).toHaveProperty(
+          "disabled",
+          false,
+        ),
+      );
+      expect(screen.getByLabelText("Value for EDITOR")).toHaveProperty(
+        "value",
+        "updated",
+      );
+      expect(
+        screen.getByRole("button", { name: "Add a variable" }),
+      ).toHaveProperty("disabled", false);
+      expect(screen.queryByTestId("shell-config-read-failed")).toBeNull();
+    },
+  );
+
+  it.each(["removed", "normalized"] as const)(
+    "settles after the fresh read reports the accepted Add as %s",
+    async (outcome) => {
+      let releaseRead: () => void = () => {
+        throw new Error("fresh read has not started");
+      };
+      const freshRead = new Promise<{
+        entries: { key: string; value: string | null }[];
+      }>((resolve) => {
+        releaseRead = () =>
+          resolve({
+            entries:
+              outcome === "removed"
+                ? []
+                : [{ key: "NEW_VAR", value: "NORMALIZED" }],
+          });
+      });
+      let reads = 0;
+      const panel = renderShellPanelOverRpc({
+        overrideHandlers: {
+          "config.env.list": () => {
+            reads += 1;
+            return reads === 1 ? { entries: [] } : freshRead;
+          },
+          "config.env.set": (request) => ({
+            key: request.key,
+            value: request.value,
+          }),
+        },
+      });
+      const listKey = queryKeys.hostMethod("host-a", "config.env.list", {});
+      await waitFor(() =>
+        expect(panel.queryClient.getQueryData(listKey)).toEqual({
+          entries: [],
+        }),
+      );
+      const before = panel.queryClient.getQueryData(listKey);
+      fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+      fireEvent.change(screen.getByLabelText("New variable name"), {
+        target: { value: "NEW_VAR" },
+      });
+      fireEvent.change(screen.getByLabelText("New variable value"), {
+        target: { value: "one" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+      await waitFor(() => expect(reads).toBe(2));
+      expect(screen.getByText("NEW_VAR · Adding").textContent).toContain(
+        "NEW_VAR",
+      );
+      expect(screen.getByLabelText("New variable name")).toHaveProperty(
+        "disabled",
+        true,
+      );
+
+      await act(async () => {
+        releaseRead();
+        await freshRead;
+      });
+      await waitFor(() =>
+        expect(screen.queryByText("NEW_VAR · Adding")).toBeNull(),
+      );
+      expect(
+        screen.getByRole("button", { name: "Add a variable" }),
+      ).toHaveProperty("disabled", false);
+      if (outcome === "removed") {
+        expect(panel.queryClient.getQueryData(listKey)).toBe(before);
+        expect(screen.queryByLabelText("Value for NEW_VAR")).toBeNull();
+      } else {
+        expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+          "value",
+          "NORMALIZED",
+        );
+      }
+    },
+  );
+
+  it("cancels an older read and waits for the post-write snapshot to unlock the editor", async () => {
+    const original = [{ key: "OLD_VAR", value: "original" }];
+    let releaseWrite: () => void = () => {
+      throw new Error("write has not started");
+    };
+    const write = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let releaseStale: () => void = () => {
+      throw new Error("stale read has not started");
+    };
+    const staleRead = new Promise<{ entries: typeof original }>((resolve) => {
+      releaseStale = () =>
+        resolve({ entries: [...original, { key: "GHOST", value: "stale" }] });
+    });
+    let releaseFresh: () => void = () => {
+      throw new Error("fresh read has not started");
+    };
+    const freshRead = new Promise<{ entries: typeof original }>((resolve) => {
+      releaseFresh = () =>
+        resolve({
+          entries: [...original, { key: "NEW_VAR", value: "NORMALIZED" }],
+        });
+    });
+    let reads = 0;
+    const panel = renderShellPanelOverRpc({
+      overrideHandlers: {
+        "config.env.list": () => {
+          reads += 1;
+          if (reads === 1) return { entries: original };
+          return reads === 2 ? staleRead : freshRead;
+        },
+        "config.env.set": async (request) => {
+          await write;
+          return { key: request.key, value: request.value };
+        },
+      },
+    });
+    await screen.findByLabelText("Value for OLD_VAR");
+    const listScope = queryKeys.hostMethodScope("host-a", "config.env.list");
+    const envQuery = panel.queryClient
+      .getQueryCache()
+      .find({ queryKey: listScope, exact: false });
+    if (envQuery === undefined)
+      throw new Error("environment query did not mount");
+    const cancel = vi.spyOn(envQuery, "cancel");
+    let staleRefetch: Promise<void> = Promise.resolve();
+    act(() => {
+      staleRefetch = panel.queryClient.refetchQueries({ queryKey: listScope });
+    });
+    await waitFor(() => expect(reads).toBe(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "NEW_VAR" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "one" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    await act(async () => {
+      releaseWrite();
+      await write;
+    });
+    await waitFor(() => expect(reads).toBe(3));
+    expect(cancel).toHaveBeenCalledWith({ silent: true });
+    await act(async () => {
+      releaseStale();
+      await staleRead;
+    });
+    expect(screen.getByText("NEW_VAR · Adding").textContent).toContain(
+      "NEW_VAR",
+    );
+    expect(screen.getByLabelText("New variable name")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.queryByLabelText("Value for GHOST")).toBeNull();
+
+    await act(async () => {
+      releaseFresh();
+      await freshRead;
+      await staleRefetch;
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("NEW_VAR · Adding")).toBeNull(),
+    );
+    expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+      "value",
+      "NORMALIZED",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", false);
+    expect(screen.queryByLabelText("Value for GHOST")).toBeNull();
+  });
+});
 
 const STALE_DETAIL: EnvironmentStaleWrite = {
   changedBy: { kind: "dashboard" },

@@ -52,10 +52,12 @@ export interface EnvOverrideValue {
 interface PendingEnvWrite {
   readonly oldKey: string;
   readonly key: string;
-  readonly value: string | null;
   readonly action: "put" | "remove";
   readonly original: EnvOverrideValue | null;
-  readonly accepted: boolean;
+}
+
+interface SavedEnvRow {
+  readonly key: string;
 }
 
 interface Draft {
@@ -277,24 +279,6 @@ function credentialError(
   return null;
 }
 
-/** A write is settled only after both acceptance and the observing read. */
-function envWriteObserved(
-  overrides: readonly EnvOverrideValue[],
-  pending: PendingEnvWrite | null,
-): boolean {
-  if (pending === null || !pending.accepted) return false;
-  if (pending.action === "remove")
-    return !overrides.some((entry) => entry.key === pending.key);
-  if (
-    !overrides.some(
-      (entry) => entry.key === pending.key && entry.value === pending.value,
-    )
-  )
-    return false;
-  if (pending.oldKey === "" || pending.oldKey === pending.key) return true;
-  return !overrides.some((entry) => entry.key === pending.oldKey);
-}
-
 /** Retain only the submitted row, keeping a pending add in its own draft. */
 function envRowsWithPending(
   overrides: readonly EnvOverrideValue[],
@@ -346,27 +330,24 @@ export function EnvOverrideEditor(props: {
   readonly keyRefusal: KeyRefusalFor;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
+  /** Resolves after the write and its post-write overrides read complete. */
   readonly onCommit: (
     oldKey: string,
     newKey: string,
     value: string | null,
   ) => void | Promise<void>;
+  /** Resolves after the removal and its post-write overrides read complete. */
   readonly onDelete: (key: string) => void | Promise<void>;
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
   const { credentialRefusal, namePlaceholder, emptyLabel } = props;
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<PendingEnvWrite | null>(null);
+  const [savedRow, setSavedRow] = useState<SavedEnvRow | null>(null);
   const submittingRef = useRef(false);
   const [writeError, setWriteError] = useState<string | null>(null);
   const disabled = props.disabled || pending !== null;
-  const observed = envWriteObserved(props.overrides, pending);
-  if (observed && pending !== null) {
-    if (pending.oldKey === "" && pending.action === "put") setAdding(false);
-    setPending(null);
-  }
-  // Only a submitted write is retained, never a second cache of the list.
-  // Its read can lag acceptance, or arrive before the mutation's reply.
+  // Retain the submitted row until the caller finishes its post-write read.
   const overrides = envRowsWithPending(props.overrides, pending);
   const keys = overrides.map((entry) => entry.key);
   async function submit(
@@ -379,14 +360,16 @@ export function EnvOverrideEditor(props: {
     setWriteError(null);
     try {
       await run();
-      setPending({ ...write, accepted: true });
+      submittingRef.current = false;
+      if (write.oldKey === "" && write.action === "put") setAdding(false);
+      setSavedRow({ key: write.oldKey });
+      setPending(null);
     } catch (error) {
+      submittingRef.current = false;
       setPending(null);
       setWriteError(
         error instanceof Error ? error.message : "Couldn't save this variable.",
       );
-    } finally {
-      submittingRef.current = false;
     }
   }
   const onCommit = (
@@ -398,10 +381,8 @@ export function EnvOverrideEditor(props: {
       {
         oldKey,
         key,
-        value,
         action: "put",
         original: props.overrides.find((entry) => entry.key === oldKey) ?? null,
-        accepted: false,
       },
       () => props.onCommit(oldKey, key, value),
     );
@@ -411,10 +392,8 @@ export function EnvOverrideEditor(props: {
       {
         oldKey: key,
         key,
-        value: null,
         action: "remove",
         original: props.overrides.find((entry) => entry.key === key) ?? null,
-        accepted: false,
       },
       () => props.onDelete(key),
     );
@@ -493,6 +472,7 @@ export function EnvOverrideEditor(props: {
                 note={props.rowNotes.get(entry.key) ?? null}
                 details={props.renderDetails?.(entry.key) ?? null}
                 staleRefusal={props.staleRefusal}
+                savedRow={savedRow}
                 onCommit={onCommit}
                 onDelete={onDelete}
               />
@@ -550,6 +530,7 @@ function EnvOverrideRow(props: {
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
+  readonly savedRow: SavedEnvRow | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -560,14 +541,23 @@ function EnvOverrideRow(props: {
   const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
     props;
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry));
-  // After this row's save was refused as stale, the draft follows the
-  // setting as it is re-read, so the refused value is never shown again nor
-  // sent on blur or when the row goes away; the person's next edit ends it.
+  // After a completed save or stale refusal, follow the authoritative value
+  // until the next edit, so a normalized or superseded draft is not resubmitted.
+  const [seenSavedRow, setSeenSavedRow] = useState(props.savedRow);
+  const saved =
+    props.savedRow !== seenSavedRow && props.savedRow?.key === entry.key;
+  if (props.savedRow !== seenSavedRow) setSeenSavedRow(props.savedRow);
   const [following, setFollowing] = useState(false);
   const [seenRefusal, setSeenRefusal] = useState(
     props.staleRefusal === null ? 0 : props.staleRefusal.seq,
   );
-  if (props.staleRefusal !== null && props.staleRefusal.seq !== seenRefusal) {
+  if (saved) {
+    setFollowing(true);
+    setDraft(draftOf(entry));
+  } else if (
+    props.staleRefusal !== null &&
+    props.staleRefusal.seq !== seenRefusal
+  ) {
     setSeenRefusal(props.staleRefusal.seq);
     if (props.staleRefusal.key === entry.key) {
       setFollowing(true);

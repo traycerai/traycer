@@ -20,6 +20,7 @@ import { useRunnerTraycerShellRevertArgsMutation } from "@/hooks/runner/use-runn
 import { useRunnerTraycerShellListQuery } from "@/hooks/runner/use-runner-traycer-shell-list-query";
 import type {
   ShellConfigController,
+  ShellCommandCallbacks,
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
 
@@ -117,14 +118,28 @@ export function useBridgeShellConfigController(props: {
     [traycerCli],
   );
 
+  // Invalidation starts the post-write read; success means that read has also
+  // finished, including when structural sharing retains the original array.
+  const afterEnvRead = (
+    callbacks: ShellCommandCallbacks,
+  ): ShellCommandCallbacks => ({
+    onSuccess: () => {
+      void queryClient
+        .refetchQueries(
+          { queryKey: runnerQueryKeys.traycerEnvOverrideList(traycerCli) },
+          { cancelRefetch: false, throwOnError: true },
+        )
+        .then(callbacks.onSuccess, callbacks.onError);
+    },
+    onError: callbacks.onError,
+  });
+
   return {
     config: configQuery.data,
-    // The bridge reads the on-disk store directly, so there is no transport to
-    // fail the way a host RPC can. Its errors surface through the runner's own
-    // toasts; the panel's read-failed arm is for the RPC path.
-    configError: null,
+    configError: configQuery.error ?? envListQuery.error,
     retryConfig: () => {
       void configQuery.refetch();
+      void envListQuery.refetch();
     },
     shells: shellListQuery.data ?? [],
     refreshShells: () => {
@@ -139,6 +154,8 @@ export function useBridgeShellConfigController(props: {
       removeMutation.isPending ||
       revertMutation.isPending,
     envPending:
+      envListQuery.data === undefined ||
+      envListQuery.isError ||
       envSetMutation.isPending ||
       envDeleteMutation.isPending ||
       envRenameMutation.isPending,
@@ -151,12 +168,14 @@ export function useBridgeShellConfigController(props: {
       removeMutation.mutate({ path }, callbacks),
     revertShellArgs: (path, callbacks) =>
       revertMutation.mutate({ path }, callbacks),
-    setEnv: (entry, callbacks) => envSetMutation.mutate(entry, callbacks),
+    setEnv: (entry, callbacks) =>
+      envSetMutation.mutate(entry, afterEnvRead(callbacks)),
     setEnvAsync: async (entry) => {
       await envSetMutation.mutateAsync(entry);
     },
     renameEnv: (rename, callbacks) =>
-      envRenameMutation.mutate(rename, callbacks),
-    deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
+      envRenameMutation.mutate(rename, afterEnvRead(callbacks)),
+    deleteEnv: (key, callbacks) =>
+      envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),
   };
 }

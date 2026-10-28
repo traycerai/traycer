@@ -13,7 +13,6 @@ import type {
   ConfigEnvEntry,
 } from "@traycer/protocol/host/config/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
 import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
@@ -642,7 +641,7 @@ function ShellSettingsPanelBody(props: {
  */
 function ShellConfigUnavailable(props: {
   readonly compact: boolean;
-  readonly configError: HostRpcError | null;
+  readonly configError: Error | null;
   readonly onRetryConfig: () => void;
 }): ReactNode {
   if (props.configError === null) {
@@ -675,7 +674,7 @@ function ShellConfigUnavailable(props: {
 function TerminalShellGroup(props: {
   readonly compact: boolean;
   readonly config: ShellConfigSnapshot | undefined;
-  readonly configError: HostRpcError | null;
+  readonly configError: Error | null;
   readonly onRetryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
   readonly onRefreshShells: () => void;
@@ -714,7 +713,7 @@ function TerminalShellGroup(props: {
           saved={props.savedTarget === "flags"}
           label="Startup flags"
         />
-        {config === undefined ? (
+        {config === undefined || props.configError !== null ? (
           <ShellConfigUnavailable
             compact={props.compact}
             configError={props.configError}

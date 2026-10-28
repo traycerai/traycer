@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
@@ -18,7 +18,8 @@ import {
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
 import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { environmentMutationKeys } from "@/lib/query-keys";
+import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
+import { useHostBinding } from "@/lib/host";
 import {
   EnvOverrideEditor,
   type KeyRefusal,
@@ -75,6 +76,17 @@ export function ProviderEnvOverridesSection({
   readonly envOverrideScope: ProviderCliState["nativeCapabilities"]["envOverrideScope"];
 }) {
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
+  const queryClient = useQueryClient();
+  const hostClient = useHostBinding()?.hostClient ?? null;
+  // Join the mutation's invalidation fetch. Completion also covers reads whose
+  // values are unchanged by structural sharing or supersede the submitted value.
+  const rereadOverrides = (hostId: string | null): Promise<void> =>
+    hostId === null
+      ? Promise.resolve()
+      : queryClient.refetchQueries(
+          { queryKey: queryKeys.hostMethodScope(hostId, "providers.list") },
+          { cancelRefetch: false, throwOnError: true },
+        );
   const viewerId = useCloudChatViewerId();
   const configurationKey = useConfigurationKey();
   // A team is read from the cloud (`TeamProviders`): this tab is Personal on
@@ -162,14 +174,21 @@ export function ProviderEnvOverridesSection({
 
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
-  const onCommit = (
+  const onCommit = async (
     oldKey: string,
     newKey: string,
     value: string | null,
   ): Promise<void> => {
     if (credentialRefusal !== null)
       return Promise.reject(new Error(credentialRefusal));
-    return commitOverride.mutateAsync({ oldKey, newKey, value });
+    const hostId = hostClient?.getActiveHostId() ?? null;
+    await commitOverride.mutateAsync({ oldKey, newKey, value });
+    await rereadOverrides(hostId);
+  };
+  const onDelete = async (key: string): Promise<void> => {
+    const hostId = hostClient?.getActiveHostId() ?? null;
+    await deleteOverride.mutateAsync({ providerId, key });
+    await rereadOverrides(hostId);
   };
 
   return (
@@ -223,9 +242,7 @@ export function ProviderEnvOverridesSection({
           />
         )}
         onCommit={onCommit}
-        onDelete={async (key) => {
-          await deleteOverride.mutateAsync({ providerId, key });
-        }}
+        onDelete={onDelete}
       />
       {keyShaped.dialog}
     </div>
