@@ -1997,6 +1997,75 @@ describe("The Skills page's skills from a source", () => {
       });
     });
 
+    describe("a source with more skills than one import takes", () => {
+      const many = Array.from({ length: 70 }, (_, index) => {
+        const name = `skill-${String(index + 1).padStart(2, "0")}`;
+        return {
+          name,
+          description: null,
+          relPath: `skills/${name}`,
+          installed: false,
+        };
+      });
+      const readMany = () =>
+        readSource((request) =>
+          request.step === "inspect"
+            ? { ...inspected, candidates: many }
+            : { outcome: "installed", names: [] },
+        );
+
+      it("reads Select all as mixed once the selection leaves the set it chooses, and picks that set again", async () => {
+        const { dialog } = await readMany();
+        const box = (name: string) =>
+          within(dialog).getByRole("checkbox", { name });
+        await within(dialog).findByRole("checkbox", { name: "skill-01" });
+        const all = within(dialog).getByRole("checkbox", {
+          name: "Select all skills",
+        });
+        expect(all.getAttribute("aria-checked")).toBe("true");
+
+        await userEvent.click(box("skill-10"));
+        await userEvent.click(box("skill-65"));
+
+        expect(within(dialog).getByText("64 of 70 selected")).toBeTruthy();
+        expect(all.getAttribute("aria-checked")).toBe("mixed");
+
+        await userEvent.click(all);
+
+        expect(within(dialog).getByText("64 of 70 selected")).toBeTruthy();
+        expect(box("skill-10").getAttribute("data-state")).toBe("checked");
+        expect(box("skill-64").getAttribute("data-state")).toBe("checked");
+        expect(box("skill-65").getAttribute("data-state")).toBe("unchecked");
+        expect(box("skill-65").hasAttribute("disabled")).toBe(true);
+        expect(all.getAttribute("aria-checked")).toBe("true");
+      });
+
+      it("scrolls the candidate list on its own, outside the cap line and the Import button", async () => {
+        const { dialog } = await readMany();
+
+        await within(dialog).findByRole("checkbox", { name: "skill-01" });
+
+        const list =
+          within(dialog).getAllByRole("listitem").at(0)?.parentElement ?? null;
+        if (list === null) throw new Error("no candidate list");
+        expect(within(list).getAllByRole("listitem")).toHaveLength(70);
+        expect(list.className).toContain("overflow-y-auto");
+        expect(list.className).toContain("max-h-[50dvh]");
+        expect(
+          list.contains(
+            within(dialog).getByText(
+              "You can import up to 64 skills at a time.",
+            ),
+          ),
+        ).toBe(false);
+        expect(
+          list.contains(
+            within(dialog).getByRole("button", { name: "Import 64 skills" }),
+          ),
+        ).toBe(false);
+      });
+    });
+
     it.each<readonly ["exists" | "bundled_name", string, string]>([
       [
         "exists",

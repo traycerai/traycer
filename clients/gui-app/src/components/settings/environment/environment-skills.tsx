@@ -492,13 +492,9 @@ function SkillsPageList(props: {
     restoreBundled.isPending ||
     rereading;
 
-  const whileRereading = async <T,>(work: () => Promise<T>): Promise<T> => {
+  const whileRereading = <T,>(work: () => Promise<T>): Promise<T> => {
     setRereading(true);
-    try {
-      return await work();
-    } finally {
-      setRereading(false);
-    }
+    return work().finally(() => setRereading(false));
   };
 
   const savePolicy = async (

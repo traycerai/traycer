@@ -177,7 +177,7 @@ export function EnvironmentSkillImportDialog(props: {
                   : null
               }
               disabled={pending}
-              selectableCount={selectable.length}
+              selectableNames={selectable}
               limit={ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS}
               onToggle={(candidateName) =>
                 setSelected(

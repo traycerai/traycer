@@ -120,7 +120,9 @@ export function ProviderSkillComposerDialog(props: {
               selectedNames={draft.selectedNames}
               note={draft.pickerNote}
               disabled={props.pending}
-              selectableCount={draft.inspectSession.candidates.length}
+              selectableNames={draft.inspectSession.candidates.map(
+                (candidate) => candidate.name,
+              )}
               limit={null}
               onToggle={(candidateName) => {
                 draft.setSelectedNames(
@@ -524,7 +526,7 @@ export function PickerFields({
   selectedNames,
   note,
   disabled,
-  selectableCount,
+  selectableNames,
   limit,
   onToggle,
   onToggleAll,
@@ -534,8 +536,11 @@ export function PickerFields({
   readonly selectedNames: readonly string[];
   readonly note: string | null;
   readonly disabled: boolean;
-  /** How many Select all chooses: what the toggle reads as all selected. */
-  readonly selectableCount: number;
+  /**
+   * The names Select all chooses. The toggle reads how many of them are
+   * selected, so its state is what pressing it changes.
+   */
+  readonly selectableNames: readonly string[];
   /** The most that can be chosen at once, or `null` for no cap: past it, no other row can be checked. */
   readonly limit: number | null;
   readonly onToggle: (name: string) => void;
@@ -543,6 +548,9 @@ export function PickerFields({
   readonly onBack: () => void;
 }): ReactNode {
   const selected = new Set(selectedNames);
+  const selectedSelectable = selectableNames.filter((name) =>
+    selected.has(name),
+  ).length;
   return (
     <div className="flex flex-col gap-3">
       {note === null ? null : (
@@ -556,14 +564,16 @@ export function PickerFields({
         </span>
         <SelectAllToggle
           accessibleLabel="Select all skills"
-          selectableCount={selectableCount}
-          selectedCount={selectedNames.length}
+          selectableCount={selectableNames.length}
+          selectedCount={selectedSelectable}
           disabled={disabled}
           testId="skill-picker-select-all"
           onToggle={onToggleAll}
         />
       </div>
-      <ul className="flex flex-col gap-2">
+      {/* Its own scroll region, so a long source leaves the note above and
+          the dialog's actions in view. */}
+      <ul className="flex max-h-[50dvh] flex-col gap-2 overflow-y-auto">
         {candidates.map((candidate) => {
           const checked = selected.has(candidate.name);
           const full = limit !== null && selectedNames.length >= limit;
