@@ -595,6 +595,16 @@ export function sandboxVerbFailureLine(
 
 export const COMPUTE_CHARGED_WHILE_AWAKE =
   "Compute is charged while it is awake.";
+
+/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
+export function settingsDidntApplyOnLine(
+  configuration: string,
+  name: string,
+  reference: string,
+): string {
+  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
+}
+
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";
 
