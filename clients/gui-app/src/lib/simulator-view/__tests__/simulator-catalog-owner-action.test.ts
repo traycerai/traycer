@@ -44,12 +44,24 @@ function record(
   };
 }
 
+/** Sessions whose close this host refuses. */
+const refusedCloses = new Set<string>();
+
 /** A real client over a recording messenger: the host's side is the handler. */
 function hostSide() {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "request",
-    handlers: { "simulator.close": () => ({ closed: 1 }) },
+    handlers: {
+      "simulator.close": (params) => {
+        if (
+          params.sessionId !== undefined &&
+          refusedCloses.has(params.sessionId)
+        )
+          throw new Error("This simulator would not close.");
+        return { closed: 1 };
+      },
+    },
   });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -72,6 +84,7 @@ function signIn(userId: string): void {
 describe("closeSimulatorCatalogSessions", () => {
   beforeEach(() => {
     remote.ready = false;
+    refusedCloses.clear();
     signIn(USER);
   });
   afterEach(() => {
@@ -117,6 +130,29 @@ describe("closeSimulatorCatalogSessions", () => {
         version: { major: 1, minor: 1 },
       });
     }
+  });
+
+  it("names the sessions the host ended apart from the close it refused", async () => {
+    refusedCloses.add("session-agent");
+    const { messenger, client } = hostSide();
+
+    const outcome = await closeSimulatorCatalogSessions({
+      epicId: EPIC,
+      hostId: HOST,
+      records: [
+        record("session-person", "udid-1"),
+        record("session-agent", "udid-1"),
+      ],
+      owner: { userId: USER, entry: mockLocalHostEntry, client },
+    });
+
+    expect(outcome.closed.map((item) => item.sessionId)).toEqual([
+      "session-person",
+    ]);
+    expect(outcome.failures.map((error) => error.message)).toEqual([
+      "This simulator would not close.",
+    ]);
+    expect(messenger.calls).toHaveLength(2);
   });
 
   it("refuses a host the directory marks offline, without sending anything", async () => {

@@ -59,6 +59,7 @@ vi.mock("@/hooks/simulator/use-simulator-catalog-inventory", () => ({
   useSimulatorCatalogInventory: () => ({
     status: "ready",
     scope: "cloud",
+    listsSessions: true,
     records: [],
     refetch: () => undefined,
   }),

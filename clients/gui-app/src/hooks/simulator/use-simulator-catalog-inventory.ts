@@ -27,6 +27,14 @@ export interface SimulatorCatalogQueryData {
 export interface SimulatorCatalogModel {
   readonly status: "loading" | "error" | "ready";
   readonly scope: SimulatorCatalogQueryData["scope"];
+  /**
+   * Whether this catalog answers for the task's sessions at all. A host that
+   * cannot relay one - too old for the method, no cloud behind it, a cloud
+   * whose catalog is not enabled - lists none and never will, so nothing may
+   * wait on its snapshot for a session to appear. A read that merely failed
+   * still lists them, once it succeeds.
+   */
+  readonly listsSessions: boolean;
   readonly records: readonly SimulatorCatalogRecord[];
   readonly refetch: () => void;
 }
@@ -135,9 +143,11 @@ export function useSimulatorCatalogInventory(args: {
   let status: SimulatorCatalogModel["status"] = "ready";
   if (query.isError || query.data?.unavailable === true) status = "error";
   else if (supported && query.isPending) status = "loading";
+  const scope = query.data?.scope ?? "cloud";
   return {
     status,
-    scope: query.data?.scope ?? "cloud",
+    scope,
+    listsSessions: supported && scope === "cloud",
     records: query.data?.records ?? EMPTY_RECORDS,
     refetch,
   };

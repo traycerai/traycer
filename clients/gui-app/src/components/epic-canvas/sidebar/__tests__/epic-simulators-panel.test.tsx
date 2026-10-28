@@ -59,6 +59,7 @@ const world = vi.hoisted(() => ({
   streamListeners: new Set<() => void>(),
   openTile: vi.fn(),
   toastError: vi.fn(),
+  hostErrorToast: vi.fn(),
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
@@ -97,7 +98,9 @@ vi.mock("@/lib/host/read-negotiated-method-version", () => ({
 vi.mock("@traycer-clients/shared/host-transport/remote/index", () => ({
   hasReadyRemoteSession: () => false,
 }));
-vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: world.hostErrorToast,
+}));
 vi.mock("sonner", () => ({ toast: { error: world.toastError } }));
 vi.mock("@/stores/epics/canvas/store", () => ({
   useIsActiveTile: () => false,
@@ -272,6 +275,20 @@ function isStream(value: unknown): value is SimulatorSessionsState {
   return typeof value === "object" && value !== null && "lifecycle" in value;
 }
 
+/**
+ * Every open the GUI still has pending, as a host that is still running them
+ * answers `simulator.list`: the default, so a read taken while an answer is
+ * in flight never reads as a failure.
+ */
+function openingEveryPendingOpen(): SimulatorState {
+  return {
+    ...STREAM_BASE,
+    opening: Object.keys(
+      useSimulatorPendingOpensStore.getState().byRequestId,
+    ).map((requestId) => ({ requestId })),
+  };
+}
+
 /** The host's side: the catalog it lists and how each open answers. */
 const host_ = {
   catalog: { kind: "available", snapshot: { version: 1, records: [] } } as
@@ -279,7 +296,10 @@ const host_ = {
     | { kind: "not-ready" },
   catalogReads: 0,
   openAnswer: (): Promise<SimulatorOpenResponse> => new Promise(() => {}),
+  listAnswer: openingEveryPendingOpen,
   closes: [] as unknown[],
+  /** Sessions whose close the host refuses. */
+  closeFails: new Set<string>(),
   opens: [] as unknown[],
 };
 
@@ -401,10 +421,13 @@ describe("Mobile simulators panel", () => {
     world.streamByHost.set(HOST, connecting);
     world.openTile.mockReset();
     world.toastError.mockReset();
+    world.hostErrorToast.mockReset();
     host_.catalogReads = 0;
     host_.closes = [];
+    host_.closeFails = new Set();
     host_.opens = [];
     host_.openAnswer = () => new Promise(() => {});
+    host_.listAnswer = openingEveryPendingOpen;
     setCatalog([]);
     queryClient = new QueryClient({
       defaultOptions: {
@@ -420,12 +443,18 @@ describe("Mobile simulators panel", () => {
           host_.catalogReads += 1;
           return host_.catalog;
         },
+        "simulator.list": () => host_.listAnswer(),
         "simulator.open": (params) => {
           host_.opens.push(params);
           return host_.openAnswer();
         },
         "simulator.close": (params) => {
           host_.closes.push(params);
+          if (
+            params.sessionId !== undefined &&
+            host_.closeFails.has(params.sessionId)
+          )
+            throw new Error("This simulator would not close.");
           return { closed: 1 };
         },
       },
@@ -554,6 +583,34 @@ describe("Mobile simulators panel", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("epic-simulator-row-udid-1")).toBeNull();
     });
+  });
+
+  it("keeps a session whose close the host confirmed hidden when another in the row fails, and re-sends only the failed one", async () => {
+    setCatalog([
+      record("session-person", { lastActivityAt: 300 }),
+      record("session-agent", { lastActivityAt: 100, drivenByAgent: true }),
+    ]);
+    host_.closeFails = new Set(["session-agent"]);
+    renderPanel(vi.fn());
+
+    fireEvent.click(
+      await screen.findByTestId("epic-simulator-row-close-udid-1"),
+    );
+
+    await waitFor(() => {
+      expect(world.hostErrorToast).toHaveBeenCalledTimes(1);
+    });
+    expect(host_.closes).toHaveLength(2);
+    // The row stays: the agent's session is still live. The person's session
+    // closed, so a second Close must not send its already-answered close.
+    host_.closes = [];
+    fireEvent.click(
+      await screen.findByTestId("epic-simulator-row-close-udid-1"),
+    );
+    await waitFor(() => {
+      expect(host_.closes).toHaveLength(1);
+    });
+    expect(host_.closes[0]).toMatchObject({ sessionId: "session-agent" });
   });
 
   describe("the person's own open", () => {
@@ -737,6 +794,118 @@ describe("Mobile simulators panel", () => {
       expect(screen.getAllByTestId("epic-simulator-row-udid-1")).toHaveLength(
         1,
       );
+    });
+
+    it("ends the row on the answer's session where the catalog lists no sessions at all", async () => {
+      // A machine with no cloud catalog behind it: the row's successor never
+      // arrives, so waiting for the snapshot to hold the session is waiting
+      // for something that cannot come.
+      host_.catalog = { kind: "local-only" };
+      const place = vi.fn();
+      host_.openAnswer = () => Promise.resolve(openResponse("session-new"));
+      renderPanel(place);
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+
+      await waitFor(() => {
+        expect(place).toHaveBeenCalledTimes(1);
+      });
+      await waitFor(() => {
+        expect(useSimulatorPendingOpensStore.getState().byRequestId).toEqual(
+          {},
+        );
+      });
+      expect(screen.queryByText("Booting")).toBeNull();
+      expect(world.toastError).not.toHaveBeenCalled();
+    });
+
+    it("ends the row, with a failure, when the answer is lost and a fresh read shows the host never heard of the open", async () => {
+      const place = vi.fn();
+      host_.openAnswer = () =>
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "The host did not answer in time.",
+            requestId: "request",
+            method: "simulator.open",
+            fatalDetails: null,
+          }),
+        );
+      // Neither an open in flight nor a session carrying it, and nothing on
+      // this host will change again: the published state alone never moves.
+      host_.listAnswer = () => STREAM_BASE;
+      publishStream({});
+      renderPanel(place);
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+
+      await waitFor(() => {
+        expect(world.toastError).toHaveBeenCalledWith(
+          "Couldn't open iPhone 16.",
+        );
+      });
+      expect(useSimulatorPendingOpensStore.getState().byRequestId).toEqual({});
+      expect(screen.queryByText("Booting")).toBeNull();
+      expect(place).not.toHaveBeenCalled();
+    });
+
+    it("takes a second Watch's session for the first open, whose requestId the host moved off it", async () => {
+      const place = vi.fn();
+      host_.openAnswer = () =>
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "The host did not answer in time.",
+            requestId: "request",
+            method: "simulator.open",
+            fatalDetails: null,
+          }),
+        );
+      publishStream({});
+      renderPanel(place);
+
+      fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+      const first = await waitFor(() => {
+        const [id] = Object.keys(
+          useSimulatorPendingOpensStore.getState().byRequestId,
+        );
+        expect(id).toBeDefined();
+        return id;
+      });
+      publishStream({ opening: [{ requestId: first }] });
+      await waitFor(() => {
+        expect(
+          useSimulatorPendingOpensStore.getState().byRequestId[first]
+            ?.seenOpening,
+        ).toBe(true);
+      });
+
+      // The second Watch of the instance is answered with the SAME live
+      // session, and the host stamps it with that open's requestId - so the
+      // first open's id is now on nothing the host publishes.
+      host_.openAnswer = () => Promise.resolve(openResponse("session-held"));
+      fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+      const second = await waitFor(() => {
+        const id = Object.keys(
+          useSimulatorPendingOpensStore.getState().byRequestId,
+        ).find((item) => item !== first);
+        expect(id).toBeDefined();
+        return id;
+      });
+      publishStream({
+        opening: [],
+        sessions: [
+          { ...openResponse("session-held").session, requestId: second },
+        ],
+      });
+
+      await waitFor(() => {
+        expect(
+          useSimulatorPendingOpensStore.getState().byRequestId[first]
+            ?.sessionId,
+        ).toBe("session-held");
+      });
+      expect(world.toastError).not.toHaveBeenCalled();
     });
   });
 });

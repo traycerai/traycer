@@ -42,23 +42,45 @@ function readyClient(
 }
 
 /**
+ * What one row's Close did. The two are independent: a row of several
+ * sessions can have some ended and one refused, and the caller owes the
+ * person both halves - the ended ones hidden, the refusal reported.
+ */
+export interface SimulatorCatalogCloseOutcome {
+  /** The sessions the host answered for; safe to treat as closed. */
+  readonly closed: readonly SimulatorCatalogRecord[];
+  /** Why each close that failed did. */
+  readonly failures: readonly Error[];
+}
+
+function closeFailure(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error(String(reason));
+}
+
+/**
  * Ends every session in `records` with `close@1.1 { sessionId }`, once each:
  * a row's Close ends the person's session and the agent's alike, and a closed
  * row's Dismiss retires the one ended record. Every record in the viewer's
  * snapshot is one the viewer owns: the catalog is read per user.
+ *
+ * Every send is awaited to its own answer, and the outcome names the sessions
+ * that ended beside the closes that failed - never the first failure alone.
+ * The host answers a close before its tombstone lands, so a session the
+ * caller does not learn is closed comes back as a row whose next Close
+ * re-sends a close the host has already answered.
  */
 export async function closeSimulatorCatalogSessions(args: {
   readonly epicId: string;
   readonly hostId: string;
   readonly records: readonly SimulatorCatalogRecord[];
   readonly owner: SimulatorCatalogOwner;
-}): Promise<void> {
+}): Promise<SimulatorCatalogCloseOutcome> {
   const client = readyClient(args.hostId, args.owner);
   for (const record of args.records) {
     if (record.hostId !== args.hostId || record.epicId !== args.epicId)
       throw new Error("Simulator session owner does not match.");
   }
-  await Promise.all(
+  const settled = await Promise.allSettled(
     args.records.map((record) =>
       client.requestWithOptions(
         "simulator.close",
@@ -80,4 +102,12 @@ export async function closeSimulatorCatalogSessions(args: {
       ),
     ),
   );
+  return {
+    closed: args.records.filter(
+      (_record, index) => settled[index].status === "fulfilled",
+    ),
+    failures: settled.flatMap((result) =>
+      result.status === "rejected" ? [closeFailure(result.reason)] : [],
+    ),
+  };
 }

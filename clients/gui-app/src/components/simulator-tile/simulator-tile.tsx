@@ -36,6 +36,7 @@ import {
   findSessionFor,
   findSimulatorForTile,
 } from "@/lib/simulator-view/simulator-tile-target";
+import { useSimulatorInventoryRefreshOnMount } from "@/lib/simulator-view/use-simulator-inventory-refresh";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
@@ -104,6 +105,9 @@ export function SimulatorTile(props: SimulatorTileProps) {
   const hostId = useTabHostId();
   const reachability = useHostReachability(hostId);
   const sessions = useSimulatorSessionsForHost({ hostId, epicId });
+  // The stream alone never starts the hub, so a restored tile would sit on an
+  // inventory the host has not read yet with nothing to attach to.
+  useSimulatorInventoryRefreshOnMount({ hostId, sessions });
   const closeTile = useCloseCanvasTileWithNestedFocus(
     viewTabId,
     tileId,
