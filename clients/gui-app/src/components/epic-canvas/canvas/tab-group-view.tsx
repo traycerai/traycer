@@ -407,12 +407,10 @@ export const TabGroupView = memo(function TabGroupView(
       if (sidebarNodeId !== null) {
         requestSidebarNodeReveal(tabId, sidebarNodeId);
       }
-      // The Browsers panel lists one host's sessions and simulators, so it is
-      // pinned to the tab's host or the row to reveal may not be listed.
-      if (
-        tab?.type === TILE_KIND_BROWSER_SESSION ||
-        tab?.type === TILE_KIND_SIMULATOR
-      ) {
+      // The Simulators group lists one host's simulators, so it is pinned to
+      // the tab's host or the row to reveal may not be listed. Browser rows
+      // are listed for every device, so a browser tab leaves the pin alone.
+      if (tab?.type === TILE_KIND_SIMULATOR) {
         useSurfaceHostSelectionStore
           .getState()
           .setSelection(tabSurfaceKey("browsers", tabId), tab.hostId);
