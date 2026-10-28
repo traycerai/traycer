@@ -988,7 +988,20 @@ describe("SimulatorTile on a @1.1 host", () => {
     });
   });
 
-  it("powers off through simulator.powerOff by instance key, with no extra confirm, and closes the tile", async () => {
+  it("waits for the handshake rather than reading an agent's session as the viewer's", async () => {
+    // The registry's third state: no handshake has completed, so neither
+    // version's session rule has been established for this host.
+    fakes.negotiated = null;
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [AGENT_SESSION] },
+    });
+    renderTile();
+
+    expect(await screen.findByTestId("simulator-loading")).toBeTruthy();
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+  });
+
+  it("asks before powering off, names what it reaches, then sends simulator.powerOff by instance key", async () => {
     fakes.sessions = sessions({
       state: { ...READY_STATE, sessions: [PERSON_SESSION] },
     });
@@ -1000,6 +1013,13 @@ describe("SimulatorTile on a @1.1 host", () => {
 
     fireEvent.click(screen.getByTestId("simulator-power-off"));
 
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("ends every task's session on it");
+    expect(dialog.textContent).toContain("A copy is deleted");
+    expect(fakes.powerOff).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Power off" }));
+
     await waitFor(() => {
       expect(fakes.closeTile).toHaveBeenCalledTimes(1);
     });
@@ -1010,7 +1030,7 @@ describe("SimulatorTile on a @1.1 host", () => {
     expect(fakes.shutdown).not.toHaveBeenCalled();
   });
 
-  it("asks first when the host answers confirm-required, and sends confirm: true only once the person agrees", async () => {
+  it("asks a second time when the host answers confirm-required, and sends confirm: true only once the person agrees again", async () => {
     fakes.sessions = sessions({
       state: { ...READY_STATE, sessions: [PERSON_SESSION] },
     });
@@ -1020,13 +1040,27 @@ describe("SimulatorTile on a @1.1 host", () => {
     renderTile();
 
     fireEvent.click(screen.getByTestId("simulator-power-off"));
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Power off",
+      }),
+    );
 
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog.textContent).toContain("An agent is using it right now");
-    expect(fakes.powerOff).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(fakes.powerOff).toHaveBeenCalledTimes(1);
+    });
+    // The host's own refusal raises the agent question, which the tile's
+    // confirm does not answer.
+    const agentDialog = await waitFor(() => {
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).toContain("An agent is using it right now");
+      return dialog;
+    });
     expect(fakes.closeTile).not.toHaveBeenCalled();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Power off" }));
+    fireEvent.click(
+      within(agentDialog).getByRole("button", { name: "Power off" }),
+    );
 
     await waitFor(() => {
       expect(fakes.closeTile).toHaveBeenCalledTimes(1);
