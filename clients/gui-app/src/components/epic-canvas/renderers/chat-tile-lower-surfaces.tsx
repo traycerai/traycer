@@ -794,6 +794,10 @@ function ComposerSurface(props: {
   const { model, layout } = props;
   const tabHostId = useTabHostId();
   const stateLine = useContext(ChatStateLineContext);
+  // Before the snapshot the pre-content body says the state line instead.
+  if (!model.runtime.snapshotLoaded) {
+    return null;
+  }
   if (stateLine !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -803,9 +807,6 @@ function ComposerSurface(props: {
         />
       </ComposerSlotShell>
     );
-  }
-  if (!model.runtime.snapshotLoaded) {
-    return null;
   }
   if (model.access.isViewer && model.access.restingSandbox !== true) {
     return <ViewerComposerSurface model={model} layout={layout} />;

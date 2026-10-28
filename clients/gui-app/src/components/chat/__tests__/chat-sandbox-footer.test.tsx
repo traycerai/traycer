@@ -142,6 +142,16 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     expect(same).not.toContain("Other members can use it");
   });
 
+  it("says the wake alone, with no money clause, before the team configuration it bills under resolves", () => {
+    const base = resting("suspended", { team: true, wakeChangesPayer: false });
+    if (base.kind !== "resting") throw new Error("expected a resting state");
+    render(<ChatSandboxFooter state={{ ...base, configuration: null }} />);
+
+    expect(document.body.textContent).toBe(
+      "e2e-sbx-rest is suspended · your next message resumes it",
+    );
+  });
+
   it("offers no action and no offline or clone wording: the next message is the wake", () => {
     render(
       <ChatSandboxFooter
@@ -203,6 +213,22 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
         }),
       }),
     ).toBeTruthy();
+  });
+
+  it("names whose bundle is out, with no action, before the team configuration resolves", () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: { userId: "viewer", userName: "V", email: "v@example.com" },
+      contextMetadata: { userId: "viewer", username: "V" },
+    });
+    const state = frozen(true);
+    if (state.kind !== "resting") throw new Error("expected a resting state");
+    render(<ChatSandboxFooter state={{ ...state, configuration: null }} />);
+
+    expect(document.body.textContent).toBe(
+      sandboxTeamFrozenStateLine(state.sandbox, "viewer"),
+    );
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 

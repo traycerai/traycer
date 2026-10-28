@@ -131,6 +131,20 @@ describe("useBoundSandboxSend", () => {
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
   });
 
+  it("keeps the draft, sending and staging nothing, until the configuration the wake bills under resolves", () => {
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: { ...resting("suspended"), configuration: null },
+      }),
+    );
+
+    expect(result.current(INPUT)).toBe(false);
+    expect(pendingSends()).toEqual([]);
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
   it("sends for the signed-in account beside another account's undelivered message in the same chat", () => {
     usePendingSandboxSendStore.setState({
       sends: {

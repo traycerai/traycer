@@ -1,9 +1,11 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   restingChatSandbox,
+  unknownSandboxLine,
   type ChatSandboxState,
 } from "@/lib/sandboxes/chat-sandbox-state";
-import { ChatSandboxStateLine } from "./chat-sandbox-state-line";
+import { chatSandboxStateLine } from "./chat-sandbox-state-line";
+import { ChatStateLineContext, type ChatStateLine } from "./chat-state-line";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
@@ -506,6 +508,7 @@ function useChatCloneAllowed(): boolean {
 function useChatTilePreContentFrame(
   reachability: HostReachability,
   hasReadySession: boolean,
+  sandboxFooter: boolean,
 ): ChatTilePreContentFrame {
   const cloneAllowed = useChatCloneAllowed();
   const [wait, setWait] = useState<ChatLoadWait>(() => ({
@@ -521,8 +524,22 @@ function useChatTilePreContentFrame(
     });
   }, []);
   return useMemo(
-    () => ({ wait, restartWait, reachability, cloneAllowed, hasReadySession }),
-    [wait, restartWait, reachability, cloneAllowed, hasReadySession],
+    () => ({
+      wait,
+      restartWait,
+      reachability,
+      cloneAllowed,
+      hasReadySession,
+      sandboxFooter,
+    }),
+    [
+      wait,
+      restartWait,
+      reachability,
+      cloneAllowed,
+      hasReadySession,
+      sandboxFooter,
+    ],
   );
 }
 
@@ -676,6 +693,7 @@ function ChatTileForChat(props: ChatTileProps) {
   const preContentFrame = useChatTilePreContentFrame(
     reachability,
     hasReadySession,
+    sandboxFooterExplains(sandboxState, reachability.status),
   );
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
@@ -704,13 +722,9 @@ function ChatTileForChat(props: ChatTileProps) {
       lease,
       hasReadySession,
     );
-    // A sandbox's state line is its only line. A destroyed one says its end
-    // here only while no session view holds the composer slot that says it.
-    if (
-      strip === "offline" &&
-      (sandboxState.kind === "none" ||
-        (sandboxState.kind === "destroyed" && handle === null))
-    ) {
+    // A sandbox's state line is its only line: the offline strip is a
+    // person's host's.
+    if (strip === "offline" && sandboxState.kind === "none") {
       return (
         <ChatDeadTileBannerWithOffer
           epicId={epicId}
@@ -743,6 +757,16 @@ function ChatTileForChat(props: ChatTileProps) {
     return null;
   })();
 
+  // The one line a sandbox's state says, in the composer's place once the
+  // transcript is in and as the body before it.
+  const stateLine = liveSandboxStateLine(sandboxState, reachability.status, {
+    epicId,
+    tabId: viewTabId,
+    chatId: node.id,
+    sourceHostId: tabHostId,
+    sourceOwnerUserId: chatRecord?.userId ?? undefined,
+  });
+
   if (handle === null) {
     return (
       <div
@@ -752,11 +776,14 @@ function ChatTileForChat(props: ChatTileProps) {
       >
         {deadTileBanner}
         <ChatTileCatchingUpBanner chat={servingKey} />
-        <ChatTilePreContent
-          testId={`chat-tile-pre-content-${node.id}`}
-          frame={preContentFrame}
-          session={null}
-        />
+        <ChatStateLineContext value={stateLine}>
+          <ChatTilePreContent
+            testId={`chat-tile-pre-content-${node.id}`}
+            frame={preContentFrame}
+            session={null}
+          />
+        </ChatStateLineContext>
+        <ChatSandboxFooter state={sandboxState} />
       </div>
     );
   }
@@ -775,21 +802,7 @@ function ChatTileForChat(props: ChatTileProps) {
         providers={providersList.data?.providers ?? []}
         hostId={tabHostId}
       >
-        <ChatSandboxStateLine
-          state={sandboxState}
-          endActions={
-            sandboxState.kind === "destroyed" ? (
-              <SandboxEndActions
-                epicId={epicId}
-                tabId={viewTabId}
-                chatId={node.id}
-                sourceHostId={tabHostId}
-                sourceOwnerUserId={chatRecord?.userId ?? undefined}
-                ended={sandboxState.ended}
-              />
-            ) : null
-          }
-        >
+        <ChatStateLineContext value={stateLine}>
           <ChatTileSessionView
             handle={handle}
             node={node}
@@ -809,7 +822,7 @@ function ChatTileForChat(props: ChatTileProps) {
             isLiveSession
             preContent={preContentFrame}
           />
-        </ChatSandboxStateLine>
+        </ChatStateLineContext>
       </TombstonedProfileProvider>
       <ChatSandboxFooter state={sandboxState} />
     </div>
@@ -827,6 +840,36 @@ function ChatTileCatchingUpBanner(props: {
       reason={serving.catchingUp}
       testId={`chat-catching-up-${props.chat.chatId}`}
     />
+  );
+}
+
+/**
+ * The live tile's sandbox line: a known state's own, or - while the state is
+ * not known and the host does not answer - the unknown line, never offline.
+ */
+function liveSandboxStateLine(
+  state: ChatSandboxState,
+  reachability: HostReachability["status"],
+  source: DeadTileOfferSource,
+): ChatStateLine | null {
+  if (state.kind === "pending" && reachability !== "reachable")
+    return { line: unknownSandboxLine(state.name), actions: null };
+  return chatSandboxStateLine(
+    state,
+    state.kind === "destroyed" ? (
+      <SandboxEndActions {...source} ended={state.ended} />
+    ) : null,
+  );
+}
+
+/** A resting or unreachable sandbox's footer explains a chat that cannot load. */
+function sandboxFooterExplains(
+  state: ChatSandboxState,
+  reachability: HostReachability["status"],
+): boolean {
+  return (
+    (state.kind === "resting" || state.kind === "unreachable") &&
+    reachability !== "reachable"
   );
 }
 
@@ -990,10 +1033,13 @@ function ChatDeadTileBannerWithOffer(
   const continues = continueOffer.eligible && props.reason === "host-offline";
   if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
     return null;
-  // Nothing about a sandbox that is moving, or whose state is not known yet,
-  // is offline.
+  // Nothing about a sandbox whose state has its own line, or is not known
+  // yet, is offline.
   if (
-    (sandboxState.kind === "pending" || sandboxState.kind === "moving") &&
+    (sandboxState.kind === "pending" ||
+      sandboxState.kind === "moving" ||
+      sandboxState.kind === "failed" ||
+      sandboxState.kind === "released") &&
     props.reason === "host-offline"
   )
     return null;

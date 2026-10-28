@@ -144,7 +144,8 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 // The container runs the real sandbox-state hook. Its external reads are
-// controlled here so the tests can exercise both answered and offline hosts.
+// controlled here so the tests can exercise both answered and offline hosts;
+// by default the task answers that the host is a person's.
 const sandboxHookSources = vi.hoisted(
   (): {
     task: TaskSandboxHost;
@@ -153,7 +154,7 @@ const sandboxHookSources = vi.hoisted(
     hostEntry: HostDirectoryEntry | null;
     sampledNow: number;
   } => ({
-    task: { kind: "other" },
+    task: { kind: "person" },
     sandboxes: [],
     configurations: {
       configurations: [{ kind: "personal" }],
@@ -343,7 +344,7 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   environments.pool = false;
   environments.list = undefined;
-  sandboxHookSources.task = { kind: "other" };
+  sandboxHookSources.task = { kind: "person" };
   sandboxHookSources.sandboxes = [];
   sandboxHookSources.configurations = {
     configurations: [{ kind: "personal" }],

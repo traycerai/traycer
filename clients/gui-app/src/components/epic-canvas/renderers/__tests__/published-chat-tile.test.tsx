@@ -233,7 +233,8 @@ const sandboxSurface = vi.hoisted(
     role: "owner" | "editor" | "viewer" | null;
     sources: {
       taskHosts: TaskHostsView;
-      sandboxes: SandboxSummary[];
+      /** `null`: the list read failed, or is disabled, with nothing cached. */
+      sandboxes: SandboxSummary[] | null;
       entry: HostDirectoryEntry | null;
     } | null;
   } => ({ state: { kind: "none" }, role: null, sources: null }),
@@ -272,13 +273,17 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
     >();
   return {
     ...actual,
-    useSandboxList: () =>
-      sandboxSurface.sources === null
-        ? actual.useSandboxList()
-        : {
-            data: { sandboxes: sandboxSurface.sources.sandboxes },
-            isLoading: false,
-          },
+    useSandboxList: () => {
+      const sources = sandboxSurface.sources;
+      if (sources === null) return actual.useSandboxList();
+      return {
+        data:
+          sources.sandboxes === null
+            ? undefined
+            : { sandboxes: sources.sandboxes },
+        isLoading: false,
+      };
+    },
   };
 });
 vi.mock(
@@ -1859,7 +1864,7 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
 
   it("draws no offline banner, no Clone and no offline footer after a reload, before the task's hosts answer", () => {
     sandboxSurface.sources = {
-      taskHosts: { kind: "loading" },
+      taskHosts: { kind: "none" },
       sandboxes: [],
       entry: null,
     };
@@ -1874,7 +1879,7 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
 
   it("never prints the raw host id of a destroyed sandbox the directory no longer lists, and names it once the task's end arrives", () => {
     sandboxSurface.sources = {
-      taskHosts: { kind: "loading" },
+      taskHosts: { kind: "none" },
       sandboxes: [],
       entry: null,
     };
@@ -1915,4 +1920,133 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
       "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.",
     );
   });
+});
+
+/**
+ * One precedence on the copy, through the real hook: a task end, then a
+ * listed row's known state, then a move, then unknown. A failed or disabled
+ * read never proves the host is not a sandbox.
+ */
+describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
+  function mountOwnCopy(): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: NODE.ownerUserId,
+        userName: "Owner",
+        email: "owner@example.com",
+      },
+      contextMetadata: { userId: NODE.ownerUserId, username: "Owner" },
+    });
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "owner-host-1",
+    });
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+  }
+
+  function listed(overrides: Partial<SandboxSummary>): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: "sbx-p1",
+      hostId: "owner-host-1",
+      displayName: "e2e-sbx-p1",
+      ...overrides,
+    });
+  }
+
+  const FAILED_AT = new Date(2026, 9, 28, 1, 2).getTime();
+  const FAILED_TIME = new Date(FAILED_AT).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  it("keeps a reloaded chat unknown, never offline, when both the task's hosts and the list fail", () => {
+    sandboxSurface.sources = {
+      taskHosts: { kind: "error", retry: () => undefined },
+      sandboxes: null,
+      entry: null,
+    };
+    mountOwnCopy();
+
+    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+      "This chat's sandbox isn't available — this chat stays readable.",
+    );
+  });
+
+  it("keeps a listed resting team sandbox resting, with its footer and its wake, before its configuration resolves", () => {
+    sandboxSurface.sources = {
+      taskHosts: { kind: "none" },
+      sandboxes: [
+        listed({
+          state: "suspended",
+          environmentId: "env-not-loaded",
+          createdBy: { userId: "member-2", displayName: "Dana" },
+        }),
+      ],
+      entry: null,
+    };
+    mountOwnCopy();
+
+    expect(chatTileSessionViewCalls.at(-1)?.restingSandbox).toMatchObject({
+      kind: "resting",
+      configuration: null,
+    });
+    expect(
+      screen.getByText(
+        "e2e-sbx-p1 is suspended · your next message resumes it",
+      ),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("isn't available");
+  });
+
+  it.each([
+    [
+      "failed",
+      {
+        state: "failed",
+        failureCode: "boot-timeout",
+        lastTransitionAt: FAILED_AT,
+      },
+      `e2e-sbx-p1 failed to start (SBX-0414) at ${FAILED_TIME} · Nothing is billed for a sandbox that never woke · support reference in DetailsDetails`,
+    ],
+    [
+      "released",
+      { state: "released", kind: "automation" },
+      "e2e-sbx-p1 is suspended · files kept · the next shell starts it",
+    ],
+    [
+      "destroyed before the task records its end",
+      { state: "destroyed" },
+      "Destroying e2e-sbx-p1 · pending",
+    ],
+  ] as const)(
+    "says a listed %s sandbox's own line, never the unknown one",
+    (_state, overrides, line) => {
+      sandboxSurface.sources = {
+        taskHosts: { kind: "none" },
+        sandboxes: [listed(overrides)],
+        entry: null,
+      };
+      mountOwnCopy();
+
+      expect(
+        screen.queryByTestId("published-chat-dead-tile-chat-1"),
+      ).toBeNull();
+      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+        line,
+      );
+    },
+  );
 });

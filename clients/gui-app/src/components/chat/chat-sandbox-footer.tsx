@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 
 /** A resting or unreachable sandbox's state line, under its chat. */
 export function ChatSandboxFooter(props: {
@@ -34,8 +36,9 @@ export function ChatSandboxFooter(props: {
     sandbox.state === "stopped"
       ? "is stopped · your next message starts it from a cold boot"
       : "is suspended · your next message resumes it";
+  // The money clause waits for the configuration it bills under.
   const price =
-    sandbox.priceMcPerHour === null
+    sandbox.priceMcPerHour === null || state.configuration === null
       ? ""
       : ` · ${costLine(sandbox.priceMcPerHour.awakeMc, state.configuration)}`;
   return (
@@ -54,6 +57,30 @@ function FrozenSandboxFooter(props: {
 }): ReactNode {
   const { sandbox, configuration } = props.state;
   const viewer = useAuthStore((state) => state.profile?.userId ?? null);
+  // Only a team sandbox's configuration can be unresolved: say its line alone
+  // until the configuration that names its action arrives.
+  if (configuration === null) {
+    return (
+      <p className="shrink-0 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
+        {sandboxTeamFrozenStateLine(sandbox, viewer)}
+      </p>
+    );
+  }
+  return (
+    <FrozenSandboxActions
+      sandbox={sandbox}
+      configuration={configuration}
+      viewer={viewer}
+    />
+  );
+}
+
+function FrozenSandboxActions(props: {
+  readonly sandbox: SandboxSummary;
+  readonly configuration: StageConfiguration;
+  readonly viewer: string | null;
+}): ReactNode {
+  const { sandbox, configuration, viewer } = props;
   const verb = useSandboxVerb(sandbox.id);
   const operation = useSandboxOperation(sandbox.id);
   const pending = operation?.kind === "pending";

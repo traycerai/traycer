@@ -12,11 +12,16 @@ export type SandboxMovingState =
   | "destroying";
 
 /**
- * A chat's host as a sandbox. `none` is a host that is not a sandbox, or an
- * awake one this device reaches; `moving` is a sandbox between two states;
- * `pending` is one whose state is not known here yet, named when anything
- * names it. A sandbox chat never reads as `none` while its state is unknown,
- * so it never borrows the offline-host copy.
+ * A chat's host as a sandbox, by one precedence: the task's end record, then
+ * a listed row's known state, then a move, then unknown.
+ *
+ * - `none` - proven not a sandbox (a person's host), or an awake sandbox this
+ *   device reaches. A failed, disabled or missing read never proves it.
+ * - `resting` - suspended, stopped or frozen. `configuration` is `null` until
+ *   the team configuration it bills under resolves.
+ * - `moving` - between two states, or destroyed before the task records the
+ *   end.
+ * - `pending` - not known here, named when anything names it.
  */
 export type ChatSandboxState =
   | { readonly kind: "none" }
@@ -26,11 +31,13 @@ export type ChatSandboxState =
       readonly sandbox: SandboxSummary;
       readonly state: SandboxMovingState;
     }
+  | { readonly kind: "failed"; readonly sandbox: SandboxSummary }
+  | { readonly kind: "released"; readonly sandbox: SandboxSummary }
   | { readonly kind: "destroyed"; readonly ended: TaskSandboxEndedHost }
   | {
       readonly kind: "resting";
       readonly sandbox: SandboxSummary;
-      readonly configuration: StageConfiguration;
+      readonly configuration: StageConfiguration | null;
       readonly wakeChangesPayer: boolean;
     }
   | {
@@ -65,6 +72,11 @@ const MOVING_VERB: Record<SandboxMovingState, string> = {
   stopping: "Stopping",
   destroying: "Destroying",
 };
+
+/** A sandbox whose state this device cannot tell yet. */
+export function unknownSandboxLine(name: string | null): string {
+  return `${name ?? "This chat's sandbox"} isn't available — this chat stays readable.`;
+}
 
 /** A moving sandbox's line, as its row and setup line say it. */
 export function movingSandboxLine(

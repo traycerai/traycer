@@ -61,22 +61,31 @@ describe("useTaskSandboxHost", () => {
     });
   });
 
-  it("says loading while the task's hosts have not answered", () => {
-    view.current = { kind: "loading" };
-
-    expect(hostOf("host-a")).toEqual({ kind: "loading" });
-  });
-
-  it("answers other for a person's host, an unlisted host, no host and a view with no hosts", () => {
+  it("names a person's host only from an answered list", () => {
     view.current = {
       kind: "hosts",
       hosts: [row({ label: null, sandboxEnd: END })],
     };
-    expect(hostOf("host-a")).toEqual({ kind: "other" });
-    expect(hostOf("elsewhere")).toEqual({ kind: "other" });
-    expect(hostOf(null)).toEqual({ kind: "other" });
 
-    view.current = { kind: "none" };
-    expect(hostOf("host-a")).toEqual({ kind: "other" });
+    expect(hostOf("host-a")).toEqual({ kind: "person" });
+  });
+
+  it.each([
+    { kind: "error", retry: () => undefined },
+    { kind: "none" },
+  ] as const)(
+    "proves nothing about a host while the task's hosts read $kind (unanswered reads as none)",
+    (current) => {
+      view.current = current;
+
+      expect(hostOf("host-a")).toEqual({ kind: "unknown" });
+    },
+  );
+
+  it("proves nothing about a host the list does not hold, or no host", () => {
+    view.current = { kind: "hosts", hosts: [row({})] };
+
+    expect(hostOf("elsewhere")).toEqual({ kind: "unknown" });
+    expect(hostOf(null)).toEqual({ kind: "unknown" });
   });
 });

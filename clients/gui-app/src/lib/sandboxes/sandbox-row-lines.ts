@@ -167,12 +167,7 @@ export function sandboxRowMoving(summary: SandboxSummary): boolean {
 
 export type SandboxKindFilter = "all" | SandboxRowKind;
 export type SandboxStateFilter =
-  | "all"
-  | "awake"
-  | "suspended"
-  | "stopped"
-  | "frozen"
-  | "failed";
+  "all" | "awake" | "suspended" | "stopped" | "frozen" | "failed";
 export type SandboxStarterFilter = "anyone" | "you" | "agent" | "others";
 
 export interface SandboxRowFilter {
@@ -403,12 +398,20 @@ export function automationsShapeLine(
     : "Runs your long-running shells · agents can't run here · no charge";
 }
 
+const NEVER_WOKE_CLAUSE =
+  "Nothing is billed for a sandbox that never woke · support reference in Details";
+
+const RELEASED_CLAUSE = "files kept · the next shell starts it";
 /**
  * The Automations host at rest, or not created yet: the next shell starts it.
  * Its badge reads Suspended, and so does the line.
  */
-export const AUTOMATIONS_RELEASED_LINE =
-  "Suspended · files kept · the next shell starts it";
+export const AUTOMATIONS_RELEASED_LINE = `Suspended · ${RELEASED_CLAUSE}`;
+
+/** The released row's line with the sandbox as its subject, for its chat. */
+export function sandboxReleasedChatLine(name: string): string {
+  return `${name} is suspended · ${RELEASED_CLAUSE}`;
+}
 
 /**
  * Whether the filter keeps the Automations row of a host not created yet:
@@ -659,7 +662,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      return `${sandboxFailedToStart(summary.failureCode)} at ${formatSandboxTime(summary.lastTransitionAt)} · Nothing is billed for a sandbox that never woke · support reference in Details`;
+      return `${sandboxFailedToStart(summary.failureCode)} at ${formatSandboxTime(summary.lastTransitionAt)} · ${NEVER_WOKE_CLAUSE}`;
     case "creating":
       return "Starting";
     case "awake":
@@ -767,15 +770,22 @@ function stoppedLead(
   return `Stopped by ${sandboxMemberName(operation.actor, viewerUserId)}`;
 }
 
+/** The failed row's line with the sandbox as its subject, for its chat. */
+export function sandboxFailedChatLine(summary: SandboxSummary): string {
+  return `${summary.displayName} failed to start${referenceSuffix(summary.failureCode)} at ${formatSandboxTime(summary.lastTransitionAt)} · ${NEVER_WOKE_CLAUSE}`;
+}
+
 /**
  * `Failed to start (SBX-0412)`, by the failure's support reference; with no
  * reference, `Failed to start` alone. Never the raw code.
  */
 export function sandboxFailedToStart(failureCode: string | null): string {
+  return `Failed to start${referenceSuffix(failureCode)}`;
+}
+
+function referenceSuffix(failureCode: string | null): string {
   const reference = sandboxSupportReference(failureCode);
-  return reference === null
-    ? "Failed to start"
-    : `Failed to start (${reference})`;
+  return reference === null ? "" : ` (${reference})`;
 }
 
 /**

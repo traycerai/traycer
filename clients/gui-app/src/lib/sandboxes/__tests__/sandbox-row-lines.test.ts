@@ -14,6 +14,8 @@ import {
   SANDBOX_ROW_FILTER_NONE,
   sandboxClockLine,
   sandboxDestroyAllIdleOffered,
+  sandboxFailedChatLine,
+  sandboxReleasedChatLine,
   sandboxFilterCount,
   sandboxFrozenClock,
   sandboxIdleRefusal,
@@ -481,6 +483,60 @@ describe("sandboxClockLine", () => {
       });
     expect(line(0)).toBe("Running, but Traycer can't connect");
     expect(line(NOW - 360_000)).toMatch(/last contact 6 min ago$/);
+  });
+});
+
+describe("a failed or released sandbox's line in its chat", () => {
+  const FAILED_AT = new Date(2026, 9, 25, 11, 1).getTime();
+
+  function failedRow(failureCode: string): SandboxSummary {
+    return sandboxSummaryFixture({
+      displayName: "e2e-sbx-p1",
+      state: "failed",
+      failureCode,
+      lastTransitionAt: FAILED_AT,
+    });
+  }
+
+  it.each(["boot-timeout", "zzz"])(
+    "says the failed row's own line, code and time included, with the sandbox as its subject (%s)",
+    (failureCode) => {
+      const summary = failedRow(failureCode);
+      const row = sandboxClockLine({
+        summary,
+        configuration: { kind: "personal" },
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now: NOW,
+      });
+
+      expect(sandboxFailedChatLine(summary)).toBe(
+        `e2e-sbx-p1 f${row.slice(1)}`,
+      );
+    },
+  );
+
+  it("says the released Automations row's own line with the sandbox as its subject", () => {
+    const row = sandboxClockLine({
+      summary: sandboxSummaryFixture({
+        kind: "automation",
+        displayName: "e2e-auto",
+        state: "released",
+      }),
+      configuration: { kind: "personal" },
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+    });
+
+    expect(sandboxReleasedChatLine("e2e-auto")).toBe(
+      `e2e-auto is s${row.slice(1)}`,
+    );
+    expect(row).toBe("Suspended · files kept · the next shell starts it");
   });
 });
 

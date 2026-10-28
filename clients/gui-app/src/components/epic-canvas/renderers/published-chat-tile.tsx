@@ -1,5 +1,6 @@
 import {
   restingChatSandbox,
+  unknownSandboxLine,
   type ChatSandboxState,
 } from "@/lib/sandboxes/chat-sandbox-state";
 import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
@@ -50,7 +51,8 @@ import {
   ChatTileSessionView,
   SandboxEndActions,
 } from "./chat-tile";
-import { ChatSandboxStateLine } from "./chat-sandbox-state-line";
+import { chatSandboxStateLine } from "./chat-sandbox-state-line";
+import { ChatStateLineContext } from "./chat-state-line";
 import { chatTileHostLabel } from "./chat-pre-content";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
@@ -294,6 +296,8 @@ function copyOwnerLabel(
     case "destroyed":
       return state.ended.name;
     case "moving":
+    case "failed":
+    case "released":
     case "resting":
     case "unreachable":
       return state.sandbox.displayName;
@@ -315,7 +319,7 @@ function copyReadOnlyNotice(
     owner.lockFacts.ownedByViewer &&
     !owner.lockFacts.environmentOwned
   )
-    return `${owner.lockFacts.ownerLabel} isn't available — this chat stays readable.`;
+    return unknownSandboxLine(owner.sandboxState.name);
   return copyNotice;
 }
 
@@ -328,24 +332,21 @@ function PublishedSandboxStateLine(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const state = props.owner.sandboxState;
+  const line = chatSandboxStateLine(
+    state,
+    state.kind === "destroyed" ? (
+      <SandboxEndActions
+        epicId={props.epicId}
+        tabId={props.tabId}
+        chatId={props.node.chatId}
+        sourceHostId={props.node.ownerHostId}
+        sourceOwnerUserId={props.node.ownerUserId}
+        ended={state.ended}
+      />
+    ) : null,
+  );
   return (
-    <ChatSandboxStateLine
-      state={state}
-      endActions={
-        state.kind === "destroyed" ? (
-          <SandboxEndActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            chatId={props.node.chatId}
-            sourceHostId={props.node.ownerHostId}
-            sourceOwnerUserId={props.node.ownerUserId}
-            ended={state.ended}
-          />
-        ) : null
-      }
-    >
-      {props.children}
-    </ChatSandboxStateLine>
+    <ChatStateLineContext value={line}>{props.children}</ChatStateLineContext>
   );
 }
 

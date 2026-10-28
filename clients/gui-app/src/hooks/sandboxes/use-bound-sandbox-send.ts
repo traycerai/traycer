@@ -19,7 +19,10 @@ export function useBoundSandboxSend(input: {
   const { epicId, chatId, target } = input;
   return useCallback(
     (submission: ChatComposerSubmitInput): boolean => {
-      if (target === null) return false;
+      // Without the configuration the wake bills under, nothing is staged and
+      // the draft stays until it resolves.
+      const configuration = target?.configuration ?? null;
+      if (target === null || configuration === null) return false;
       const userId = useAuthStore.getState().profile?.userId ?? null;
       const held = Object.values(
         usePendingSandboxSendStore.getState().sends,
@@ -44,7 +47,7 @@ export function useBoundSandboxSend(input: {
         hostId: sandbox.hostId,
         sandboxId: sandbox.id,
         name: sandbox.displayName,
-        configuration: target.configuration,
+        configuration,
         verb: sandbox.state === "stopped" ? "start" : "resume",
       });
       return (

@@ -23,15 +23,14 @@ const NOW = Date.UTC(2026, 9, 27, 12, 0);
 const sources = vi.hoisted(
   (): {
     task: TaskSandboxHost;
-    sandboxes: SandboxSummary[];
-    listLoading: boolean;
+    /** `null`: the list read failed, or is disabled, with nothing cached. */
+    sandboxes: SandboxSummary[] | null;
     configurations: SandboxConfigurations;
     entry: HostDirectoryEntry | null;
     now: number;
   } => ({
-    task: { kind: "other" },
+    task: { kind: "unknown" },
     sandboxes: [],
-    listLoading: false,
     configurations: {
       configurations: [{ kind: "personal" }],
       teamEnvironmentIds: new Set(),
@@ -46,10 +45,10 @@ vi.mock("@/hooks/epic/use-task-sandbox-end", () => ({
   useTaskSandboxHost: () => sources.task,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
-  useSandboxList: () =>
-    sources.listLoading
-      ? { data: undefined, isLoading: true }
-      : { data: { sandboxes: sources.sandboxes }, isLoading: false },
+  useSandboxList: () => ({
+    data:
+      sources.sandboxes === null ? undefined : { sandboxes: sources.sandboxes },
+  }),
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
@@ -90,9 +89,8 @@ function stateOf(reachable: boolean) {
 }
 
 beforeEach(() => {
-  sources.task = { kind: "other" };
+  sources.task = { kind: "unknown" };
   sources.sandboxes = [];
-  sources.listLoading = false;
   sources.configurations = {
     configurations: [
       { kind: "personal" },
@@ -162,17 +160,36 @@ describe("useChatSandboxState", () => {
     });
   });
 
-  it("reads a resting team sandbox whose configuration is not among the viewer's as pending, by its name", () => {
-    sources.sandboxes = [
-      row({
-        state: "suspended",
-        environmentId: "env-elsewhere",
-        createdBy: { userId: OTHER, displayName: "Other" },
-      }),
-    ];
+  it("keeps a resting team sandbox resting before its configuration resolves, changing no payer", () => {
+    const sandbox = row({
+      state: "suspended",
+      environmentId: "env-elsewhere",
+      createdBy: { userId: OTHER, displayName: "Other" },
+      wakePayer: { userId: OTHER, displayName: "Other" },
+    });
+    sources.sandboxes = [sandbox];
 
-    expect(stateOf(false)).toEqual({ kind: "pending", name: "e2e-sbx" });
+    expect(stateOf(false)).toEqual({
+      kind: "resting",
+      sandbox,
+      configuration: null,
+      wakeChangesPayer: false,
+    });
   });
+
+  it.each([
+    ["failed", { kind: "failed" }],
+    ["released", { kind: "released" }],
+    ["destroyed", { kind: "moving", state: "destroying" }],
+  ] as const)(
+    "reads a listed %s sandbox by its own state, never as unknown",
+    (state, expected) => {
+      const sandbox = row({ state });
+      sources.sandboxes = [sandbox];
+
+      expect(stateOf(false)).toEqual({ ...expected, sandbox });
+    },
+  );
 
   it.each([
     "creating",
@@ -203,23 +220,23 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toEqual({ kind: "pending", name: `label-${HOST}` });
   });
 
-  it("reads a host nobody can place yet as pending, unnamed, while the task's hosts or the list are out", () => {
-    sources.task = { kind: "loading" };
+  it("reads a host nothing places as pending, unnamed, when the list read failed or the task's hosts prove nothing", () => {
     expect(stateOf(false)).toEqual({ kind: "pending", name: null });
 
-    sources.task = { kind: "other" };
-    sources.listLoading = true;
+    sources.sandboxes = null;
     expect(stateOf(false)).toEqual({ kind: "pending", name: null });
   });
 
   it("reads a host the directory knows as a person's as not a sandbox, without waiting on the task", () => {
-    sources.task = { kind: "loading" };
+    sources.sandboxes = null;
     sources.entry = remoteEntry(HOST, null);
 
     expect(stateOf(false)).toEqual({ kind: "none" });
   });
 
-  it("reads a host nothing names as a sandbox, once every read has answered, as not a sandbox", () => {
+  it("reads a host the task's answered list names as a person's as not a sandbox", () => {
+    sources.task = { kind: "person" };
+
     expect(stateOf(false)).toEqual({ kind: "none" });
   });
 
