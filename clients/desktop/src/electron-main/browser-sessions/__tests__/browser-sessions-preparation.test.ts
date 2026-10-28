@@ -199,6 +199,28 @@ describe("main-owned browser.sessions streams held by preparation and UI", () =>
     expect(session.closed).toBe(true);
   });
 
+  it("a renderer that comes back to a stream the host ended while a native tab held it starts the stream again", async () => {
+    registry.open("window-1", KEY);
+    const session = await openNewestStream(CURRENT_LINE);
+    await bindOneTab(session);
+    registry.close("window-1", KEY);
+    // The host ends the connection, as it does at a bearer's expiry. Main
+    // holds no revalidator, so this socket is over, and the tab keeps it.
+    session.emitFatal("Bearer expired.");
+    await settle();
+    harness.emitted.length = 0;
+
+    registry.open("window-1", KEY);
+    await settle();
+
+    expect(eventKinds(harness.emitted)).toEqual(["status"]);
+    expect(harness.emitted[0]?.envelope.event).toMatchObject({
+      lifecycle: "connecting",
+    });
+    expect(harness.clients).toHaveLength(2);
+    expect(session.closed).toBe(true);
+  });
+
   it("a preparation released after the UI closed does not close a stream a native tab still needs", async () => {
     const release = registry.acquirePreparation(
       "window-1",

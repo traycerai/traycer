@@ -2317,7 +2317,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toBe("artifacts");
   });
 
-  it("targets the browser row, panel, and host for an independent browser tab", () => {
+  it("targets the browser row and panel for a browser tab, leaving the Simulator device as it was", () => {
     const tabs = [SPEC, BROWSER_TAB];
     seedCanvas(tabs, BROWSER_TAB.instanceId);
     render(groupView(tabs, BROWSER_TAB.instanceId, true));
@@ -2335,11 +2335,13 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
       "browsers",
     );
+    // The panel lists every device's browsers, so the row is listed whatever
+    // the pin says, and the pin also picks where links open.
     expect(
       useSurfaceHostSelectionStore.getState().selections[
         tabSurfaceKey("browsers", VIEW_TAB_ID)
       ],
-    ).toBe(BROWSER_TAB.hostId);
+    ).toBeUndefined();
   });
 
   it("targets the simulator row, the Browsers panel, and the tile's host for a simulator tab", () => {
