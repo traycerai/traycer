@@ -1,10 +1,49 @@
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostOverviewStatusQuery } from "@/components/settings/panels/host-overview-rpc";
 import { liveBusySessionCount } from "@/components/settings/panels/my-hosts-model";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
+  sandboxPublicState,
   sandboxSessionKinds,
   type SandboxSessionReport,
 } from "@/lib/sandboxes/sandbox-row-lines";
+
+interface SandboxSessionObservation {
+  readonly report: SandboxSessionReport;
+  /** The status read failed while the control plane says awake. */
+  readonly failed: boolean;
+  /** A host answer exists in this query's lifecycle, even without sessions. */
+  readonly hasReported: boolean;
+}
+
+/** A Resume stays pending until this wake's first host answer, not its ACK. */
+export function useSandboxRowSessionReport(summary: SandboxSummary): {
+  readonly report: SandboxSessionReport;
+  readonly failed: boolean;
+  readonly resumePending: boolean;
+} {
+  const operation = summary.operation;
+  const resumed =
+    summary.kind !== "automation" &&
+    operation?.cause === "wake" &&
+    operation.fromState === "suspended" &&
+    operation.outcomeCause !== "failure";
+  const awake = sandboxPublicState(summary) === "awake";
+  const observation = useSessionObservation(
+    summary.hostId,
+    awake,
+    resumed ? ["sandbox-wake", operation.at, operation.cause] : undefined,
+  );
+  return {
+    report: observation.report,
+    failed: observation.failed,
+    resumePending:
+      awake &&
+      summary.kind !== "automation" &&
+      summary.guestConfigured !== false &&
+      (summary.state === "resuming" || (resumed && !observation.hasReported)),
+  };
+}
 
 /**
  * What a sandbox host last reported about its running sessions, for the
@@ -22,18 +61,24 @@ import {
 export function useSandboxSessionReport(
   hostId: string,
   enabled: boolean,
-): {
-  readonly report: SandboxSessionReport;
-  /** The status read failed while the control plane says awake. */
-  readonly failed: boolean;
-} {
+): SandboxSessionObservation {
+  return useSessionObservation(hostId, enabled, undefined);
+}
+
+function useSessionObservation(
+  hostId: string,
+  enabled: boolean,
+  cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
+): SandboxSessionObservation {
   const client = useHostClientForHostId(hostId);
   const status = useHostOverviewStatusQuery({
     client,
     enabled: enabled && client !== null,
     hostId,
+    cacheKeyIdentity,
   });
   const data = status.data ?? null;
+  const hasReported = data !== null && !status.isPlaceholderData;
   const sessions = data?.sessions ?? null;
   const kinds = sandboxSessionKinds(sessions);
   const count = kinds === null ? null : kinds.agents + kinds.terminals;
@@ -48,6 +93,7 @@ export function useSandboxSessionReport(
     return {
       report: { kind: "live", count: live, busy: data.busy, kinds, sessions },
       failed: false,
+      hasReported,
     };
   }
   // A read that never answered has no time; its count is not "as of" one.
@@ -55,7 +101,8 @@ export function useSandboxSessionReport(
     return {
       report: { kind: "stale", count, at: status.dataUpdatedAt },
       failed: status.isError,
+      hasReported,
     };
   }
-  return { report: { kind: "unknown" }, failed: status.isError };
+  return { report: { kind: "unknown" }, failed: status.isError, hasReported };
 }

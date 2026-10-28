@@ -134,6 +134,7 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
   sessionFailed: false,
+  resumePending: false,
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
@@ -236,6 +237,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
   useSandboxSessionReport: () => ({
     report: mocks.report,
     failed: mocks.sessionFailed,
+  }),
+  useSandboxRowSessionReport: () => ({
+    report: mocks.report,
+    failed: mocks.sessionFailed,
+    resumePending: mocks.resumePending,
   }),
 }));
 vi.mock(
@@ -516,6 +522,7 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
     mocks.sessionFailed = false;
+    mocks.resumePending = false;
     mocks.costs = null;
     mocks.automation = null;
     mocks.realAutomation = false;
@@ -1894,6 +1901,42 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(screen.queryByTestId("sandboxes-row")).toBeNull();
     },
   );
+
+  it("keeps Resume pending through the awake ACK until the host reports", () => {
+    const sandbox = row("sbx-resume", { state: "resuming" });
+    mocks.sandboxes = [sandbox];
+    mocks.resumePending = true;
+    // A previous wake's count must not accompany this pending line.
+    mocks.report = { kind: "stale", count: 4, at: Date.now() };
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent;
+    expect(clock()).toBe("Resuming · pending");
+    expect(
+      within(rowOf(sandbox.id)).queryByTestId("sandboxes-row-sessions"),
+    ).toBeNull();
+
+    mocks.sandboxes = [{ ...sandbox, state: "awake" }];
+    mocks.sessionFailed = true;
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toBe("Resuming · pending");
+
+    mocks.resumePending = false;
+    mocks.sessionFailed = false;
+    mocks.report = liveSessionReport({ agents: [], terminals: [] }, false);
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toContain("Awake");
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-sessions")
+        .textContent,
+    ).toBe("0 sessions running");
+
+    // Lifecycle state changes always take over from the pending wake.
+    mocks.resumePending = false;
+    mocks.sandboxes = [{ ...sandbox, state: "stopped" }];
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toContain("Stopped");
+  });
 
   it.each(["destroying", "awake", "destroyed"] as const)(
     "checks a stale awake row's lifecycle on host loss before presenting %s",

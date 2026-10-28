@@ -440,6 +440,8 @@ export interface SandboxReachability {
 }
 
 export interface SandboxClockInput {
+  /** A resumed host has not answered for this wake yet. */
+  readonly resumePending?: boolean;
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
   readonly cost: SandboxCost | null;
@@ -671,6 +673,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
     case "creating":
       return "Starting";
     case "awake":
+      if (input.resumePending) return sandboxVerbPendingLine("resume");
       return summary.kind === "automation"
         ? `stops after ${idleMinutesOf(summary)} idle min · files kept · the next shell starts it`
         : awakeClockLine(input);
