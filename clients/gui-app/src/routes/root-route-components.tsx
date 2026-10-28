@@ -117,8 +117,14 @@ export function RootComponent() {
           whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
       <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
-      <SandboxSettingsNoticeObservers />
-      <SandboxRestingNoticeObservers />
+      {/* The sandbox notices' observers: none in a build without sandboxes
+          (`unreleased-features.ts`). */}
+      {UNRELEASED_FEATURES_ENABLED ? (
+        <>
+          <SandboxSettingsNoticeObservers />
+          <SandboxRestingNoticeObservers />
+        </>
+      ) : null}
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller.
@@ -189,8 +195,10 @@ export function RootComponent() {
               {/* The retrospective and move sheets. Here rather than in
                   Settings: the retrospective sheet opens by itself once on
                   the first launch after the update, whatever the window
-                  shows, and the Start toast opens it too. */}
-              <EnvironmentSheetsHost />
+                  shows, and the Start toast opens it too. Neither sheet
+                  exists in a build without environments
+                  (`unreleased-features.ts`). */}
+              {UNRELEASED_FEATURES_ENABLED ? <EnvironmentSheetsHost /> : null}
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
               <NotificationsMobileSheet />

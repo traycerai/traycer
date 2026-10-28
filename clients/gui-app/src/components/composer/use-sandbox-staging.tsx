@@ -255,8 +255,11 @@ export function useSandboxStaging(input: {
   const task = input.surface === null ? null : input.surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
-  const catalogue = useSandboxCatalogue(input.surface !== null).data ?? null;
-  const defaultsFor = useSandboxDefaultsLookup(input.surface !== null);
+  // Neither read in a build without sandboxes (`unreleased-features.ts`):
+  // the picker stages nothing, so nothing prices or shapes a stage.
+  const reads = UNRELEASED_FEATURES_ENABLED && input.surface !== null;
+  const catalogue = useSandboxCatalogue(reads).data ?? null;
+  const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,
