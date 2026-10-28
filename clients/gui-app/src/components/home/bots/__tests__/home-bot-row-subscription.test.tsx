@@ -79,6 +79,7 @@ const REPLYING_SNAPSHOT: BotSubscribeServerFrame = {
   tasks: [],
   openRequestCount: 0,
   conversationsRevision: 0,
+  notificationSubscriptions: null,
   boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
   activity: { trunk: REPLYING, threads: {} },
   hasBinaryPayload: false,

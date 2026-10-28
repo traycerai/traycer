@@ -345,6 +345,7 @@ function emitActivity(activity: BotActivity): void {
       tasks: [],
       openRequestCount: null,
       conversationsRevision: null,
+      notificationSubscriptions: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
       hasBinaryPayload: false,

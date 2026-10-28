@@ -489,6 +489,7 @@ function BotTabContent(props: {
                 trunkChatId={snapshot.bot.trunkChatId}
                 tasks={snapshot.tasks}
                 openRequestCount={snapshot.openRequestCount}
+                notificationSubscriptions={snapshot.notificationSubscriptions}
                 boundHost={snapshot.boundHost}
                 environmentLabel={environmentLabel}
                 environmentBots={environmentBots}

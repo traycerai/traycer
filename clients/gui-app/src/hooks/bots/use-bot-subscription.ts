@@ -7,6 +7,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   botSubscribeServerFrameSchema,
   type BotActivity,
+  type BotNotificationSubscription,
   type BotRecord,
   type BotSubscribeServerFrame,
   type BotTaskEntry,
@@ -61,6 +62,11 @@ export interface BotSubscriptionSnapshot {
    * cannot read the environment room the bot's host writes it to.
    */
   readonly activity: BotActivity | null;
+  /**
+   * The bot's chats watching the person's notifications (T84). `null` when
+   * the serving host does not run the bot, or predates them.
+   */
+  readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
 }
 
 /**
@@ -242,6 +248,7 @@ function toSnapshot(
     conversationsRevision: frame.conversationsRevision,
     boundHost: frame.boundHost,
     activity: frame.activity,
+    notificationSubscriptions: frame.notificationSubscriptions,
   };
 }
 

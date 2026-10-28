@@ -403,6 +403,7 @@ import {
   chatSubscribeV136,
   chatSubscribeV137,
   chatSubscribeV138,
+  chatSubscribeV139,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -659,6 +660,7 @@ import {
   botReadV10,
   botSubscribeV10,
   botSubscribeV11,
+  botSubscribeV12,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -15513,13 +15515,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
     1: {
       // @1.1 says why a session failed or parked (`reason`, T69); @1.0 stays
       // bound to its frozen frames so an older peer's re-parse strips it.
-      latestMinor: 1,
+      // @1.2 names the chats subscribed to the person's notification feed
+      // (`notificationSubscriptions`, T84); @1.1 is frozen without it.
+      latestMinor: 2,
       versions: {
         0: {
           contract: botSubscribeV10,
         },
         1: {
           contract: botSubscribeV11,
+        },
+        2: {
+          contract: botSubscribeV12,
         },
       },
     },
@@ -15565,7 +15572,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 38,
+      latestMinor: 39,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15770,6 +15777,11 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         37: { contract: chatSubscribeV137 },
         // @1.38 adds `opencodeLineHeld` to the snapshot.
         38: { contract: chatSubscribeV138 },
+        // @1.39 is the notification-digest line: the `notification-digest`
+        // queue item on a personal bot chat subscribed to its person's feed
+        // (projection: the host omits it below @1.39). @1.35 to @1.38 are
+        // frozen at their seven-arm queue.
+        39: { contract: chatSubscribeV139 },
       },
     },
   },
