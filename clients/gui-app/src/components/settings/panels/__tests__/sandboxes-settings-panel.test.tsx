@@ -931,6 +931,31 @@ describe("<SandboxesSettingsPanel />", () => {
     }
   });
 
+  it("renders the failed-create sentence and keeps Retry, Destroy and Details", async () => {
+    mocks.realActions = true;
+    renderPanel([
+      row("build-box", {
+        state: "failed",
+        failureCode: "create:kube-create-service-account",
+        lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
+      }),
+    ]);
+
+    const failed = within(rowOf("build-box"));
+    expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
+      "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
+    );
+    expect(
+      failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+    ).toBe(false);
+    await userEvent.click(
+      failed.getByRole("button", { name: "More actions for build-box" }),
+    );
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Details", "Destroy"]);
+  });
+
   it("offers an awake agent sandbox Keep instead of Suspend", () => {
     renderPanel([row("agent-1", { state: "awake", burst: true })]);
     expect(
