@@ -315,7 +315,10 @@ export function sandboxStartedByLabel(
   return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
 }
 
-/** `Paid by Priya`, on an awake team row only. */
+/**
+ * `Paid by you` to the payer, `Paid by Priya` to anyone else, on an awake
+ * team row only. A payer the server does not name is never `a member`.
+ */
 export function sandboxPaidByLabel(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
@@ -326,8 +329,10 @@ export function sandboxPaidByLabel(
     return null;
   }
   const payer = summary.wakePayer;
-  if (payer.displayName !== null) return paidByLine(payer.displayName);
-  return payer.userId === viewerUserId ? paidByLine("you") : null;
+  if (viewerUserId !== null && payer.userId === viewerUserId) {
+    return paidByLine("you");
+  }
+  return payer.displayName === null ? null : paidByLine(payer.displayName);
 }
 
 export function sandboxKeptByLabel(
@@ -491,18 +496,17 @@ export function sandboxDestroyedLine(
   return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
 }
 
-/** `23:40` today, `Mon` this week, `Oct 20` before. */
+/**
+ * `23:40` within the last 24 hours, `Mon 23:40` within six days, and
+ * `Oct 20 23:40` from then on, where a day name would be ambiguous.
+ */
 export function formatSandboxSince(at: number, now: number): string {
-  if (
-    now - at < MS_PER_DAY &&
-    new Date(at).getDate() === new Date(now).getDate()
-  ) {
-    return formatSandboxTime(at);
-  }
-  if (now - at < 6 * MS_PER_DAY) {
-    return new Date(at).toLocaleDateString(undefined, { weekday: "short" });
-  }
-  return formatSandboxDate(at, false);
+  if (now - at < MS_PER_DAY) return formatSandboxTime(at);
+  const day =
+    now - at < 6 * MS_PER_DAY
+      ? new Date(at).toLocaleDateString(undefined, { weekday: "short" })
+      : formatSandboxDate(at, false);
+  return `${day} ${formatSandboxTime(at)}`;
 }
 
 /**
@@ -740,7 +744,11 @@ function restingClockLine(
   // leaves the sentence out rather than naming the wrong member.
   const payer = summary.wakePayer;
   if (payer === null) return resting;
-  return `${resting} · Storage uses ${possessive(sandboxMemberName(payer, input.viewerUserId))} ${configuration.teamName} credits. Resuming changes the payer to you.`;
+  const who = sandboxMemberName(payer, input.viewerUserId);
+  const storage = `${resting} · Storage uses ${possessive(who)} ${configuration.teamName} credits.`;
+  return who === "you"
+    ? storage
+    : `${storage} Resuming changes the payer to you.`;
 }
 
 /**
@@ -1110,7 +1118,8 @@ export function sandboxGiveAnotherLabel(
 
 /**
  * `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.`
- * The count is of the rows shown, an Automations host not created yet
+ * The share is left out when it is all of the day's or none of it. The count
+ * is of the rows shown, an Automations host not created yet
  * (`unstartedAutomations`) included.
  */
 export function sandboxListHeader(input: {
@@ -1131,7 +1140,11 @@ export function sandboxListHeader(input: {
     : `${sandboxes} ${noun}`;
   if (input.todayMc === null) return count;
   const today = `${formatSandboxCost(input.todayMc)} today (UTC day)`;
-  if (input.todayYoursMc === null || input.todayYoursMc === input.todayMc) {
+  if (
+    input.todayYoursMc === null ||
+    input.todayYoursMc <= 0 ||
+    input.todayYoursMc === input.todayMc
+  ) {
     return `${count} · ${today}`;
   }
   return `${count} · ${today}, ${formatSandboxCost(input.todayYoursMc)} of it yours`;

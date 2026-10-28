@@ -559,6 +559,44 @@ describe("sandboxClockLine, a resting row", () => {
       / · under \$0\.01 today$/,
     );
   });
+
+  describe("across midnight", () => {
+    // Tuesday 23:53, local.
+    const TUESDAY_NIGHT = new Date(2026, 9, 27, 23, 53).getTime();
+    const sinceAt = (now: number): string =>
+      sandboxClockLine({
+        summary: sandboxSummaryFixture({
+          state: "suspended",
+          restingSince: TUESDAY_NIGHT,
+          destroyAt: null,
+          destroyAfterRestingMinutes: null,
+        }),
+        configuration: { kind: "personal" },
+        cost: cost(0),
+        wakeString: "Suspend keeps memory",
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now,
+      }).split(" · ")[0];
+
+    it("keeps the clock time within the last 24 hours, past midnight", () => {
+      expect(sinceAt(new Date(2026, 9, 28, 0, 0, 22).getTime())).toBe(
+        "Suspended since 23:53",
+      );
+    });
+
+    it("names the day with the time beyond 24 hours", () => {
+      expect(sinceAt(new Date(2026, 9, 29, 0, 10).getTime())).toBe(
+        "Suspended since Tue 23:53",
+      );
+    });
+
+    it("dates it with the time from six days on", () => {
+      expect(sinceAt(new Date(2026, 10, 3, 0, 10).getTime())).toBe(
+        "Suspended since Oct 27 23:53",
+      );
+    });
+  });
 });
 
 describe("sandboxFrozenClock", () => {
@@ -908,7 +946,7 @@ describe("team payer copy", () => {
       "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake",
     );
     expect(sandboxPaidByLabel(summary, team, "other")).toBe("Paid by Priya");
-    expect(sandboxPaidByLabel(summary, team, "payer")).toBe("Paid by Priya");
+    expect(sandboxPaidByLabel(summary, team, "payer")).toBe("Paid by you");
   });
   it("warns a non-payer before a resting sandbox is woken", () => {
     expect(

@@ -431,13 +431,19 @@ export function sandboxCreditShortLine(
   if (creditSource === null || (!waking && creditSource === "personal")) {
     return notEnoughCreditsText(shortfallMc, options);
   }
-  const allowance =
-    configuration.kind === "team" && creditSource === "team-allowance";
+  const allowance = creditSource === "team-allowance";
   const whose = context === "sentence" ? "Your" : "your";
-  const pot =
-    configuration.kind === "team" && creditSource !== "personal"
-      ? `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`
-      : `${whose} credits`;
+  // The refusal names the pot; the configuration only supplies the team's
+  // name. A refusal from a team pot with no team configuration known (the
+  // directory had no row) still says it was the team's, never the person's.
+  let pot = `${whose} credits`;
+  if (creditSource !== "personal") {
+    if (configuration.kind === "team") {
+      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
+    } else {
+      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
+    }
+  }
   if (shortfallMc === null) {
     if (!waking && allowance)
       return `${pot} is too short to start this sandbox for an hour.`;
