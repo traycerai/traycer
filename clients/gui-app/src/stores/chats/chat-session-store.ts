@@ -85,6 +85,7 @@ import {
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
+  withoutQueueEditAwaitingConfirmation,
   withoutReturnedQueueEditsForRow,
   withQueueEditRecord,
   withoutQueueEditRecord,
@@ -2196,7 +2197,8 @@ export interface ChatSessionState {
   ) => string | null;
   /**
    * Removes and returns the steer refusal named, or `null` when it is no
-   * longer held. Its tile calls it once the person answers the dialog.
+   * longer held. Its tile calls it once the person answers the dialog, which
+   * also retires the queue edit that steer belonged to.
    */
   takeSteerRestartRefusal: (
     clientActionId: string,
@@ -11745,9 +11747,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           refusals.find((held) => held.clientActionId === clientActionId) ??
           null;
         if (refusal === null) return null;
-        set({
+        set((state) => ({
           steerRestartRefusals: refusals.filter((held) => held !== refusal),
-        });
+          queueEditRecords: withoutQueueEditAwaitingConfirmation(
+            state.queueEditRecords,
+            clientActionId,
+          ),
+        }));
         return refusal;
       },
       releaseSteerRestartInitiator: (initiatorId) => {

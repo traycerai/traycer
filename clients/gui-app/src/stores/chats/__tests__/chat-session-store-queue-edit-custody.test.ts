@@ -31,6 +31,7 @@ import {
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import { chatCapHasActiveWork } from "@/stores/chats/session-registry";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -1099,6 +1100,52 @@ describe("an edit refused while its steer waits for the person to confirm ending
     expect(followUpAloneNotices(harness)).toEqual([]);
     expect(state.failedSendRestoration?.content).toEqual(EDITED);
     expect(state.queueEditRecords).toEqual({});
+  });
+});
+
+describe("a saved edit whose steer waits for the person to confirm ending the turn", () => {
+  it("holds the chat and the record until the dialog is answered, then releases both", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      OTHER_SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: followUpActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "Steering this message now would end the current turn.",
+      code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+      backgroundStopTaskIds: [],
+      token: null,
+      steerRestartReasons: ["settings"],
+    });
+
+    // The settings the person asked for ride on nothing the host has seen, so
+    // the chat cannot be evicted while the dialog is open.
+    expect(
+      Object.keys(harness.handle.store.getState().queueEditRecords),
+    ).not.toEqual([]);
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
+
+    expect(
+      harness.handle.store.getState().takeSteerRestartRefusal(followUpActionId),
+    ).toMatchObject({ queueItemId: QUEUE_ITEM_ID });
+
+    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
   });
 });
 

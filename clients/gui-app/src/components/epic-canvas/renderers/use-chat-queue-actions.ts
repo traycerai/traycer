@@ -479,6 +479,9 @@ export function useChatQueueActions(
     // The host asked about the turn running when it refused. Once another has
     // started, confirming would end a turn the person never saw: the steer
     // goes again unconfirmed, and the host asks about the turn now running.
+    // A refusal that arrived while this client showed no turn names none, so
+    // it is confirmed against whichever turn is running, as is the settings
+    // question a host below `chat.subscribe@1.40` leaves to this client.
     const liveTurnId = handle.store.getState().activeTurn?.turnId ?? null;
     const actionId = chatActions.queueSteerNow(
       queueItemId,

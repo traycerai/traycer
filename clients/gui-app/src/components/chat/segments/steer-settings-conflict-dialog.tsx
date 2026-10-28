@@ -56,7 +56,7 @@ export function SteerSettingsConflictDialog(
   props: SteerSettingsConflictDialogProps,
 ) {
   const { changed, onOpenChange, onRestart, open, reasons } = props;
-  const changeList = changed.length > 0 ? changed.join(", ") : "these settings";
+  const changeList = changed.length > 0 ? changed.join(", ") : "settings";
   const settingsOnly = reasons.length === 1 && reasons[0] === "settings";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

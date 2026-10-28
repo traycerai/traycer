@@ -58,6 +58,30 @@ describe("<SteerSettingsConflictDialog /> reasons", () => {
   });
 });
 
+describe("<SteerSettingsConflictDialog /> unnamed settings", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("does not name settings it cannot list", () => {
+    render(
+      <SteerSettingsConflictDialog
+        open
+        onOpenChange={onOpenChange}
+        onRestart={onRestart}
+        reasons={["settings"]}
+        changed={[]}
+      />,
+    );
+
+    const text = screen.getByRole("dialog").textContent;
+    expect(text).toContain(
+      "The current turn is running with different settings.",
+    );
+    expect(text).not.toContain("these settings");
+  });
+});
+
 describe("<SteerSettingsConflictDialog /> keyboard navigation", () => {
   beforeEach(() => {
     onOpenChange.mockReset();

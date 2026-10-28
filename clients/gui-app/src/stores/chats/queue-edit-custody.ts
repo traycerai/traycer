@@ -30,8 +30,10 @@ export type QueueEditIntent = "save" | "steer";
  * one is owed evidence.
  *
  * `confirming` is a steer the host refused until the person confirms ending
- * the running turn: the confirm dialog owns it from there, so it is answered,
- * and nothing about it is told here, applied or not.
+ * the running turn: the confirm dialog asks about it, so nothing about it is
+ * told here, applied or not. The record stays in custody until the dialog is
+ * answered ({@link withoutQueueEditAwaitingConfirmation}): until then the
+ * settings it asked for ride on nothing the host has seen.
  */
 export type QueueEditFrameOutcome =
   | "pending"
@@ -364,9 +366,7 @@ function settleQueueEditRecord(
       requestedChanges: next.requestedChanges,
     });
   }
-  const landedWhole =
-    next.edit === "accepted" &&
-    (next.followUp === "accepted" || next.followUp === "confirming");
+  const landedWhole = next.edit === "accepted" && next.followUp === "accepted";
   const refusedAndAnswered =
     next.edit === "rejected" && next.followUp !== "pending";
   return {
@@ -449,6 +449,27 @@ export function foldQueueEditSteerAwaitingConfirmation(
         : withQueueEditRecord(records, next),
     settlements,
   };
+}
+
+/**
+ * Retire the record whose steer the confirm dialog has just answered: the
+ * Restart re-sends the steer and the Cancel saves its settings, each as a
+ * frame of its own. Unchanged for an action id that is no record's refused
+ * steer.
+ */
+export function withoutQueueEditAwaitingConfirmation(
+  records: QueueEditRecords,
+  followUpActionId: string,
+): QueueEditRecords {
+  const record = queueEditRecordForAction(records, followUpActionId);
+  if (
+    record === null ||
+    record.followUpActionId !== followUpActionId ||
+    record.followUp !== "confirming"
+  ) {
+    return records;
+  }
+  return withoutQueueEditRecord(records, record.editActionId);
 }
 
 /** An image node reduced to the one attribute that survives the host. */
