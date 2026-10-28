@@ -150,6 +150,25 @@ export const SANDBOX_PUBLIC_STATE_LABEL: Record<SandboxPublicState, string> = {
   failed: "Failed",
 };
 
+/**
+ * Whether the server holds a Stop pressed while the row was being created,
+ * started or resumed: it stops the sandbox as soon as that boot lands, so
+ * the row reads `Stopping · pending` for every viewer until it does. An
+ * older server never sends the field.
+ */
+export function sandboxStopPending(summary: SandboxSummary): boolean {
+  if (summary.stopRequestedAt === null) return false;
+  switch (summary.state) {
+    case "creating":
+    case "resuming":
+    case "starting":
+    case "awake":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** Whether the row is between two states, which offers no action but Details. */
 export function sandboxRowMoving(summary: SandboxSummary): boolean {
   switch (summary.state) {
@@ -648,6 +667,7 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
   const state = sandboxPublicState(summary);
+  if (sandboxStopPending(summary)) return sandboxVerbPendingLine("stop");
   switch (state) {
     case "destroying":
       return sandboxVerbPendingLine("destroy");
@@ -971,6 +991,19 @@ export function sandboxRowActions(input: {
   return { primary: null, menu: actions.menu };
 }
 
+/**
+ * A row between two states: Destroy is the way out of a suspend or stop in
+ * flight and of a Stop the server holds; anything else offers only Details.
+ * Null for a row at rest.
+ */
+function movingRowActions(summary: SandboxSummary): SandboxRowActions | null {
+  if (sandboxStopPending(summary)) return { primary: null, menu: ["destroy"] };
+  if (!sandboxRowMoving(summary)) return null;
+  return summary.state === "suspending" || summary.state === "stopping"
+    ? { primary: null, menu: ["destroy"] }
+    : NO_ROW_ACTIONS;
+}
+
 function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
@@ -994,11 +1027,8 @@ function matrixRowActions(input: {
       menu: ["rename", "destroy"],
     };
   }
-  if (sandboxRowMoving(summary)) {
-    return summary.state === "suspending" || summary.state === "stopping"
-      ? { primary: null, menu: ["destroy"] }
-      : NO_ROW_ACTIONS;
-  }
+  const moving = movingRowActions(summary);
+  if (moving !== null) return moving;
   switch (state) {
     case "failed":
       return { primary: "retry", menu: ["destroy"] };

@@ -38,6 +38,7 @@ import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-hos
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import {
+  shownPendingVerb,
   useSandboxOperation,
   type SandboxRowVerb,
 } from "@/hooks/sandboxes/use-sandbox-operation";
@@ -277,7 +278,7 @@ export function SandboxRowActions(props: {
       )}
       <SandboxRowPrimaryAction
         primary={primary}
-        pendingVerb={pendingVerb}
+        pendingVerb={shownPendingVerb(operation, summary)}
         configuration={configuration}
         busy={busy}
         dialogOpen={dialog !== null}

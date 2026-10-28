@@ -54,6 +54,7 @@ export function sandboxSummaryFixture(
     keptAt: null,
     operation: null,
     regionLabel: null,
+    stopRequestedAt: null,
     ...overrides,
   };
 }

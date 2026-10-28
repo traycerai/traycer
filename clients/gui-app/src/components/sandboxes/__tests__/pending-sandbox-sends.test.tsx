@@ -6810,6 +6810,106 @@ describe("a task deleted while its message waits on a sandbox", () => {
   );
 });
 
+describe("Stop pressed while the sandbox is being created", () => {
+  let restoreLocks: () => void = () => undefined;
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(() => {
+    restoreLocks();
+  });
+
+  /** A create seven seconds in: the sandbox has an id, nothing is awake. */
+  async function pressStopDuringCreate(): Promise<Deferred<SandboxVerbOutcome>> {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    seed({ ...SEEDED, phase: "creating", elapsedSeconds: 7 });
+    mount();
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
+    await waitFor(() => {
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    });
+    return answer;
+  }
+
+  it("keeps the setup line and the message, and reads Stopping <name> · pending from the row once the server holds it", async () => {
+    const answer = await pressStopDuringCreate();
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).toContain("Starting sandbox");
+    expect(screen.getByTestId("sandbox-setup-stopping").textContent).toBe(
+      "Stopping api-refactor · pending",
+    );
+    expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+      "fix the login bug",
+    );
+
+    // The server answered while the create still ran: the row says so.
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "creating",
+          stopRequestedAt: Date.now(),
+        }),
+      ],
+      Date.now() + 60_000,
+    );
+    await act(async () => {
+      answer.resolve({ kind: "moving" });
+      await answer.promise;
+    });
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
+      "Starting sandbox",
+    );
+    expect(screen.getByTestId("sandbox-setup-stopping").textContent).toBe(
+      "Stopping api-refactor · pending",
+    );
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+  });
+
+  it("gives the message back to this task's composer still on that sandbox once it stops", async () => {
+    const answer = await pressStopDuringCreate();
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "stopped",
+        }),
+      ],
+      Date.now() + 60_000,
+    );
+    await act(async () => {
+      answer.resolve({ kind: "settled", state: "stopped" });
+      await answer.promise;
+    });
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+
+    expect(
+      await screen.findByText(
+        "Stopped api-refactor. Your message wasn't sent; it's back in the composer.",
+      ),
+    ).toBeDefined();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT });
+    // The task's own composer, picked on the stopped sandbox: never This
+    // computer.
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: "epic-1",
+    });
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        newConversationSurfaceKey("epic-1")
+      ],
+    ).toBe(SANDBOX_HOST);
+  });
+});
+
 describe("choosing Stop on an unclaimed send", () => {
   const FRESH = Date.now() + 60_000;
   const BACK_IN_COMPOSER_RECEIPT =
@@ -7261,9 +7361,10 @@ describe("choosing Stop on an unclaimed send", () => {
 
     await chooseStopAndConfirmRest();
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
+    // The message is back in the task's composer on the stopped sandbox.
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe("pinned-host");
+    ).toBe(SANDBOX_HOST);
 
     act(() => {
       useNewConversationModalStore.getState().clearDraft("epic-1");
@@ -7275,7 +7376,7 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe("pinned-host");
+    ).toBe(SANDBOX_HOST);
   });
 
   it("clears the stopped receipt when a newer send appears in the task", async () => {

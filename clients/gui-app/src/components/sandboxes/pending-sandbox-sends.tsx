@@ -145,10 +145,8 @@ import {
   type RequestedAgentReadiness,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
-  stoppingSandboxLine,
   couldntStopLine,
   RETRY,
-  STOP,
   DETAILS,
 } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
@@ -2668,17 +2666,26 @@ function observePendingStopResult(
   }
 }
 
-/** A moving or non-resting verb answer proves no completed Stop. */
+/**
+ * A moving or non-resting verb answer proves no completed Stop. A boot that
+ * failed (or a destroy that took the row) while the server held the Stop
+ * ends the sandbox: nothing is left to stop.
+ */
 function stoppedHostObservation(
   outcome: SandboxVerbOutcome,
 ): PendingSendFacts["host"] {
   if (outcome.kind === "gone") return "ended";
-  if (
-    outcome.kind === "settled" &&
-    (outcome.state === "stopped" || outcome.state === "suspended")
-  )
-    return "resting";
-  return "unknown";
+  if (outcome.kind !== "settled") return "unknown";
+  switch (outcome.state) {
+    case "stopped":
+    case "suspended":
+      return "resting";
+    case "failed":
+    case "destroyed":
+      return "ended";
+    default:
+      return "unknown";
+  }
 }
 
 /** Every completion rechecks the current record and the original account. */
@@ -2711,24 +2718,35 @@ function pendingStopDecision(
   );
 }
 
-/** The existing failure projection retains a Stop failure across observer replacement. */
-function isStopFailure(failure: StagedSandboxFailure | null): boolean {
-  return failure?.kind === "settings" && failure.code === STOP_FAILED_CODE;
+/**
+ * A held Stop that failed and is not being retried: its own answer, or the
+ * failure the stage keeps across observer replacement.
+ */
+function heldStopFailed(
+  held: boolean,
+  inFlight: boolean,
+  error: Error | null,
+  failure: StagedSandboxFailure | null,
+): boolean {
+  if (!held || inFlight) return false;
+  return (
+    error !== null ||
+    (failure?.kind === "settings" && failure.code === STOP_FAILED_CODE)
+  );
 }
 
-function PendingStopLine(props: {
+/** A failed Stop: its typed failure, or the verb's own reference once no longer cached. */
+function PendingStopFailureLine(props: {
   readonly name: string;
   readonly sandboxId: string;
   readonly configuration: StageConfiguration;
   readonly costLine: string;
-  readonly pending: boolean;
-  readonly failed: boolean;
   readonly canWithdraw: boolean;
   readonly stop: () => void;
 }): ReactNode {
   const operation = useSandboxOperation(props.sandboxId);
   const failure =
-    operation?.kind === "failed" && operation.verb === "stop" && !props.pending
+    operation?.kind === "failed" && operation.verb === "stop"
       ? operation
       : null;
   return (
@@ -2740,65 +2758,49 @@ function PendingStopLine(props: {
           name={props.name}
           configuration={props.configuration}
           operation={failure}
-          busy={props.pending}
+          busy={false}
           onRetry={props.canWithdraw ? props.stop : null}
         />
       ) : (
-        <PendingStopFallback
-          name={props.name}
-          sandboxId={props.sandboxId}
-          pending={props.pending}
-          failed={props.failed}
-          canWithdraw={props.canWithdraw}
-          stop={props.stop}
-        />
+        <>
+          <span>{`${couldntStopLine(props.name)} · ${sandboxSupportReference("stop")}`}</span>
+          <div className="flex flex-wrap gap-2">
+            {props.canWithdraw ? (
+              <Button
+                type="button"
+                variant="link"
+                size="inline-xs"
+                data-testid="sandbox-setup-stop"
+                onClick={props.stop}
+              >
+                {RETRY}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="link"
+              size="inline-xs"
+              onClick={() => openSandboxDetails(props.sandboxId)}
+            >
+              {DETAILS}
+            </Button>
+          </div>
+        </>
       )}
     </div>
   );
 }
 
-/** A held Stop stays readable while its outcome is pending or no longer cached. */
-function PendingStopFallback(props: {
-  readonly name: string;
-  readonly sandboxId: string;
-  readonly pending: boolean;
-  readonly failed: boolean;
-  readonly canWithdraw: boolean;
-  readonly stop: () => void;
-}): ReactNode {
-  return (
-    <>
-      <span>
-        {!props.failed || props.pending
-          ? stoppingSandboxLine(props.name)
-          : `${couldntStopLine(props.name)} · ${sandboxSupportReference("stop")}`}
-      </span>
-      <div className="flex flex-wrap gap-2">
-        {props.canWithdraw ? (
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            data-testid="sandbox-setup-stop"
-            disabled={props.pending}
-            onClick={props.stop}
-          >
-            {props.pending ? STOP : RETRY}
-          </Button>
-        ) : null}
-        {props.failed && !props.pending ? (
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            onClick={() => openSandboxDetails(props.sandboxId)}
-          >
-            {DETAILS}
-          </Button>
-        ) : null}
-      </div>
-    </>
-  );
+/**
+ * The stage as its setup line reads it: a held Stop's own marker is not a
+ * failure of the boot, whose line keeps running beside
+ * `Stopping <name> · pending`.
+ */
+function stageUnderHeldStop(stage: StagedSandbox): StagedSandbox {
+  return stage.failure?.kind === "settings" &&
+    stage.failure.code === STOP_INTENT_CODE
+    ? { ...stage, failure: null }
+    : stage;
 }
 
 /** Model recovery needs an undispatched message and an empty destination draft. */
@@ -2823,6 +2825,7 @@ function pendingSandboxModelRecovery(input: {
       stage: input.stage,
       tabId: input.tabId,
       restage: false,
+      keepHost: true,
       modelPickerHarnessId: "traycer",
     });
   };
@@ -2924,8 +2927,17 @@ function PendingStagedSendItem(props: {
   if (stage === null || facts === null) {
     return <PendingSendMessage send={send} />;
   }
-  const backToComposer = (restage: boolean): ReturnedPendingSandboxSend => {
-    return endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
+  const backToComposer = (
+    restage: boolean,
+    keepHost: boolean,
+  ): ReturnedPendingSandboxSend => {
+    return endSendBackToComposer({
+      send,
+      stage,
+      tabId: props.tabId,
+      restage,
+      keepHost,
+    });
   };
   const stop = (): void => {
     void stopPendingSend(
@@ -2934,7 +2946,9 @@ function PendingStagedSendItem(props: {
       () => {
         attention.current = {
           userId: send.userId,
-          giveBack: () => backToComposer(false),
+          // Back in this task's composer, still on the stopped sandbox: its
+          // send starts it again.
+          giveBack: () => backToComposer(false, true),
         };
         stopAttention.set(send.id, attention.current);
       },
@@ -2945,6 +2959,15 @@ function PendingStagedSendItem(props: {
     stage.target.name.length > 0
       ? stage.target.name
       : stagedSandboxFallbackName(send.text);
+  // A held Stop keeps the setup line, reading `Stopping <name> · pending`,
+  // until it fails; the server carries it out when the boot lands.
+  const stopHeld = pendingSendState(send, stageBlocker(stage)).blocker === "stop";
+  const stopFailed = heldStopFailed(
+    stopHeld,
+    verb.isPending || activeVerbs > 0,
+    verb.error,
+    stage.failure,
+  );
   const chooseModel = pendingSandboxModelRecovery({
     send,
     stage,
@@ -2957,14 +2980,12 @@ function PendingStagedSendItem(props: {
       className="flex w-full flex-col gap-2"
       data-testid="pending-sandbox-send"
     >
-      {pendingSendState(send, stageBlocker(stage)).blocker === "stop" ? (
-        <PendingStopLine
+      {stopFailed ? (
+        <PendingStopFailureLine
           name={name}
           sandboxId={sandboxId}
           configuration={stage.target.configuration}
           costLine={facts.costLine}
-          pending={verb.isPending || activeVerbs > 0}
-          failed={verb.error !== null || isStopFailure(stage.failure)}
           canWithdraw={canWithdraw}
           stop={stop}
         />
@@ -2972,7 +2993,7 @@ function PendingStagedSendItem(props: {
         <PendingSendSetupLine
           requestKind={send.request.kind}
           withdrawalAllowed={canWithdraw}
-          stage={stage}
+          stage={stageUnderHeldStop(stage)}
           name={name}
           facts={facts}
           actions={{
@@ -2984,7 +3005,7 @@ function PendingStagedSendItem(props: {
                 );
                 return;
               }
-              const returned = backToComposer(false);
+              const returned = backToComposer(false, false);
               if (
                 !Object.hasOwn(
                   usePendingSandboxSendStore.getState().sends,
@@ -2993,17 +3014,18 @@ function PendingStagedSendItem(props: {
               )
                 recordCancelledSandboxSend(send, returned);
             },
-            onChooseAnotherHost: () => backToComposer(false),
+            onChooseAnotherHost: () => backToComposer(false, false),
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),
-            onChangeShape: () => backToComposer(true),
+            onChangeShape: () => backToComposer(true, false),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
+            stopPending: stopHeld,
             onOpenTerminal: newHost.onOpenTerminal,
             // The configuration's own Providers, a team's included.
             onOpenProviders: providersOpener(stage.target.configuration),
@@ -3178,14 +3200,17 @@ function useOpenTerminalWhenUp(
 /**
  * Ends the send and puts the message back in this task's new-agent
  * composer, where the person picks a host again; `restage` stages the same
- * sandbox there, for a shape change. A fork has no message to put back: it
- * ends, and the chat it came from is where to fork again.
+ * sandbox there, for a shape change, and `keepHost` picks the sandbox the
+ * send was made on (a Stop's give-back, a model recovery). A fork has no
+ * message to put back: it ends, and the chat it came from is where to fork
+ * again.
  */
 function endSendBackToComposer(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly tabId: string;
   readonly restage: boolean;
+  readonly keepHost: boolean;
   readonly modelPickerHarnessId?: GuiHarnessId;
 }): ReturnedPendingSandboxSend {
   const { send } = input;
@@ -3212,10 +3237,7 @@ function endSendBackToComposer(input: {
     useStagedSandboxStore.getState().stage(key, input.stage.target);
     openStagedShapeSheet(key);
   }
-  if (
-    input.modelPickerHarnessId !== undefined &&
-    input.stage.createdHostId !== null
-  ) {
+  if (input.keepHost && input.stage.createdHostId !== null) {
     useSurfaceHostSelectionStore
       .getState()
       .setSelection(

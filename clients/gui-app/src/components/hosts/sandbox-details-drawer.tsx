@@ -19,7 +19,10 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
-import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
+import {
+  sandboxDetailsEntry,
+  type SandboxDetailsExport,
+} from "@/lib/sandboxes/sandbox-details-provider";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   SANDBOX_LIST_FAILED,
@@ -101,6 +104,21 @@ function SandboxDetailsBody(props: { readonly sandboxId: string }): ReactNode {
   return <SandboxDetailsSections summary={summary} />;
 }
 
+/**
+ * The export with this view's last failed operation's raw code: Details
+ * shows only its support reference, and the raw code goes here.
+ */
+function withOperationFailure(
+  exported: SandboxDetailsExport,
+  code: string | null,
+): SandboxDetailsExport {
+  if (code === null) return exported;
+  return {
+    ...exported,
+    status: { ...exported.status, "Operation failure code": code },
+  };
+}
+
 function SandboxDetailsSections(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
@@ -172,9 +190,6 @@ function SandboxDetailsSections(props: {
                 )}
               </p>
               <p>{operation.error.message}</p>
-              {operation.code === null ? null : (
-                <p>{`Failure code: ${operation.code}`}</p>
-              )}
               <p>{`Support reference: ${operation.reference}`}</p>
             </li>
           ) : null}
@@ -212,7 +227,16 @@ function SandboxDetailsSections(props: {
           size="sm"
           data-testid="sandbox-details-export"
           onClick={() =>
-            clipboard.copy(JSON.stringify(entry.export(), null, 2))
+            clipboard.copy(
+              JSON.stringify(
+                withOperationFailure(
+                  entry.export(),
+                  operation?.kind === "failed" ? operation.code : null,
+                ),
+                null,
+                2,
+              ),
+            )
           }
         >
           {clipboard.copied ? "Copied" : "Copy diagnostics"}

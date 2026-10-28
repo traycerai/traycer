@@ -69,6 +69,7 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     keptAt: null,
     operation: null,
     regionLabel: null,
+    stopRequestedAt: null,
     ...overrides,
   };
 }

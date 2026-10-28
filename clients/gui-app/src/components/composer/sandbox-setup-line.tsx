@@ -54,6 +54,7 @@ import {
   agentNotOfferedOnSandboxesLine,
   enableSandboxInferenceLine,
   stepApplyingSettings,
+  stoppingSandboxLine,
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
 import { cn } from "@/lib/utils";
@@ -160,6 +161,12 @@ export interface SandboxSetupLineActions {
   readonly applyingPending?: boolean;
   readonly applyingError?: boolean;
   readonly onStop: (() => void) | null;
+  /**
+   * A Stop is held for this sandbox: the line keeps running and reads
+   * `Stopping <name> · pending` beside a disabled Stop until the server
+   * carries it out when the boot lands.
+   */
+  readonly stopPending?: boolean;
   /**
    * A folderless terminal on the new host: Open terminal on the Booting step
    * and the settings branch, Open terminal instead on the no-provider
@@ -519,15 +526,29 @@ function SandboxProgressLine(props: {
       expanded={expanded}
       onToggle={() => setManualExpanded(!expanded)}
       trailing={
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
-          onClick={
-            failure?.kind === "settings" && expanded
-              ? null
-              : props.actions.onStop
-          }
-        />
+        props.actions.stopPending === true ? (
+          <>
+            <span data-testid="sandbox-setup-stopping">
+              {stoppingSandboxLine(name)}
+            </span>
+            <LineButton
+              label={STOP}
+              testId="sandbox-setup-stop"
+              onClick={props.actions.onStop}
+              pending
+            />
+          </>
+        ) : (
+          <LineButton
+            label={STOP}
+            testId="sandbox-setup-stop"
+            onClick={
+              failure?.kind === "settings" && expanded
+                ? null
+                : props.actions.onStop
+            }
+          />
+        )
       }
       head={
         <ProgressHead view={view} name={name} elapsedSeconds={elapsedSeconds} />

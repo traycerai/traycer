@@ -3,6 +3,7 @@ import { hashKey, type Mutation } from "@tanstack/react-query";
 import {
   sandboxSupportReference,
   type SandboxLifecycleVerb,
+  type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useMutationStateOf } from "@/hooks/use-mutation-state-of";
@@ -11,6 +12,7 @@ import {
   type SandboxDestroyRequest,
 } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { sandboxMutationKeys } from "@/lib/query-keys";
+import { sandboxStopPending } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 export type SandboxRowVerb = SandboxLifecycleVerb | "destroy";
@@ -96,6 +98,18 @@ export function useSandboxOperation(
     reference,
     destroyRequest: destroyRetryRequest(latest.variables),
   };
+}
+
+/**
+ * The verb a view of the row shows as pending: this window's own, or a Stop
+ * the server holds for the boot (pressed here or by another viewer).
+ */
+export function shownPendingVerb(
+  operation: SandboxRowOperation | null,
+  summary: SandboxSummary,
+): SandboxRowVerb | null {
+  if (operation?.kind === "pending") return operation.verb;
+  return sandboxStopPending(summary) ? "stop" : null;
 }
 
 function isRowVerb(value: unknown): value is SandboxRowVerb {

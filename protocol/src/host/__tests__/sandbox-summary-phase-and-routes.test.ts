@@ -264,6 +264,21 @@ describe("sandbox summary environmentId", () => {
   });
 });
 
+describe("sandbox summary stopRequestedAt", () => {
+  it("keeps the Stop a server holds while the row boots", () => {
+    const parsed = sandboxSummarySchema.parse({
+      ...SANDBOX_VIEW,
+      state: "creating",
+      stopRequestedAt: 1_791_000_020_000,
+    });
+    expect(parsed.stopRequestedAt).toBe(1_791_000_020_000);
+  });
+
+  it("reads a server before the pending Stop (no key) as null", () => {
+    expect(sandboxSummarySchema.parse(SANDBOX_VIEW).stopRequestedAt).toBeNull();
+  });
+});
+
 describe("a server before the resting clock, keep and today's cost", () => {
   it("reads a summary without the five new fields as nulls", () => {
     const parsed = sandboxSummarySchema.parse(SANDBOX_VIEW);

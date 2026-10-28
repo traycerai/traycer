@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -292,6 +293,70 @@ async function press(testCase: VerbCase): Promise<HTMLElement> {
   return row;
 }
 
+/** Presses Copy diagnostics in the open Details and answers what it copied. */
+async function copiedDiagnostics(): Promise<string> {
+  const writeText = vi.fn((_text: string) => Promise.resolve());
+  const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  try {
+    fireEvent.click(screen.getByTestId("sandbox-details-export"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+  } finally {
+    if (original === undefined) Reflect.deleteProperty(navigator, "clipboard");
+    else Object.defineProperty(navigator, "clipboard", original);
+  }
+  return writeText.mock.calls[0]?.[0] ?? "";
+}
+
+describe("a Stop the server holds while the sandbox boots", () => {
+  it.each(["creating", "starting", "resuming"] as const)(
+    "reads Stopping · pending on a %s row for any viewer, with Destroy still offered",
+    async (state) => {
+      const binding = mocks.binding;
+      if (binding === null) throw new Error("Expected the signed-in binding");
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            sandboxSummaryFixture({
+              id: "sbx-build",
+              displayName: "build-box",
+              state,
+              stopRequestedAt: 1_000,
+            }),
+          ],
+        },
+      });
+      const client = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      render(
+        <QueryClientProvider client={client}>
+          <Rows />
+        </QueryClientProvider>,
+      );
+
+      const row = await screen.findByRole("region", { name: "build-box" });
+      expect((await within(row).findByRole("status")).textContent).toBe(
+        "Stopping · pending",
+      );
+      await userEvent.click(
+        within(row).getByRole("button", { name: "More actions for build-box" }),
+      );
+      expect(
+        await screen.findByRole("menuitem", { name: "Destroy" }),
+      ).toBeTruthy();
+      expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("sandbox row operations", () => {
   it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
     const testCase = CASES.find((entry) => entry.verb === "start");
@@ -507,7 +572,7 @@ describe("sandbox row operations", () => {
     );
     expect(
       (await screen.findByRole("region", { name: "History" })).textContent,
-    ).toContain("Failure code: sandbox_busy");
+    ).not.toContain("sandbox_busy");
     await userEvent.keyboard("{Escape}");
     const retried = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();
     mocks.binding?.auth.runSandboxVerb.mockReturnValue(retried.promise);
@@ -723,10 +788,13 @@ describe("sandbox row operations", () => {
       expect(history.textContent).toContain(
         "It's in use (an agent turn, a running shell or an open tab), so it stays awake.",
       );
-      expect(history.textContent).toContain("Failure code: sandbox_busy");
+      // Details shows the SBX code; the raw code goes only in the export.
+      expect(history.textContent).not.toContain("Failure code");
+      expect(history.textContent).not.toContain("sandbox_busy");
       expect(history.textContent).toContain(
         `Support reference: ${testCase.reference}`,
       );
+      expect(await copiedDiagnostics()).toContain("sandbox_busy");
       await userEvent.keyboard("{Escape}");
 
       const retry = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();

@@ -53,6 +53,7 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import {
+  shownPendingVerb,
   useSandboxOperation,
   type SandboxRowOperation,
 } from "@/hooks/sandboxes/use-sandbox-operation";
@@ -922,8 +923,7 @@ function SandboxActions(props: {
   const { summary } = props;
   const verb = useSandboxVerb(summary.id);
   const destroy = useSandboxDestroy(summary);
-  const pendingVerb =
-    props.operation?.kind === "pending" ? props.operation.verb : null;
+  const pendingVerb = shownPendingVerb(props.operation, summary);
   return (
     <>
       {pendingVerb !== null && !props.actions.includes(pendingVerb) ? (

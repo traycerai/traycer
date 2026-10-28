@@ -263,6 +263,14 @@ export interface SandboxSummary {
    * catalogue gives it; `null` from a server before the field.
    */
   readonly regionLabel: string | null;
+  /**
+   * When a member's Stop pressed while the row was creating, starting or
+   * resuming was accepted (epoch milliseconds): the server stops it as soon
+   * as that boot lands, and the row reads "Stopping · pending" until then.
+   * `null` when no Stop is pending and from a server before the field, which
+   * refuses a Stop on a booting row instead.
+   */
+  readonly stopRequestedAt: number | null;
 }
 
 /**
@@ -474,6 +482,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     // fail the row, and with it the whole sandbox list.
     operation: sandboxOperationSchema.nullable().default(null).catch(null),
     regionLabel: z.string().nullable().default(null),
+    stopRequestedAt: z.number().nullable().default(null),
   }),
 );
 
