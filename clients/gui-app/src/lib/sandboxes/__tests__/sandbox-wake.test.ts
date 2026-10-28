@@ -312,6 +312,43 @@ describe("wakeSandboxOnPick", () => {
     );
   });
 
+  it("says the team's pot, nameless, when the directory has no row for the sandbox", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 120,
+      creditSource: "team-allowance",
+    });
+
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      {
+        description:
+          "Your team allowance is short $0.12. $0.12 more wakes it for an hour.",
+      },
+    );
+
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: null,
+      creditSource: "team",
+    });
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+    expect(mocks.toastWarning).toHaveBeenLastCalledWith(
+      "Not enough credits to wake this sandbox",
+      {
+        description: "Your team's credits don't cover an hour of this sandbox.",
+      },
+    );
+  });
+
   it("keeps the add-credits wording for a refusal from the person's own balance, and for one that named no pot", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
