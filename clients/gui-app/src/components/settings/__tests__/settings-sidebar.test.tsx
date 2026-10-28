@@ -1121,6 +1121,7 @@ describe("<SettingsSidebar /> preview features", () => {
         "machine-setup",
         "agent-definitions",
         "sandboxes",
+        "credits",
       ]) {
         expect(present(id)).toBe(false);
       }
@@ -1136,6 +1137,7 @@ describe("<SettingsSidebar /> preview features", () => {
 
     expect(present("secrets")).toBe(true);
     expect(present("sandboxes")).toBe(true);
+    expect(present("credits")).toBe(true);
     expect(screen.getByTestId("environment-picker-trigger")).toBeTruthy();
     expect(headings()).toContain("Environment");
     expect(headings()).not.toContain("Agent settings");
@@ -1150,6 +1152,7 @@ describe("<SettingsSidebar /> preview features", () => {
     await renderRail();
 
     expect(present("sandboxes")).toBe(false);
+    expect(present("credits")).toBe(true);
     expect(present("secrets")).toBe(true);
     expect(screen.getByTestId("environment-picker-trigger")).toBeTruthy();
   });

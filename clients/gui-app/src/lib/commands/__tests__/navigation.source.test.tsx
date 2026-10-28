@@ -98,6 +98,7 @@ describe("navigationSource", () => {
     "nav:settings/secrets",
     "nav:settings/members",
     "nav:settings/sandboxes",
+    "nav:settings/credits",
   ];
 
   it.each(["off", "unread"] as const)(

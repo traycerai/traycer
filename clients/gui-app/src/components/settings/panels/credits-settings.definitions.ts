@@ -6,16 +6,9 @@
  */
 export const CREDITS_PAGE = {
   label: "Credits",
-  description: "Credits pay for your sandboxes, awake or resting.",
+  description: "Your remaining credits.",
   /** The card's figure: the balance as the card formats it, then "left". */
   remaining: (balance: string): string => `${balance} left`,
   readFailed: "Couldn't read your credits.",
-  keywords: [
-    "credits",
-    "billing",
-    "balance",
-    "sandbox",
-    "add credits",
-    "spend",
-  ],
+  keywords: ["credits", "billing", "balance", "add credits", "spend"],
 } as const;

@@ -144,6 +144,54 @@ describe("<SettingsSearch /> without the preview features", () => {
     },
   );
 
+  it.each(["off", "unread"] as const)(
+    "names the Personal group Agent settings, not Environment, in a result's breadcrumb while environments read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      render(<Harness />);
+      type("providers");
+      const texts = optionTexts();
+
+      expect(texts.some((text) => text.includes("Agent settings"))).toBe(true);
+      expect(texts.some((text) => text.includes("Environment"))).toBe(false);
+    },
+  );
+
+  it("names the Personal group Environment in a result's breadcrumb with environments on", () => {
+    render(<Harness />);
+    type("providers");
+
+    expect(optionTexts().some((text) => text.includes("Environment"))).toBe(
+      true,
+    );
+  });
+
+  it.each(["off", "unread"] as const)(
+    "offers no Credits page while environments read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      render(<Harness />);
+      type("credits");
+
+      expect(optionTexts().some((text) => /credits/i.test(text))).toBe(false);
+    },
+  );
+
+  it("offers the Credits page with environments on", () => {
+    render(<Harness />);
+    type("credits");
+
+    expect(optionTexts().some((text) => /credits/i.test(text))).toBe(true);
+  });
+
   it("finds Show Tracy and the install row with bots and environments on", () => {
     render(<Harness />);
     type("tracy");
