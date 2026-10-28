@@ -114,6 +114,15 @@ __setEpicRuntimeWorkerFactoryForTests(() => {
 // file-level `vi.mock` takes precedence over this one - twenty do. The suite
 // that exercises the real dialing path targets `durable-stream-transport.ts`,
 // a different module, and is untouched by this.
+// The suites describe the whole product: every feature on, as the build that
+// ships them will have it. The build-time switch (`unreleased-features.ts`)
+// is off in the shipping build and would otherwise hide, from every suite,
+// the surfaces it gates. A suite of the switched-off build mocks the module
+// itself with `false`; a file-level `vi.mock` takes precedence over this one.
+vi.mock("@/unreleased-features", () => ({
+  UNRELEASED_FEATURES_ENABLED: true,
+}));
+
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");

@@ -9,9 +9,14 @@ import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definiti
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
-const AGENTS_TABS = ["guide", "definitions"] as const;
-type AgentsTab = (typeof AGENTS_TABS)[number];
+// Definitions are a configuration's files (environments); a build without
+// environments (`unreleased-features.ts`) offers the guide alone, as it did.
+type AgentsTab = "guide" | "definitions";
+const AGENTS_TABS: ReadonlyArray<AgentsTab> = UNRELEASED_FEATURES_ENABLED
+  ? ["guide", "definitions"]
+  : ["guide"];
 
 const AGENTS_TAB_LABELS: Readonly<Record<AgentsTab, string>> = {
   guide: "Selection guide",
@@ -75,13 +80,15 @@ export function AgentsSettingsPanel(): ReactNode {
           </p>
           <AgentSelectionGuideSection />
         </TabsContent>
-        <TabsContent value="definitions" className="pt-5">
-          {/* Definitions read the ambient binding, so a Local row's pick
-              re-provides it to that computer. */}
-          <EnvironmentHostBinding>
-            <AgentDefinitionsTab />
-          </EnvironmentHostBinding>
-        </TabsContent>
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <TabsContent value="definitions" className="pt-5">
+            {/* Definitions read the ambient binding, so a Local row's pick
+                re-provides it to that computer. */}
+            <EnvironmentHostBinding>
+              <AgentDefinitionsTab />
+            </EnvironmentHostBinding>
+          </TabsContent>
+        ) : null}
       </Tabs>
     </SettingsPanelShell>
   );

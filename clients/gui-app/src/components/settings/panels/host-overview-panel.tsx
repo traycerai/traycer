@@ -26,6 +26,7 @@ import {
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
@@ -2001,17 +2002,23 @@ export function HostOverviewPanel(props: {
           hostId={scope.hostId}
           enabled={usable}
         />
-        {/* Which configuration this host runs, for the host the picker names. */}
-        <HostEnvironmentSection scope={scope} />
-        {/* The settings card, on every tab like the lines above it: whether
+        {/* Which configuration this host runs, for the host the picker names,
+            and the settings card on every tab like the lines above it: whether
             this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. */}
-        <HostOverviewSettingsCardSlot
-          client={client}
-          hostId={scope.hostId}
-          hostName={displayName}
-          usable={usable}
-        />
+            earlier version or stopped. Neither in a build without
+            environments (`unreleased-features.ts`): a host there runs its own
+            settings and has nowhere to move them. */}
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <>
+            <HostEnvironmentSection scope={scope} />
+            <HostOverviewSettingsCardSlot
+              client={client}
+              hostId={scope.hostId}
+              hostName={displayName}
+              usable={usable}
+            />
+          </>
+        ) : null}
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs

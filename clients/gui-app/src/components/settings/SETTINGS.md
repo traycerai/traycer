@@ -854,6 +854,20 @@ Supporting pieces, all viewport-agnostic where possible:
 
 ## Team configuration sources
 
+A build without environments (`src/unreleased-features.ts`, off for the
+release that ships before they are ready) has no Environment dropdown and no
+Environment group: `settings-sections.ts` puts its pages under the Host
+picker, Overview first, with Notifications beside them, and the sidebar
+writes the picked host as the window's default pick, a Local row
+(`HostPickAsLocalRow`), so every one of those pages reads that host's own
+values through `PersonalPageFrame`'s host source and none reads the cloud.
+The Overview draws neither the configuration line nor the settings card, its
+Access tab is the remote access switch alone, the Local row note and the
+move reminders are not drawn, and Credits, MCP servers, Skills, Secrets,
+Sandboxes and Members are not offered. The suites describe the build with
+everything on (`__tests__/test-browser-apis.ts` mocks the switch to `true`);
+a suite of the switched-off build mocks it to `false` itself.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the

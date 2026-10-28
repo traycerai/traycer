@@ -23,6 +23,8 @@ import { SandboxRestingNoticeObservers } from "@/components/notifications/sandbo
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
@@ -177,6 +179,13 @@ export function RootComponent() {
               <SystemTabModalHost />
               <ChatSearchDialogHost />
               <SweepReviewDialogHost />
+              {/* The Sync profiles dialog of a build without environments
+                  (`unreleased-features.ts`). Here rather than in Settings:
+                  Providers settings drops its body while a deep link moves
+                  its host scope, which is the navigation "Sign in on
+                  <source>" makes; and not behind the default-host scope,
+                  because it reads only the source host it captured. */}
+              {UNRELEASED_FEATURES_ENABLED ? null : <ProfileSyncModalHost />}
               {/* The retrospective and move sheets. Here rather than in
                   Settings: the retrospective sheet opens by itself once on
                   the first launch after the update, whatever the window

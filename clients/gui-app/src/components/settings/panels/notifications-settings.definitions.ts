@@ -1,5 +1,6 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // Host-scoped: the page's scope gate conceals both cards while the host
 // connects or is unreachable and drops them for a host that vanished, so
@@ -8,8 +9,11 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Notifications",
-    description:
-      "What gets surfaced to you, and what your automation receives.",
+    // Under the host picker in a build without environments
+    // (`settings-sections.ts`), where the page describes one host.
+    description: UNRELEASED_FEATURES_ENABLED
+      ? "What gets surfaced to you, and what your automation receives."
+      : "What this host surfaces, and what its automation receives.",
     keywords: [
       "alerts",
       "inbox",

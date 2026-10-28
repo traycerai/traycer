@@ -1,7 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeEach } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
+
+// The suites describe the whole CLI: every command registered, as the build
+// that ships them will have it. The build-time switch
+// (`src/unreleased-features.ts`) is off in the shipping build and would
+// otherwise hide the commands it gates from every suite. A suite of the
+// switched-off build mocks the module itself with `false`.
+vi.mock("./src/unreleased-features", () => ({
+  UNRELEASED_FEATURES_ENABLED: true,
+}));
 
 // Pin the home directory to a private temp dir for every test file, BEFORE
 // the file - or anything it imports - is evaluated.

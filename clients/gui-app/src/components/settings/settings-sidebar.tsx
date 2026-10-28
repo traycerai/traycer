@@ -42,6 +42,7 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
 import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
+import { HostPickAsLocalRow } from "@/components/settings/environment/host-pick-as-local-row";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
@@ -125,6 +126,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
       )}
     >
       <SidebarArtwork />
+      {UNRELEASED_FEATURES_ENABLED ? null : (
+        <HostPickAsLocalRow scope={scope} />
+      )}
       <SettingsSearch query={query} onQueryChange={setQuery} />
       {/* The results took this space. Keeping the section list under them
           would put two competing lists in one column, and the top one already
@@ -137,7 +141,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
               {group.id !== "guide" ? (
                 <SettingsSidebarGroupHeader label={group.label} />
               ) : null}
-              {group.id === "personal" && UNRELEASED_FEATURES_ENABLED ? (
+              {group.id === "personal" ? (
                 <SettingsSidebarEnvironmentPicker
                   scope={scope}
                   mode={props.mode}
@@ -278,7 +282,9 @@ function SettingsSidebarHostPicker(props: {
       {/* A sandbox is an account's machine: nothing to create signed out,
           and nothing at all from a build that cannot reach the control
           plane (staging), which says so instead. */}
-      {UNRELEASED_FEATURES_ENABLED && signedIn && sandboxesUnavailable !== null ? (
+      {UNRELEASED_FEATURES_ENABLED &&
+      signedIn &&
+      sandboxesUnavailable !== null ? (
         <p
           data-testid="settings-sandboxes-unavailable"
           className="px-2 py-1 text-ui-xs text-muted-foreground"

@@ -1,5 +1,6 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
 // is not gated. The page's tab triggers render for every host in every
@@ -97,12 +98,15 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "phone",
     ],
   },
+  // The remote access switch alone in a build without environments
+  // (`host-overview-access-tab.tsx`).
   accessTab: {
     kind: "group",
     search: { anchor: "host-overview-tab-access" },
-    label: "Access and setup",
-    description:
-      "Whether other devices and agents can reach this computer, finishing setup, this computer's own sign-ins, and the values kept on this host only.",
+    label: UNRELEASED_FEATURES_ENABLED ? "Access and setup" : "Access",
+    description: UNRELEASED_FEATURES_ENABLED
+      ? "Whether other devices and agents can reach this computer, finishing setup, this computer's own sign-ins, and the values kept on this host only."
+      : "Whether other devices and agents can reach this computer.",
     breadcrumb: "Overview",
     availableWhen: alwaysAvailable,
     keywords: [
