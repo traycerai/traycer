@@ -28,6 +28,7 @@ import {
   environmentConfigurationSkillsListV11,
   environmentConfigurationSkillsRemoveV10,
   environmentConfigurationSkillsRestoreBundledV10,
+  environmentConfigurationSkillsSearchV10,
   environmentConfigurationSkillsSetPolicyV10,
   environmentConfigurationSkillsImportV10,
   environmentConfigurationSkillsSetProvidersV10,
@@ -1005,6 +1006,24 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
       ],
     },
     badResponse: { outcome: "imported" },
+  },
+  {
+    method: "environment.configuration.skills.search",
+    contract: environmentConfigurationSkillsSearchV10,
+    request: { query: "review", owner: null },
+    badRequest: { query: "r", owner: null },
+    response: {
+      outcome: "found",
+      skills: [
+        {
+          id: "acme/skills/review",
+          name: "review",
+          installs: 12,
+          source: "acme/skills",
+        },
+      ],
+    },
+    badResponse: { outcome: "found", skills: [{ id: "acme/skills/review" }] },
   },
   {
     method: "environment.configuration.skills.restoreBundled",

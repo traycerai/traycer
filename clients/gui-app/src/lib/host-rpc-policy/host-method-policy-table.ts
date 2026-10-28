@@ -2568,6 +2568,10 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: null,
   },
+  "environment.configuration.skills.search": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useForm } from "@tanstack/react-form";
+import { useForm, useSelector } from "@tanstack/react-form";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
 import {
   AlertTriangle,
@@ -67,6 +67,11 @@ export function ProviderSkillDetailDialog(props: {
    */
   readonly lockedNote: string | null;
   readonly canEdit: boolean;
+  /**
+   * What an open draft shows once Edit is taken away under it (the skill
+   * became read-only while it was being edited), or `null` for no line.
+   */
+  readonly editRevokedNote: string | null;
   readonly canUpdate: boolean;
   readonly origin: string | null;
   readonly updatePending: boolean;
@@ -79,6 +84,10 @@ export function ProviderSkillDetailDialog(props: {
   readonly fileEpoch: number;
 }): ReactNode {
   const client = useHostClient();
+  // The content an editor holding unsaved changes opened on: it stays
+  // mounted on it whatever the skill turns into meanwhile, so the draft is
+  // never dropped without its discard confirm.
+  const [heldRaw, setHeldRaw] = useState<string | null>(null);
   const guardedClose = useRef<(() => void) | null>(null);
   function registerGuardedClose(request: (() => void) | null): void {
     guardedClose.current = request;
@@ -103,6 +112,7 @@ export function ProviderSkillDetailDialog(props: {
     props.canEdit && readError === null && stableContent !== null && !truncated
       ? stableContent
       : null;
+  const editorRaw = editableContent ?? heldRaw;
 
   return (
     <Dialog
@@ -118,7 +128,7 @@ export function ProviderSkillDetailDialog(props: {
         layout="banded"
         className="grid h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(92vw,52rem)]"
       >
-        {editableContent === null ? (
+        {editorRaw === null ? (
           <ReadOnlySkillDetail
             skill={props.skill}
             sourceLabel={props.sourceLabel}
@@ -142,7 +152,10 @@ export function ProviderSkillDetailDialog(props: {
             onCloseRequestChange={registerGuardedClose}
             skill={props.skill}
             sourceLabel={props.sourceLabel}
-            raw={editableContent}
+            raw={editorRaw}
+            locked={!props.canEdit}
+            lockedNote={props.editRevokedNote}
+            onDraftChange={setHeldRaw}
             removal={props.removal}
             removePending={props.removePending}
             actionsDisabled={props.removeDisabled}
@@ -172,6 +185,12 @@ function EditableSkillDetail(props: {
   readonly skill: ProviderSkill;
   readonly sourceLabel: string;
   readonly raw: string;
+  /** Edit was taken away under an open draft: it can be discarded, not saved. */
+  readonly locked: boolean;
+  /** What a locked draft shows; `null` for no line. */
+  readonly lockedNote: string | null;
+  /** The content this editor opened on while it holds unsaved changes; `null` once it holds none. */
+  readonly onDraftChange: (raw: string | null) => void;
   readonly removal: SkillRemovability;
   readonly removePending: boolean;
   readonly actionsDisabled: boolean;
@@ -201,6 +220,7 @@ function EditableSkillDetail(props: {
   const form = useForm({
     defaultValues: editValues(initial),
     onSubmit: async ({ value }) => {
+      if (props.locked) return;
       const normalized = normalizeEditValues(value);
       const saved = await props.onSave({
         path: props.skill.path,
@@ -219,6 +239,13 @@ function EditableSkillDetail(props: {
         ?.focus();
     },
   });
+
+  const dirty = useSelector(form.store, (state) => !state.isDefaultValue);
+  const holding = editing && dirty;
+  const { onDraftChange, raw } = props;
+  useEffect(() => {
+    onDraftChange(holding ? raw : null);
+  }, [holding, raw, onDraftChange]);
 
   function syncBodyScroll(destination: "edit" | "preview"): void {
     const editorScroller =
@@ -445,6 +472,14 @@ function EditableSkillDetail(props: {
               {props.actionError}
             </div>
           )}
+          {!props.locked || props.lockedNote === null ? null : (
+            <div
+              role="status"
+              className="mb-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+            >
+              {props.lockedNote}
+            </div>
+          )}
           <form.Field name="body">
             {(field) => (
               <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -522,7 +557,9 @@ function EditableSkillDetail(props: {
                     <Button
                       type="submit"
                       size="sm"
-                      disabled={props.editPending || isSubmitting}
+                      disabled={
+                        props.editPending || isSubmitting || props.locked
+                      }
                     >
                       {props.editPending || isSubmitting ? (
                         <MutedAgentSpinner />

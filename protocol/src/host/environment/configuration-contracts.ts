@@ -1074,6 +1074,65 @@ export const environmentConfigurationSkillsImportV10 = defineRpcContract({
   responseSchema: environmentConfigurationSkillImportResponseSchema,
 });
 
+/** The most results one directory search answers. */
+export const ENVIRONMENT_SKILL_SEARCH_MAX_RESULTS = 20;
+
+/**
+ * `environment.configuration.skills.search@1.0`: the public skills.sh
+ * directory searched for `query` (at least two characters), optionally
+ * within one `owner`'s skills, on the host the page reads from. It sends the
+ * query text and nothing else, and answers each result's id
+ * (`owner/repo/slug`), name, install count and source (`owner/repo`), most
+ * installed first. Only skills held in a GitHub repository are answered, as
+ * an import reads git sources only. `unavailable` when the directory could
+ * not be reached or answered something else: the page shows no results.
+ */
+export const environmentConfigurationSkillSearchRequestSchema = lazySchema(() =>
+  z.object({
+    query: z.string().min(2).max(200),
+    owner: z.string().min(1).max(100).nullable(),
+  }),
+);
+export type EnvironmentConfigurationSkillSearchRequest = z.infer<
+  typeof environmentConfigurationSkillSearchRequestSchema
+>;
+
+/** One directory result. */
+export const environmentSkillSearchResultSchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1).max(512),
+    name: z.string().min(1).max(256),
+    installs: z.number().int().nonnegative(),
+    source: z.string().min(1).max(256),
+  }),
+);
+export type EnvironmentSkillSearchResult = z.infer<
+  typeof environmentSkillSearchResultSchema
+>;
+
+export const environmentConfigurationSkillSearchResponseSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("outcome", [
+      z.object({
+        outcome: z.literal("found"),
+        skills: z
+          .array(environmentSkillSearchResultSchema)
+          .max(ENVIRONMENT_SKILL_SEARCH_MAX_RESULTS),
+      }),
+      z.object({ outcome: z.literal("unavailable") }),
+    ]),
+);
+export type EnvironmentConfigurationSkillSearchResponse = z.infer<
+  typeof environmentConfigurationSkillSearchResponseSchema
+>;
+
+export const environmentConfigurationSkillsSearchV10 = defineRpcContract({
+  method: "environment.configuration.skills.search",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillSearchRequestSchema,
+  responseSchema: environmentConfigurationSkillSearchResponseSchema,
+});
+
 /** authn's cap on a team policy document, in bytes. */
 export const ENVIRONMENT_POLICY_MAX_BYTES = 64 * 1024;
 

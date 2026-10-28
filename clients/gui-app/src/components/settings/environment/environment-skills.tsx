@@ -166,6 +166,10 @@ function useServedSkills() {
     viewingHostId,
     "environment.configuration.skills.import",
   );
+  const searchable = useHostSupportsMethod(
+    viewingHostId,
+    "environment.configuration.skills.search",
+  );
   // What only the serving host knows (an update available, the built-ins
   // it can restore), read beside the room's list: a pool knows neither.
   const stateReadable = useHostSupportsMethod(
@@ -185,6 +189,7 @@ function useServedSkills() {
     state: state.data,
     stateReadable,
     importable,
+    searchable,
     switchesAvailable: switchesVersion !== null && switchesVersion !== false,
     removable,
     uploadable,
@@ -314,6 +319,7 @@ function EnvironmentSkills(props: {
         <AddSkill
           uploadable={served.uploadable}
           importable={importable}
+          searchable={served.searchable}
           hostClient={served.scope.client}
           onNotServed={() => setPicking(true)}
         />
@@ -329,6 +335,8 @@ function EnvironmentSkills(props: {
 function AddSkill(props: {
   readonly uploadable: boolean;
   readonly importable: boolean;
+  /** The import offers a search of the public skills directory. */
+  readonly searchable: boolean;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly onNotServed: () => void;
 }): ReactNode {
@@ -356,6 +364,7 @@ function AddSkill(props: {
       {importing ? (
         <EnvironmentSkillImportDialog
           hostClient={props.hostClient}
+          searchable={props.searchable}
           onClose={() => setImporting(false)}
         />
       ) : null}
@@ -1018,6 +1027,8 @@ function EnvironmentSkillDetail(props: {
       actionError={error}
       lockedNote={null}
       canEdit={props.canEdit}
+      // A draft open when the skill turns read-only stays, Save off.
+      editRevokedNote={READ_ONLY_EDIT_REFUSAL}
       canUpdate={props.canUpdate}
       origin={skillOriginLine(props.skill)}
       updatePending={props.updatePending}

@@ -3,6 +3,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import {
   ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS,
   type EnvironmentConfigurationSkillImportResponse,
+  type EnvironmentSkillSearchResult,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { ProviderSkillInspectCandidate } from "@traycer/protocol/host/provider-native-schemas";
 import {
@@ -22,6 +23,7 @@ import {
 import { useEnvironmentSkillHostMutations } from "@/hooks/environment/team/use-environment-skills";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useConfigurationSource } from "./configuration-source";
+import { SkillsDirectorySearch } from "./environment-skills-directory-search";
 import { useConfigurationName } from "./mcp-servers-model";
 import {
   IMPORT_SKILL_DESCRIPTION,
@@ -48,6 +50,26 @@ function selectableNames(
     .filter((candidate) => !candidate.installed)
     .slice(0, ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS)
     .map((candidate) => candidate.name);
+}
+
+/**
+ * What a read source starts with chosen: the one skill a directory pick
+ * named (`slug`, its folder or its name), else what Select all chooses.
+ */
+function initialSelection(
+  candidates: readonly ProviderSkillInspectCandidate[],
+  slug: string | null,
+): readonly string[] {
+  const picked =
+    slug === null
+      ? undefined
+      : candidates.find(
+          (candidate) =>
+            !candidate.installed &&
+            (candidate.name === slug ||
+              candidate.relPath.split("/").at(-1) === slug),
+        );
+  return picked === undefined ? selectableNames(candidates) : [picked.name];
 }
 
 /** What an import answer that installed nothing tells the person. */
@@ -78,6 +100,8 @@ function importProblem(
  */
 export function EnvironmentSkillImportDialog(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /** The viewing host searches the public skills directory. */
+  readonly searchable: boolean;
   readonly onClose: () => void;
 }): ReactNode {
   const source = useConfigurationSource();
@@ -96,14 +120,15 @@ export function EnvironmentSkillImportDialog(props: {
     inspected.candidates.filter((candidate) => !candidate.installed).length >
       ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS;
 
-  const inspect = (): void => {
+  // `slug` is the skill a directory pick named, chosen alone once read.
+  const inspect = (from: string, slug: string | null): void => {
     if (source.kind !== "pool") return;
     setProblem(null);
     importSkills.mutate(
       {
         step: "inspect",
         environmentId: source.environmentId,
-        source: text.trim(),
+        source: from,
       },
       {
         onSuccess: (result) => {
@@ -113,7 +138,7 @@ export function EnvironmentSkillImportDialog(props: {
             return;
           }
           setInspected({ token: result.token, candidates: result.candidates });
-          setSelected(selectableNames(result.candidates));
+          setSelected(initialSelection(result.candidates, slug));
         },
       },
     );
@@ -159,14 +184,30 @@ export function EnvironmentSkillImportDialog(props: {
         </DialogHeader>
         <div className="flex flex-col gap-3">
           {inspected === null ? (
-            <ImportFields
-              source={text}
-              setSource={setText}
-              hint={IMPORT_SOURCE_HINT}
-              disabled={pending}
-              canWrite={false}
-              onWrite={() => undefined}
-            />
+            <>
+              {props.searchable ? (
+                <SkillsDirectorySearch
+                  hostClient={props.hostClient}
+                  disabled={pending}
+                  onPick={(result: EnvironmentSkillSearchResult) => {
+                    // As if typed and read: the source, then its skills.
+                    setText(result.source);
+                    inspect(
+                      result.source,
+                      result.id.slice(result.source.length + 1),
+                    );
+                  }}
+                />
+              ) : null}
+              <ImportFields
+                source={text}
+                setSource={setText}
+                hint={IMPORT_SOURCE_HINT}
+                disabled={pending}
+                canWrite={false}
+                onWrite={() => undefined}
+              />
+            </>
           ) : (
             <PickerFields
               candidates={inspected.candidates}
@@ -221,7 +262,7 @@ export function EnvironmentSkillImportDialog(props: {
             <Button
               type="button"
               disabled={pending || text.trim().length === 0}
-              onClick={inspect}
+              onClick={() => inspect(text.trim(), null)}
             >
               Read source
               {pending ? <MutedAgentSpinner /> : null}

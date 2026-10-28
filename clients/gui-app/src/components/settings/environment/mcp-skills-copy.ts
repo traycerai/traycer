@@ -1,3 +1,4 @@
+import { formatCount } from "@/lib/format-count";
 import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
@@ -138,6 +139,19 @@ export const IMPORT_SKILL_DESCRIPTION =
   "Paste a public repository. Imported skills update from it on their own until you change their updates setting.";
 export const IMPORT_SOURCE_HINT =
   "owner/repo, or an https link to a repository or a folder in it. An npx skills command works too.";
+
+export const SKILLS_DIRECTORY_SEARCH_LABEL = "Search skills.sh";
+
+/** Under the directory search: where results come from, and what a pick reads. */
+export const SKILLS_DIRECTORY_NOTE =
+  "Results come from a public directory. Importing reads the skill from its own repository.";
+
+export const SKILLS_DIRECTORY_NO_RESULTS = "No results";
+
+/** A directory result's install count, as the page counts. */
+export function skillInstallsPhrase(count: number): string {
+  return count === 1 ? "1 install" : `${formatCount(count)} installs`;
+}
 
 /** Why an import was refused, by its reason; `name` is the skill it names. */
 export function skillImportRefusal(

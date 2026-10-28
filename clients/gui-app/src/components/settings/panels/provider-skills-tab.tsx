@@ -460,6 +460,7 @@ function ProviderSkillsTabBody({
             actionError={detailError}
             lockedNote={openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null}
             canEdit={openSkillEditable}
+            editRevokedNote={null}
             canUpdate={openSkillUpdatable}
             origin={skillOriginDisplay(openSkill)}
             updatePending={updatePending}

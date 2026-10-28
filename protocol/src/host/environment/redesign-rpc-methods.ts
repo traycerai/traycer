@@ -17,6 +17,7 @@ import {
   environmentConfigurationMcpServersPutV11,
   environmentConfigurationPolicyPutV10,
   environmentConfigurationSkillsImportV10,
+  environmentConfigurationSkillsSearchV10,
   environmentConfigurationSkillsListUpgradeV10ToV11,
   environmentConfigurationSkillsListV10,
   environmentConfigurationSkillsListV11,
@@ -384,6 +385,19 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentConfigurationSkillsImportV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.search": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsSearchV10,
           upgradeFromPreviousVersion: null,
         },
       },

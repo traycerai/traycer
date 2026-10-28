@@ -1644,6 +1644,91 @@ describe("The Skills page's update policies", () => {
     });
   });
 
+  describe("when the skill turns frozen under an open editor", () => {
+    const READ_ONLY_LINE =
+      "This skill can't be edited while it's set to Auto-update or Frozen. Switch it to Evolve to edit it.";
+
+    /** Opens `review`'s detail and presses Edit; the next list then reads it frozen. */
+    async function editingThenFrozen() {
+      negotiateMethods(POLICIES);
+      let policy: "evolve" | "frozen" = "evolve";
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([REVIEW], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+        "environment.configuration.skills.list": () =>
+          listed([{ ...REVIEW, policy }], "pol-1"),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+      await screen.findByText("review");
+      await userEvent.click(
+        within(rowOf("review")).getByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.click(
+        await within(dialog).findByRole("button", { name: "Edit" }),
+      );
+      const freeze = async (): Promise<void> => {
+        policy = "frozen";
+        await act(async () => {
+          await harness.queryClient.invalidateQueries();
+        });
+      };
+      return { dialog, freeze };
+    }
+
+    it("keeps a dirty draft, locked, with the refusal line, and still asks before it is discarded", async () => {
+      const { dialog, freeze } = await editingThenFrozen();
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "When to use" }),
+        { target: { value: "Review every change." } },
+      );
+
+      await freeze();
+
+      await waitFor(() => {
+        expect(within(dialog).getByText(READ_ONLY_LINE)).toBeTruthy();
+      });
+      expect(
+        within(dialog).getByRole("textbox", { name: "When to use" }),
+      ).toHaveProperty("value", "Review every change.");
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Save changes" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+
+      await userEvent.keyboard("{Escape}");
+
+      const confirm = await screen.findByTestId("skill-unsaved-changes-dialog");
+      await userEvent.click(
+        within(confirm).getByRole("button", { name: "Discard changes" }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+    });
+
+    it("shows the read-only view at once for a clean editor, with no Save and no confirm", async () => {
+      const { dialog, freeze } = await editingThenFrozen();
+      expect(
+        within(dialog).getByRole("button", { name: "Save changes" }),
+      ).toBeTruthy();
+
+      await freeze();
+
+      await waitFor(() => {
+        expect(
+          within(dialog).queryByRole("button", { name: "Save changes" }),
+        ).toBeNull();
+      });
+      expect(within(dialog).queryByRole("textbox")).toBeNull();
+      expect(within(dialog).queryByText(READ_ONLY_LINE)).toBeNull();
+      expect(screen.queryByTestId("skill-unsaved-changes-dialog")).toBeNull();
+    });
+  });
+
   it("offers Auto-update on a built-in and not on a skill with nothing to follow", async () => {
     negotiateMethods(POLICIES);
     const harness = mountTeamPage(
@@ -2064,6 +2149,134 @@ describe("The Skills page's skills from a source", () => {
             within(dialog).getByRole("button", { name: "Import 64 skills" }),
           ),
         ).toBe(false);
+      });
+    });
+
+    describe("searching the directory", () => {
+      const SEARCH = "environment.configuration.skills.search";
+      type Result = {
+        readonly id: string;
+        readonly name: string;
+        readonly installs: number;
+        readonly source: string;
+      };
+      type SearchAnswer =
+        | { readonly outcome: "found"; readonly skills: Result[] }
+        | { readonly outcome: "unavailable" };
+      const found = (skills: readonly Result[]): SearchAnswer => ({
+        outcome: "found",
+        skills: [...skills],
+      });
+      const triage = {
+        id: "acme/skills/triage",
+        name: "triage",
+        installs: 12,
+        source: "acme/skills",
+      };
+
+      async function openSearch(
+        answer: (request: unknown) => SearchAnswer,
+        inspectAnswer: EnvironmentConfigurationSkillImportResponse,
+      ) {
+        negotiateHosted({ [STATE]: LIST, [IMPORT]: LIST, [SEARCH]: LIST });
+        const harness = mountTeamPage(poolSource("editor"), {
+          ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+          [STATE]: () => listedState([], []),
+          [IMPORT]: () => inspectAnswer,
+          [SEARCH]: (request) => answer(request),
+        });
+        render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+        await userEvent.click(
+          await screen.findByRole("button", { name: "Import from source" }),
+        );
+        const dialog = await screen.findByRole("dialog");
+        return { harness, dialog };
+      }
+
+      it("lists results for two characters or more, and nothing for one", async () => {
+        const { harness, dialog } = await openSearch(
+          () => found([triage]),
+          inspected,
+        );
+        const box = within(dialog).getByLabelText("Search skills.sh");
+
+        await userEvent.type(box, "t");
+        expect(within(dialog).queryByText("No results")).toBeNull();
+        expect(within(dialog).queryByText("triage")).toBeNull();
+
+        await userEvent.type(box, "r");
+
+        expect(await within(dialog).findByText("triage")).toBeTruthy();
+        expect(
+          within(dialog).getByText(/^acme\/skills · 12 installs$/),
+        ).toBeTruthy();
+        expect(harness.paramsOf(SEARCH)).toEqual([
+          { query: "tr", owner: null },
+        ]);
+      });
+
+      it("reads the picked result's repository at once and selects only its skill", async () => {
+        const several: EnvironmentConfigurationSkillImportResponse = {
+          ...inspected,
+          candidates: [
+            {
+              name: "triage",
+              description: null,
+              relPath: "skills/triage",
+              installed: false,
+            },
+            {
+              name: "deploy",
+              description: null,
+              relPath: "skills/deploy",
+              installed: false,
+            },
+          ],
+        };
+        const { harness, dialog } = await openSearch(
+          () => found([triage]),
+          several,
+        );
+        await userEvent.type(
+          within(dialog).getByLabelText("Search skills.sh"),
+          "triage",
+        );
+
+        await userEvent.click(
+          await within(dialog).findByRole("button", { name: /triage/ }),
+        );
+
+        expect(
+          (
+            await within(dialog).findByRole("checkbox", { name: "triage" })
+          ).getAttribute("data-state"),
+        ).toBe("checked");
+        expect(
+          within(dialog)
+            .getByRole("checkbox", { name: "deploy" })
+            .getAttribute("data-state"),
+        ).toBe("unchecked");
+        expect(within(dialog).getByText("1 of 2 selected")).toBeTruthy();
+        expect(harness.paramsOf(IMPORT)).toEqual([
+          { step: "inspect", environmentId: "env-a", source: "acme/skills" },
+        ]);
+      });
+
+      it.each([
+        ["an empty list", () => found([])],
+        [
+          "an unavailable directory",
+          () => ({ outcome: "unavailable" as const }),
+        ],
+      ])("says No results for %s", async (_label, answer) => {
+        const { dialog } = await openSearch(answer, inspected);
+
+        await userEvent.type(
+          within(dialog).getByLabelText("Search skills.sh"),
+          "triage",
+        );
+
+        expect(await within(dialog).findByText("No results")).toBeTruthy();
       });
     });
 

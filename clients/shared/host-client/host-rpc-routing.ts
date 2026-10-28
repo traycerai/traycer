@@ -437,6 +437,9 @@ export const HOST_UNARY_RPC_ROUTES = {
   // host serving the configuration holds: the page sends it to its viewing
   // host.
   "environment.configuration.skills.restoreBundled": "target-host",
+  // A search of the public skills directory, from the host the page reads
+  // from: the directory answers no browser's cross-origin read.
+  "environment.configuration.skills.search": "target-host",
   "environment.configuration.skills.setPolicy": "pool-only",
   "environment.configuration.skills.setProviders": "pool-only",
   // What only the serving host knows of the skills (its build, its checks of
