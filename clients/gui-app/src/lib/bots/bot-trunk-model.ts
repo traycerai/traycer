@@ -89,6 +89,19 @@ export function describeCadence(cadence: BotTaskEntry["cadence"]): string {
   }
 }
 
+/** One of the bot's chats watching the person's notifications (T84), in words. */
+export function describeNotificationWatch(watch: {
+  readonly attentionOnly: boolean;
+  readonly everySeconds: number | null;
+}): string {
+  const what = watch.attentionOnly ? "attention only" : "everything";
+  const when =
+    watch.everySeconds === null
+      ? "on event"
+      : `every ${describeSeconds(watch.everySeconds)}`;
+  return `Watching your notifications (${what}, ${when})`;
+}
+
 function describeSeconds(seconds: number): string {
   if (seconds % DAY_S === 0) return plural(seconds / DAY_S, "day");
   if (seconds % HOUR_S === 0) return plural(seconds / HOUR_S, "hour");

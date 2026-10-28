@@ -2,6 +2,7 @@ import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-sc
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
 /**
@@ -50,47 +51,6 @@ export function replyFollowsPost(
   );
 }
 
-/** A post as the line above a direct reply names it. */
-export interface ChatBotRepliedPost {
-  readonly senderLabel: string;
-  /** The post's first line, cut. */
-  readonly excerpt: string;
-}
-
-/** Characters of a post's first line the line above a direct reply shows. */
-const REPLIED_POST_EXCERPT_MAX = 80;
-
-/**
- * The post a bot's direct reply answers, as the reply's line names it (Tracy
- * Bots, reply mode `direct`): its sender and its first line. `null` when no
- * rendered row carries it.
- */
-export function repliedPostOf(
-  messages: ReadonlyArray<ChatMessage>,
-  messageId: string,
-): ChatBotRepliedPost | null {
-  const post = messages.find(
-    (message) =>
-      message.role === "user" && message.persistentMessageId === messageId,
-  );
-  if (post === undefined) return null;
-  const text = post.segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
-    .join("\n");
-  const firstLine =
-    text
-      .split("\n")
-      .find((line) => line.trim().length > 0)
-      ?.trim() ?? "";
-  return {
-    senderLabel: post.senderLabel ?? "Member",
-    excerpt:
-      firstLine.length > REPLIED_POST_EXCERPT_MAX
-        ? `${firstLine.slice(0, REPLIED_POST_EXCERPT_MAX - 1)}…`
-        : firstLine,
-  };
-}
-
 /**
  * The text of a channel row - a member's post or one of the bot's own rows
  * - as the chat's store holds it (Tracy Bots T65): a thread names the post
@@ -108,10 +68,12 @@ export function postTextOf(post: OpenMessage | null): string | null {
 }
 
 /**
- * The post a thread opens on, as the channel's row draws it: `loaded` once
- * it is read from the channel's own row, with its text; before that, what the
- * thread list says of the post (its writer, its time and its request) with
- * no text yet, which nothing can send again.
+ * The post a thread opens on, as the channel's row draws it. `loaded` once
+ * it is read from the channel's own row, the authoritative post that Retry
+ * and Edit act on. Before that the row stands in for it: the post as the
+ * person sent it (its text, writer, time and request), or what the thread
+ * list says of it (its writer, its time and its request, no text), and
+ * nothing can send it again.
  */
 export interface ThreadOriginRow {
   readonly row: ChatMessage;
@@ -120,21 +82,38 @@ export interface ThreadOriginRow {
 
 /**
  * The post a thread opens on (Tracy Bots, decision 90): from the channel's
- * row once it is loaded, else from the thread list's anchor. A member's post
- * carries its request, so a post the bot failed to answer says so here as in
- * the channel; the bot's own question or proposal carries its announcement.
- * `null` while neither is known.
+ * row once it is loaded, else from the post as the person sent it (a send
+ * the host queued has no row until the bot's host takes it), else from the
+ * thread list's anchor. A member's post carries its request, so a post the
+ * bot failed to answer says so here as in the channel; the bot's own
+ * question or proposal carries its announcement. `null` while none is known.
  */
 export function threadOriginRow(input: {
+  /** The post's message id. */
+  readonly messageId: string;
   readonly post: OpenMessage | null;
+  readonly sent: BotSentPost | null;
   readonly anchor: BotThreadAnchor | null;
   /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
   readonly senderLabel: (senderUserId: string | null) => string;
   readonly senderAvatarUrl: (senderUserId: string) => string | null;
 }): ThreadOriginRow | null {
-  const { post, anchor, senderLabel, senderAvatarUrl } = input;
+  const { post, sent, anchor, senderLabel, senderAvatarUrl } = input;
   if (post !== null) {
     return { row: loadedOriginRow(post, input), loaded: true };
+  }
+  if (sent !== null) {
+    const row = memberOriginRow(
+      originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+      sent.senderUserId,
+      {
+        requestId: sent.requestId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+      { senderLabel, senderAvatarUrl },
+    );
+    return { row, loaded: false };
   }
   if (anchor === null) return null;
   const base = originRowBase(

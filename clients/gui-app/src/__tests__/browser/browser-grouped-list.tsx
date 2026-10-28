@@ -8,10 +8,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { LazyMotion, domAnimation } from "motion/react";
-import {
-  BROWSER_CATALOG_VERSION,
-  type BrowserCatalogRecord,
-} from "@traycer/protocol/host/browser/catalog-contracts";
+import type { BrowserCatalogRecord } from "@traycer/protocol/host/browser/catalog-contracts";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -230,7 +227,8 @@ const SESSION = openSession();
 const liveState: BrowserSessionsState = {
   hostId: LOCAL_HOST_ID,
   lifecycle: "live",
-  inventoryReady: true,
+  // This fixture seeds discovery; no local sessions inventory has arrived.
+  inventoryReady: false,
   canMaterializeElectron: false,
   connectionGeneration: 0,
   items: [],
@@ -249,25 +247,10 @@ const liveState: BrowserSessionsState = {
 };
 
 const CATALOG = {
-  inventory: {
-    status: "available" as const,
-    records: RECORDS,
-    readiness: RECORDS.map((entry) => ({
-      hostId: entry.hostId,
-      state: "complete" as const,
-      indexingRevision: 1,
-      capability: {
-        catalogVersion: BROWSER_CATALOG_VERSION,
-        durableInventoryRevisions: true as const,
-        revisionedMutationAcks: true as const,
-      },
-    })),
-    version: 1,
-    pendingCount: 0,
-    revokedHostIds: [] as readonly string[],
-  },
-  hosts: new Map<string, HostDirectoryEntry>(),
-  refresh: () => undefined,
+  status: "ready" as const,
+  scope: "cloud" as const,
+  records: RECORDS,
+  refetch: () => undefined,
 };
 
 function seedCanvas(): void {
@@ -280,7 +263,7 @@ function seedCanvas(): void {
 
 function reset(): void {
   window.localStorage.clear();
-  useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+  useBrowserPanelStore.setState({ preferences: {} });
   usePanelHeaderSearchStore.getState().closeSearch(TAB_ID, "browsers");
   if (LAB_OFFLINE)
     useBrowserPanelStore

@@ -15,18 +15,24 @@ import {
   act,
   cleanup,
   render,
+  type RenderResult,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { commandActivityLabel } from "@traycer/protocol/host/agent/gui/activity-step-label";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendDelivery,
+  BotConversationSendRequest,
+  BotConversationSendResponse,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotActivity,
   BotRecord,
@@ -45,6 +51,7 @@ import {
   useBotOpenThreadStore,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
   StubHostStreamClient,
@@ -58,12 +65,24 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
+/** What a box hands the send mutation for its send. */
+interface SendCallbacks {
+  readonly onSuccess:
+    | ((response: BotConversationSendResponse) => void)
+    | undefined;
+  readonly onError: ((error: Error) => void) | undefined;
+}
+
 interface SessionHarness {
   readonly handle: ChatSessionStoreHandle;
   callbacks(): ChatStreamCallbacks;
 }
 
 const mocks = vi.hoisted(() => ({
+  /** `bot.conversation.send`, answered by the case through the callbacks it was handed. */
+  send: vi.fn<
+    (variables: BotConversationSendRequest, callbacks: SendCallbacks) => void
+  >(),
   sessionFor: null as
     | ((chatId: string, enabled: boolean) => ChatSessionStoreHandle | null)
     | null,
@@ -119,7 +138,7 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
-    mutate: vi.fn(),
+    mutate: mocks.send,
     isPending: false,
     error: null,
   }),
@@ -326,6 +345,7 @@ function emitActivity(activity: BotActivity): void {
       tasks: [],
       openRequestCount: null,
       conversationsRevision: null,
+      notificationSubscriptions: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
       hasBinaryPayload: false,
@@ -467,10 +487,10 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
 
 const DIRECTIVE = "Watches CI and answers questions about the nightly run.";
 
-function mountChannel(threads: ReadonlyArray<BotThreadSummary>): void {
+function mountChannel(threads: ReadonlyArray<BotThreadSummary>): RenderResult {
   mocks.threadListData = { threads };
   // The transcript reads the app's send ledger off the query client.
-  render(
+  return render(
     <QueryClientProvider client={new QueryClient()}>
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
@@ -537,12 +557,14 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  mocks.send.mockReset();
   for (const { handle } of sessions.values()) handle.dispose();
   sessions.clear();
   mocks.sessionFor = null;
   mocks.threadListData = { threads: [] };
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useAuthStore.setState({ profile: null });
   __resetBotSubscriptionsForTesting();
   mocks.streamClient = null;
 });
@@ -561,12 +583,13 @@ describe("<BotChannelView /> the channel's typing line", () => {
     );
   });
 
-  it("names the step the trunk's turn has in flight", async () => {
-    const step = commandActivityLabel("Reading the CI log");
+  it("never names the step the trunk's turn has in flight", async () => {
+    const step = commandActivityLabel("gh run view --log-failed");
     await mountAwaitingDirectReply(replying("request-1", step));
 
     const strip = await screen.findByTestId("bot-channel-replying");
-    expect(within(strip).getByText(`Tracy: ${step}`)).toBeTruthy();
+    expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("gh run view");
   });
 
   it("clears when the reply lands, though the trunk is still running", async () => {
@@ -646,7 +669,7 @@ describe("<BotChannelView /> the channel's typing line", () => {
 });
 
 describe("<BotChannelView /> a thread's typing line", () => {
-  it("shows on the closed thread's line, and moves to the panel once the thread is open", async () => {
+  it("shows on the closed thread's line, and moves to the panel once the thread is open, never naming the step", async () => {
     const user = userEvent.setup();
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: false, resolvedAt: null })],
@@ -654,7 +677,12 @@ describe("<BotChannelView /> a thread's typing line", () => {
     mountChannel([threadSummary()]);
     emitActivity({
       trunk: null,
-      threads: { [THREAD_ID]: replying("request-1", null) },
+      threads: {
+        [THREAD_ID]: replying(
+          "request-1",
+          commandActivityLabel("gh run view --log-failed"),
+        ),
+      },
     });
 
     const line = await screen.findByTestId("bot-thread-line");
@@ -663,6 +691,7 @@ describe("<BotChannelView /> a thread's typing line", () => {
         "Tracy is replying…",
       ),
     ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("gh run view");
 
     await user.click(line);
 
@@ -672,6 +701,7 @@ describe("<BotChannelView /> a thread's typing line", () => {
     const strip = await within(panel).findByTestId("bot-thread-replying-strip");
     expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-replying")).toBeNull();
+    expect(document.body.textContent).not.toContain("gh run view");
   });
 });
 
@@ -692,5 +722,197 @@ describe("<BotChannelView /> a channel nobody has written in", () => {
     ).toBeTruthy();
     expect(within(intro).getByText(DIRECTIVE)).toBeTruthy();
     expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
+  });
+});
+
+describe("<BotChannelView /> a post whose answer lands in a thread", () => {
+  /** The channel's box sending what was typed into it, and the callbacks it handed the send. */
+  async function postInChannel(user: UserEvent): Promise<SendCallbacks> {
+    const box = screen.getByRole("textbox", { name: "Message Tracy" });
+    await user.type(box, "Is CI green?");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    const call = mocks.send.mock.calls.at(-1);
+    if (call === undefined) throw new Error("the channel's box sent nothing");
+    expect(call[0]).toMatchObject({ text: "Is CI green?", threadId: null });
+    return call[1];
+  }
+
+  function accept(
+    callbacks: SendCallbacks,
+    threadId: string | null,
+    delivery: BotConversationSendDelivery,
+  ): void {
+    act(() => {
+      callbacks.onSuccess?.({
+        messageId: POST_ID,
+        requestId: "request-1",
+        delivery,
+        threadId,
+      });
+    });
+  }
+
+  function textbox(name: string): HTMLTextAreaElement {
+    const box = screen.getByRole("textbox", { name });
+    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no textbox");
+    return box;
+  }
+
+  function mountQuietChannel(): RenderResult {
+    emitSnapshot(CHANNEL_ID, { messages: [] });
+    const view = mountChannel([]);
+    emitActivity({ trunk: null, threads: {} });
+    return view;
+  }
+
+  it("opens the thread on the post as the send is accepted, saying the bot is replying, and keeps the reply box when the list catches up", async () => {
+    const user = userEvent.setup();
+    mountQuietChannel();
+
+    accept(await postInChannel(user), THREAD_ID, "written");
+
+    const panel = await screen.findByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe(THREAD_ID);
+    expect(
+      within(within(panel).getByTestId("bot-thread-anchor")).getByText(
+        "Is CI green?",
+      ),
+    ).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    expect(textbox("Message Tracy").value).toBe("");
+    // The channel's row lands after the host answered the send.
+    emitSnapshot(CHANNEL_ID, {
+      messages: [post({ direct: false, resolvedAt: null })],
+    });
+    expect(
+      within(within(panel).getByTestId("bot-thread-anchor")).getByText(
+        "Is CI green?",
+      ),
+    ).toBeTruthy();
+
+    emitActivity({
+      trunk: null,
+      threads: { [THREAD_ID]: replying("request-1", null) },
+    });
+    const strip = await within(panel).findByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-replying")).toBeNull();
+
+    const reply = textbox("Reply in the thread");
+    await user.type(reply, "And the nightly?");
+    expect(document.activeElement).toBe(reply);
+
+    // The list's next read returns the thread; the activity frame redraws.
+    mocks.threadListData = {
+      threads: [{ ...threadSummary(), replyCount: 0, lastReplyAt: null }],
+    };
+    emitActivity({
+      trunk: null,
+      threads: { [THREAD_ID]: replying("request-1", null) },
+    });
+
+    expect(
+      await within(panel).findByTestId("bot-thread-under-the-hood"),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByRole("textbox", { name: "Reply in the thread" }),
+    ).toBe(reply);
+    expect(reply.value).toBe("And the nightly?");
+    expect(document.activeElement).toBe(reply);
+    expect(within(panel).getByTestId("bot-thread-replying-strip")).toBeTruthy();
+  });
+
+  it("opens the thread of a queued post on the post as sent, says it was saved there and not under the channel's box, and retires that once the post's row lands", async () => {
+    const user = userEvent.setup();
+    // The post's writer is the viewer, as the channel names their own posts.
+    useAuthStore.setState({
+      profile: {
+        userId: USER_ID,
+        userName: "Tess Teammate",
+        email: "tess@example.com",
+        avatarUrl: null,
+      },
+    });
+    const view = mountQuietChannel();
+
+    accept(await postInChannel(user), THREAD_ID, "queued");
+
+    // No channel row yet: the bot's host has not taken the post.
+    const panel = await screen.findByTestId("bot-thread-panel");
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Is CI green?")).toBeTruthy();
+    expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
+    expect(within(panel).getByTestId("bot-thread-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
+    // Said once, where the person now looks.
+    expect(screen.queryByTestId("bot-channel-composer-queued")).toBeNull();
+
+    // The bot's host takes the post and writes its row: what was saved has
+    // been read.
+    emitSnapshot(CHANNEL_ID, {
+      messages: [post({ direct: false, resolvedAt: null })],
+    });
+
+    expect(within(panel).getByTestId("bot-thread-anchor")).toBe(anchor);
+    expect(anchor.getAttribute("data-loaded")).toBe("true");
+    expect(within(anchor).getByText("Is CI green?")).toBeTruthy();
+    expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
+
+    emitActivity({
+      trunk: null,
+      threads: { [THREAD_ID]: replying("request-1", null) },
+    });
+    const strip = await within(panel).findByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
+
+    // Messages → Under the hood → Messages: the tab unmounts the channel and
+    // mounts it again on the thread it holds open.
+    view.unmount();
+    mountChannel([]);
+    const again = await screen.findByTestId("bot-thread-panel");
+    expect(
+      within(within(again).getByTestId("bot-thread-anchor")).getByText(
+        "Is CI green?",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
+  });
+
+  it("says a queued post the bot answers in the channel under the channel's box", async () => {
+    const user = userEvent.setup();
+    mountQuietChannel();
+
+    accept(await postInChannel(user), null, "queued");
+
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    expect(screen.getByTestId("bot-channel-composer-queued").textContent).toBe(
+      "Saved. The bot will read it.",
+    );
+  });
+
+  it("opens no thread for a post the bot answers in the channel", async () => {
+    const user = userEvent.setup();
+    mountQuietChannel();
+
+    accept(await postInChannel(user), null, "written");
+
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    expect(textbox("Message Tracy").value).toBe("");
+  });
+
+  it("opens no thread and keeps the text when the send fails", async () => {
+    const user = userEvent.setup();
+    mountQuietChannel();
+
+    const callbacks = await postInChannel(user);
+    act(() => {
+      callbacks.onError?.(new Error("host refused the post"));
+    });
+
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    expect(textbox("Message Tracy").value).toBe("Is CI green?");
   });
 });

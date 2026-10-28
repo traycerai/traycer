@@ -53,6 +53,7 @@ interface CaptureState {
   lastBrowserSessionsEpicId: string | null;
   lastBrowserSessionsHostClient: ReadyTileSurfaceEnvironment["services"]["hostClient"];
   lastBrowserSessionsHostId: string | null;
+  lastOpenSessionsTarget: { epicId: string; tabId: string } | null;
   lastViewTabId: string | null;
   lastOpenEpicHandle: OpenEpicStoreHandle | null;
   lastPanePortalContainer: HTMLElement | null;
@@ -64,6 +65,7 @@ const capture = vi.hoisted((): CaptureState => ({
   lastBrowserSessionsEpicId: null,
   lastBrowserSessionsHostClient: null,
   lastBrowserSessionsHostId: null,
+  lastOpenSessionsTarget: null,
   lastViewTabId: null,
   lastOpenEpicHandle: null,
   lastPanePortalContainer: null,
@@ -89,6 +91,17 @@ vi.mock(
     const { BrowserSessionsContext: Context } =
       await import("@/components/epic-canvas/renderers/browser-sessions-context");
     return {
+      BrowserOpenSessionsProvider: (props: {
+        readonly epicId: string;
+        readonly tabId: string;
+        readonly children: ReactNode;
+      }) => {
+        capture.lastOpenSessionsTarget = {
+          epicId: props.epicId,
+          tabId: props.tabId,
+        };
+        return props.children;
+      },
       BrowserSessionsHostProvider: (props: {
         readonly scope: HostResourceScope;
         readonly hostClient: ReadyTileSurfaceEnvironment["services"]["hostClient"];
@@ -214,6 +227,7 @@ function resetCapture(): void {
   capture.lastBrowserSessionsEpicId = null;
   capture.lastBrowserSessionsHostClient = null;
   capture.lastBrowserSessionsHostId = null;
+  capture.lastOpenSessionsTarget = null;
   capture.lastViewTabId = null;
   capture.lastOpenEpicHandle = null;
   capture.lastPanePortalContainer = null;
@@ -259,6 +273,12 @@ describe("HostedChatSurfaceContextBridge", () => {
     expect(capture.lastBrowserSessionsEpicId).toBe(EPIC_ID);
     expect(capture.lastBrowserSessionsHostClient).toBe(HOST_CLIENT);
     expect(capture.lastBrowserSessionsHostId).toBe(TEST_HOST_ID);
+    // The hosted surface renders in its own React root, so it mounts the open
+    // host's inventory itself for the epic and view tab it hosts.
+    expect(capture.lastOpenSessionsTarget).toEqual({
+      epicId: EPIC_ID,
+      tabId: VIEW_TAB_ID,
+    });
   });
 
   it("re-provides the SAME openEpicHandle object reference (no second EpicSessionProvider)", () => {

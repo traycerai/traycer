@@ -3,6 +3,7 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
@@ -16,10 +17,12 @@ export function useSecretRowActions(props: {
   readonly hostId: string | null;
   /** The secret by id, and its current version as the list last named it. */
   readonly secret: Pick<EnvironmentSecret, "secretId" | "currentVersionId">;
+  readonly removing: boolean;
   readonly onChanged: () => void;
 }) {
   const { environmentId, resolved } = useAddressedEnvironment();
   const queryClient = useQueryClient();
+  const [polling, setPolling] = useState(props.removing);
   const versions = useHostQuery<
     HostRpcRegistry,
     "environment.secrets.versions"
@@ -35,8 +38,13 @@ export function useSecretRowActions(props: {
             method: "environment.secrets.versions",
             version: { major: 1, minor: 1 },
           },
-    options: { enabled: resolved },
+    options: { enabled: resolved, poll: polling },
   });
+  const removal = versions.data?.removal;
+  const unfinished =
+    removal?.outcome !== "destroyed" &&
+    (props.removing || (removal !== undefined && removal !== null));
+  if (polling !== unfinished) setPolling(unfinished);
   const verify = useHostMutation<HostRpcRegistry, "environment.secrets.verify">(
     {
       client: props.client,

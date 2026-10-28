@@ -22,6 +22,7 @@ export function useEnvironmentMembersSeatsQuery(
     method: "environment.members.seats",
     params: { environmentId },
     options: {
+      poll: true,
       enabled,
       gcTime: 0,
       retry: false,

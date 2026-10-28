@@ -98,7 +98,7 @@ describe("the team page chip", () => {
     });
   });
 
-  it("rereads the host reports while an item is still applying and stops once it settles", async () => {
+  it("keeps mounted host metadata fresh after an item settles, and stops on unmount", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let state: EnvironmentHostItemApply["state"] = "received";
     const harness = mountTeamPage(poolSource("editor"), {
@@ -122,9 +122,19 @@ describe("the team page chip", () => {
       expect(chipText()).toBe("✓ On Mac mini");
     });
 
+    // A later report can change without another configuration write. The
+    // mounted metadata reader keeps the chip current after initial apply.
+    state = "not_applied";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await waitFor(() => expect(chipText()).toBe("1 not applied on Mac mini"));
+
+    cleanup();
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     const reads = harness.paramsOf("environment.host.list").length;
-    act(() => {
-      vi.advanceTimersByTime(20_000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
     });
     expect(harness.paramsOf("environment.host.list")).toHaveLength(reads);
   });

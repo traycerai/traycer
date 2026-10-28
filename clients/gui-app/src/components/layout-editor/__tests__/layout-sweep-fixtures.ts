@@ -152,6 +152,7 @@ export const harnessMessengerFactory: MessengerFactory<HostRpcRegistry> = ({
         (): HostNotificationsIndicatorStateResponse => ({
           epics: {},
           chats: {},
+          complete: true,
         }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
       "providers.list": () => HARNESS_PROVIDERS,

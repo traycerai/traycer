@@ -424,7 +424,14 @@ function ActivityChildRow(props: ActivityChildRowProps) {
   switch (segment.kind) {
     case "autonomous_resume":
       return (
-        <AutonomousResumeSegment triggers={segment.triggers} variant="row" />
+        // A line inside work already under way: it heads no turn, so it has no
+        // ending of its own and nothing folded into it.
+        <AutonomousResumeSegment
+          triggers={segment.triggers}
+          variant="row"
+          ending={null}
+          folded={[]}
+        />
       );
     case "tool":
       return (

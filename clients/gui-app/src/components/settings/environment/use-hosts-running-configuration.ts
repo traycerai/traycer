@@ -57,7 +57,10 @@ export function useHostsRunningConfiguration(
     method: "environment.host.list",
     params: { environmentId: environmentId ?? "" },
     cacheKeyIdentity: [viewerUserId],
-    options: { enabled: environmentId !== null && viewerUserId.length > 0 },
+    options: {
+      enabled: environmentId !== null && viewerUserId.length > 0,
+      poll: true,
+    },
   });
   const scope = useHostScope();
   const computers = usePersonalComputers(personalTarget);

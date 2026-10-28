@@ -43,6 +43,7 @@ const QUIET = {
   unreadFailure: false,
   unreadDone: false,
   pendingFork: false,
+  unreadCount: 0,
 };
 
 /**

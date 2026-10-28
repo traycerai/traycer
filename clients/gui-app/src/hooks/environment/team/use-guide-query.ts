@@ -30,6 +30,7 @@ export function useConfigurationGuideQuery() {
     },
     preflight: cloudVerdictPreflight("environment.configuration.guide.get"),
     options: {
+      poll: true,
       enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
     },
   });

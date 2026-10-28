@@ -248,7 +248,12 @@ function surfacesProps(
     chatId: CHAT_ID,
     hostId: TAB_HOST.hostId,
     runtime: { snapshotLoaded: true },
-    access: { isViewer: false, canAct: true, readOnlyNotice: null },
+    access: {
+      isViewer: false,
+      isCopy: false,
+      canAct: true,
+      readOnlyNotice: null,
+    },
     turn: {
       activeTurnStatus: null,
       steerCapable: false,

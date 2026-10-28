@@ -197,6 +197,7 @@ function Harness({
       onDragOver={() => undefined}
       onDrop={() => undefined}
       onKeyDown={undefined}
+      interceptKeyDown={null}
       onFocus={() => undefined}
       onBlur={() => undefined}
       onEditorReady={null}

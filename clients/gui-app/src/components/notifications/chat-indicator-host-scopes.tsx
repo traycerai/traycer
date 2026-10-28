@@ -1,5 +1,4 @@
 import { useContext, useMemo, type ReactNode } from "react";
-import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
   useNotificationFeedMode,
@@ -14,6 +13,7 @@ import {
   mergeLocalPartitionIntoCloudIndicators,
   mergeIndicatorStateResponses,
   selectCloudNotificationIndicatorProjection,
+  type NotificationIndicatorRecords,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
@@ -85,10 +85,9 @@ export function ChatIndicatorHostScopes(props: {
       NO_EPIC_IDS,
       allChatIds,
     );
-    const byOriginHostId: Record<
-      string,
-      HostNotificationsIndicatorStateResponse
-    > = { ...inherited.byOriginHostId };
+    const byOriginHostId: Record<string, NotificationIndicatorRecords> = {
+      ...inherited.byOriginHostId,
+    };
     for (const [originHostId, bucket] of Object.entries(cloud.byOriginHostId)) {
       byOriginHostId[originHostId] = mergeIndicatorStateResponses(
         byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE,
@@ -143,11 +142,11 @@ function ChatIndicatorHostLayers(props: {
  * One host's answer, folded into whatever the layers above already established.
  *
  * The two feed modes fold differently, and cloud mode's fold follows what was
- * ASKED: the layer requests the host's `home: local` partition, which is
- * disjoint from the cloud snapshot the base holds, so the whole partition ORs
- * in - the reasoning `mergeLocalPartitionIntoCloudIndicators` documents. (A
- * whole-origin answer would only permit the pendingFork-only import.) In
- * local mode the host response IS the answer, so it merges whole.
+ * ASKED: the layer requests the host's `home: local` partition, whose flags OR
+ * into the cloud snapshot the base holds and whose counts stand for this
+ * host's chats only when it answers its whole origin - the reasoning
+ * `mergeLocalPartitionIntoCloudIndicators` documents. In local mode the host
+ * response IS the answer, so it merges whole.
  */
 function ChatIndicatorHostLayer(props: {
   readonly hostId: string;
@@ -175,6 +174,7 @@ function ChatIndicatorHostLayer(props: {
             inherited,
             host.data,
             props.hostId,
+            { epicIds: NO_EPIC_IDS, chatIds: props.chatIds },
           )
         : {
             ...mergeIndicatorStateResponses(inherited, host.data),
@@ -189,7 +189,7 @@ function ChatIndicatorHostLayer(props: {
               ),
             },
           },
-    [props.isCloud, inherited, host.data, props.hostId],
+    [props.isCloud, inherited, host.data, props.hostId, props.chatIds],
   );
   return (
     <NotificationIndicatorsProvider indicators={merged}>

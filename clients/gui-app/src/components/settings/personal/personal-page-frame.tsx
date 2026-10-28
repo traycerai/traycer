@@ -312,10 +312,9 @@ function CloudPageFrame(props: {
 
 /**
  * Cloud-read pages never read the window host's Personal notices or values.
- * Their configuration is reread when a save on the page loses to a newer
- * change, and when the window regains focus: no status reports a team's
- * revision, nor Personal's when the window's host does not run it. Where it
- * does, the host's revision rereads Personal too.
+ * Their boundary watches the authoritative configuration revision, including
+ * teams with zero hosts. Focus and stale-write recovery also refresh receipt
+ * and room reads whose changes do not move that apply position.
  */
 function TeamPageFrame(props: {
   readonly section: SettingsSectionId;

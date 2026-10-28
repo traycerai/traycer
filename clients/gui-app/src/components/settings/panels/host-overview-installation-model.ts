@@ -5,6 +5,7 @@ import {
   formatPlatform,
 } from "@/components/settings/host-scope/host-scope-model";
 import { formatElapsed } from "@/components/settings/panels/my-hosts-model";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 /**
  * What About this host is drawn from: the ACCOUNT's record of the host, plus
@@ -51,15 +52,11 @@ export function deriveAboutThisHost(
   };
 }
 
-/** "Mar 3, 2026"; an unparsable stamp is shown as it came. */
+/** An unparsable account timestamp is shown as it came. */
 function formatAccountDate(iso: string): string {
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return iso;
-  return new Date(at).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  return formatSettingsDate(at, false);
 }
 
 /**

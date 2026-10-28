@@ -313,6 +313,7 @@ function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
       onDragOver={() => undefined}
       onDrop={() => undefined}
       onKeyDown={undefined}
+      interceptKeyDown={null}
       onFocus={() => undefined}
       onBlur={() => undefined}
       onEditorReady={() => setEditorReadyTick((tick) => tick + 1)}

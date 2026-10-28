@@ -14,11 +14,7 @@ import {
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import {
-  repliedPostOf,
-  replyFollowsPost,
-  replyRowIdFor,
-} from "@/lib/bots/reply-row";
+import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
   botUserSenderId,
@@ -242,6 +238,10 @@ function useResubscribeOnNextSend(input: {
  *
  * `resolveMember` names and pictures the members whose messages the chat
  * carries; a member it does not know shows as their user id.
+ *
+ * `showConnecting` holds the transcript's place with a spinner while its
+ * session connects; without it nothing is drawn until then, for a thread
+ * with no reply yet whose box follows its post.
  */
 export function BotChatTranscript(props: {
   readonly botId: string;
@@ -251,11 +251,13 @@ export function BotChatTranscript(props: {
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
+  readonly showConnecting: boolean;
 }): ReactNode {
   const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
     props;
   const handle = useChatSessionHandleForContainer(botId, chatId, hostId, true);
   if (handle === null) {
+    if (!props.showConnecting) return null;
     return (
       <div
         className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
@@ -526,7 +528,6 @@ function BotChatTranscriptBody(props: {
         botTitle: title,
         scrollToMessage,
         replyFollowsPost: followsPost,
-        repliedPost: null,
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
@@ -537,10 +538,9 @@ function BotChatTranscriptBody(props: {
     return {
       botTitle: title,
       // A thread post's verdict is in its thread, which the thread line
-      // opens; a direct post's reply, and the post it answers, are here.
+      // opens; a direct post's reply is here.
       scrollToMessage,
       replyFollowsPost: followsPost,
-      repliedPost: (messageId) => repliedPostOf(messages, messageId),
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,

@@ -5,6 +5,8 @@
  * file that exports both components and non-components breaks fast refresh for
  * everything importing it. Pure string builders.
  */
+import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
+import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
@@ -77,6 +79,7 @@ export function publishedChatLockReason(input: {
    * name a machine and promise a resume this copy is not waiting on.
    */
   readonly environmentOwned: boolean;
+  readonly sandboxEnd?: TaskSandboxEnd | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -85,7 +88,11 @@ export function publishedChatLockReason(input: {
   /** What is happening about a newer publication, if anything. */
   readonly refresh: PublishedCopyRefresh;
 }): string {
-  const parts = [publishedCopySentence(input)];
+  const parts = [
+    input.sandboxEnd === undefined || input.sandboxEnd === null
+      ? publishedCopySentence(input)
+      : taskSandboxEndLine(input.ownerLabel, input.sandboxEnd),
+  ];
   if (input.publishedAt !== null) {
     parts.push(`Published ${formatAbsoluteDateTime(input.publishedAt)}.`);
   }
@@ -152,10 +159,14 @@ export function replicaChatLockReason(input: {
   readonly ownedByViewer: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly environmentOwned: boolean;
+  readonly sandboxEnd?: TaskSandboxEnd | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
-  const base = replicaCopySentence(input);
+  const base =
+    input.sandboxEnd === undefined || input.sandboxEnd === null
+      ? replicaCopySentence(input)
+      : taskSandboxEndLine(input.ownerLabel, input.sandboxEnd);
   if (input.unreadableCount > 0) {
     return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }

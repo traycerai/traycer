@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   HostListItem,
   HostOwnerPrincipal,
+  HostSandboxState,
 } from "@traycer/protocol/host/host-status";
 import {
   hostListItemToDirectoryEntry,
@@ -684,6 +686,39 @@ function renderFrame(): void {
   );
 }
 
+const CHAT_TILE = { epicId: "epic-1", chatId: "chat-1" };
+
+function sandboxDirectoryEntry(input: {
+  readonly state: HostSandboxState;
+  readonly owner: HostOwnerPrincipal | undefined;
+}): RemoteHostDirectoryEntry {
+  const item: HostListItem = {
+    ...registryItem({ kind: "sandbox", owner: input.owner }),
+    sandboxState: input.state,
+    sandboxFrozen: false,
+    profile: "agent",
+  };
+  return hostListItemToDirectoryEntry(item, "wss://relay.example.test");
+}
+
+function renderChatTile(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <SandboxTileStateFrame chat={CHAT_TILE}>
+        <textarea data-testid="tile-body" />
+      </SandboxTileStateFrame>
+    </QueryClientProvider>,
+  );
+}
+
+function expectChatTileLive(): void {
+  expect(screen.queryByTestId("sandbox-tile-overlay")).toBeNull();
+  expect(screen.getByTestId("tile-body").closest("[inert]")).toBeNull();
+}
+
 describe("<SandboxTileStateFrame /> team host disclosure", () => {
   beforeEach(() => {
     resetSeenStore();
@@ -769,5 +804,70 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
     renderFrame();
 
     expect(screen.queryByTestId("team-host-disclosure")).toBeNull();
+  });
+
+  it("warns once on a team chat tile's first open while suspended, and leaves the chat live", () => {
+    mocks.entry.current = sandboxDirectoryEntry({
+      state: "suspended",
+      owner: TEAM_OWNER,
+    });
+
+    renderChatTile();
+
+    const cards = screen.getAllByTestId("team-host-disclosure");
+    expect(cards).toHaveLength(1);
+    const [first] = teamHostDisclosureSentences(TEAM_NAME);
+    expect(cards[0]?.textContent).toContain(first);
+    expectChatTileLive();
+  });
+
+  it("persists Got it for a team chat tile and stays quiet when that destroyed chat tile opens again, still live", async () => {
+    mocks.entry.current = sandboxDirectoryEntry({
+      state: "destroyed",
+      owner: TEAM_OWNER,
+    });
+
+    renderChatTile();
+
+    fireEvent.click(screen.getByTestId("team-host-disclosure-dismiss"));
+
+    expect(screen.queryByTestId("team-host-disclosure")).toBeNull();
+    expect(
+      teamHostDisclosureSeen(
+        useTeamHostDisclosureSeenStore.getState().seen,
+        VIEWER,
+        HOST_ID,
+      ),
+    ).toBe(true);
+    const raw = window.localStorage.getItem(PERSIST_KEY);
+    if (raw === null) throw new Error("Expected a persisted blob");
+    // setState writes the empty record through, so put the dismiss blob back.
+    cleanup();
+    useTeamHostDisclosureSeenStore.setState({ seen: {} });
+    window.localStorage.setItem(PERSIST_KEY, raw);
+    await useTeamHostDisclosureSeenStore.persist.rehydrate();
+
+    expect(
+      teamHostDisclosureSeen(
+        useTeamHostDisclosureSeenStore.getState().seen,
+        VIEWER,
+        HOST_ID,
+      ),
+    ).toBe(true);
+    renderChatTile();
+    expect(screen.queryByTestId("team-host-disclosure")).toBeNull();
+    expectChatTileLive();
+  });
+
+  it("shows nothing on a personal chat tile while suspended, and leaves the chat live", () => {
+    mocks.entry.current = sandboxDirectoryEntry({
+      state: "suspended",
+      owner: undefined,
+    });
+
+    renderChatTile();
+
+    expect(screen.queryByTestId("team-host-disclosure")).toBeNull();
+    expectChatTileLive();
   });
 });

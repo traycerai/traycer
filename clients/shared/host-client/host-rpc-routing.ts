@@ -420,6 +420,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   // edit it with no host running that configuration. What is about one host
   // (its status, local overrides, setup, review, the move) stays on it.
   "environment.configuration.items": "pool-only",
+  "environment.configuration.revision": "pool-only",
   "environment.configuration.items.delete": "pool-only",
   "environment.configuration.items.put": "pool-only",
   "environment.configuration.mcpServers.delete": "pool-only",

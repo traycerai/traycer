@@ -34,6 +34,7 @@ import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 interface IndicatorState {
   unreadDone: boolean;
   unreadFailure: boolean;
+  unreadCount: number | null;
 }
 
 const mocks = vi.hoisted(() => {
@@ -50,6 +51,7 @@ const mocks = vi.hoisted(() => {
     state: {
       environments: [] as EnvironmentDescriptor[],
       bots: [] as BotRecord[],
+      mainBotIds: null as Record<string, string> | null,
       connectable: { hostIds: [] as string[], resolved: true },
       epics,
       onboarding,
@@ -114,7 +116,9 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
   };
 });
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({ data: { bots: mocks.state.bots } }),
+  useBotListQuery: () => ({
+    data: { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+  }),
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => mocks.state.connectable,
@@ -262,6 +266,7 @@ beforeEach(() => {
     bot("bot-triage", "env-team", "triage-bot"),
     bot("bot-notes", "env-me", "notes-bot"),
   ];
+  mocks.state.mainBotIds = null;
   mocks.state.connectable = { hostIds: [TAB_HOST, OTHER_HOST], resolved: true };
   mocks.state.epics = {};
   // Both teams read as onboarded, so only the onboarding cases lock.
@@ -314,9 +319,13 @@ describe("<BotChannelSidebar /> sections", () => {
 
   it("marks a channel with an unread reply, and the one in view as the current page", () => {
     mocks.state.epics = {
-      "bot-release": { unreadDone: false, unreadFailure: false },
-      "bot-triage": { unreadDone: true, unreadFailure: false },
-      "bot-notes": { unreadDone: false, unreadFailure: true },
+      "bot-release": {
+        unreadDone: false,
+        unreadFailure: false,
+        unreadCount: 0,
+      },
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 1 },
+      "bot-notes": { unreadDone: false, unreadFailure: true, unreadCount: 1 },
     };
     mount("bot-release");
 
@@ -326,6 +335,97 @@ describe("<BotChannelSidebar /> sections", () => {
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
     expect(row("bot-triage").getAttribute("aria-current")).toBeNull();
     expect(row("bot-notes").getAttribute("aria-current")).toBeNull();
+  });
+
+  it("counts a channel's unread notifications at the end of its row, and draws nothing at zero or where the host does not count", () => {
+    mocks.state.epics = {
+      "bot-release": {
+        unreadDone: false,
+        unreadFailure: false,
+        unreadCount: 0,
+      },
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 3 },
+      "bot-notes": {
+        unreadDone: true,
+        unreadFailure: false,
+        unreadCount: null,
+      },
+    };
+    mount("bot-release");
+
+    expect(
+      within(
+        within(row("bot-triage")).getByTestId("bot-channel-row-unread-count"),
+      ).getByText("3"),
+    ).toBeTruthy();
+    expect(row("bot-triage").getAttribute("data-unread")).toBe("true");
+    expect(
+      within(row("bot-release")).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+    expect(
+      within(row("bot-notes")).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+    expect(row("bot-notes").getAttribute("data-unread")).toBe("true");
+  });
+});
+
+describe("<BotChannelSidebar /> main bot", () => {
+  it("stars the environment's main bot after its name and no other channel", () => {
+    mocks.state.mainBotIds = { "env-team": "bot-triage" };
+    mount("bot-release");
+
+    const star = within(row("bot-triage")).getByRole("img", {
+      name: "Main bot",
+    });
+    expect(star.parentElement?.previousElementSibling?.textContent).toBe(
+      "triage-bot",
+    );
+    expect(star.getAttribute("class")).toContain("text-muted-foreground");
+    expect(
+      within(row("bot-release")).queryByRole("img", { name: "Main bot" }),
+    ).toBeNull();
+    expect(
+      within(row("bot-notes")).queryByRole("img", { name: "Main bot" }),
+    ).toBeNull();
+  });
+
+  it("draws the main bot's star before its unread count, which ends the row", () => {
+    mocks.state.mainBotIds = { "env-team": "bot-triage" };
+    mocks.state.epics = {
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 2 },
+    };
+    mount("bot-release");
+
+    const star = within(row("bot-triage")).getByRole("img", {
+      name: "Main bot",
+    });
+    const count = within(row("bot-triage")).getByTestId(
+      "bot-channel-row-unread-count",
+    );
+    expect(
+      star.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(row("bot-triage").lastElementChild).toBe(count);
+  });
+
+  it("draws the main bot's star in its row's own colour while its channel is in view", () => {
+    mocks.state.mainBotIds = { "env-team": "bot-triage" };
+    mount("bot-triage");
+
+    const star = within(row("bot-triage")).getByRole("img", {
+      name: "Main bot",
+    });
+    expect(row("bot-triage").getAttribute("class")).toContain(
+      "text-primary-foreground",
+    );
+    expect(star.getAttribute("class")).toContain("text-current");
+    expect(star.getAttribute("class")).not.toContain("text-muted-foreground");
+  });
+
+  it("stars no channel when the host's list names no main bots", () => {
+    mount("bot-release");
+
+    expect(screen.queryByRole("img", { name: "Main bot" })).toBeNull();
   });
 });
 

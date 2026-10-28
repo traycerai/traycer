@@ -8,6 +8,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { BrowserCreatePicker } from "../browser-create-picker";
 
 interface FakeHost {
@@ -27,8 +28,16 @@ const state = vi.hoisted(() => ({
   withOwner: vi.fn(),
   openTab: vi.fn(),
   openTile: vi.fn(),
-  inventoryStatus: "available",
+  scope: "cloud",
   localHostId: "host-home",
+  /** This machine's own host, as `useReactiveLocalHostId` reports it. */
+  machineHostId: null as string | null,
+  /** The Browsers panel's pin, honoured (its host can serve). */
+  browsersPin: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => state.machineHostId,
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
@@ -42,7 +51,10 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
 }));
 vi.mock("@/components/epic-canvas/renderers/browser-catalog-context", () => ({
   useBrowserCatalogContext: () => ({
-    inventory: { status: state.inventoryStatus },
+    status: "ready",
+    scope: state.scope,
+    records: [],
+    refetch: vi.fn(),
   }),
 }));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
@@ -60,9 +72,10 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 vi.mock("@/hooks/host/use-surface-host-pin", () => ({
   useTabSurfaceKey: (kind: string, tabId: string) => `${kind}:${tabId}`,
   useSurfaceHostPin: () => ({
-    selection: null,
+    selection: state.browsersPin,
+    honoredSelection: state.browsersPin,
     // A simulator pin must not steer the browser suggestion.
-    resolvedHostId: "host-vm",
+    resolvedHostId: state.browsersPin ?? "host-vm",
     followingHostId: state.pinned,
     setSelection: state.setSelection,
   }),
@@ -129,8 +142,11 @@ describe("BrowserCreatePicker", () => {
       fakeHost("host-nas", "NAS", "offline", {}),
     ];
     state.pinned = "host-home";
-    state.inventoryStatus = "available";
+    state.scope = "cloud";
     state.localHostId = "host-home";
+    state.machineHostId = null;
+    state.browsersPin = null;
+    useSelectionAuthorityStore.getState().reset();
     state.setSelection.mockReset();
     state.withOwner.mockReset();
     state.openTab.mockReset();
@@ -162,6 +178,43 @@ describe("BrowserCreatePicker", () => {
       "Offline",
     );
     expect(screen.getByText("New browser on")).toBeTruthy();
+  });
+
+  it("suggests this machine's host over the task's", async () => {
+    state.machineHostId = "host-work";
+    await openPicker();
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]?.textContent).toContain("Work Mac");
+    expect(items[0]?.textContent).toContain("Suggested");
+    expect(
+      screen.getByRole("menuitem", { name: /Home Mac/ }).textContent,
+    ).not.toContain("Suggested");
+  });
+
+  it("does not let a honoured browsers pin steer the suggestion", async () => {
+    state.browsersPin = "host-work";
+    await openPicker();
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]?.textContent).toContain("Home Mac");
+    expect(items[0]?.textContent).toContain("Suggested");
+    expect(
+      screen.getByRole("menuitem", { name: /Work Mac/ }).textContent,
+    ).not.toContain("Suggested");
+  });
+
+  it("suggests the task's host when this machine's host is dead", async () => {
+    state.machineHostId = "host-work";
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: "host-work", status: "dead", dead: { reason: "offline" } },
+        { hostId: "host-home", status: "ready", dead: null },
+      ],
+    });
+    await openPicker();
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]?.textContent).toContain("Home Mac");
+    expect(items[0]?.textContent).toContain("Suggested");
   });
 
   it("creates on the chosen device, without redirecting it or changing the task host", async () => {
@@ -224,7 +277,7 @@ describe("BrowserCreatePicker", () => {
   });
 
   it("offers only the owning device for a local-only task", async () => {
-    state.inventoryStatus = "local-only";
+    state.scope = "local-only";
     state.localHostId = "host-work";
     await openPicker();
     expect(
@@ -233,7 +286,7 @@ describe("BrowserCreatePicker", () => {
   });
 
   it("is unavailable for a task whose browsers this account cannot reach", () => {
-    state.inventoryStatus = "inaccessible";
+    state.scope = "inaccessible";
     render(
       wrap(
         <BrowserCreatePicker

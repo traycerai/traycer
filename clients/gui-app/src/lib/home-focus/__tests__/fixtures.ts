@@ -107,6 +107,7 @@ export function makeIndicatorFlags(
     unreadFailure: false,
     unreadDone: false,
     pendingFork: false,
+    unreadCount: 0,
     ...overrides,
   };
 }

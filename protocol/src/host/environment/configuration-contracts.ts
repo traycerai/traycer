@@ -36,6 +36,23 @@ const environmentIdSchema = lazySchema(() => z.string().min(1));
 const itemKeySchema = lazySchema(() => z.string().min(1).max(3072));
 const itemRevisionSchema = lazySchema(() => z.number().int().nonnegative());
 
+/** The apply-plane position, independent of host delivery and item inventory. */
+export const environmentConfigurationRevisionResponseSchema = lazySchema(() =>
+  z.object({ revision: z.string().regex(/^(0|[1-9][0-9]{0,18})$/) }),
+);
+export type EnvironmentConfigurationRevisionResponse = z.infer<
+  typeof environmentConfigurationRevisionResponseSchema
+>;
+
+export const environmentConfigurationRevisionV10 = defineRpcContract({
+  method: "environment.configuration.revision",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: lazySchema(() =>
+    z.object({ environmentId: environmentIdSchema }),
+  ),
+  responseSchema: environmentConfigurationRevisionResponseSchema,
+});
+
 // ── environment.configuration.items ─────────────────────────────────────────
 
 export const environmentConfigurationItemsRequestSchema = lazySchema(() =>

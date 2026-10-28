@@ -1,8 +1,4 @@
-import {
-  useMutationState,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -10,6 +6,10 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProvidersListResponse } from "@traycer/protocol/host/provider-schemas";
+import {
+  useMutationStateOf,
+  selectMutationVariables,
+} from "@/hooks/use-mutation-state-of";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -99,14 +99,14 @@ export function useProviderProfileEnablementPending(
   providerId: string | null,
 ): (profileId: string | null) => boolean {
   const hostId = useRequesterHostId(client);
-  const pendingVariables = useMutationState({
-    filters: {
+  const pendingVariables = useMutationStateOf(
+    {
       mutationKey: providersMutationKeys.setProfileEnabled(hostId, providerId),
       status: "pending",
       exact: true,
     },
-    select: (mutation) => mutation.state.variables,
-  });
+    selectMutationVariables,
+  );
   const pendingProfileIds = new Set(
     pendingVariables.flatMap((variables) =>
       isSetProfileEnabledRequest(variables) ? [variables.profileId] : [],

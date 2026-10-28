@@ -1,11 +1,18 @@
+import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  ConnectedHookRemovalObservers,
+  HookRemovalObserver,
+} from "@/components/notifications/hook-removal-observer";
+import { consumePendingHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   NotificationsStreamClient,
   type NotificationsStreamCallbacks,
@@ -38,6 +45,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import {
   openCloudNotificationsStream,
+  selectCloudLaneServing,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import {
@@ -85,6 +93,8 @@ import {
 } from "@/hooks/auth/use-auth-identity-transition";
 import {
   clearNotificationIndicatorCaches,
+  COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+  createCompleteNotificationIndicatorsReask,
   invalidateNotificationIndicators,
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
@@ -97,7 +107,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationEntryV25,
+  HostNotificationCloudEntryV26,
   HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -130,10 +140,7 @@ function poolCloudLane(): HostNotificationsCloudLane | null {
 }
 
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
-  serving: () => {
-    const state = useCloudNotificationsStore.getState();
-    return state.hasSnapshot && state.connectionState === "connected";
-  },
+  serving: () => selectCloudLaneServing(useCloudNotificationsStore.getState()),
   subscribe: (listener) => useCloudNotificationsStore.subscribe(listener),
 };
 
@@ -371,6 +378,18 @@ function NotificationsSessionBody(
     activityStreamVersion,
   );
   const queryClient = useQueryClient();
+  const completeIndicatorsReask = useMemo(
+    () =>
+      createCompleteNotificationIndicatorsReask(
+        queryClient,
+        COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+      ),
+    [queryClient],
+  );
+  useEffect(
+    () => () => completeIndicatorsReask.dispose(),
+    [completeIndicatorsReask],
+  );
   const authService = useAuthService();
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivationWithNavigate(props.navigate);
@@ -390,9 +409,9 @@ function NotificationsSessionBody(
   const replicaFeed = props.replicaFeed;
   useEffect(() => {
     const store = useCloudNotificationsStore.getState();
-    if (replicaFeed === null) store.revokeReplicaSeed();
-    else store.seedFromReplica(replicaFeed);
-  }, [replicaFeed, cloudSessionEpoch]);
+    if (replicaFeed === null || userId === null) store.revokeReplicaSeed();
+    else store.seedFromReplica({ ...replicaFeed, accountId: userId });
+  }, [replicaFeed, cloudSessionEpoch, userId]);
   const disposerRef = useRef<(() => void) | null>(null);
   const activityDisposerRef = useRef<(() => void) | null>(null);
   /** The host whose lane `activityDisposerRef` holds - the slice a verdict loss clears. */
@@ -448,7 +467,7 @@ function NotificationsSessionBody(
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
-        readonly entry: HostNotificationEntryV25;
+        readonly entry: HostNotificationCloudEntryV26;
         readonly originHostId: string;
         readonly semanticId: string;
       }>,
@@ -599,6 +618,7 @@ function NotificationsSessionBody(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (servingHostId !== hostId) return;
+      syncHookRemovalNoticesFromFrame(queryClient, hostId, frame);
       // `partitionSnapshot` is a `snapshot` for every purpose here: `@1.3`
       // defines it by extending the frozen `@1.2` snapshot, so it carries the
       // same `attention` / `recent` pages and only narrows WHICH rows they
@@ -1233,9 +1253,12 @@ function NotificationsSessionBody(
       // a cloud-lane problem left this machine's own notification lane shut
       // for the rest of the session. Machine notifications do not depend on
       // cloud access and must survive a cloud lane that cannot open.
+      const openedAccountId =
+        useAuthStore.getState().contextMetadata?.userId ?? null;
       if (
         settledFeedMode === "cloud" &&
         cloudAuthorized &&
+        openedAccountId !== null &&
         cloudFeedStreamClient !== null
       ) {
         // The cloud feed owns host/agent rows only. Collaboration events are
@@ -1252,22 +1275,17 @@ function NotificationsSessionBody(
         // projects a new user straight over this one, and this stream is
         // torn down only by the effect that render runs: a frame delivered
         // before then belongs to the account that left.
-        const openedAccountId =
-          useAuthStore.getState().contextMetadata?.userId ?? null;
         cloudDisposerRef.current = openCloudNotificationsStream(
           reconnect,
           cloudFeedStreamClient,
+          openedAccountId,
           onAuthError,
           ({ rows, arrivals }) => {
             const accountId =
               useAuthStore.getState().contextMetadata?.userId ?? null;
             if (accountId !== openedAccountId) return;
             const accepted = useCloudNotificationsStore.getState();
-            if (
-              accountId !== null &&
-              accepted.summary !== null &&
-              accepted.version !== null
-            ) {
+            if (accepted.summary !== null && accepted.version !== null) {
               rememberNotificationFeed({
                 accountId,
                 servingHostId,
@@ -1282,6 +1300,18 @@ function NotificationsSessionBody(
                 version: accepted.version,
               });
             }
+            for (const row of rows) {
+              if (
+                row.entry.kind === "notification.hooks.removed" &&
+                row.entry.readAt !== null
+              ) {
+                void consumePendingHookRemovalNotices(
+                  queryClient,
+                  row.originHostId,
+                  { ids: [row.entry.id] },
+                );
+              }
+            }
             recordCompletions(
               rows.map((row) => ({
                 entry: row.entry,
@@ -1289,6 +1319,7 @@ function NotificationsSessionBody(
                 semanticId: row.entryId,
               })),
             );
+            completeIndicatorsReask.schedule();
             void displayCloudSnapshotArrivals(arrivals, {
               showNotification,
               playChime: playNotificationChime,
@@ -1366,9 +1397,12 @@ function NotificationsSessionBody(
       }
     },
     [
+      queryClient,
       servingStreamClient,
       cloudFeedStreamClient,
       recordCompletions,
+      // The cloud snapshot re-asks every host holding a whole-origin answer.
+      completeIndicatorsReask,
       servingHostId,
       windowId,
       showNotification,
@@ -1624,9 +1658,52 @@ function NotificationsSessionBody(
 
   return (
     <NotificationConsumptionContext.Provider value={consumeFocusedEntity}>
+      <HookRemovalObserver
+        client={servingHostClient}
+        navigate={props.navigate}
+      />
+      <ConnectedHookRemovalObservers
+        servingHostId={servingHostId}
+        navigate={props.navigate}
+      />
       {props.children}
     </NotificationConsumptionContext.Provider>
   );
+}
+
+/** Reconcile receipt announcements with authoritative notification read/clear
+ * frames, and fetch newly committed receipts when their published row arrives. */
+function syncHookRemovalNoticesFromFrame(
+  queryClient: QueryClient,
+  hostId: string,
+  frame: HostNotificationsFeedFrame,
+): void {
+  let consumedIds: readonly string[];
+  if (frame.kind === "snapshot" || frame.kind === "partitionSnapshot") {
+    consumedIds = [...frame.attention.entries, ...frame.recent.entries]
+      .filter((entry) => entry.readAt !== null)
+      .map((entry) => entry.id);
+  } else if (frame.kind === "readStateChanged" && frame.readAt !== null) {
+    consumedIds = [...frame.ids, ...frame.removedIds];
+  } else {
+    consumedIds = frame.removedIds;
+  }
+  if (consumedIds.length > 0) {
+    void consumePendingHookRemovalNotices(queryClient, hostId, {
+      ids: consumedIds,
+    });
+  }
+  if (
+    frame.kind === "upserted" &&
+    frame.entry.kind === "notification.hooks.removed"
+  ) {
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(
+        hostId,
+        "host.notificationHooks.status",
+      ),
+    });
+  }
 }
 
 /**

@@ -136,6 +136,10 @@ export interface ChatLowerRuntimeState {
 }
 
 export interface ChatLowerAccessState {
+  /** Only the composer can enqueue a message for its resting sandbox. */
+  readonly restingSandbox?: boolean;
+  /** The serving host has a copy, not authority over the owner's workspace. */
+  readonly isCopy: boolean;
   readonly isViewer: boolean;
   readonly canAct: boolean;
   /**
@@ -784,7 +788,7 @@ function ComposerSurface(props: {
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
-  if (model.access.isViewer) {
+  if (model.access.isViewer && model.access.restingSandbox !== true) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -877,20 +881,13 @@ function ViewerComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  // The workspace row is LIVE: its selector targets the reading host and this
-  // surface's chat id, and both create/re-bind and remove are real mutations.
-  // For a viewer of a live chat that is the chat's own workspace and the row
-  // is informative. For a COPY (`readOnlyNotice` is set only by the published
-  // and doc-replica surfaces) the binding shown is `null` and the chat id is
-  // the one the OWNER minted, so acting on the row would commit a workspace
-  // change against whatever local lineage happens to hold that id here.
-  // A copy has no live workspace to show, so it shows none.
-  const isCopy = model.access.readOnlyNotice !== null;
+  // The selector mutates this host's workspace using the chat id. A copy's id
+  // belongs to its owner, so the serving host must never expose that row.
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
         <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
-        {isCopy ? null : (
+        {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
           />
@@ -907,13 +904,17 @@ function LiveChatComposer(props: {
 }) {
   const { model } = props;
   const tabHostId = useTabHostId();
+  const restingMessage =
+    model.access.restingSandbox === true && model.queue.editingItem === null;
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
-      sendDisabled={!model.access.canAct}
-      sendDisabledHint={chatSendDisabledHint(model.access)}
+      sendDisabled={!model.access.canAct && !restingMessage}
+      sendDisabledHint={
+        restingMessage ? null : chatSendDisabledHint(model.access)
+      }
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
@@ -938,7 +939,9 @@ function LiveChatComposer(props: {
       hasPendingApprovals={props.hasPendingApprovals}
       stopDisabled={model.turn.stopDisabled}
       onStopTurn={model.turn.onStopTurn}
-      workspaceControls={model.composer.workspaceControls}
+      workspaceControls={
+        model.access.isCopy ? null : model.composer.workspaceControls
+      }
       workspaceAvailability={model.composer.workspaceAvailability}
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}

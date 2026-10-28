@@ -157,6 +157,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
         <div style={{ height: 700, width: 800 }}>
           <ChatTimeline
             rows={transcriptListRows({
+              splitLongTurns: true,
               window: null,
               rendered: [makeMessage(0, "user")],
             })}
@@ -558,6 +559,7 @@ const ONE_BACKGROUND_ITEM_DOCK_HOTSPOTS: Readonly<
 function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
   const runtime: ChatLowerRuntimeState = { snapshotLoaded: true };
   const access: ChatLowerAccessState = {
+    isCopy: false,
     isViewer: true,
     canAct: false,
     readOnlyNotice: null,

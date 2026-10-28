@@ -26,11 +26,12 @@ concurrency:
 jobs:
   test:
     name: ${{ matrix.name }}
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       github.event_name != 'pull_request'
-      || github.base_ref != 'main'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     # Every leg runs on the standard runner. This repository is public, and
@@ -291,12 +292,13 @@ jobs:
   tests:
     name: tests
     needs: [test]
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       always() && (
         github.event_name != 'pull_request'
-        || github.base_ref != 'main'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
@@ -326,11 +328,12 @@ jobs:
   # touching no CLI file. A gate that skips on the riskiest diffs is not a gate.
   test-windows-cli-exit:
     name: test (cli win32 SEA exit code)
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       github.event_name != 'pull_request'
-      || github.base_ref != 'main'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: windows-latest
@@ -397,11 +400,12 @@ jobs:
   # covers.
   macos-packaging-changes:
     name: test (desktop darwin + packaging) changes
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       github.event_name != 'pull_request'
-      || github.base_ref != 'main'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-24.04
@@ -480,12 +484,13 @@ jobs:
   test-macos-packaging:
     name: test (desktop darwin + packaging)
     needs: macos-packaging-changes
-    # A team PR into `main` skips this job: the merge to `main` runs it once.
-    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
     if: >-
       (
         github.event_name != 'pull_request'
-        || github.base_ref != 'main'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )

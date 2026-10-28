@@ -304,4 +304,25 @@ describe("a server before the resting clock, keep and today's cost", () => {
     expect(response.todayYoursMillicredits).toBe(0);
     expect(response.sandboxes[0]?.todayMillicredits).toBe(0);
   });
+
+  it("reads a cost without todayAwakeMs as null, and keeps an explicit value", () => {
+    const cost = {
+      sandboxId: "sbx_1",
+      currentRateMillicreditsPerHour: 120,
+      state: "awake",
+      frozen: false,
+      charged: {
+        computeMillicredits: 300,
+        storageMillicredits: 4,
+        sinceCreatedAt: 1_791_000_000_000,
+      },
+      pendingMillicredits: 0,
+      segments: [],
+    };
+    expect(sandboxCostSchema.parse(cost).todayAwakeMs).toBeNull();
+    expect(
+      sandboxCostSchema.parse({ ...cost, todayAwakeMs: 3_600_000 })
+        .todayAwakeMs,
+    ).toBe(3_600_000);
+  });
 });

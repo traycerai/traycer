@@ -6,27 +6,16 @@ import {
   browserCatalogSnapshotSchema,
 } from "./catalog-contracts";
 
-/**
- * A stateless reader of the caller's task inventory. The client owns cached
- * inventory, pending owner evidence, probe chunking and active-view repair.
- */
+/** Stateless relay of the caller's task inventory. */
 export const browserCatalogReadResponseSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.strictObject({
       kind: z.literal("available"),
       snapshot: browserCatalogSnapshotSchema,
     }),
-    // Suppress cloud inventory and retain the existing local session path.
     z.strictObject({ kind: z.literal("local-only") }),
-    // Drop cached inventory and pending evidence for this caller/task.
     z.strictObject({ kind: z.literal("inaccessible") }),
-    // Keep the legacy owner path; missing support proves no completeness.
-    z.strictObject({ kind: z.literal("unsupported") }),
-    // No inventory assertion. Authorized cached data may remain visibly stale.
-    z.strictObject({
-      kind: z.literal("unavailable"),
-      reason: z.enum(["cloud", "cloud-verdict", "inventory-limit"]),
-    }),
+    z.strictObject({ kind: z.literal("unavailable") }),
   ]),
 );
 export type BrowserCatalogReadResponse = z.infer<

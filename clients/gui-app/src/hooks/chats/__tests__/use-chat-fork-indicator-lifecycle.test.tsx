@@ -333,8 +333,10 @@ function indicatorResponse(
         pendingFork,
         unreadFailure: false,
         unreadDone: false,
+        unreadCount: 0,
       },
     },
+    complete: true,
   };
 }
 

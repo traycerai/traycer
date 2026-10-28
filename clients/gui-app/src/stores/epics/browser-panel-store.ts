@@ -16,22 +16,18 @@ const EMPTY_PREFERENCE: BrowserPanelPreference = {
 
 interface BrowserPanelStore {
   readonly preferences: Readonly<Record<string, BrowserPanelPreference>>;
-  /** Explicit legacy browsing is an action, never restored as a background dial. */
-  readonly legacyHostByScope: Readonly<Record<string, string | null>>;
   readonly setShowOffline: (scope: string, value: boolean) => void;
   readonly setCollapsed: (
     scope: string,
     hostId: string,
     value: boolean,
   ) => void;
-  readonly setLegacyHost: (scope: string, hostId: string | null) => void;
 }
 
 export const useBrowserPanelStore = create<BrowserPanelStore>()(
   persist(
     (set) => ({
       preferences: {},
-      legacyHostByScope: {},
       setShowOffline: (scope, value) =>
         set((state) => ({
           preferences: {
@@ -55,10 +51,6 @@ export const useBrowserPanelStore = create<BrowserPanelStore>()(
             },
           };
         }),
-      setLegacyHost: (scope, hostId) =>
-        set((state) => ({
-          legacyHostByScope: { ...state.legacyHostByScope, [scope]: hostId },
-        })),
     }),
     {
       ...basePersistOptions(persistKey("browser-panel")),
@@ -77,10 +69,8 @@ export const useBrowserPanelStore = create<BrowserPanelStore>()(
 );
 
 export interface BrowserPanelPreferences extends BrowserPanelPreference {
-  readonly legacyHostId: string | null;
   readonly setShowOffline: (value: boolean) => void;
   readonly setCollapsed: (hostId: string, value: boolean) => void;
-  readonly setLegacyHost: (hostId: string | null) => void;
 }
 
 export function useBrowserPanelPreferences(
@@ -91,20 +81,13 @@ export function useBrowserPanelPreferences(
   const preference = useBrowserPanelStore(
     (state) => state.preferences[scope] ?? EMPTY_PREFERENCE,
   );
-  const legacyHostId = useBrowserPanelStore(
-    (state) => state.legacyHostByScope[scope] ?? null,
-  );
   const setShowOffline = (value: boolean) =>
     useBrowserPanelStore.getState().setShowOffline(scope, value);
   const setCollapsed = (hostId: string, value: boolean) =>
     useBrowserPanelStore.getState().setCollapsed(scope, hostId, value);
-  const setLegacyHost = (hostId: string | null) =>
-    useBrowserPanelStore.getState().setLegacyHost(scope, hostId);
   return {
     ...preference,
-    legacyHostId,
     setShowOffline,
     setCollapsed,
-    setLegacyHost,
   };
 }

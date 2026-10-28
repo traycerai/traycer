@@ -427,7 +427,11 @@ const dockMetricMessengerFactory: MessengerFactory<HostRpcRegistry> = ({
         crossHostMessaging: null,
         sessions: null,
       }),
-      "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      "host.notifications.indicatorState": () => ({
+        epics: {},
+        chats: {},
+        complete: true,
+      }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
     },
   });

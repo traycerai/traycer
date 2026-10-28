@@ -1,6 +1,29 @@
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
+import { QueryClient } from "@tanstack/react-query";
+import { AuthService } from "@/lib/auth/auth-service";
+import { HostDirectoryService } from "@/lib/host";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT } from "@traycer/protocol/host/sandbox-control";
+import { runStagedSandbox } from "@/lib/sandboxes/staged-sandbox-run";
+import {
+  handPendingSandboxSend,
+  endPendingSandboxSend,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  PICKED_SETTINGS,
+  MESSAGE_CONTENT,
+} from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  openLandingStagedTerminal,
+  type StagedSandboxRunner,
+} from "@/components/composer/use-staged-sandbox-send";
 import {
   act,
   cleanup,
@@ -11,6 +34,7 @@ import {
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
+  SandboxCreateRequest,
   SandboxCatalogue,
   SandboxCatalogueProvider,
   SandboxCost,
@@ -259,6 +283,7 @@ beforeEach(() => {
   mocks.costs = null;
   mocks.openSettings.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
+  usePendingSandboxSendStore.setState({ sends: {} });
   useSandboxShapeMemoryStore.setState({
     byHost: {},
     lastConfigurationByHost: {},
@@ -273,6 +298,114 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+});
+
+describe("a staged name at create", () => {
+  async function createFromStage(
+    action: "send" | "terminal" | "pending-terminal",
+  ): Promise<SandboxCreateRequest> {
+    const runnerHost = createFakeRunnerHost({});
+    const auth = new AuthService({ runnerHost });
+    const directory = new HostDirectoryService({
+      runnerHost,
+      remoteFetcher: null,
+      onRegistryPollTick: null,
+      authContextId: null,
+      credentialGeneration: null,
+      localHostIdSeeder: () => Promise.resolve(null),
+    });
+    const create = vi
+      .spyOn(auth, "createSandbox")
+      .mockResolvedValue(
+        refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      );
+    const client = new QueryClient();
+    let completed = Promise.resolve();
+    let pendingId: string | null = null;
+    const runner: StagedSandboxRunner = (surfaceKey, fresh, request) => {
+      completed = runStagedSandbox(surfaceKey, fresh, request, {
+        auth,
+        directory,
+        queryClient: client,
+        userId: null,
+        wake: () => Promise.resolve(false),
+        readSettings: () => Promise.resolve("unsupported"),
+        now: Date.now,
+        sleep: () => Promise.resolve(),
+      });
+    };
+    try {
+      if (action === "terminal") openLandingStagedTerminal(SURFACE, runner);
+      else {
+        pendingId = handPendingSandboxSend({
+          fromSurfaceKey: SURFACE,
+          epicId: "epic-1",
+          request:
+            action === "pending-terminal"
+              ? { kind: "terminal" }
+              : { kind: "chat", parentId: null, placement: null },
+          content: MESSAGE_CONTENT,
+          text: action === "pending-terminal" ? "" : "a different message name",
+          settings: PICKED_SETTINGS,
+          epicConfirmed: true,
+          now: Date.now(),
+        });
+        if (pendingId === null) throw new Error("expected a handed stage");
+        runner(pendingSendSurfaceKey(pendingId), true, {
+          taskId: "epic-1",
+          resume: false,
+        });
+      }
+      await completed;
+      expect(create).toHaveBeenCalledTimes(1);
+      return create.mock.calls[0][0];
+    } finally {
+      if (pendingId !== null) endPendingSandboxSend(pendingId);
+      directory.dispose();
+      auth.dispose();
+      client.clear();
+      create.mockRestore();
+    }
+  }
+
+  it.each([
+    { action: "terminal", reselect: false },
+    { action: "terminal", reselect: true },
+    { action: "pending-terminal", reselect: true },
+  ] as const)(
+    "$action keeps the applied typed name (reselect New: $reselect)",
+    async ({ action, reselect }) => {
+      mount([LAPTOP]);
+      act(() => staging().composer.onPickNew("personal"));
+      act(() => staging().composer.onOpenShape("personal"));
+      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+        target: { value: "typed-terminal-box" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Use this shape" }));
+      if (reselect) act(() => staging().composer.onPickNew("personal"));
+
+      const request = await createFromStage(action);
+
+      expect(request.displayName).toBe("typed-terminal-box");
+    },
+  );
+
+  it.each(["send", "terminal", "pending-terminal"] as const)(
+    "%s uses the generated name shown in the untouched stage's shape sheet",
+    async (action) => {
+      mount([LAPTOP]);
+      act(() => staging().composer.onPickNew("personal"));
+      act(() => staging().composer.onOpenShape("personal"));
+      const name = screen.getByRole<HTMLInputElement>("textbox", {
+        name: "Name",
+      }).value;
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const request = await createFromStage(action);
+
+      expect(name).toMatch(/^sandbox-[a-z0-9]{4}$/);
+      expect(request.displayName).toBe(name);
+    },
+  );
 });
 
 describe("useSandboxStaging New rows", () => {
@@ -369,7 +502,6 @@ describe("useSandboxStaging New rows", () => {
         kind: "new",
         configuration: { kind: "personal" },
         shape: DEFAULT_SHAPE,
-        name: "",
         wakeString: WAKE_STRING_MEMORY,
       },
     });
@@ -566,6 +698,7 @@ describe("useSandboxStaging In this task", () => {
         label: host.name,
         principal: { kind: "user", id: "u1" },
         reach: "same_principal",
+        sandboxEnd: null,
       })),
       groups: [],
       collaborators: null,
@@ -607,6 +740,7 @@ describe("useSandboxStaging sandbox rows' lines", () => {
       pendingMillicredits: 0,
       segments: [],
       todayMillicredits,
+      todayAwakeMs: null,
       history: [],
     };
   }
@@ -639,7 +773,10 @@ describe("useSandboxStaging sandbox rows' lines", () => {
       teamOwnedItem(),
     );
 
-    expect(lineOf(awakeTeamBox)).toEqual(["acme · $0.05 today"]);
+    expect(lineOf(awakeTeamBox)).toEqual([
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+      "acme · $0.05 today",
+    ]);
   });
 });
 
@@ -875,7 +1012,7 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
   it("names the team on a team sandbox's price", () => {
     expect(
       stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
-    ).toBe("$0.21 an hour while awake · uses your acme credits");
+    ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
   });
 });
 

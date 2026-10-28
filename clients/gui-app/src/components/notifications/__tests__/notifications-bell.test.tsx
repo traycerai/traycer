@@ -539,7 +539,7 @@ describe("NotificationsBell", () => {
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, 2 tasks need you");
+    ).toBe("Notifications, 2 need you");
   });
 
   it("rolls the badge count through the shared primitive, ungrouped, and lets the badge leave", () => {

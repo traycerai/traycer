@@ -67,6 +67,7 @@
  * after the first.
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
@@ -133,6 +134,11 @@ const DROPPED_IMAGE_CLAUSE: Readonly<Record<DroppedImageCause, string>> = {
   unprepared: "it could not be prepared for a draft",
 };
 
+export interface PromptHandoffRecovery {
+  readonly draftId: string;
+  readonly settings: ChatRunSettings;
+}
+
 /**
  * What a handoff leaves behind.
  *
@@ -187,6 +193,7 @@ type ImportOutcome =
  * as unrecoverable.
  */
 export async function buildUnrecordedPromptHandoff(args: {
+  readonly recovery?: PromptHandoffRecovery;
   readonly content: JsonContent;
   /**
    * The prompt's annotation sidecar, or `[]` for a source that has none.
@@ -239,6 +246,7 @@ export async function buildUnrecordedPromptHandoff(args: {
     }
     try {
       const draftId = installHandoffDraft({
+        recovery: args.recovery,
         content: raced.result.content,
         stillCurrent: args.stillCurrent,
         qualification: teardownQualification({
@@ -392,6 +400,7 @@ async function materializeInlineImages(
  * refuse. Stripping is a decision, so it is expressed as one.
  */
 export interface TextOnlyPromptHandoffInput {
+  readonly recovery?: PromptHandoffRecovery;
   readonly content: JsonContent;
   /**
    * The sidecar this path is about to drop. It cannot be carried - a landing
@@ -430,6 +439,7 @@ function installTextOnly(
   try {
     return Promise.resolve(
       installHandoffDraft({
+        recovery: args.recovery,
         content: stripped.content,
         stillCurrent: args.stillCurrent,
         qualification: teardownQualification({
@@ -458,6 +468,7 @@ function installTextOnly(
  * run settings is what a draft with no surface behind it is.
  */
 function installHandoffDraft(args: {
+  readonly recovery: PromptHandoffRecovery | undefined;
   readonly content: JsonContent;
   readonly qualification: string;
   readonly stillCurrent: () => boolean;
@@ -468,20 +479,26 @@ function installHandoffDraft(args: {
   // account's private prompt in the incoming account's drafts list, and root
   // its images in that account's partition.
   if (!args.stillCurrent()) return null;
-  const draftId = mintDraftId();
-  useLandingDraftStore.getState().installLandingDraft({
+  const draftId = args.recovery?.draftId ?? mintDraftId();
+  const installed = useLandingDraftStore.getState().installLandingDraft({
     id: draftId,
-    content: withTrailingParagraph(args.content, args.qualification),
+    content: appendPromptQualification(args.content, args.qualification),
     selection: null,
     lastTouchedAt: Date.now(),
-    settings: useComposerRunSettingsStore
-      .getState()
-      .getGlobalRunSettings(readComposerHostIdSnapshot()),
+    settings:
+      args.recovery === undefined
+        ? useComposerRunSettingsStore
+            .getState()
+            .getGlobalRunSettings(readComposerHostIdSnapshot())
+        : args.recovery.settings,
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
   });
-  return draftId;
+  return installed ||
+    useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)
+    ? draftId
+    : null;
 }
 
 /**
@@ -564,7 +581,7 @@ function causeOf(error: unknown): DroppedImageCause {
   return "unprepared";
 }
 
-function withTrailingParagraph(
+export function appendPromptQualification(
   content: JsonContent,
   text: string,
 ): JsonContent {

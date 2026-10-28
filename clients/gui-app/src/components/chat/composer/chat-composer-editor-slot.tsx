@@ -1,8 +1,8 @@
 import {
   useCallback,
+  useRef,
   type ClipboardEventHandler,
   type DragEventHandler,
-  type KeyboardEvent,
   type Ref,
 } from "react";
 import { PHONE_COMPOSER_EDITOR_CAP_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
@@ -23,8 +23,9 @@ import type {
   PastedComposerImage,
   PastedComposerImageOutcome,
 } from "./editor/extensions/chat-paste-handler";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
-import { isPromptSuggestionAcceptKey } from "./prompt-suggestion";
+import { isPromptSuggestionAcceptEvent } from "./prompt-suggestion";
 import {
   PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
   usePromptSuggestionSwipe,
@@ -66,14 +67,14 @@ interface ChatComposerEditorSlotProps {
   /**
    * The provider's predicted next prompt, already gated by
    * `promptSuggestionAllowed` (so the draft is empty); `null` offers nothing.
-   * Shown as the placeholder; → or a rightward swipe on a touch device accepts
-   * it.
+   * Shown as the placeholder; the "Accept suggested reply" key (→ unless
+   * rebound) or a rightward swipe on a touch device accepts it.
    */
   readonly suggestedPrompt: string | null;
   /**
    * Fills and focuses the composer with the suggestion. Must never send.
    * Returns whether it filled: the live draft can stop being empty before this
-   * prop re-renders, and a declined fill must leave → its ordinary job.
+   * prop re-renders, and a declined fill must leave the key its ordinary job.
    */
   readonly onAcceptSuggestion: (suggestion: string) => boolean;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
@@ -130,27 +131,43 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     placeholder = suggestedPrompt;
   }
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLElement>) => {
-      if (suggestedPrompt === null) return;
+  // The accept key is the person's own binding, read live so a rebind in
+  // Settings applies to the next keystroke. It is matched inside the editor,
+  // ahead of its keymaps, so a binding the editor would otherwise act on
+  // first (Enter submits; the picker commits on Tab) can still accept - and so
+  // the picker, when open, is yielded to explicitly rather than by luck.
+  const acceptBinding = useBindingForAction("composer.suggestion.accept");
+  // A fill made by a held key: its OS repeats keep arriving after the fill,
+  // and with the draft no longer empty they would fall through to the key's
+  // ordinary job - on an Enter binding, submitting the text just filled. The
+  // repeats of THAT physical key are taken until it is pressed afresh. Keyed
+  // by code, not a flag: a modifier tapped while the key is still held is a
+  // fresh keydown of another key, and must not hand the held key back.
+  const swallowRepeatsOfCodeRef = useRef<string | null>(null);
+  const interceptKeyDown = useCallback(
+    (event: KeyboardEvent): boolean => {
+      if (swallowRepeatsOfCodeRef.current === event.code) {
+        if (event.repeat) return true;
+        swallowRepeatsOfCodeRef.current = null;
+      }
+      if (suggestedPrompt === null) return false;
       if (
-        !isPromptSuggestionAcceptKey({
-          key: event.key,
-          altKey: event.altKey,
-          ctrlKey: event.ctrlKey,
-          metaKey: event.metaKey,
-          shiftKey: event.shiftKey,
-          isComposing: event.nativeEvent.isComposing,
+        !isPromptSuggestionAcceptEvent({
+          binding: acceptBinding,
+          event,
+          pickerOpen: pickerStore.getState().open,
         })
       ) {
-        return;
+        return false;
       }
-      if (onAcceptSuggestion(suggestedPrompt)) event.preventDefault();
+      const filled = onAcceptSuggestion(suggestedPrompt);
+      if (filled) swallowRepeatsOfCodeRef.current = event.code;
+      return filled;
     },
-    [suggestedPrompt, onAcceptSuggestion],
+    [acceptBinding, onAcceptSuggestion, pickerStore, suggestedPrompt],
   );
 
-  // Touch has no → key, so a rightward swipe over the composer accepts
+  // Touch has no accept key, so a rightward swipe over the composer accepts
   // instead. A tap is left alone: it is how the user starts typing.
   const swipeHandlers = usePromptSuggestionSwipe(
     suggestedPrompt,
@@ -194,7 +211,8 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
         onPaste={onPaste}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        onKeyDown={handleKeyDown}
+        onKeyDown={undefined}
+        interceptKeyDown={interceptKeyDown}
         onFocus={onFocus}
         onBlur={NOOP}
         onEditorReady={onEditorReady}

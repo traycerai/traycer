@@ -124,6 +124,7 @@ function unitsFor(segment: ToolSegment): ReadonlyArray<ChatFindUnit> {
   return buildChatFindRows([message], TILE_INSTANCE_ID, new Set(), {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: null,
+    splitLongTurns: true,
   })[0].units;
 }
 
@@ -203,7 +204,7 @@ describe("Chat Find over generic tool image captions", () => {
           turnId={null}
           settledNotice={null}
           settledNoticeFindUnitId={null}
-          autonomousResumeVariant="card"
+          backgroundCard={null}
         />
       </Providers>,
     );
@@ -401,7 +402,7 @@ describe("Chat Find highlighter over the generic tool gallery", () => {
             turnId={null}
             settledNotice={null}
             settledNoticeFindUnitId={null}
-            autonomousResumeVariant="card"
+            backgroundCard={null}
           />
         </Providers>,
       ),

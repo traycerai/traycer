@@ -65,6 +65,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
     props.children,
+  BrowserOpenSessionsProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
 }));
 
 // Import AFTER the mocks so the bridge picks them up.

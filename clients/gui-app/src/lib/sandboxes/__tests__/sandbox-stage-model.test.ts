@@ -25,6 +25,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
     configuration: PERSONAL,
     price: { awakeMcPerHour: 120, exact: true },
     needsCredits: false,
+    shortfallMc: 120,
     audience: "private",
     reachHost: null,
     unmovedComputer: null,
@@ -54,7 +55,7 @@ describe("priceClause", () => {
 
   it("asks for credits at a zero or short balance", () => {
     expect(priceClause(input({ needsCredits: true })).text).toBe(
-      "Add credits to start a sandbox · from $0.12 an hour while awake",
+      "Not enough credits. $0.12 more starts this sandbox for an hour.",
     );
   });
 
@@ -69,19 +70,21 @@ describe("priceClause", () => {
           },
           price: { awakeMcPerHour: 210, exact: false },
           needsCredits: true,
+          shortfallMc: 210,
         }),
       ).text,
     ).toBe(
-      "Add pool-e2e-fixture credits to start a sandbox · from $0.21 an hour while awake",
+      "Your pool-e2e-fixture allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
     );
     expect(
       priceClause(
         input({
           price: { awakeMcPerHour: 210, exact: false },
           needsCredits: true,
+          shortfallMc: 210,
         }),
       ).text,
-    ).toBe("Add credits to start a sandbox · from $0.21 an hour while awake");
+    ).toBe("Not enough credits. $0.21 more starts this sandbox for an hour.");
   });
 
   it("says what it bills by when the server prices no shape", () => {
@@ -155,7 +158,7 @@ describe("consequenceClauses", () => {
     const clauses = consequenceClauses(
       input({ configuration: ACME, needsCredits: true }),
     );
-    expect(clauses[0].text).toMatch(/^Add Acme credits to start a sandbox/);
+    expect(clauses[0].text).toMatch(/^Your Acme allowance is short/);
     expect(clauses).toHaveLength(4);
   });
 });

@@ -6,6 +6,7 @@ import {
   type BotAnnouncementKind,
   type ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
@@ -19,10 +20,7 @@ import {
   BotAvatar,
   MemberAvatar,
 } from "@/components/bots/bot-avatars";
-import {
-  BotIdentityTrigger,
-  BotOwnerLine,
-} from "@/components/bots/bot-identity-popover";
+import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -44,8 +42,7 @@ import { TextSegment } from "./segments/text-segment";
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A bot that answers posts
- * itself (reply mode `direct`) replies in the channel, its row naming the
- * post it answers.
+ * itself (reply mode `direct`) replies in the channel, as a plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
  * Slack offers it on every message: a member's post and a question or
@@ -175,7 +172,6 @@ function BotRow(props: {
 }): ReactElement {
   const { message, presentation, sentAt, body, hoverActions } = props;
   const announcement = message.announcement ?? null;
-  const repliesTo = message.repliesTo ?? null;
   const { replyInThread, threadLine } = botRowThread(message, presentation);
   return (
     <BotMessageFrame
@@ -189,9 +185,6 @@ function BotRow(props: {
       replyInThread={replyInThread}
       failed={null}
     >
-      {repliesTo === null ? null : (
-        <RepliedPostLine postId={repliesTo} presentation={presentation} />
-      )}
       {announcement === null ? (
         body
       ) : (
@@ -249,12 +242,12 @@ function botRowThread(
 /**
  * Slack's message frame: picture on the left, name and time on the first
  * line, and whatever the row carries under it. On a bot's row the picture
- * and the name open the bot's card, and "managed by" names its owner.
+ * and the name open the bot's card.
  */
 function BotMessageFrame(props: {
   readonly avatar: ReactNode;
   readonly name: string;
-  /** A bot's row: its card and its owner. */
+  /** A bot's row: its picture and name open its card. */
   readonly bot: boolean;
   readonly sentAt: number;
   /** Names the time stamp for the layout editor; a message id. */
@@ -308,7 +301,6 @@ function BotMessageFrame(props: {
           ) : (
             <span className={nameClassName}>{props.name}</span>
           )}
-          {carded ? <BotOwnerLine /> : null}
           <ChatMessageTimestamp
             timestamp={props.sentAt}
             separated={false}
@@ -640,43 +632,6 @@ function AnnouncementLink(props: { readonly link: string }): ReactNode {
 }
 
 /**
- * The post a bot's direct reply answers, above the reply: who wrote it and
- * its first line, a jump back to it. Nothing while the post is not in the
- * list the channel has read.
- */
-function RepliedPostLine(props: {
-  readonly postId: string;
-  readonly presentation: ChatBotPresentation;
-}): ReactNode {
-  const { postId, presentation } = props;
-  const post = presentation.repliedPost?.(postId) ?? null;
-  const scrollToMessage = presentation.scrollToMessage;
-  if (post === null) return null;
-  const label = (
-    <>
-      <span className="font-medium">{post.senderLabel}</span>
-      <span className="truncate">{post.excerpt}</span>
-    </>
-  );
-  const className =
-    "flex w-fit max-w-full min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground";
-  return scrollToMessage === null ? (
-    <div className={className} data-testid="bot-replied-post">
-      {label}
-    </div>
-  ) : (
-    <button
-      type="button"
-      className={cn(className, "rounded-sm hover:text-foreground")}
-      data-testid="bot-replied-post"
-      onClick={() => scrollToMessage(postId)}
-    >
-      {label}
-    </button>
-  );
-}
-
-/**
  * "See reply" under a member's message the bot has answered, a jump to the
  * reply when that reply is in this list (in a thread, or in the channel for
  * a direct post, whose reply is in the channel) and not the row right under
@@ -742,8 +697,8 @@ function threadStarted(
 
 /**
  * Slack's line under a post: who is in the thread, "N replies" and when the
- * last one landed, the way into the thread. An unread reply in a thread the
- * viewer took part in shows as a dot and bold count. While the bot is
+ * last one landed, the way into the thread. Unread replies in a thread the
+ * viewer took part in show as their count and a bold "N replies". While the bot is
  * answering in the thread, the line says so in place of when the last reply
  * landed.
  */
@@ -771,7 +726,11 @@ function ThreadLine(props: {
         label="In this thread"
         testId="bot-thread-participants"
       />
-      <ThreadLineCount replies={replies} unread={unread} />
+      <ThreadLineCount
+        replies={replies}
+        unread={unread}
+        unreadCount={line.unreadCount}
+      />
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -781,22 +740,35 @@ function ThreadLine(props: {
   );
 }
 
-/** "N replies", bold behind a dot while one is unread. */
+/**
+ * "N replies", bold behind the unread count while one is unread (a 2 badge
+ * before "5 replies" reads two unread of five), or behind a dot where the
+ * host does not count.
+ */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread } = props;
+  const { replies, unread, unreadCount } = props;
   return (
     <>
-      {unread ? (
-        <span
-          className="size-2 shrink-0 rounded-full bg-primary"
-          data-testid="bot-thread-unread"
-          aria-label="Unread replies"
-          role="img"
+      {unreadCount === null ? (
+        unread && (
+          <span
+            className="size-2 shrink-0 rounded-full bg-primary"
+            data-testid="bot-thread-unread"
+            aria-label="Unread replies"
+            role="img"
+          />
+        )
+      ) : (
+        <UnreadCountBadge
+          count={unreadCount}
+          size="xs"
+          testId="bot-thread-unread-count"
         />
-      ) : null}
+      )}
       {replies === 0 ? null : (
         <span
           className={cn("text-primary", unread ? "font-bold" : "font-semibold")}

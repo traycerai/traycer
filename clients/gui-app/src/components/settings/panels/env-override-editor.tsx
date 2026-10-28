@@ -49,6 +49,17 @@ export interface EnvOverrideValue {
   readonly value: string | null;
 }
 
+interface PendingEnvWrite {
+  readonly oldKey: string;
+  readonly key: string;
+  readonly action: "put" | "remove";
+  readonly original: EnvOverrideValue | null;
+}
+
+interface SavedEnvRow {
+  readonly key: string;
+}
+
 interface Draft {
   readonly key: string;
   readonly value: string;
@@ -268,6 +279,24 @@ function credentialError(
   return null;
 }
 
+/** Retain only the submitted row, keeping a pending add in its own draft. */
+function envRowsWithPending(
+  overrides: readonly EnvOverrideValue[],
+  pending: PendingEnvWrite | null,
+): EnvOverrideValue[] {
+  if (pending === null) return [...overrides];
+  const rows = overrides.filter(
+    (entry) =>
+      pending.action !== "put" ||
+      pending.oldKey !== "" ||
+      entry.key !== pending.key,
+  );
+  const original = pending.original;
+  if (original !== null && !rows.some((entry) => entry.key === original.key))
+    rows.push(original);
+  return rows;
+}
+
 export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
@@ -301,25 +330,80 @@ export function EnvOverrideEditor(props: {
   readonly keyRefusal: KeyRefusalFor;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
+  /** Resolves after the write and its post-write overrides read complete. */
   readonly onCommit: (
     oldKey: string,
     newKey: string,
     value: string | null,
-  ) => void;
-  readonly onDelete: (key: string) => void;
+  ) => void | Promise<void>;
+  /** Resolves after the removal and its post-write overrides read complete. */
+  readonly onDelete: (key: string) => void | Promise<void>;
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
-  const {
-    overrides,
-    disabled,
-    credentialRefusal,
-    namePlaceholder,
-    emptyLabel,
-    onCommit,
-    onDelete,
-  } = props;
-  const keys = overrides.map((entry) => entry.key);
+  const { credentialRefusal, namePlaceholder, emptyLabel } = props;
   const [adding, setAdding] = useState(false);
+  const [pending, setPending] = useState<PendingEnvWrite | null>(null);
+  const [savedRow, setSavedRow] = useState<SavedEnvRow | null>(null);
+  const submittingRef = useRef(false);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const disabled = props.disabled || pending !== null;
+  // Retain the submitted row until the caller finishes its post-write read.
+  const overrides = envRowsWithPending(props.overrides, pending);
+  const keys = overrides.map((entry) => entry.key);
+  async function submit(
+    write: PendingEnvWrite,
+    run: () => void | Promise<void>,
+  ): Promise<void> {
+    if (pending !== null || submittingRef.current) return;
+    submittingRef.current = true;
+    setPending(write);
+    setWriteError(null);
+    try {
+      await run();
+      submittingRef.current = false;
+      if (write.oldKey === "" && write.action === "put") setAdding(false);
+      setSavedRow({ key: write.oldKey });
+      setPending(null);
+    } catch (error) {
+      submittingRef.current = false;
+      setPending(null);
+      setWriteError(
+        error instanceof Error ? error.message : "Couldn't save this variable.",
+      );
+    }
+  }
+  const onCommit = (
+    oldKey: string,
+    key: string,
+    value: string | null,
+  ): void => {
+    void submit(
+      {
+        oldKey,
+        key,
+        action: "put",
+        original: props.overrides.find((entry) => entry.key === oldKey) ?? null,
+      },
+      () => props.onCommit(oldKey, key, value),
+    );
+  };
+  const onDelete = (key: string): void => {
+    void submit(
+      {
+        oldKey: key,
+        key,
+        action: "remove",
+        original: props.overrides.find((entry) => entry.key === key) ?? null,
+      },
+      () => props.onDelete(key),
+    );
+  };
+  let pendingLabel: string | null = null;
+  if (pending !== null) {
+    let action = pending.oldKey === "" ? "Adding" : "Saving";
+    if (pending.action === "remove") action = "Removing";
+    pendingLabel = `${pending.key} · ${action}`;
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60">
@@ -340,7 +424,7 @@ export function EnvOverrideEditor(props: {
         </div>
         <span className="sr-only">Actions</span>
       </div>
-      {overrides.length === 0 && !adding ? (
+      {overrides.length === 0 && !adding && pending === null ? (
         <div className="px-3 py-5 text-center text-ui-sm text-muted-foreground">
           {emptyLabel}
         </div>
@@ -388,6 +472,7 @@ export function EnvOverrideEditor(props: {
                 note={props.rowNotes.get(entry.key) ?? null}
                 details={props.renderDetails?.(entry.key) ?? null}
                 staleRefusal={props.staleRefusal}
+                savedRow={savedRow}
                 onCommit={onCommit}
                 onDelete={onDelete}
               />
@@ -398,13 +483,13 @@ export function EnvOverrideEditor(props: {
       {adding ? (
         <EnvOverrideAddRow
           existingKeys={keys}
+          claimedBy={props.claimedBy}
           disabled={disabled}
           credentialRefusal={credentialRefusal}
           keyRefusal={props.keyRefusal}
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
             onCommit("", key, value);
-            setAdding(false);
           }}
           onCancel={() => setAdding(false)}
         />
@@ -422,6 +507,16 @@ export function EnvOverrideEditor(props: {
           </Button>
         </div>
       )}
+      {pendingLabel === null ? null : (
+        <p role="status" className="px-3 py-2 text-ui-xs text-muted-foreground">
+          {pendingLabel}
+        </p>
+      )}
+      {writeError === null ? null : (
+        <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
+          {writeError}
+        </p>
+      )}
     </div>
   );
 }
@@ -435,6 +530,7 @@ function EnvOverrideRow(props: {
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
+  readonly savedRow: SavedEnvRow | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -445,14 +541,23 @@ function EnvOverrideRow(props: {
   const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
     props;
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry));
-  // After this row's save was refused as stale, the draft follows the
-  // setting as it is re-read, so the refused value is never shown again nor
-  // sent on blur or when the row goes away; the person's next edit ends it.
+  // After a completed save or stale refusal, follow the authoritative value
+  // until the next edit, so a normalized or superseded draft is not resubmitted.
+  const [seenSavedRow, setSeenSavedRow] = useState(props.savedRow);
+  const saved =
+    props.savedRow !== seenSavedRow && props.savedRow?.key === entry.key;
+  if (props.savedRow !== seenSavedRow) setSeenSavedRow(props.savedRow);
   const [following, setFollowing] = useState(false);
   const [seenRefusal, setSeenRefusal] = useState(
     props.staleRefusal === null ? 0 : props.staleRefusal.seq,
   );
-  if (props.staleRefusal !== null && props.staleRefusal.seq !== seenRefusal) {
+  if (saved) {
+    setFollowing(true);
+    setDraft(draftOf(entry));
+  } else if (
+    props.staleRefusal !== null &&
+    props.staleRefusal.seq !== seenRefusal
+  ) {
     setSeenRefusal(props.staleRefusal.seq);
     if (props.staleRefusal.key === entry.key) {
       setFollowing(true);
@@ -723,6 +828,18 @@ function EnvClaimedRow(props: {
       className="px-3 py-2.5 text-ui-sm text-muted-foreground"
       data-testid="env-claimed-row"
     >
+      <EnvSecretClaim name={props.name} secretName={props.secretName} />
+    </li>
+  );
+}
+
+/** The secret that owns this variable, shared by saved rows and Add drafts. */
+function EnvSecretClaim(props: {
+  readonly name: string;
+  readonly secretName: string;
+}): ReactNode {
+  return (
+    <>
       <span className="font-mono text-foreground">{props.name}</span>
       {" · from the secret "}
       <span className="font-mono">{props.secretName}</span>
@@ -735,12 +852,13 @@ function EnvClaimedRow(props: {
       >
         Secrets
       </Button>
-    </li>
+    </>
   );
 }
 
 function EnvOverrideAddRow(props: {
   readonly existingKeys: readonly string[];
+  readonly claimedBy: ReadonlyMap<string, string>;
   readonly disabled: boolean;
   readonly credentialRefusal: string | null;
   readonly keyRefusal: KeyRefusalFor;
@@ -763,12 +881,23 @@ function EnvOverrideAddRow(props: {
     error: null,
     keyShaped: false,
   }));
-  const edit = (update: (current: Draft) => Draft): void =>
+  const [showClaim, setShowClaim] = useState(false);
+  const secretName = showClaim
+    ? (props.claimedBy.get(draft.key.trim()) ?? null)
+    : null;
+  const edit = (update: (current: Draft) => Draft): void => {
     setDraft((current) => ({ ...update(current), keyShaped: false }));
+    setShowClaim(false);
+  };
 
   const add = (): void => {
-    if (draft.keyShaped) return;
     const nextKey = draft.key.trim();
+    if (props.claimedBy.has(nextKey)) {
+      setShowClaim(true);
+      setDraft((current) => ({ ...current, error: null, keyShaped: false }));
+      return;
+    }
+    if (draft.keyShaped) return;
     const nextValue = draft.mode === "unset" ? null : draft.value;
     const error =
       draftError(nextKey, existingKeys) ??
@@ -806,22 +935,38 @@ function EnvOverrideAddRow(props: {
           font="mono"
           size="xs"
         />
-        <EnvValueField
-          value={draft.value}
-          mode={draft.mode}
-          disabled={disabled}
-          ariaLabel="New variable value"
-          className={VALUE_FIELD_PLACEMENT}
-          onModeChange={(mode) => edit((current) => ({ ...current, mode }))}
-          onValueChange={(value) => edit((current) => ({ ...current, value }))}
-          onBlur={() => undefined}
-        />
+        {secretName === null ? (
+          <EnvValueField
+            value={draft.value}
+            mode={draft.mode}
+            disabled={disabled}
+            ariaLabel="New variable value"
+            className={VALUE_FIELD_PLACEMENT}
+            onModeChange={(mode) => edit((current) => ({ ...current, mode }))}
+            onValueChange={(value) =>
+              edit((current) => ({ ...current, value }))
+            }
+            onBlur={() => undefined}
+          />
+        ) : (
+          <div
+            className={cn(
+              VALUE_FIELD_PLACEMENT,
+              "text-ui-sm text-muted-foreground",
+            )}
+            data-testid="env-draft-claimed-row"
+          >
+            <EnvSecretClaim name={draft.key.trim()} secretName={secretName} />
+          </div>
+        )}
         <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
           <Button
             type="button"
             size="icon-sm"
             variant="ghost"
-            disabled={disabled || draft.key.trim().length === 0}
+            disabled={
+              disabled || draft.key.trim().length === 0 || secretName !== null
+            }
             aria-label="Apply variable"
             onClick={add}
           >
@@ -839,16 +984,18 @@ function EnvOverrideAddRow(props: {
           </Button>
         </div>
       </div>
-      <EnvRowFooter
-        draft={draft}
-        disabled={disabled}
-        onTrim={() =>
-          edit((current) => ({ ...current, value: current.value.trim() }))
-        }
-        keyRefusal={props.keyRefusal}
-        // The value went on; nothing is stored here.
-        onRefusalFollowed={onCancel}
-      />
+      {secretName === null ? (
+        <EnvRowFooter
+          draft={draft}
+          disabled={disabled}
+          onTrim={() =>
+            edit((current) => ({ ...current, value: current.value.trim() }))
+          }
+          keyRefusal={props.keyRefusal}
+          // The value went on; nothing is stored here.
+          onRefusalFollowed={onCancel}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { KeyboardEvent, ReactNode } from "react";
+import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import type { TracyStripEntry } from "../tab-strip-controller";
 import {
   TRACY_ENTRY_LABEL,
@@ -16,10 +17,11 @@ import { StripElapsedTime } from "./strip-elapsed-time";
 
 /**
  * The fixed Tracy entry in the vertical strip, after Home in the nav block:
- * the same glyph, label and signals as the top strip's slot, the label bold
- * while unread, the
- * rail tile's unread badge, and the working time as the row's trailing
- * status. Like Home, no drag, no close and no Alt-digit.
+ * the same glyph, label and signals as the top strip's slot, the glyph
+ * wearing the bot's unread count and the label bold while unread (the rail
+ * tile's unread badge where the host does not count), and the working time
+ * as the row's trailing status. Like Home, no drag, no close and no
+ * Alt-digit.
  */
 export function SideTracyRow(props: {
   readonly variant: SideTabRowVariant;
@@ -32,7 +34,7 @@ export function SideTracyRow(props: {
     role: "tab",
     tabIndex: 0,
     "aria-selected": isActive,
-    "aria-label": TRACY_ENTRY_LABEL,
+    "aria-label": labelWithUnreadCount(TRACY_ENTRY_LABEL, signals.unreadCount),
     "data-testid": "tab-tracy",
     "data-tab-kind": "tracy",
     // Present only while unread, as the header strip's entry marks it.
@@ -55,12 +57,20 @@ export function SideTracyRow(props: {
       tint={null}
       inBlock={false}
       // Its label stands where Home's does, after a 16px icon and space.
-      titleIcon={<TracyEntryIcon className="me-4" />}
+      titleIcon={
+        <TracyEntryIcon className="me-4" unreadCount={signals.unreadCount} />
+      }
       tile={{
         kind: "icon",
-        icon: <TracyEntryIcon className={undefined} />,
+        icon: (
+          <TracyEntryIcon
+            className={undefined}
+            unreadCount={signals.unreadCount}
+          />
+        ),
       }}
-      badge={signals.unread ? "unread" : null}
+      // The count stands for the badge wherever the host counts.
+      badge={signals.unread && signals.unreadCount === null ? "unread" : null}
       agents={NO_LIVE_AGENTS}
       status={
         signals.workingSince === null

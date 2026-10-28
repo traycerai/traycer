@@ -13,7 +13,11 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
-import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
+import {
+  advanceActiveTileFind,
+  openActiveTileFind,
+  openActiveTileFindWithReplace,
+} from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { openActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
@@ -150,19 +154,21 @@ export function findActionMatchForChord(
   chord: ChordString,
 ): ActionChordMatch | null {
   const bindings = useKeybindingStore.getState().bindings;
+  let defaultMatch: ActionChordMatch | null = null;
   for (const id of ACTION_IDS) {
     const meta = ACTION_META[id];
     if (meta.kind !== "chord") continue;
     const binding = bindings[id];
     if (binding === null) continue;
     if (binding === chord) {
-      const terminalPolicy =
-        binding === resolveActionDefaultChord(meta)
-          ? meta.terminalPolicy
-          : "app";
-      return { actionId: id, terminalPolicy };
+      // A newly added default must not displace an existing custom binding.
+      if (binding !== resolveActionDefaultChord(meta)) {
+        return { actionId: id, terminalPolicy: "app" };
+      }
+      defaultMatch ??= { actionId: id, terminalPolicy: meta.terminalPolicy };
     }
   }
+  if (defaultMatch !== null) return defaultMatch;
 
   for (const id of ACTION_IDS) {
     const meta = ACTION_META[id];
@@ -412,6 +418,8 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.left": (r) => focusGroupInDirection(r, "left"),
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
+  "tile.find.open": () => openActiveTileFind(),
+  "tile.find.next": () => advanceActiveTileFind(1),
   "tile.find.replace": () => openActiveTileFindWithReplace(),
   "nav.back": (r) => {
     if (!r.isHistoryNavAvailable() || !r.canGoBack()) return false;
@@ -478,6 +486,11 @@ export function dispatchAction(
 // have no handler while their bridge is unmounted yet must still be reserved.
 const EXTERNALLY_HANDLED_ACTIONS: ReadonlySet<ActionId> = new Set([
   "composer.dictation.toggle",
+  // Matched by the chat composer's own editor keydown hook, and only while a
+  // suggestion is showing over an empty draft. Its default is a bare →, and a
+  // person may rebind it to Tab: reserved here, either would be swallowed in
+  // every field of the app.
+  "composer.suggestion.accept",
 ]);
 
 export function isExternallyHandled(id: ActionId): boolean {

@@ -964,6 +964,15 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
             properties: {
               kind: { type: "string", const: "destroyed_by_member" },
               actorName: { anyOf: [{ type: "string" }, { type: "null" }] },
+              destroyedAt: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              stoppedAgentTaskTitles: {
+                type: "array",
+                items: { type: "string" },
+              },
             },
             required: ["kind", "actorName"],
             additionalProperties: false,
@@ -976,6 +985,11 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
               outcome: { type: "string", enum: ["confirmed", "failed"] },
               byYou: { type: "boolean" },
               actorName: { anyOf: [{ type: "string" }, { type: "null" }] },
+              confirmedAt: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
             },
             required: ["kind", "verb", "outcome", "byYou", "actorName"],
             additionalProperties: false,
@@ -985,5 +999,19 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       },
     },
     required: ["kind", "sandboxId", "sandboxName", "notice"],
+  },
+  notification_hooks_removed: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "notification_hooks_removed" },
+      hostId: { type: "string", minLength: 1 },
+      hostName: { type: "string" },
+      count: {
+        type: "integer",
+        exclusiveMinimum: 0,
+        maximum: 9007199254740991,
+      },
+    },
+    required: ["kind", "hostId", "hostName", "count"],
   },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;

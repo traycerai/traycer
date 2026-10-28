@@ -7,9 +7,17 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -66,7 +74,20 @@ function renderThemes(): void {
   );
 }
 
+// ThemeGallery lazy-loads the dialog; evaluating its module graph cold can
+// outlast findBy's default wait under load, so await the real import first.
+async function openImportDialog(user: UserEvent): Promise<HTMLElement> {
+  await import("@/components/settings/themes/theme-import-dialog");
+  await user.click(screen.getByRole("button", { name: "Import theme" }));
+  return screen.findByRole("dialog", { name: "Import themes" });
+}
+
 describe("theme import flow", () => {
+  // The gallery lazy-loads the import dialog. Load its module once up front
+  // so the first test's dialog query measures the flow, not a cold transform.
+  beforeAll(async () => {
+    await import("@/components/settings/themes/theme-import-dialog");
+  });
   beforeEach(() => {
     resetThemeStores();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -85,10 +106,7 @@ describe("theme import flow", () => {
     const user = userEvent.setup();
     renderThemes();
 
-    await user.click(screen.getByRole("button", { name: "Import theme" }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Import themes",
-    });
+    const dialog = await openImportDialog(user);
     expect(
       within(dialog).getByRole("tab", { name: "Browse themes" }),
     ).toBeTruthy();
@@ -161,10 +179,7 @@ describe("theme import flow", () => {
   it("updates a repeated local pack or saves it as a copy", async () => {
     const user = userEvent.setup();
     renderThemes();
-    await user.click(screen.getByRole("button", { name: "Import theme" }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Import themes",
-    });
+    const dialog = await openImportDialog(user);
     await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
     const input = within(dialog).getByLabelText("Choose theme files");
     const file = localThemePack();
@@ -218,10 +233,7 @@ describe("theme import flow", () => {
     const user = userEvent.setup();
     renderThemes();
 
-    await user.click(screen.getByRole("button", { name: "Import theme" }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Import themes",
-    });
+    const dialog = await openImportDialog(user);
     await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
     await user.click(within(dialog).getByText("Paste theme JSON"));
     fireEvent.change(within(dialog).getByLabelText("Theme JSON"), {

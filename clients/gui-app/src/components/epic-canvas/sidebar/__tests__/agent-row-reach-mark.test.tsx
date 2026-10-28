@@ -177,7 +177,7 @@ function hostRow(
   reach: AgentReach,
   principal: TaskHostPrincipal,
 ): TaskHostRow {
-  return { hostId, label: null, principal, reach };
+  return { hostId, label: null, principal, reach, sandboxEnd: null };
 }
 
 function hostsView(hosts: readonly TaskHostRow[]): TaskHostsView {

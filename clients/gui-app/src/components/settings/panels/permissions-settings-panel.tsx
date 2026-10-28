@@ -147,7 +147,7 @@ function PermissionsBrowserAgentAccess(): ReactNode {
 }
 
 const PERSONAL_PERMISSIONS_DESCRIPTION =
-  "What your agents may do without asking, on every computer and sandbox.";
+  "What your agents may do without asking, on every computer and sandbox running Personal.";
 
 /** A machine's Permissions: the five tabs, three of them host-gated. */
 function HostPermissionsSettingsPanel(): ReactNode {
