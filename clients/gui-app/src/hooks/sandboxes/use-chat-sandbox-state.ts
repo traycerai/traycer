@@ -1,6 +1,9 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { useTaskSandboxEnd } from "@/hooks/epic/use-task-sandbox-end";
+import {
+  useTaskSandboxHost,
+  type TaskSandboxHost,
+} from "@/hooks/epic/use-task-sandbox-end";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import {
@@ -17,15 +20,16 @@ export function useChatSandboxState(
   hostId: string | null,
   reachable: boolean,
 ): ChatSandboxState {
-  const ended = useTaskSandboxEnd(epicId, hostId);
+  const task = useTaskSandboxHost(epicId, hostId);
   const list = useSandboxList();
   const configurations = useSandboxConfigurations();
   const entry = useHostDirectoryEntry(hostId);
   const viewerId = useAuthStore((state) => state.profile?.userId ?? null);
   const now = useSampledNow();
-  if (ended !== null) return { kind: "destroyed", ended };
+  if (task.kind === "ended") return { kind: "destroyed", ended: task.ended };
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
-  if (sandbox === undefined) return { kind: "none" };
+  if (sandbox === undefined)
+    return unlistedHostState(task, entry, list.isLoading);
   if (
     sandbox.state === "suspended" ||
     sandbox.state === "stopped" ||
@@ -35,7 +39,8 @@ export function useChatSandboxState(
       sandbox,
       configurations.configurations,
     );
-    if (configuration === null) return { kind: "none" };
+    if (configuration === null)
+      return { kind: "pending", name: sandbox.displayName };
     return {
       kind: "resting",
       sandbox,
@@ -46,13 +51,38 @@ export function useChatSandboxState(
         sandbox.wakePayer.userId !== viewerId,
     };
   }
-  if (sandbox.state === "awake" && !reachable) {
-    return {
-      kind: "unreachable",
-      sandbox,
-      lastContactMinutes: minutesSinceContact(entry, now),
-    };
+  if (sandbox.state === "awake") {
+    return reachable
+      ? { kind: "none" }
+      : {
+          kind: "unreachable",
+          sandbox,
+          lastContactMinutes: minutesSinceContact(entry, now),
+        };
   }
+  // Creating, resuming, starting, suspending, stopping, destroying: its next
+  // state is not known yet.
+  return { kind: "pending", name: sandbox.displayName };
+}
+
+/**
+ * A host the viewer's sandbox list does not hold: a sandbox when the
+ * directory or the task names one, not a sandbox when either knows the host
+ * as anything else, and unknown while a read that could say is still out.
+ */
+function unlistedHostState(
+  task: TaskSandboxHost,
+  entry: HostDirectoryEntry | null,
+  listLoading: boolean,
+): ChatSandboxState {
+  if (task.kind === "sandbox") return { kind: "pending", name: task.name };
+  if (entry !== null) {
+    return isRemoteHostDirectoryEntry(entry) && entry.sandbox !== null
+      ? { kind: "pending", name: entry.label }
+      : { kind: "none" };
+  }
+  if (task.kind === "loading" || listLoading)
+    return { kind: "pending", name: null };
   return { kind: "none" };
 }
 

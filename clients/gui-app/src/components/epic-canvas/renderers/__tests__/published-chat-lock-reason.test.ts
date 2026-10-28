@@ -648,48 +648,27 @@ describe("sandbox end footer", () => {
     publishedAt: null,
     refresh: { kind: "idle" },
   } as const;
-  const AT = Date.UTC(2026, 9, 27, 6, 21);
+  // Local parts: the line states local time.
+  const AT = new Date(2026, 9, 28, 1, 27).getTime();
   const END = {
     state: "destroyed",
     destroyedAt: AT,
-    cause: "resting",
-    actor: null,
+    cause: "verb",
+    actor: "you",
+    idleMinutes: null,
   } as const;
-  const FILES = "Its files are gone; this chat stays readable.";
+  const LINE =
+    "e2e-sbx-stop3 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.";
 
-  it.each([
-    ["resting", null, "after its resting period"],
-    ["burst-idle", null, "after its idle period"],
-    ["idle", null, "after its idle period"],
-    ["verb", "you", "by you"],
-    ["verb", "Ada", "by Ada"],
-    ["verb", "Release agent", "by Release agent"],
-  ] as const)(
-    "names the %s destroy (actor %s) before reach and ownership, on both copies",
-    (cause, actor, phrase) => {
-      const sandboxEnd = { ...END, cause, actor };
-      for (const reason of [
-        publishedChatLockReason({ ...PUBLISHED, sandboxEnd }),
-        replicaChatLockReason({ ...BASE, sandboxEnd }),
-      ]) {
-        expect(reason).toContain(
-          `e2e-sbx-stop3 was destroyed ${phrase.startsWith("by") ? `${phrase} on` : "on"}`,
-        );
-        expect(reason).toContain("Oct 27 at 06:21 UTC");
-        expect(reason).toContain(phrase);
-        expect(reason).toContain(FILES);
-        expect(reason).not.toContain("isn't available");
-        expect(reason).not.toContain("offline");
-      }
-    },
-  );
-
-  it("reads exactly as the resting sample, in UTC, for any machine timezone", () => {
+  it("is the end line alone on both copies, ahead of reach and ownership, with no Published clause", () => {
     expect(
-      publishedChatLockReason({ ...PUBLISHED, sandboxEnd: END }),
-    ).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period. Its files are gone; this chat stays readable.",
-    );
+      publishedChatLockReason({
+        ...PUBLISHED,
+        publishedAt: Date.UTC(2026, 9, 27, 18, 6),
+        sandboxEnd: END,
+      }),
+    ).toBe(LINE);
+    expect(replicaChatLockReason({ ...BASE, sandboxEnd: END })).toBe(LINE);
   });
 
   it("is unchanged when the end is null or absent", () => {

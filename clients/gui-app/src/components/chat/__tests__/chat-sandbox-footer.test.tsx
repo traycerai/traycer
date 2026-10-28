@@ -41,8 +41,6 @@ import {
 import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const ENDED_AT = Date.UTC(2026, 9, 27, 6, 21);
-
 function render(ui: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
@@ -237,50 +235,13 @@ describe("<ChatSandboxFooter /> an awake sandbox that cannot be reached", () => 
   });
 });
 
-describe("<ChatSandboxFooter /> a destroyed sandbox", () => {
-  const destroyed: ChatSandboxState = {
-    kind: "destroyed",
-    ended: {
-      name: "e2e-sbx-stop3",
-      end: {
-        state: "destroyed",
-        destroyedAt: ENDED_AT,
-        cause: "resting",
-        actor: null,
-      },
+describe("<ChatSandboxFooter /> no state line", () => {
+  it.each([{ kind: "none" }, { kind: "pending", name: "e2e-sbx-p1" }] as const)(
+    "renders nothing for $kind",
+    (state) => {
+      const { container } = render(<ChatSandboxFooter state={state} />);
+
+      expect(container.textContent).toBe("");
     },
-  };
-
-  it("says what ended it and offers only Details, never Stop or a wake", () => {
-    render(<ChatSandboxFooter state={destroyed} />);
-
-    expect(document.body.textContent).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period.",
-    );
-    expect(
-      screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Details"]);
-    expect(h.mutate).not.toHaveBeenCalled();
-  });
-
-  it("opens the task-visible details through a real click", async () => {
-    render(<ChatSandboxFooter state={destroyed} />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Details" }));
-
-    const details = await screen.findByTestId("task-sandbox-end-details");
-    expect(details.textContent).toContain("e2e-sbx-stop3");
-    expect(details.textContent).toContain("Oct 27");
-    expect(h.openDetails).not.toHaveBeenCalled();
-  });
-});
-
-describe("<ChatSandboxFooter /> no sandbox state", () => {
-  it("renders nothing", () => {
-    const { container } = render(
-      <ChatSandboxFooter state={{ kind: "none" }} />,
-    );
-
-    expect(container.textContent).toBe("");
-  });
+  );
 });

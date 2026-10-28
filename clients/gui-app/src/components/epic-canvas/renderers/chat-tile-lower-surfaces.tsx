@@ -1,7 +1,15 @@
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { Lock } from "lucide-react";
+import { ReadOnlyNoticeActionsContext } from "./read-only-notice-actions";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -1065,8 +1073,9 @@ function SubagentViewNotice(props: { readonly view: SubagentDockView }) {
 }
 
 function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
+  const actions = useContext(ReadOnlyNoticeActionsContext);
   return (
-    <div className="flex items-start gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
+    <div className="flex flex-wrap items-start gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
       {/* The same lock the sidebar row and tab strip mark read-only chats
           with, aligned to the first line of a notice that can wrap. */}
       <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -1074,6 +1083,7 @@ function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
         {props.notice ??
           "Read-only viewer. The agent owner can send prompts and manage this queue."}
       </span>
+      {actions}
     </div>
   );
 }

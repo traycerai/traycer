@@ -132,7 +132,7 @@ describe("useTaskHostsView", () => {
     expect(result.current).toEqual({ kind: "none" });
   });
 
-  it("is none while the query is pending", () => {
+  it("is loading while the query has not answered", () => {
     mocks.taskHosts = {
       isPending: true,
       isError: false,
@@ -142,7 +142,7 @@ describe("useTaskHostsView", () => {
     };
     const { result } = renderHook(() => useTaskHostsView(EPIC_ID));
 
-    expect(result.current).toEqual({ kind: "none" });
+    expect(result.current).toEqual({ kind: "loading" });
   });
 });
 

@@ -45,7 +45,12 @@ import {
   type PublishedChatConversion,
   type PublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
-import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
+import {
+  ChatDeadTileBannerContainer,
+  ChatTileSessionView,
+  SandboxEndActions,
+} from "./chat-tile";
+import { ReadOnlyNoticeActionsContext } from "./read-only-notice-actions";
 import { chatTileHostLabel } from "./chat-pre-content";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
@@ -224,8 +229,7 @@ interface PublishedChatOwner {
   readonly reachability: HostReachability;
   readonly sandboxState: ChatSandboxState;
   readonly restingSandbox:
-    | Extract<ChatSandboxState, { readonly kind: "resting" }>
-    | undefined;
+    Extract<ChatSandboxState, { readonly kind: "resting" }> | undefined;
   readonly lockFacts: PublishedCopyOwnerFacts;
 }
 
@@ -276,14 +280,23 @@ function usePublishedChatOwner(
   };
 }
 
+/** A sandbox by its own name, never the raw host id a directory falls back to. */
 function copyOwnerLabel(
   state: ChatSandboxState,
   hostId: string,
   label: string,
 ): string {
-  if (state.kind === "destroyed") return state.ended.name;
-  if (state.kind !== "none") return state.sandbox.displayName;
-  return publishedCopyOwnerLabel(hostId, label);
+  switch (state.kind) {
+    case "none":
+      return publishedCopyOwnerLabel(hostId, label);
+    case "pending":
+      return state.name ?? "This chat's sandbox";
+    case "destroyed":
+      return state.ended.name;
+    case "resting":
+    case "unreachable":
+      return state.sandbox.displayName;
+  }
 }
 
 function copyReadOnlyNotice(
@@ -293,15 +306,47 @@ function copyReadOnlyNotice(
   if (owner.restingSandbox !== undefined) return null;
   if (owner.sandboxState.kind === "unreachable")
     return "This chat stays readable while its sandbox reconnects.";
+  // The viewer's own sandbox, its state not known yet: never the offline
+  // sentence. A team's or a collaborator's keeps its own sentence, which
+  // claims nothing about the host.
+  if (
+    owner.sandboxState.kind === "pending" &&
+    owner.lockFacts.ownedByViewer &&
+    !owner.lockFacts.environmentOwned
+  )
+    return `${owner.lockFacts.ownerLabel} isn't available — this chat stays readable.`;
   return copyNotice;
 }
 
-function PublishedSandboxFooter(props: {
+/**
+ * A destroyed sandbox's actions, handed to the one footer line that states
+ * its end. Nothing for any other chat.
+ */
+function PublishedSandboxEndActions(props: {
+  readonly node: PublishedChatTileRef;
+  readonly epicId: string;
+  readonly tabId: string;
   readonly owner: PublishedChatOwner;
+  readonly children: ReactNode;
 }): ReactNode {
   const state = props.owner.sandboxState;
-  if (state.kind === "none" || state.kind === "destroyed") return null;
-  return <ChatSandboxFooter state={state} />;
+  if (state.kind !== "destroyed") return props.children;
+  return (
+    <ReadOnlyNoticeActionsContext
+      value={
+        <SandboxEndActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          chatId={props.node.chatId}
+          sourceHostId={props.node.ownerHostId}
+          sourceOwnerUserId={props.node.ownerUserId}
+          ended={state.ended}
+        />
+      }
+    >
+      {props.children}
+    </ReadOnlyNoticeActionsContext>
+  );
 }
 
 export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
@@ -503,29 +548,36 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           chatId={node.chatId}
           tabId={props.viewTabId}
         />
-        <ChatTileSessionView
-          isLiveSession={false}
-          preContent={null}
-          handle={replicaHandle}
-          node={{
-            id: node.chatId,
-            instanceId: node.instanceId,
-            name: node.name,
-          }}
-          viewTabId={props.viewTabId}
-          tileId={props.tileId}
-          isActive={props.isActive}
-          currentEpicId={props.epicId}
-          restingSandbox={owner.restingSandbox}
-          readOnlyNotice={copyReadOnlyNotice(
-            owner,
-            replicaChatLockReason({
-              ...owner.lockFacts,
-              unreadableCount: replicaConversion.unreadableCount,
-            }),
-          )}
-        />
-        <PublishedSandboxFooter owner={owner} />
+        <PublishedSandboxEndActions
+          node={node}
+          epicId={props.epicId}
+          tabId={props.viewTabId}
+          owner={owner}
+        >
+          <ChatTileSessionView
+            isLiveSession={false}
+            preContent={null}
+            handle={replicaHandle}
+            node={{
+              id: node.chatId,
+              instanceId: node.instanceId,
+              name: node.name,
+            }}
+            viewTabId={props.viewTabId}
+            tileId={props.tileId}
+            isActive={props.isActive}
+            currentEpicId={props.epicId}
+            restingSandbox={owner.restingSandbox}
+            readOnlyNotice={copyReadOnlyNotice(
+              owner,
+              replicaChatLockReason({
+                ...owner.lockFacts,
+                unreadableCount: replicaConversion.unreadableCount,
+              }),
+            )}
+          />
+        </PublishedSandboxEndActions>
+        <ChatSandboxFooter state={owner.sandboxState} />
       </div>
     );
   }
@@ -565,34 +617,41 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         tabId={props.viewTabId}
       />
       <PublishedChatSourceProvider source={publishedSource}>
-        <ChatTileSessionView
-          isLiveSession={false}
-          preContent={null}
-          handle={applied.handle}
-          node={{
-            id: node.chatId,
-            instanceId: node.instanceId,
-            name: node.name,
-          }}
-          viewTabId={props.viewTabId}
-          tileId={props.tileId}
-          isActive={props.isActive}
-          currentEpicId={props.epicId}
-          restingSandbox={owner.restingSandbox}
-          readOnlyNotice={copyReadOnlyNotice(
-            owner,
-            publishedChatLockReason({
-              ...owner.lockFacts,
-              unreadableCount: applied.unreadableCount,
-              fidelityNotice: applied.fidelityNotice,
-              // A refresh has not changed the copy currently on screen.
-              publishedAt: applied.publishedAt,
-              refresh: publishedCopyRefresh(state),
-            }),
-          )}
-        />
+        <PublishedSandboxEndActions
+          node={node}
+          epicId={props.epicId}
+          tabId={props.viewTabId}
+          owner={owner}
+        >
+          <ChatTileSessionView
+            isLiveSession={false}
+            preContent={null}
+            handle={applied.handle}
+            node={{
+              id: node.chatId,
+              instanceId: node.instanceId,
+              name: node.name,
+            }}
+            viewTabId={props.viewTabId}
+            tileId={props.tileId}
+            isActive={props.isActive}
+            currentEpicId={props.epicId}
+            restingSandbox={owner.restingSandbox}
+            readOnlyNotice={copyReadOnlyNotice(
+              owner,
+              publishedChatLockReason({
+                ...owner.lockFacts,
+                unreadableCount: applied.unreadableCount,
+                fidelityNotice: applied.fidelityNotice,
+                // A refresh has not changed the copy currently on screen.
+                publishedAt: applied.publishedAt,
+                refresh: publishedCopyRefresh(state),
+              }),
+            )}
+          />
+        </PublishedSandboxEndActions>
       </PublishedChatSourceProvider>
-      <PublishedSandboxFooter owner={owner} />
+      <ChatSandboxFooter state={owner.sandboxState} />
     </div>
   );
 }
@@ -757,21 +816,18 @@ function PublishedChatDeadTileBanner(props: {
   readonly showsPublishedCopy: boolean;
 }): ReactNode {
   const { sandboxState, reachability } = props.owner;
-  if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
-    return null;
-  const destroyed = sandboxState.kind === "destroyed";
-  if (!destroyed && reachability.status !== "unreachable") return null;
-  const hostLabel = destroyed
-    ? sandboxState.ended.name
-    : chatTileHostLabel(reachability, props.node.ownerHostId);
+  // A sandbox chat's state footer is its only line, whatever the state, and
+  // one whose state is not known yet borrows nothing from the offline copy.
+  if (sandboxState.kind !== "none") return null;
+  if (reachability.status !== "unreachable") return null;
   return (
     <ChatDeadTileBannerContainer
       epicId={props.epicId}
       tabId={props.tabId}
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
-      hostLabel={hostLabel}
-      reason={destroyed ? "sandbox-destroyed" : "host-offline"}
+      hostLabel={chatTileHostLabel(reachability, props.node.ownerHostId)}
+      reason="host-offline"
       showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}
       sourceOwnerUserId={props.node.ownerUserId}

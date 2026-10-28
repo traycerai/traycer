@@ -2,8 +2,16 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 
+/**
+ * A chat's host as a sandbox. `none` is a host that is not a sandbox, or an
+ * awake one this device reaches; `pending` is a sandbox whose state is moving
+ * or not known here yet, named when anything names it. A sandbox chat never
+ * reads as `none` while its state is unknown, so it never borrows the
+ * offline-host copy.
+ */
 export type ChatSandboxState =
   | { readonly kind: "none" }
+  | { readonly kind: "pending"; readonly name: string | null }
   | { readonly kind: "destroyed"; readonly ended: TaskSandboxEndedHost }
   | {
       readonly kind: "resting";

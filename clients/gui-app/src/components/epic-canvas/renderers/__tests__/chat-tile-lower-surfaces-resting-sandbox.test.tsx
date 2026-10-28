@@ -69,6 +69,7 @@ import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state"
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { ReadOnlyNoticeActionsContext } from "@/components/epic-canvas/renderers/read-only-notice-actions";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -328,5 +329,32 @@ describe("the composer of a chat on a resting sandbox", () => {
       hasWorkspaceControls: false,
     });
     expect(lastComposer()?.hint).not.toBeNull();
+  });
+});
+
+describe("the read-only notice of a destroyed sandbox's chat", () => {
+  it("carries the actions it is handed in its own line", () => {
+    const line =
+      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.";
+    render(
+      <ReadOnlyNoticeActionsContext
+        value={<button type="button">Continue on another host</button>}
+      >
+        <ChatLowerInteractionSurfaces
+          {...props(
+            {
+              isViewer: true,
+              isCopy: true,
+              canAct: false,
+              readOnlyNotice: line,
+            },
+            null,
+          )}
+        />
+      </ReadOnlyNoticeActionsContext>,
+    );
+
+    const notice = screen.getByText(line).parentElement;
+    expect(notice?.textContent).toBe(`${line}Continue on another host`);
   });
 });

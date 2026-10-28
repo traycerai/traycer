@@ -7,6 +7,8 @@ import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
+import { Button } from "@/components/ui/button";
+import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
@@ -237,7 +239,10 @@ import {
   useEpicCreateChatForHost,
   useEpicUpdateChatRunSettings,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
+import {
+  useChatCloneOnHostSwitch,
+  type ChatCloneOnHostSwitch,
+} from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
 import {
@@ -698,10 +703,11 @@ function ChatTileForChat(props: ChatTileProps) {
       lease,
       hasReadySession,
     );
+    // A sandbox's state footer is its line; only a destroyed one, which has
+    // no footer under a live session, says its end here.
     if (
       strip === "offline" &&
-      sandboxState.kind !== "resting" &&
-      sandboxState.kind !== "unreachable"
+      (sandboxState.kind === "none" || sandboxState.kind === "destroyed")
     ) {
       return (
         <ChatDeadTileBannerWithOffer
@@ -784,10 +790,7 @@ function ChatTileForChat(props: ChatTileProps) {
           preContent={preContentFrame}
         />
       </TombstonedProfileProvider>
-      {sandboxState.kind === "resting" ||
-      sandboxState.kind === "unreachable" ? (
-        <ChatSandboxFooter state={sandboxState} />
-      ) : null}
+      <ChatSandboxFooter state={sandboxState} />
     </div>
   );
 }
@@ -854,14 +857,7 @@ export function ChatDeadTileBannerContainer(
   return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
 }
 
-/**
- * The banner and its Clone offer, for a mounting surface that already holds
- * the role gate - the live tile, whose body under the strip reads the same
- * value.
- */
-function useDeadTileSourceOwner(
-  props: ChatDeadTileBannerContainerProps,
-): string | null {
+function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
   // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
   // list the sidebar tree already fetched for this epic, and that fetch rides
   // the session's client - so this must too, or it is a cache miss per host
@@ -889,11 +885,14 @@ function useDeadTileSourceOwner(
   return providedOwnerUserId ?? lookedUpOwnerUserId;
 }
 
-function ChatDeadTileBannerWithOffer(
-  props: ChatDeadTileBannerContainerProps & {
-    readonly cloneAllowed: boolean;
-  },
-): ReactNode {
+/** The chat a dead tile's offer clones or continues, and where it was. */
+type DeadTileOfferSource = Pick<
+  ChatDeadTileBannerContainerProps,
+  "epicId" | "tabId" | "chatId" | "sourceHostId" | "sourceOwnerUserId"
+>;
+
+/** The clone offer a dead tile's banner and a destroyed sandbox's line share. */
+function useDeadTileCloneOffer(props: DeadTileOfferSource) {
   const chatRecord = useChatById(props.chatId);
   const sourceOwnerUserId = useDeadTileSourceOwner(props);
   const sourceTitle = chatRecord?.title ?? "";
@@ -922,6 +921,32 @@ function ChatDeadTileBannerWithOffer(
     sourceTitle,
     sourceOwnerUserId,
   });
+  return {
+    sourceOwnerUserId,
+    sourceTitle,
+    ownedByViewer,
+    environmentOwned,
+    offer,
+  };
+}
+
+/**
+ * The banner and its Clone offer, for a mounting surface that already holds
+ * the role gate - the live tile, whose body under the strip reads the same
+ * value.
+ */
+function ChatDeadTileBannerWithOffer(
+  props: ChatDeadTileBannerContainerProps & {
+    readonly cloneAllowed: boolean;
+  },
+): ReactNode {
+  const {
+    sourceOwnerUserId,
+    sourceTitle,
+    ownedByViewer,
+    environmentOwned,
+    offer,
+  } = useDeadTileCloneOffer(props);
   // A removed team sandbox's agent continues on another awake sandbox of its
   // team instead of being cloned; a refusal for another environment falls
   // back to the clone.
@@ -941,25 +966,37 @@ function ChatDeadTileBannerWithOffer(
     props.reason === "chat-not-visible" ||
       props.reason === "chat-not-on-this-host",
   );
-  const reason =
-    sandboxState.kind === "destroyed" ? "sandbox-destroyed" : props.reason;
-  const continues = continueOffer.eligible && reason === "host-offline";
+  const continues = continueOffer.eligible && props.reason === "host-offline";
   if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
     return null;
+  // Nothing about a sandbox whose state is not known yet is offline.
+  if (sandboxState.kind === "pending" && props.reason === "host-offline")
+    return null;
+  if (sandboxState.kind === "destroyed") {
+    // A copy's footer already states the end, with these same actions.
+    if (props.showsPublishedCopy) return null;
+    return (
+      <div
+        role="status"
+        data-testid={props.testId}
+        className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-ui-sm text-muted-foreground"
+      >
+        <span className="min-w-0 flex-1">
+          {taskSandboxEndLine(sandboxState.ended.name, sandboxState.ended.end)}
+        </span>
+        <SandboxEndActionButtons
+          ended={sandboxState.ended}
+          cloneAllowed={props.cloneAllowed}
+          offer={offer}
+        />
+      </div>
+    );
+  }
   return (
     <>
       <ChatDeadTileBanner
-        details={
-          sandboxState.kind === "destroyed" ? (
-            <TaskSandboxEndDetails ended={sandboxState.ended} />
-          ) : undefined
-        }
-        hostLabel={
-          sandboxState.kind === "destroyed"
-            ? sandboxState.ended.name
-            : props.hostLabel
-        }
-        reason={continues ? "sandbox-removed" : reason}
+        hostLabel={props.hostLabel}
+        reason={continues ? "sandbox-removed" : props.reason}
         ownedByViewer={ownedByViewer}
         environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
@@ -970,6 +1007,59 @@ function ChatDeadTileBannerWithOffer(
         className={undefined}
         testId={props.testId}
       />
+      {offer.profileRecovery !== null ? (
+        <CloneProfileRecovery
+          client={offer.profileRecovery.client}
+          resolution={offer.profileRecovery.resolution}
+          targetHostLabel={offer.profileRecovery.targetHostLabel}
+          onChooseProfile={offer.profileRecovery.chooseProfile}
+          onRetry={offer.profileRecovery.retry}
+          onCancel={offer.profileRecovery.cancel}
+          onOpenProviderSettings={offer.profileRecovery.openProviderSettings}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A destroyed sandbox's actions: continue the agent on another host, and
+ * Details. They sit in the one line that states the sandbox's end.
+ */
+export function SandboxEndActions(
+  props: DeadTileOfferSource & { readonly ended: TaskSandboxEndedHost },
+): ReactNode {
+  const cloneAllowed = useChatCloneAllowed();
+  const { offer } = useDeadTileCloneOffer(props);
+  return (
+    <SandboxEndActionButtons
+      ended={props.ended}
+      cloneAllowed={cloneAllowed}
+      offer={offer}
+    />
+  );
+}
+
+function SandboxEndActionButtons(props: {
+  readonly ended: TaskSandboxEndedHost;
+  readonly cloneAllowed: boolean;
+  readonly offer: ChatCloneOnHostSwitch;
+}): ReactNode {
+  const { offer } = props;
+  return (
+    <>
+      {props.cloneAllowed ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={offer.cloning}
+          onClick={offer.clone}
+        >
+          Continue on another host
+        </Button>
+      ) : null}
+      <TaskSandboxEndDetails ended={props.ended} />
       {offer.profileRecovery !== null ? (
         <CloneProfileRecovery
           client={offer.profileRecovery.client}

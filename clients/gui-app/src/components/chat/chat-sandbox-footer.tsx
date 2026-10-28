@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
-import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
@@ -11,7 +10,6 @@ import {
   RESTING_STORAGE_CLAUSE,
   SHARED_USE_CLAUSE,
 } from "@/lib/sandboxes/sandbox-strings";
-import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import {
   sandboxFrozenLine,
@@ -22,19 +20,12 @@ import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-
 import { useOpenLink } from "@/lib/links/open-link";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+/** A resting or unreachable sandbox's state line, under its chat. */
 export function ChatSandboxFooter(props: {
   readonly state: ChatSandboxState;
 }): ReactNode {
   const state = props.state;
-  if (state.kind === "none") return null;
-  if (state.kind === "destroyed") {
-    return (
-      <div className="shrink-0 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
-        <p>{taskSandboxEndLine(state.ended.name, state.ended.end)}</p>
-        <TaskSandboxEndDetails ended={state.ended} />
-      </div>
-    );
-  }
+  if (state.kind !== "resting" && state.kind !== "unreachable") return null;
   if (state.kind === "unreachable")
     return <UnreachableSandboxFooter state={state} />;
   if (state.sandbox.frozen) return <FrozenSandboxFooter state={state} />;
