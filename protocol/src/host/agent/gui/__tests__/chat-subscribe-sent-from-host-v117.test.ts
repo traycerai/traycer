@@ -29,6 +29,7 @@ import {
   chatSubscribeV136,
   chatSubscribeV137,
   chatSubscribeV138,
+  chatSubscribeV139,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedClientFrameSchemaPreCanvas,
   chatSubscribeWindowedServerFrameSchema,
@@ -69,7 +70,7 @@ const PRE_KEY_LINES = [
 describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
   it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.38", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(38);
+    expect(line.latestMinor).toBe(39);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
@@ -188,7 +189,10 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     expect(chatSubscribeV137.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV138.serverFrameSchema).toBe(
+    expect(chatSubscribeV138.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV139.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     // 1.36 carries 1.35's frames unchanged.

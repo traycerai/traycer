@@ -1037,6 +1037,78 @@ export type ChatQueuedMemoryCurationItem = z.infer<
   typeof chatQueuedMemoryCurationItemSchema
 >;
 
+/**
+ * One row of the person's notification feed as a digest lists it (Tracy
+ * Bots T84). `entity` is what the row addresses - a task, a chat of one, or
+ * a bot - with the title the feed knows for it, `null` for a row that
+ * addresses none. `severity` and `operation` are the feed's own strings,
+ * open on purpose: a feed value a peer has never heard of still decodes.
+ * `read` is the row's read state when the digest was composed.
+ */
+export const chatNotificationDigestRowSchema = lazySchema(() =>
+  z.object({
+    notificationId: z.string(),
+    entity: z
+      .object({
+        kind: z.enum(["task", "chat", "bot"]),
+        id: z.string(),
+        title: z.string().nullable(),
+      })
+      .nullable(),
+    severity: z.string(),
+    operation: z.string(),
+    title: z.string(),
+    at: z.number(),
+    read: z.boolean(),
+  }),
+);
+export type ChatNotificationDigestRow = z.infer<
+  typeof chatNotificationDigestRowSchema
+>;
+
+/**
+ * A digest of the person's notification feed, waiting to reach the bot chat
+ * that subscribed to it (Tracy Bots T84, `chat.subscribe@1.39`): the trunk or
+ * a thread session of a personal bot. Unlike the arms above it CARRIES its
+ * content, composed by the bot's host when the item is queued: the window it
+ * covers (`fromVersion` exclusive to `throughVersion` inclusive, in feed
+ * versions, and the wall-clock span; `from` is `null` when the window
+ * restarted from the feed's current snapshot because the last one fell out of
+ * the feed's retention), the rows that need the person (`attention`), the
+ * other rows of the window unless the subscription is attention-only
+ * (`recent`, `null` then), and whether rows past the cap were left for the
+ * next digest (`truncated`). `description` is the chip's label.
+ *
+ * Same narrowed status enum and `delivery` / `targetTurnId` pair as the other
+ * host-authored arms. A peer below `1.39` is never sent one: the host's
+ * per-minor frame projection OMITS it, from the queue and from the queue
+ * events alike, as it omits the memory-curation item below `1.35`.
+ */
+export const chatQueuedNotificationDigestItemSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("notification-digest"),
+    queueItemId: z.string(),
+    description: z.string(),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    targetTurnId: z.string().nullable().default(null),
+    status: z.enum(["pending", "steering", "paused"]).default("pending"),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    window: z.object({
+      fromVersion: z.number().int().nonnegative(),
+      throughVersion: z.number().int().nonnegative(),
+      from: z.number().nullable(),
+      through: z.number(),
+    }),
+    attention: z.array(chatNotificationDigestRowSchema),
+    recent: z.array(chatNotificationDigestRowSchema).nullable(),
+    truncated: z.boolean(),
+  }),
+);
+export type ChatQueuedNotificationDigestItem = z.infer<
+  typeof chatQueuedNotificationDigestItemSchema
+>;
+
 // A plain `z.union` with the REQUIRED-`kind` arms FIRST - deliberately not
 // a `z.discriminatedUnion`, which rejects a payload missing the discriminant
 // even when the literal is defaulted (verified against this repo's zod). Legacy
@@ -1166,6 +1238,7 @@ export const chatQueuedItemSchema = lazySchema(() =>
     chatQueuedTaskCheckinItemSchema,
     chatQueuedTaskOverdueItemSchema,
     chatQueuedMemoryCurationItemSchema,
+    chatQueuedNotificationDigestItemSchema,
     chatQueuedPromptItemSchema,
   ]),
 );
@@ -1190,6 +1263,7 @@ export const openChatQueuedItemSchema = lazySchema(() =>
     chatQueuedTaskCheckinItemSchema,
     chatQueuedTaskOverdueItemSchema,
     chatQueuedMemoryCurationItemSchema,
+    chatQueuedNotificationDigestItemSchema,
     openChatQueuedPromptItemSchema,
   ]),
 );
@@ -1197,6 +1271,30 @@ export const openChatQueuedItemSchema = lazySchema(() =>
 export const openChatQueueStateSchema = lazySchema(() =>
   chatQueueStateSchema.extend({
     items: z.array(openChatQueuedItemSchema),
+  }),
+);
+
+// Wire-freeze of the open queue as `chat.subscribe@1.35` through `@1.38` ship
+// it: the seven arms that existed before `1.39` added the notification-digest
+// item, over the live prompt item with its sender reopened. Its own union, NOT
+// derived from the live open one, so a later arm cannot reach those lines
+// through it. Bound to their snapshot and `queueChanged` frames.
+const openChatQueuedItemSchemaPreNotificationDigest = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
+    openChatQueuedPromptItemSchema,
+  ]),
+);
+const openChatQueueStateSchemaPreNotificationDigest = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(openChatQueuedItemSchemaPreNotificationDigest),
+    pausedReason: z.string().nullable().optional(),
   }),
 );
 
@@ -3708,9 +3806,29 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.35`): `1.34`'s over the live
-// open queue, which may carry a memory-curation item.
+// The common frames as `chat.subscribe@1.35` through `@1.38` ship them:
+// `1.34`'s over the open queue frozen at its seven pre-notification-digest
+// arms, which may carry a memory-curation item.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchemaPreNotificationDigest,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: { sendWouldQueue: z.boolean().optional() },
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.39`): `1.35`'s over the live open
+// queue, which may carry a notification-digest item.
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
     queue: openChatQueueStateSchema,
@@ -4011,10 +4129,18 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessV135 = [
   blockDeltaServerFrameSchema(openRuntimeEventSchemaPreNotApplied),
 ];
 
-// Live shared frames use the current compaction outcome schema.
+// The shared frames shipped at `chat.subscribe@1.37` and `@1.38`: the current
+// compaction outcome schema over the pre-notification-digest common set.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV137 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV135,
+  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+];
+
+// The live shared frames (`chat.subscribe@1.39`): the live common set.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV139 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV139,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
@@ -6230,7 +6356,7 @@ const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
   z.object({
     chat: chatRecordSchema,
     access: chatAccessSchema,
-    queue: openChatQueueStateSchema,
+    queue: openChatQueueStateSchemaPreNotificationDigest,
     runStatus: chatRunStatusSchema,
     activeTurn: chatActiveTurnSchema.nullable(),
     pendingApprovals: z.array(chatApprovalStateSchema),
@@ -6265,17 +6391,26 @@ const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
 // the closed enum: they are what a peer drives (`open-harness-wire.ts`).
 const openChatWindowedSnapshotSchemaPreLineHeld = lazySchema(() =>
   chatWindowedSnapshotSchema.extend({
-    queue: openChatQueueStateSchema,
+    queue: openChatQueueStateSchemaPreNotificationDigest,
     tail: openChatTranscriptWindowSchema,
   }),
 );
 
-// The live windowed snapshot (`chat.subscribe@1.38`): `1.37`'s with
+// The windowed snapshot shipped at `chat.subscribe@1.38`: `1.37`'s with
 // `opencodeLineHeld`, present while the chat stays on its recorded OpenCode
 // line although the saved selection names the other one, and absent otherwise.
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+const openChatWindowedSnapshotSchemaPreNotificationDigest = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreLineHeld.extend({
     opencodeLineHeld: opencodeLineHeldSchema.optional(),
+  }),
+);
+
+// The live windowed snapshot (`chat.subscribe@1.39`): `1.38`'s over the live
+// open queue, which may carry a notification-digest item. An existing key, so
+// `.extend` keeps its position.
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreNotificationDigest.extend({
+    queue: openChatQueueStateSchema,
   }),
 );
 export type OpenChatWindowedSnapshot = z.infer<
@@ -6344,8 +6479,20 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137 =
     }),
   );
 
-// The live snapshot carries `opencodeLineHeld`.
+// The snapshot shipped at `chat.subscribe@1.38`: `opencodeLineHeld`, the queue
+// frozen at its seven pre-notification-digest arms.
 const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138 =
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchemaPreNotificationDigest,
+    }),
+  );
+
+// The live snapshot (`chat.subscribe@1.39`).
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139 =
   lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
@@ -7157,15 +7304,10 @@ const chatSubscribeServerFrameSchemaV137 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.38`): the
- * union above with the snapshot, the `range` response, the three
- * sender-bearing common frames and the `blockDelta` bound to their
- * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
- * (the active turn, the fallback tuples) and the snapshot's record head - keep
- * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
+ * Frozen 1.38: `opencodeLineHeld`, the queue carries no notification-digest
+ * item (`1.39`).
  */
-export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+const chatSubscribeServerFrameSchemaV138 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
@@ -7178,6 +7320,31 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasOpenHarnessV137,
+  ]),
+);
+
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.39`): the
+ * union above with the snapshot, the `range` response, the three
+ * sender-bearing common frames and the `blockDelta` bound to their
+ * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
+ * (the active turn, the fallback tuples) and the snapshot's record head - keep
+ * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
+ * is assignable to this type; the client parses with this schema.
+ */
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV139,
   ]),
 );
 export type OpenChatSubscribeWindowedServerFrame = z.infer<
@@ -8293,6 +8460,32 @@ export const chatSubscribeV138 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 38 } as const,
   openRequestSchema: chatSubscribeV137.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV138,
   clientFrameSchema: chatSubscribeV137.clientFrameSchema,
+});
+
+/**
+ * The notification-digest line (Tracy Bots T84).
+ *
+ * `1.39` adds one union member and no key, frame or enum value: the
+ * `notification-digest` queue item (`chatQueuedNotificationDigestItemSchema`),
+ * a bounded digest of the person's notification feed waiting on the queue of
+ * the personal bot chat that subscribed to it. It carries its rows, composed
+ * when the host queues it.
+ *
+ * PROJECTION, like `1.35`'s memory-curation item: `1.35` through `1.38` bind
+ * the hand-frozen seven-arm open queue
+ * (`openChatQueueStateSchemaPreNotificationDigest`), every older line its own
+ * freeze, and the host OMITS the item - from the queue and from the queue
+ * events alike - for every peer below `1.39`, since there is no sibling shape
+ * to degrade it into.
+ *
+ * The open request and the client frames are `1.38`'s, unchanged.
+ */
+export const chatSubscribeV139 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 39 } as const,
+  openRequestSchema: chatSubscribeV138.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeV138.clientFrameSchema,
 });

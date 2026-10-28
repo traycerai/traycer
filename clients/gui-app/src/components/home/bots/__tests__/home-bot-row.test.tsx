@@ -81,6 +81,7 @@ function snapshotWith(activity: BotActivity | null): BotSubscriptionSnapshot {
     tasks: [],
     openRequestCount: 0,
     conversationsRevision: null,
+    notificationSubscriptions: null,
     boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
     activity,
   };
@@ -334,6 +335,7 @@ describe("<HomeBotRow /> state", () => {
       tasks: [],
       openRequestCount: 0,
       conversationsRevision: null,
+      notificationSubscriptions: null,
       boundHost: { hostId: null, epoch: 2, isThisHost: false },
       activity: null,
     };

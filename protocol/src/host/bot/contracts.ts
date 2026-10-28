@@ -24,6 +24,7 @@ import {
   botSubscribeOpenRequestSchema,
   botSubscribeServerFrameSchema,
   botSubscribeServerFrameSchemaV10,
+  botSubscribeServerFrameSchemaV11,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -284,6 +285,19 @@ export const botSubscribeV10 = defineStreamRpcContract({
 export const botSubscribeV11 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV11,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.2` (T84): the snapshot names the bot's chats subscribed to
+ * the person's notification feed (`notificationSubscriptions`). A 1.1
+ * subscriber's snapshot carries none.
+ */
+export const botSubscribeV12 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,

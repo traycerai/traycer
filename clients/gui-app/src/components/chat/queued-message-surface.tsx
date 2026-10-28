@@ -11,6 +11,7 @@ import {
 } from "@dnd-kit/sortable";
 import {
   AlarmClock,
+  Bell,
   Brain,
   Cable,
   ClipboardList,
@@ -57,6 +58,7 @@ import type {
   OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
+import { NotificationDigestCard } from "@/components/chat/notification-digest-card";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import {
   isReceivedAgentResponse,
@@ -1065,9 +1067,13 @@ function QueuedMessageRowText(props: {
   readonly agentFold: QueuedMessageRowContentAgentFold | null;
 }): ReactNode {
   const item = props.item;
+  if (item.kind === "notification-digest") {
+    // The one host-authored item that carries its content: its rows.
+    return <NotificationDigestCard item={item} />;
+  }
   if (item.kind !== "prompt") {
-    // Both host-authored items (a shell's update, a forward's interruption)
-    // are content-free: the label is all they carry.
+    // The other host-authored items (a shell's update, a forward's
+    // interruption) are content-free: the label is all they carry.
     return <span className="text-muted-foreground">{item.description}</span>;
   }
   if (agentFoldCompact(props.agentFold)) {
@@ -1248,6 +1254,7 @@ function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
   if (item.kind === "task-checkin") return <TaskCheckinBadge />;
   if (item.kind === "task-overdue") return <TaskOverdueBadge />;
   if (item.kind === "memory-curation") return <MemoryCurationBadge />;
+  if (item.kind === "notification-digest") return <NotificationDigestBadge />;
   return null;
 }
 
@@ -1437,6 +1444,27 @@ function MemoryCurationBadge() {
   );
 }
 
+/**
+ * A digest of the person's notifications, waiting for the bot's next turn (a
+ * `notification-digest` item on a personal bot's chat). Unlike the chips
+ * above, the item carries its rows; the card beside the chip shows them.
+ */
+function NotificationDigestBadge() {
+  return (
+    <TooltipWrapper
+      label="Your notifications, for the bot's next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-notification-digest-badge">
+        <Bell aria-hidden />
+        Notifications
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
 type CancelOnlyKind =
   | "shell"
   | "port-forward"
@@ -1444,6 +1472,7 @@ type CancelOnlyKind =
   | "task-checkin"
   | "task-overdue"
   | "memory-curation"
+  | "notification-digest"
   | "sign-in-park";
 
 const CANCEL_COPY: Record<
@@ -1477,6 +1506,10 @@ const CANCEL_COPY: Record<
     ariaLabel: "Dismiss memory notice",
     tooltip: "Dismiss this notice — the bot won't be asked to tidy the memory",
   },
+  "notification-digest": {
+    ariaLabel: "Dismiss notification digest",
+    tooltip: "Dismiss this digest — the bot won't see these notifications",
+  },
   "sign-in-park": {
     ariaLabel: "Cancel agent message waiting for sign-in",
     tooltip: "Cancel this message — it won't run when you sign back in",
@@ -1494,6 +1527,7 @@ function cancelOnlyKind(item: OpenChatQueuedItem): CancelOnlyKind {
     case "task-checkin":
     case "task-overdue":
     case "memory-curation":
+    case "notification-digest":
       return item.kind;
     case "prompt":
       return "sign-in-park";
