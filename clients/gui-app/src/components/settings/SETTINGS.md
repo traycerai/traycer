@@ -6545,9 +6545,11 @@ computer`. A team's host draws no card. The move sheet names the moving computer
     simulator is a device, its booted copies (instances) and each task's
     sessions on them; Running now is the machine-wide instance list, the same
     shape as Ports, because powering one off ends every task's session on it.
-    Its task links are a count: `simulator.instances` names only the tasks the
-    viewer can see, and this page has no task titles to show. The idle field
-    is drawn only for a `@1.1` host, which is the only one with an idle rule.
+    Its task links name each task the viewer can see - its title where the app
+    already holds one, its short id otherwise - and count the rest as
+    `+N other`, because `simulator.instances` names only the tasks the viewer
+    can see. The idle field is drawn only for a `@1.1` host, which is the only
+    one with an idle rule.
 
   **The page reads the scoped host's OWN RPC** (`host-overview-panel.tsx`):
   `host.status` for what it is running, `host.identity.get` for what it is

@@ -6,10 +6,11 @@ import type {
   SimulatorPlatform,
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
+import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
-import { simulatorHostSpeaksV11 } from "@/lib/simulator-view/simulator-host-version";
+import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import type { SimulatorOpenTarget } from "./use-simulator-instance-open";
 
 /** One row a list of machines offers: watch an instance, or boot a device. */
@@ -91,6 +92,12 @@ export function simulatorInventoryEntries(args: {
  * One machine's read: `simulator.list`, and `simulator.instances` on a `@1.1`
  * host. The requester is resolved per call from the binding, so a cached
  * entry never pins a client.
+ *
+ * `speaksV11` is the host's negotiated gate, and the fetcher takes it as an
+ * ARGUMENT rather than re-reading the registry at dispatch: it is part of the
+ * query key, and a dispatch that read a gate the key does not name would file
+ * one minor's shape as the answer for the other. A gate that moves mid-flight
+ * is a different key, which fetches on its own.
  */
 function simulatorInventoryQuery(args: {
   readonly resolveClient: (
@@ -99,20 +106,20 @@ function simulatorInventoryQuery(args: {
   readonly hostId: string;
   readonly epicId: string;
   readonly enabled: boolean;
+  readonly speaksV11: boolean;
 }) {
-  const { resolveClient, hostId, epicId, enabled } = args;
+  const { resolveClient, hostId, epicId, enabled, speaksV11 } = args;
   return queryOptions({
-    queryKey: hostQueryKeys.simulatorInventory(hostId, epicId),
+    queryKey: hostQueryKeys.simulatorInventory(hostId, epicId, speaksV11),
     enabled,
     retry: false,
     queryFn: async (): Promise<readonly SimulatorInventoryEntry[]> => {
       const client = resolveClient(hostId);
       if (client === null) throw new Error("Couldn't reach this host.");
       const state = await client.request("simulator.list", { epicId });
-      const instances =
-        simulatorHostSpeaksV11(hostId) === true
-          ? (await client.request("simulator.instances", {})).instances
-          : null;
+      const instances = speaksV11
+        ? (await client.request("simulator.instances", {})).instances
+        : null;
       return simulatorInventoryEntries({
         hostId,
         simulators: state.simulators,
@@ -125,6 +132,11 @@ function simulatorInventoryQuery(args: {
 /**
  * What each of several machines offers to open, for the surfaces that list
  * more than one machine (the palette). One read per machine.
+ *
+ * A machine whose simulator minor is still unnegotiated is NOT read: the gate
+ * decides which of the two shapes the answer has, and `null` there is "not
+ * known yet", never "`@1.0`". Subscribed per host (`hostIds` is memoized by
+ * the caller), so the read starts on its own the moment the handshake lands.
  */
 export function useSimulatorInventories(args: {
   readonly hostIds: readonly string[];
@@ -137,10 +149,18 @@ export function useSimulatorInventories(args: {
     (hostId: string) => resolveNamedHostClient(binding, hostId),
     [binding],
   );
+  const versions = useHostNegotiatedMethodVersions(hostIds, "simulator.open");
   return useQueries({
-    queries: hostIds.map((hostId) =>
-      simulatorInventoryQuery({ resolveClient, hostId, epicId, enabled }),
-    ),
+    queries: hostIds.map((hostId) => {
+      const speaksV11 = simulatorVerbsAreV11(versions.get(hostId) ?? null);
+      return simulatorInventoryQuery({
+        resolveClient,
+        hostId,
+        epicId,
+        enabled: enabled && speaksV11 !== null,
+        speaksV11: speaksV11 === true,
+      });
+    }),
     combine: (results) =>
       results.map((result, index): SimulatorHostInventory => {
         let status: SimulatorHostInventory["status"] = "ready";
