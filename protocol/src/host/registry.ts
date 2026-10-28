@@ -647,6 +647,8 @@ import {
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
   botThreadListV10,
+  botThreadListV11,
+  botThreadListUpgradeV10ToV11,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
@@ -9245,11 +9247,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botThreadListV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the rows the bound host roots a thread on beyond a
+        // post, a question, a proposal and a direct post (T85).
+        1: {
+          contract: botThreadListV11,
+          upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

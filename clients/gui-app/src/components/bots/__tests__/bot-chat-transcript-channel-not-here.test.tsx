@@ -109,6 +109,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   threadLine: () => null,
   openThread: null,
   openAnnouncementThread: null,
+  answerThreads: false,
   chooseOption: null,
   failedRequest: () => null,
   intro: { botTitle: "Release Bot", directive: null },

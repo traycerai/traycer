@@ -92,6 +92,13 @@ export interface ChatBotPresentation {
    */
   readonly openAnnouncementThread: ((announcementId: string) => void) | null;
   /**
+   * Whether the bot's host opens a thread under a direct reply of the bot
+   * (decision 114), so the reply opens its own thread and carries its line;
+   * `false` where it does not say, and a direct reply then opens the thread
+   * under the post it answers.
+   */
+  readonly answerThreads: boolean;
+  /**
    * Posts one of a bot reply's options as the person's next message: in the
    * thread, or a new post in the channel for a direct reply's; `null` where
    * nothing can post it.

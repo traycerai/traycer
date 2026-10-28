@@ -161,7 +161,13 @@ describe("the bot's thread listing follows its subscription", () => {
     world.render();
     act(() => world.session.emit(snapshot(3, 0)));
     await waitFor(() => expect(world.listReads.value).toBe(1));
-    act(() => world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 }));
+    act(() =>
+      world.pendingReads[0]?.({
+        threads: [],
+        trunkCostUsd: 0,
+        threadAnchors: [],
+      }),
+    );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
 
     // The open-request count moved; the rows did not. The revision check runs
@@ -181,7 +187,13 @@ describe("the bot's thread listing follows its subscription", () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
 
     await waitFor(() => expect(world.listReads.value).toBe(2));
-    act(() => world.pendingReads[1]?.({ threads: [], trunkCostUsd: 0 }));
+    act(() =>
+      world.pendingReads[1]?.({
+        threads: [],
+        trunkCostUsd: 0,
+        threadAnchors: [],
+      }),
+    );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
     expect(world.listReads.value).toBe(2);
   });
@@ -210,8 +222,16 @@ describe("the bot's thread listing follows its subscription", () => {
     // The second read answers with the post-reply body, then the first,
     // started before the reply, answers with its stale one.
     act(() => {
-      world.pendingReads[1]?.({ threads: [], trunkCostUsd: 1.5 });
-      world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 });
+      world.pendingReads[1]?.({
+        threads: [],
+        trunkCostUsd: 1.5,
+        threadAnchors: [],
+      });
+      world.pendingReads[0]?.({
+        threads: [],
+        trunkCostUsd: 0,
+        threadAnchors: [],
+      });
     });
 
     // Settled is the query's own `fetchStatus`, not a timer or a call count.
@@ -224,6 +244,7 @@ describe("the bot's thread listing follows its subscription", () => {
     expect(world.queryClient.getQueryState(world.threadListKey)?.data).toEqual({
       threads: [],
       trunkCostUsd: 1.5,
+      threadAnchors: [],
     });
   });
 });

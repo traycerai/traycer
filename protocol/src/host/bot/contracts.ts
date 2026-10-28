@@ -43,6 +43,7 @@ import {
   botConversationSendResponseSchema,
   botThreadListRequestSchema,
   botThreadListResponseSchema,
+  botThreadListResponseSchemaV10,
 } from "./conversation-schemas";
 import {
   botOnboardingChooseRequestSchema,
@@ -233,7 +234,28 @@ export const botThreadListV10 = defineRpcContract({
   method: "bot.thread.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botThreadListRequestSchema,
+  responseSchema: botThreadListResponseSchemaV10,
+});
+
+/**
+ * `bot.thread.list@1.1` (T85): the response names the rows the bound host
+ * roots a thread on beyond a post, a question, a proposal and a direct post
+ * (`threadAnchors`). A 1.0 host names none.
+ */
+export const botThreadListV11 = defineRpcContract({
+  method: "bot.thread.list",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botThreadListRequestSchema,
   responseSchema: botThreadListResponseSchema,
+});
+export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
+  typeof botThreadListV10,
+  typeof botThreadListV11
+>({
+  from: botThreadListV10.schemaVersion,
+  to: botThreadListV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, threadAnchors: [] }),
 });
 
 /**

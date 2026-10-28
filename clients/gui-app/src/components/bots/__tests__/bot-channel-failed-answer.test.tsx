@@ -128,7 +128,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.threads },
+    data: { threads: mocks.threads, threadAnchors: [] },
     isError: false,
     refetch: vi.fn(),
   }),

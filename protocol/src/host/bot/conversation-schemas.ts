@@ -82,9 +82,10 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * its bot answered at the top level (a `direct` post), or the bot's
      * direct answer to such a post (decision 114), whose thread is its own
      * and not the post's. The message opens, or joins, the thread hung off
-     * that row, as its first request when it opens it. A host that predates
-     * threads under a direct answer refuses one with `THREAD_NOT_FOUND`.
-     * `null` (or absent) otherwise; never set with `threadId`.
+     * that row, as its first request when it opens it. Only a bound host
+     * whose `bot.thread.list` names `"answer"` in `threadAnchors` takes a
+     * reply under a direct answer. `null` (or absent) otherwise; never set
+     * with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
     /**
@@ -205,7 +206,8 @@ export const botThreadListRequestSchema = lazySchema(() =>
 );
 export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 
-export const botThreadListResponseSchema = lazySchema(() =>
+/** `bot.thread.list@1.0`'s response, frozen by hand: without `threadAnchors`. */
+export const botThreadListResponseSchemaV10 = lazySchema(() =>
   z.object({
     threads: z.array(botThreadSummarySchema),
     /**
@@ -214,6 +216,27 @@ export const botThreadListResponseSchema = lazySchema(() =>
      * its threads'.
      */
     trunkCostUsd: z.number().nonnegative().nullable(),
+  }),
+);
+
+/**
+ * The `threadAnchors` value naming the bot's direct answer in the channel
+ * (decision 114): a member's reply under one opens the answer's own thread.
+ */
+export const BOT_THREAD_ANCHOR_ANSWER = "answer";
+
+export const botThreadListResponseSchema = lazySchema(() =>
+  botThreadListResponseSchemaV10.extend({
+    /**
+     * `bot.thread.list@1.1`: the channel rows, beyond a member's post, a
+     * question, a proposal and a direct post, under which the bot's bound
+     * host opens a thread when a member replies; `"answer"`
+     * ({@link BOT_THREAD_ANCHOR_ANSWER}) is the bot's direct answer. Empty
+     * when the bound host has not said, as a host that predates the minor
+     * and one whose room values are not written yet: a reply under such a
+     * row is then refused. A value a client does not know is ignored.
+     */
+    threadAnchors: z.array(z.string().min(1).max(64)).max(16),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

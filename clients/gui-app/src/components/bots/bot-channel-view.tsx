@@ -7,11 +7,12 @@ import {
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type {
-  BotConversationRecord,
-  BotConversationSendResponse,
-  BotThreadListResponse,
-  BotThreadSummary,
+import {
+  BOT_THREAD_ANCHOR_ANSWER,
+  type BotConversationRecord,
+  type BotConversationSendResponse,
+  type BotThreadListResponse,
+  type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -181,6 +182,7 @@ export function BotChannelView(props: {
     threadsByPost,
     isUnread,
     unreadCountOf,
+    answerThreads,
   } = useChannelThreads({ client, botId, hostId });
   const activity = useBotActivity(botId);
   const viewer = useAuthStore((s) => s.profile);
@@ -308,11 +310,13 @@ export function BotChannelView(props: {
       openAnnouncementThread: threadListSupported
         ? openAnnouncementThread
         : null,
+      answerThreads,
       chooseOption: sending ? null : chooseOption,
       failedRequest,
       intro: { botTitle, directive },
     }),
     [
+      answerThreads,
       botTitle,
       activity?.threads,
       chooseOption,
@@ -544,6 +548,8 @@ function useChannelThreads(args: {
   readonly isUnread: (threadId: string) => boolean;
   /** `null` where the host does not count. */
   readonly unreadCountOf: (threadId: string) => number | null;
+  /** Whether the bot's host opens a thread under its direct reply. */
+  readonly answerThreads: boolean;
 } {
   const { client, botId, hostId } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -586,7 +592,20 @@ function useChannelThreads(args: {
         : 0,
     [indicators.chats],
   );
-  return { supported, threadList, threadsByPost, isUnread, unreadCountOf };
+  // Said by the bot's own host, which takes the replies: a host that
+  // predates it says nothing, and a direct reply then opens its post's thread.
+  const answerThreads =
+    supported &&
+    (threadList.data?.threadAnchors.includes(BOT_THREAD_ANCHOR_ANSWER) ??
+      false);
+  return {
+    supported,
+    threadList,
+    threadsByPost,
+    isUnread,
+    unreadCountOf,
+    answerThreads,
+  };
 }
 
 /**

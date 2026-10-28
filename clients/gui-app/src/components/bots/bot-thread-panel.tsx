@@ -285,6 +285,7 @@ function originPresentation(
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
+    answerThreads: false,
     chooseOption: null,
     failedRequest,
   };

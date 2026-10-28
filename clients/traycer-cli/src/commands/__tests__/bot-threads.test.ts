@@ -121,7 +121,11 @@ describe("bot threads", () => {
   it("lists each thread with when its post was sent, replies, open requests and cost, in the host's order", async () => {
     stage({
       bot: tracy,
-      threads: () => ({ threads: THREADS, trunkCostUsd: null }),
+      threads: () => ({
+        threads: THREADS,
+        trunkCostUsd: null,
+        threadAnchors: [],
+      }),
     });
 
     const result = await threads("tracy");
@@ -139,7 +143,10 @@ describe("bot threads", () => {
   });
 
   it("says when the bot has no threads", async () => {
-    stage({ bot: tracy, threads: () => ({ threads: [], trunkCostUsd: null }) });
+    stage({
+      bot: tracy,
+      threads: () => ({ threads: [], trunkCostUsd: null, threadAnchors: [] }),
+    });
 
     const result = await threads(BOT_ID_A);
 
@@ -153,6 +160,7 @@ describe("bot threads", () => {
       threads: () => ({
         threads: [{ ...THREADS[0], openRequestCount: -1 }],
         trunkCostUsd: null,
+        threadAnchors: [],
       }),
     });
 
@@ -164,7 +172,11 @@ describe("bot threads", () => {
   it("lists the threads of a bot bound to another host, which this host serves from the environment room", async () => {
     stage({
       bot: botRecord({ botId: BOT_ID_A, boundHostId: OTHER_HOST_ID }),
-      threads: () => ({ threads: THREADS, trunkCostUsd: null }),
+      threads: () => ({
+        threads: THREADS,
+        trunkCostUsd: null,
+        threadAnchors: [],
+      }),
     });
 
     const result = await threads(BOT_ID_A);
@@ -176,7 +188,11 @@ describe("bot threads", () => {
   it("refuses a bot no host runs", async () => {
     stage({
       bot: botRecord({ botId: BOT_ID_A, boundHostId: null }),
-      threads: () => ({ threads: THREADS, trunkCostUsd: null }),
+      threads: () => ({
+        threads: THREADS,
+        trunkCostUsd: null,
+        threadAnchors: [],
+      }),
     });
 
     const error = await rejection(threads(BOT_ID_A));

@@ -79,6 +79,8 @@ const mocks = vi.hoisted(() => {
       // What the bot record names as the channel; `null` from an older host.
       appConversationChatId: null as string | null,
       threads: [] as BotThreadSummary[],
+      // The rows the bot's host roots a thread on beyond a post (`threadAnchors`).
+      threadAnchors: [] as string[],
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
@@ -117,7 +119,10 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
     mocks.threadListCalls.push({ botId, ...args });
     return {
       data: mocks.state.threadListAnswered
-        ? { threads: mocks.state.threads }
+        ? {
+            threads: mocks.state.threads,
+            threadAnchors: mocks.state.threadAnchors,
+          }
         : undefined,
       isError: mocks.state.threadListError,
       refetch: mocks.refetchThreads,
@@ -168,6 +173,11 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
       <div
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
+        data-answer-threads={
+          surface !== null && surface.kind === "channel"
+            ? String(surface.answerThreads)
+            : ""
+        }
       >
         {surface !== null && surface.kind === "channel"
           ? mocks.postIds.map((postId) => (
@@ -423,6 +433,7 @@ beforeEach(() => {
   ];
   mocks.state.appConversationChatId = "conversation-channel";
   mocks.state.threads = [];
+  mocks.state.threadAnchors = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
   mocks.state.sending = false;
@@ -619,9 +630,36 @@ describe("<BotChannelView /> channel", () => {
     );
   });
 
+  it("lets a direct reply open its own thread only where the bot's host names it among the rows a thread roots on", () => {
+    const answerThreads = (): string | null =>
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-answer-threads");
+    mocks.state.threadAnchors = ["answer"];
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(answerThreads()).toBe("true");
+
+    // A host that predates the anchors, or one whose room is not written yet.
+    mocks.state.threadAnchors = [];
+    rerender();
+    expect(answerThreads()).toBe("false");
+
+    // An anchor this build does not know opens nothing new.
+    mocks.state.threadAnchors = ["later-kind"];
+    rerender();
+    expect(answerThreads()).toBe("false");
+
+    // A host without the thread list has nothing to say.
+    mocks.state.threadAnchors = ["answer"];
+    mocks.state.threadListSupported = false;
+    rerender();
+    expect(answerThreads()).toBe("false");
+  });
+
   it("keeps a direct post's thread and its reply's thread apart: each row its own line, each opening its own thread", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["post-1", "answer-1"];
+    mocks.state.threadAnchors = ["answer"];
     mocks.state.threads = [
       thread("thread-post", "post-1", { replyCount: 1, lastReplyAt: 7_000 }),
       {

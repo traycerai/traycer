@@ -48,8 +48,11 @@ import { TextSegment } from "./segments/text-segment";
  * Slack offers it on every message, and a thread roots on the row it is
  * opened from (decision 114): a member's post, a question or proposal, and
  * a direct reply each open their own thread, the reply's apart from the
- * post's, and each carries its own thread line. Any other announcement
- * takes no thread. A member's message
+ * post's, and each carries its own thread line. A direct reply opens the
+ * thread under the post it answers instead, with no line of its own, where
+ * the bot's host does not say it takes replies under one
+ * (`answerThreads`). Any other announcement takes no thread. A member's
+ * message
  * the bot failed to answer adds Retry and Edit to them, and says under its
  * text that it was not answered and why, with the same actions inline.
  *
@@ -213,7 +216,9 @@ function BotRow(props: {
 /**
  * The thread a bot's row opens from its hover actions, and the line of it
  * the row carries: a question's, a proposal's or a direct reply's own
- * thread. Any other row of the bot takes none.
+ * thread; for a direct reply where the bot's host does not take replies
+ * under one, the thread under the post it answers, with no line here. Any
+ * other row of the bot takes none.
  */
 function botRowThread(
   message: ChatMessageModel,
@@ -223,18 +228,21 @@ function botRowThread(
   readonly threadLine: ChatBotThreadLine | null;
 } {
   const kind = message.announcement?.kind ?? null;
-  const anchorId =
+  const ownThread =
     kind === "question" ||
     kind === "proposal" ||
-    (kind === null && message.repliesTo !== undefined)
-      ? message.persistentMessageId
-      : null;
+    (kind === null &&
+      message.repliesTo !== undefined &&
+      presentation.answerThreads);
+  const anchorId = ownThread
+    ? message.persistentMessageId
+    : (message.repliesTo ?? null);
   const open = presentation.openAnnouncementThread;
   return {
     replyInThread:
       anchorId === null || open === null ? null : () => open(anchorId),
     threadLine:
-      anchorId === null || presentation.threadLine === null
+      !ownThread || anchorId === null || presentation.threadLine === null
         ? null
         : presentation.threadLine(anchorId),
   };

@@ -86,8 +86,9 @@ const mocks = vi.hoisted(() => ({
   sessionFor: null as
     | ((chatId: string, enabled: boolean) => ChatSessionStoreHandle | null)
     | null,
-  threadListData: { threads: [] } as {
+  threadListData: { threads: [], threadAnchors: [] } as {
     threads: ReadonlyArray<BotThreadSummary>;
+    threadAnchors: ReadonlyArray<string>;
   },
   conversations: {
     conversations: [] as ReadonlyArray<{
@@ -488,7 +489,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
 const DIRECTIVE = "Watches CI and answers questions about the nightly run.";
 
 function mountChannel(threads: ReadonlyArray<BotThreadSummary>): RenderResult {
-  mocks.threadListData = { threads };
+  mocks.threadListData = { threads, threadAnchors: [] };
   // The transcript reads the app's send ledger off the query client.
   return render(
     <QueryClientProvider client={new QueryClient()}>
@@ -561,7 +562,7 @@ afterEach(() => {
   for (const { handle } of sessions.values()) handle.dispose();
   sessions.clear();
   mocks.sessionFor = null;
-  mocks.threadListData = { threads: [] };
+  mocks.threadListData = { threads: [], threadAnchors: [] };
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useAuthStore.setState({ profile: null });
@@ -805,6 +806,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     // The list's next read returns the thread; the activity frame redraws.
     mocks.threadListData = {
       threads: [{ ...threadSummary(), replyCount: 0, lastReplyAt: null }],
+      threadAnchors: [],
     };
     emitActivity({
       trunk: null,
