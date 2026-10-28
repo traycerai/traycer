@@ -1909,8 +1909,8 @@ describe("PublishedChatTile - a sandbox chat whose state is not known yet", () =
 
 /**
  * One precedence on the copy, through the real hook: a task end, then a
- * listed row's known state, then a move, then unknown. A failed or disabled
- * read never proves the host is not a sandbox.
+ * listed row's known state, then a move, then a named sandbox not known here.
+ * A host nothing names as a sandbox takes the surface's own path.
  */
 describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
   function mountOwnCopy(): void {
