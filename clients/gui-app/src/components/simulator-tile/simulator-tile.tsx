@@ -491,7 +491,7 @@ function SimulatorInventoryGate(props: {
       hostLabel={props.hostLabel}
       simulators={state.simulators}
       booting={state.booting}
-      targetSimulatorId={target?.simulatorId ?? node.simulatorId}
+      target={target}
       targetName={target?.name ?? node.name}
       onConnect={onConnect}
       connecting={connecting}
