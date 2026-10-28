@@ -404,6 +404,7 @@ import {
   chatSubscribeV137,
   chatSubscribeV138,
   chatSubscribeV139,
+  chatSubscribeV140,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -15580,7 +15581,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 39,
+      latestMinor: 40,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15790,6 +15791,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (projection: the host omits it below @1.39). @1.35 to @1.38 are
         // frozen at their seven-arm queue.
         39: { contract: chatSubscribeV139 },
+        // @1.40: a queued steer that would restart the turn needs the person's
+        // confirmation (`queueSteerNow.restartConfirmed`), and a refused one
+        // names its causes (`actionAck.steerRestartReasons`, stripped below).
+        40: { contract: chatSubscribeV140 },
       },
     },
   },

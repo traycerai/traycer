@@ -41,6 +41,7 @@ import {
   chatSubscribeV137,
   chatSubscribeV138,
   chatSubscribeV139,
+  chatSubscribeV140,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { supportsAutoPermissionMode } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import {
@@ -230,6 +231,7 @@ const CHAT_SUBSCRIBE_LINES = [
   { label: "1.37", contract: chatSubscribeV137 },
   { label: "1.38", contract: chatSubscribeV138 },
   { label: "1.39", contract: chatSubscribeV139 },
+  { label: "1.40", contract: chatSubscribeV140 },
 ] as const;
 
 // The boundary is never restated as a literal - that minor has been renumbered

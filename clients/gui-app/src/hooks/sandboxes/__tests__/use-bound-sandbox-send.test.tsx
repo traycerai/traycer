@@ -64,6 +64,7 @@ const INPUT: ChatComposerSubmitInput = {
   attachments: [],
   settings: PICKED_SETTINGS,
   deliveryPolicy: "auto",
+  restartConfirmed: false,
   restore: { content: MESSAGE_CONTENT, browserAnnotations: [] },
 };
 
