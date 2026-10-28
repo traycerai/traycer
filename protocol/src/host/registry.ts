@@ -1046,7 +1046,6 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
-  browserSessionsV23,
 } from "@traycer/protocol/host/browser/contracts";
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import { browserCatalogReadV10 } from "@traycer/protocol/host/browser/discovery-contracts";
@@ -1072,6 +1071,8 @@ import {
 import {
   sandboxEgressSubscribeV10,
   sandboxRepairGuestConfigurationV10,
+  sandboxRepairGuestConfigurationV11,
+  sandboxRepairGuestConfigurationUpgradeV10ToV11,
 } from "@traycer/protocol/host/sandbox-egress";
 import {
   browserScreencastV10,
@@ -11003,18 +11004,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The sandbox card's repair action. Optional and off
-  // `RELEASED_FLOOR_METHOD_NAMES`: only a sandbox host serves it, a host that
-  // predates it advertises nothing, and the card then offers no repair rather
-  // than failing the connection. See `sandbox-egress.ts`.
+  // Optional and off the released floor: 1.0 repairs only the guest; 1.1
+  // also retries environment settings. The resolver honors the caller version.
   "host.sandbox.repairGuestConfiguration": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: sandboxRepairGuestConfigurationV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: sandboxRepairGuestConfigurationV11,
+          upgradeFromPreviousVersion:
+            sandboxRepairGuestConfigurationUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -14879,7 +14883,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 3,
+      latestMinor: 2,
       versions: {
         0: {
           contract: browserSessionsV20,
@@ -14890,7 +14894,6 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         2: {
           contract: browserSessionsV22,
         },
-        3: { contract: browserSessionsV23 },
       },
     },
   },

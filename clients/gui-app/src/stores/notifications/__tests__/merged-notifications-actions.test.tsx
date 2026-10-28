@@ -504,6 +504,8 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useCloudNotificationsStore.getState().reset();
+    // An opened session for the signed-in account owns the rows seeded below.
+    useCloudNotificationsStore.setState({ accountId: "user-actions" });
     __resetAppLocalNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
     useHostNotificationsStore.getState().applySnapshot({
@@ -905,6 +907,8 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     // one already applied is dropped as a stale frame. Leaking it across tests
     // would silently swallow the next test's seed.
     useCloudNotificationsStore.getState().reset();
+    // An opened session for the signed-in account owns the rows seeded below.
+    useCloudNotificationsStore.setState({ accountId: "user-actions" });
     __resetAppLocalNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
   });
@@ -987,16 +991,19 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
   });
 
   it("falls back to the full indicator scope when the marked row names no entity", async () => {
-    // A row can leave `byId` before its mark-read settles (retention pruning,
-    // a snapshot swap), and a row with no `epicId` never named an entity at
-    // all. Neither can produce an entity-scoped invalidation, so the fallback
-    // must refresh the whole host scope rather than silently skip — a skip
-    // would strand exactly the badges this change exists to clear.
+    // A live row with no `epicId` never named an entity, so it cannot produce
+    // an entity-scoped invalidation. The fallback must refresh the whole host
+    // scope rather than silently skip - a skip would strand exactly the badges
+    // this change exists to clear. The row has to be live: a row that already
+    // left the feed is refused at dispatch.
     bindHostClient();
-    applyHostSnapshot([hostDone("done-1", 100, null)], {
-      unreadCount: 1,
-      attentionCount: 0,
-    });
+    applyHostSnapshot(
+      [{ ...hostDone("no-entity", 100, null), epicId: null, chatId: null }],
+      {
+        unreadCount: 1,
+        attentionCount: 0,
+      },
+    );
     const { queryClient, rowKey, unrelatedKey, wrapper } =
       seededIndicatorHarness();
 
@@ -1005,7 +1012,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     });
 
     act(() => {
-      result.current.markAsRead("host:pruned-before-settle");
+      result.current.markAsRead("host:no-entity");
     });
 
     await waitFor(() => {
@@ -1037,12 +1044,11 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     });
   });
 
-  it("addresses the entry captured by the click, even after that coalesceKey reopened", async () => {
+  it("refuses the entry captured by the click once it left the feed, and addresses only the reopened entry", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";
-    const original = cloudDone("entry-a", 1, null);
     useCloudNotificationsStore.getState().applySnapshot({
-      rows: [original],
+      rows: [cloudDone("entry-a", 1, null)],
       summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
       version: 1,
     });
@@ -1051,6 +1057,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       () => ({
         actions: useMergedNotificationsActions(),
         row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+        reopened: useMergedNotificationRow(cloudNotificationFeedId("entry-b")),
       }),
       { wrapper: createWrapper() },
     );
@@ -1059,29 +1066,34 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
 
     // The group reopens: a NEW entry supersedes the captured one, and it
     // arrives under its own feed id rather than mutating the old row.
-    useCloudNotificationsStore.getState().applySnapshot({
-      rows: [cloudDone("entry-b", 2, null)],
-      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
-      version: 2,
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 2,
+      });
     });
     act(() => {
       result.current.actions.clear(captured);
     });
-
-    // The command still names `entry-a`. That is the whole guard: a stale
-    // action can only reference a superseded entry, where the cloud no-ops it
-    // - so no occurrence token is needed to keep it off `entry-b`.
-    await waitFor(() => {
-      const call = hostRequestMock.mock.calls.find(
-        (entry) => entry[0] === "host.notifications.cloudFeed.clear",
-      );
-      expect(call?.[1]).toEqual({ entryId: "entry-a" });
+    const reopened = result.current.reopened;
+    if (reopened === null) throw new Error("expected reopened cloud row");
+    act(() => {
+      result.current.actions.clear(reopened);
     });
-    expect(
-      useCloudNotificationsStore.getState().rows[
-        cloudNotificationFeedId("entry-b")
-      ]?.entryId,
-    ).toBe("entry-b");
+
+    // The superseded entry is no longer live, so its click sends nothing; the
+    // reopened one is addressed by its own id, never retargeted from entry-a.
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.clear",
+        { entryId: "entry-b" },
+      );
+    });
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.clear",
+      { entryId: "entry-a" },
+    );
   });
 
   it("keeps a reopened entry unread after the entry it superseded was read", async () => {
@@ -2133,6 +2145,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
 
     act(() => {
       useCloudNotificationsStore.getState().reset();
+      useCloudNotificationsStore.setState({ accountId: "user-actions" });
       useCloudNotificationsStore.getState().applySnapshot({
         rows: [cloudDone("entry-b", 2, null)],
         summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },

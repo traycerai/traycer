@@ -185,10 +185,10 @@ describe("<ConsequencesBlock />", () => {
   });
 
   it("at a short balance asks for the team's credits and links to the configuration's billing page", () => {
-    render(block(input({ needsCredits: true })));
+    render(block(input({ needsCredits: true, shortfallMc: 120 })));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Add Acme credits to start a sandbox · from $0.12 an hour while awake",
+      "Your Acme allowance is short $0.12. $0.12 more starts this sandbox for an hour.",
     );
     const link = within(screen.getByTestId("consequences-block")).getByRole(
       "button",
@@ -208,12 +208,39 @@ describe("<ConsequencesBlock />", () => {
           configuration: { kind: "personal" },
           audience: "private",
           needsCredits: true,
+          shortfallMc: 120,
         }),
       ),
     );
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Add credits to start a sandbox · from $0.12 an hour while awake",
+      "Not enough credits. $0.12 more starts this sandbox for an hour.",
+    );
+  });
+
+  it("offers another host instead of a terminal at a short allowance", () => {
+    const choose = vi.fn<() => void>();
+    render(
+      <ConsequencesBlock
+        input={input({ needsCredits: true, shortfallMc: 210 })}
+        onMoveFirst={null}
+        onOpenTerminalInstead={vi.fn()}
+        onChooseAnotherHost={choose}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose another host" }),
+    );
+    expect(choose).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("button", { name: "Open terminal instead" }),
+    ).toBeNull();
+  });
+
+  it("says who takes over payment before a task wakes a team sandbox", () => {
+    render(block(input({ wakingName: "e2e-sbx-t1" })));
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "Waking e2e-sbx-t1 uses your Acme allowance and makes you the payer.",
     );
   });
 

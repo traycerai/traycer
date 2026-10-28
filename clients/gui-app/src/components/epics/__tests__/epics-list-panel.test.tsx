@@ -4652,7 +4652,7 @@ describe("<EpicsListPanel />", () => {
       name: /rename open from landing/i,
     });
     expect(router.state.location.pathname).toBe("/");
-    expect(document.activeElement).toBe(input);
+    await waitFor(() => expect(document.activeElement).toBe(input));
 
     fireEvent.change(input, { target: { value: "Edited from history" } });
     fireEvent.keyDown(input, { key: "Enter" });

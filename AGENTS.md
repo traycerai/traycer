@@ -66,10 +66,12 @@ daemon (`useDaemonProcess: false`): leave it off.
 
 ## When CI runs
 
-A team pull request into `main` runs **no CI, on purpose**, except the CodeQL
-scan: every required check reports passed, so a merge needs review only, and
-the commit hook is the only other automatic check before merge. Pull requests from
-forks and bots, and into any other branch, run every check; watch them with
+A team pull request into `main`, an `integration/*` branch or a `land/*`
+branch runs **no CI, on purpose**, except the CodeQL scan: every required
+check reports passed, so a merge needs review only, and the commit hook is the
+only other automatic check before merge. Work on those branches is tested by
+the merge run once it reaches `main`. Pull requests from forks and bots, and
+into any other branch, run every check; watch them with
 `gh pr checks --watch` and fix what they report.
 
 **CI does not run on a branch by default.** Check what you can locally with

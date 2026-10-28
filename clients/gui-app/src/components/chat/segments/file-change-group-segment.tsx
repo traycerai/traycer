@@ -145,6 +145,7 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
   return (
     <>
       <SegmentCard
+        footer={null}
         open={open}
         onOpenChange={setOpen}
         header={header}

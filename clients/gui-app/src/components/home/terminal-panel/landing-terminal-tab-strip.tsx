@@ -110,6 +110,11 @@ export function LandingTerminalTabStrip(
               <LandingPlaceholderTab
                 key={row.placeholder.instanceId}
                 instanceId={row.placeholder.instanceId}
+                label={
+                  row.placeholder.automation === undefined
+                    ? "New tab"
+                    : "Automations"
+                }
                 active={row.placeholder.instanceId === props.activeInstanceId}
                 onActivate={props.onActivate}
                 onDismiss={props.onDismissPlaceholder}
@@ -193,12 +198,12 @@ function NewTabButton(props: {
 }
 
 /**
- * The "New tab" row: a real strip entry the user can activate, close, or switch
- * away from, whose body is the chooser. It has no rename and no view model -
- * there is nothing yet to name.
+ * A reserved row for a chooser pick or an Automations shell awaiting its host.
+ * It has no host resource to rename until its terminal attaches.
  */
 function LandingPlaceholderTab(props: {
   readonly instanceId: string;
+  readonly label: string;
   readonly active: boolean;
   readonly onActivate: (instanceId: string) => void;
   readonly onDismiss: () => void;
@@ -216,7 +221,7 @@ function LandingPlaceholderTab(props: {
         <div
           ref={tabRef}
           role="tab"
-          aria-label="New tab"
+          aria-label={props.label}
           aria-selected={active}
           tabIndex={0}
           data-testid={`landing-terminal-tab-${instanceId}`}
@@ -233,13 +238,17 @@ function LandingPlaceholderTab(props: {
               "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
           )}
         >
-          <SquareDashed className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">New tab</span>
+          {props.label === "Automations" ? (
+            <TerminalSquare className="size-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <SquareDashed className="size-3.5 shrink-0" aria-hidden="true" />
+          )}
+          <span className="truncate">{props.label}</span>
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Close New tab"
+            aria-label={`Close ${props.label}`}
             className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
             onClick={(event) => {
               event.stopPropagation();

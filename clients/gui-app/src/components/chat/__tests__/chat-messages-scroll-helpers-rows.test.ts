@@ -40,7 +40,7 @@ function hydrated(
   ordinal: number,
   message: ChatMessageModel,
 ): TranscriptListRow {
-  return { kind: "hydrated", key, ordinal, model: message };
+  return { kind: "hydrated", key, ordinal, model: message, part: null };
 }
 
 function placeholder(key: string, ordinal: number): TranscriptListRow {

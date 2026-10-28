@@ -12,6 +12,7 @@ import {
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   ADD_CREDITS_LINK,
+  CHOOSE_ANOTHER_HOST,
   CONSEQUENCES_WORDING_VERSION,
   MOVE_THEM_FIRST,
   OPEN_TERMINAL_INSTEAD,
@@ -39,6 +40,7 @@ export function ConsequencesBlock(props: {
   readonly onMoveFirst: (() => void) | null;
   /** `Open terminal instead`, beside Send; `null` offers none. */
   readonly onOpenTerminalInstead: (() => void) | null;
+  readonly onChooseAnotherHost?: (() => void) | null;
 }): ReactNode {
   const viewerUserId = useCloudChatViewerId();
   const subject = consequencesShownSubject(
@@ -56,6 +58,7 @@ export function ConsequencesBlock(props: {
       viewerUserId={viewerUserId}
       onMoveFirst={props.onMoveFirst}
       onOpenTerminalInstead={props.onOpenTerminalInstead}
+      onChooseAnotherHost={props.onChooseAnotherHost}
     />
   );
 }
@@ -66,6 +69,7 @@ function ConsequencesBlockBody(props: {
   readonly viewerUserId: string;
   readonly onMoveFirst: (() => void) | null;
   readonly onOpenTerminalInstead: (() => void) | null;
+  readonly onChooseAnotherHost?: (() => void) | null;
 }): ReactNode {
   const markSeen = useTeamHostDisclosureSeenStore((s) => s.markSeen);
   // Decided once per context: recording the full render must not collapse
@@ -113,7 +117,18 @@ function ConsequencesBlockBody(props: {
             {`· ${WHAT_THIS_MEANS}`}
           </Button>
         ) : null}
-        {props.onOpenTerminalInstead === null ? null : (
+        {props.input.needsCredits && props.onChooseAnotherHost ? (
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            onClick={props.onChooseAnotherHost}
+          >
+            {CHOOSE_ANOTHER_HOST}
+          </Button>
+        ) : null}
+        {props.input.needsCredits ||
+        props.onOpenTerminalInstead === null ? null : (
           <Button
             type="button"
             variant="link"

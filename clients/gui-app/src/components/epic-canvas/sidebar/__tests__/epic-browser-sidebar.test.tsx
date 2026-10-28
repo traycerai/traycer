@@ -49,13 +49,9 @@ import {
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
-import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { dismissPip } from "@/lib/browser-view/pip/pip-store";
 import { BrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
-import {
-  BROWSER_CATALOG_VERSION,
-  type BrowserCatalogRecord,
-} from "@traycer/protocol/host/browser/catalog-contracts";
+import type { BrowserCatalogRecord } from "@traycer/protocol/host/browser/catalog-contracts";
 import { useBrowserPanelStore } from "@/stores/epics/browser-panel-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
@@ -76,10 +72,6 @@ const browserHostPinState = vi.hoisted(() => ({
   setSelection: vi.fn((selection: string | null) => {
     browserHostPinState.selection = selection;
   }),
-}));
-
-const browserHostProviderState = vi.hoisted(() => ({
-  hostIds: [] as Array<string | null>,
 }));
 
 const browserHostOptionsState = vi.hoisted(() => ({
@@ -165,20 +157,10 @@ vi.mock("@/components/settings/host-scope/host-option-row", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
-  BrowserSessionsHostProvider: (props: {
-    readonly hostId: string | null;
-    readonly children: ReactNode;
-  }) => {
-    browserHostProviderState.hostIds.push(props.hostId);
-    return props.children;
-  },
-  BrowserSessionsHostBoundary: (props: {
-    readonly hostId: string | null;
-    readonly children: ReactNode;
-  }) => {
-    browserHostProviderState.hostIds.push(props.hostId);
-    return props.children;
-  },
+  BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+  BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+    props.children,
 }));
 
 vi.mock("sonner", () => ({
@@ -356,7 +338,6 @@ describe("BrowsersPanelBody", () => {
     dndState.draggables = [];
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
-    browserHostProviderState.hostIds = [];
     browserHostOptionsState.hosts = [
       {
         hostId: "host-1",
@@ -382,6 +363,8 @@ describe("BrowsersPanelBody", () => {
     browserHostOptionsState.retryLists.mockClear();
     closeTab.mockReset();
     closeTab.mockResolvedValue(undefined);
+    catalogActions.closeTab.mockReset();
+    catalogActions.closeTab.mockResolvedValue(undefined);
     catalogActions.withOwner.mockReset();
     catalogActions.withOwner.mockImplementation(
       (hostId: string, run: (state: BrowserSessionsState) => Promise<void>) =>
@@ -600,14 +583,6 @@ describe("BrowsersPanelBody", () => {
     });
   });
 
-  it("switches only the panel subscription when its host filter is pinned", () => {
-    browserHostPinState.selection = "host-2";
-
-    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
-
-    expect(browserHostProviderState.hostIds).toContain("host-2");
-  });
-
   it("filters the flat list by title, hostname, or URL", () => {
     usePanelHeaderSearchStore
       .getState()
@@ -704,7 +679,9 @@ describe("BrowsersPanelBody", () => {
   });
 
   it("keeps duplicate close names disambiguated while pending", async () => {
-    closeTab.mockImplementation(() => new Promise<void>(() => undefined));
+    catalogActions.closeTab.mockImplementation(
+      () => new Promise<void>(() => undefined),
+    );
     const tabIds = ["tab-duplicate-aaaa", "tab-duplicate-bbbb"];
     sessionsState.value = {
       ...sessionsState.value,
@@ -868,38 +845,22 @@ describe("BrowsersPanelBody", () => {
     ).not.toContain("opacity-60");
   });
 
-  it("shows a retryable unavailable state instead of an empty list", () => {
-    const retry = vi.fn();
-    sessionsState.value = {
-      ...sessionsState.value,
-      lifecycle: "failed",
-      items: [],
-      errorMessage: "Host connection failed.",
-      retry,
-    };
+  it("shows a retryable error state instead of an empty list when the catalog cannot load", () => {
+    const refetch = vi.fn();
+    render(
+      wrapper(
+        <BrowserCatalogContext.Provider
+          value={{ status: "error", scope: "cloud", records: [], refetch }}
+        >
+          <BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />
+        </BrowserCatalogContext.Provider>,
+      ),
+    );
 
-    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
-
-    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
+    expect(screen.getByText("Couldn't load browser tabs.")).toBeTruthy();
     expect(screen.queryByText("No browsers yet.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(retry).toHaveBeenCalledOnce();
-  });
-
-  it("drops the retry and names the host update when the host has no browsers", () => {
-    sessionsState.value = {
-      ...sessionsState.value,
-      lifecycle: "unsupported",
-      items: [],
-      errorMessage: BROWSERS_UNSUPPORTED_MESSAGE,
-    };
-
-    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
-
-    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
-    expect(screen.getByText(BROWSERS_UNSUPPORTED_MESSAGE)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByText("No browsers yet.")).toBeNull();
+    expect(refetch).toHaveBeenCalledOnce();
   });
 
   it("shows drivenBy attribution via real tooltip and opens the driving chat", async () => {
@@ -962,7 +923,10 @@ describe("BrowsersPanelBody", () => {
     // The close runs as a mutation, so the host frame goes out on the next
     // microtask rather than inside the click.
     await waitFor(() => {
-      expect(closeTab).toHaveBeenCalledWith("sess-primary", "tab-live");
+      expect(catalogActions.closeTab).toHaveBeenCalledWith(
+        { epicId: "epic-1", hostId: "host-1", sessionId: "sess-primary" },
+        "tab-live",
+      );
     });
     await waitFor(() => {
       expect(findOpenArtifactInTab("view-tab-1", pointer.id)).toBeNull();
@@ -1285,7 +1249,7 @@ describe("BrowsersPanelBody", () => {
 
   it("keeps close in its own slot with a spinner, leaves canvas tiles open, and restores close after a failed ack", async () => {
     let rejectClose: ((error: Error) => void) | undefined;
-    closeTab.mockImplementation(
+    catalogActions.closeTab.mockImplementation(
       () =>
         new Promise<void>((_resolve, reject) => {
           rejectClose = reject;
@@ -1579,7 +1543,7 @@ describe("BrowsersPanelActions", () => {
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
     catalogActions.withOwner.mockReset();
-    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+    useBrowserPanelStore.setState({ preferences: {} });
     browserHostOptionsState.hosts = [
       {
         hostId: "host-1",
@@ -1792,13 +1756,6 @@ describe("grouped catalog list", () => {
   }
 
   function catalogPanel(): ReactNode {
-    return catalogPanelRevoking([], null);
-  }
-
-  function catalogPanelRevoking(
-    revokedHostIds: readonly string[],
-    header: ReactNode,
-  ): ReactNode {
     const records = [
       catalogRecord("host-1", "s1", [
         { tabId: "t1", title: "Docs", url: "https://docs.example" },
@@ -1813,29 +1770,8 @@ describe("grouped catalog list", () => {
     ];
     return wrapper(
       <BrowserCatalogContext.Provider
-        value={{
-          inventory: {
-            status: "available",
-            records,
-            readiness: ["host-1", "host-2", "host-3"].map((hostId) => ({
-              hostId,
-              state: "complete",
-              indexingRevision: 1,
-              capability: {
-                catalogVersion: BROWSER_CATALOG_VERSION,
-                durableInventoryRevisions: true,
-                revisionedMutationAcks: true,
-              },
-            })),
-            version: 1,
-            pendingCount: 0,
-            revokedHostIds,
-          },
-          hosts: new Map(),
-          refresh: vi.fn(),
-        }}
+        value={{ status: "ready", scope: "cloud", records, refetch: vi.fn() }}
       >
-        {header}
         <BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />
       </BrowserCatalogContext.Provider>,
     );
@@ -1843,7 +1779,7 @@ describe("grouped catalog list", () => {
 
   beforeEach(() => {
     window.localStorage.clear();
-    useBrowserPanelStore.setState({ preferences: {}, legacyHostByScope: {} });
+    useBrowserPanelStore.setState({ preferences: {} });
     browserHostPinState.selection = null;
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.hosts = [
@@ -1886,7 +1822,12 @@ describe("grouped catalog list", () => {
       true,
     );
     seedCanvasTab();
-    replaceSessions([]);
+    sessionsState.value = {
+      ...sessionsState.value,
+      lifecycle: "connecting",
+      inventoryReady: false,
+      items: [],
+    };
   });
 
   afterEach(() => {
@@ -1994,31 +1935,5 @@ describe("grouped catalog list", () => {
       );
     });
     expect(closeTab).not.toHaveBeenCalled();
-  });
-
-  it("omits a revoked device's tabs and its create choice even while the device is online", async () => {
-    const user = userEvent.setup();
-    render(
-      catalogPanelRevoking(
-        ["host-2"],
-        <BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />,
-      ),
-    );
-
-    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
-    expect(screen.getByTestId("browser-device-group-host-1")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
-    expect(screen.queryByRole("menuitem", { name: /Work Mac/ })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: /Home Mac/ })).toBeTruthy();
-  });
-
-  it("drops a device's tabs when it is revoked after the list is showing, while it stays online", () => {
-    const view = render(catalogPanelRevoking([], null));
-    expect(screen.getByTestId("browser-device-group-host-2")).toBeTruthy();
-
-    view.rerender(catalogPanelRevoking(["host-2"], null));
-
-    expect(screen.queryByTestId("browser-device-group-host-2")).toBeNull();
-    expect(screen.getByTestId("browser-device-group-host-1")).toBeTruthy();
   });
 });

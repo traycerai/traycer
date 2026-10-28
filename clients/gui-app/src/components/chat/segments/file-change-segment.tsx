@@ -115,6 +115,7 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
   }
   return (
     <SegmentCard
+      footer={null}
       open={open}
       onOpenChange={setOpen}
       header={header}

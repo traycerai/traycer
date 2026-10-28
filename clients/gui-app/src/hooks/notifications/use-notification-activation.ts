@@ -178,8 +178,8 @@ export function useNotificationActivationWithNavigate(
         requiresOriginHost &&
         !routedToOriginBoundTarget &&
         originHostId !== null &&
-        effectiveHostId !== null &&
-        originHostId !== effectiveHostId
+        beforeRouteHostId !== null &&
+        originHostId !== beforeRouteHostId
       ) {
         input.onResult?.("failure");
         return;
@@ -223,7 +223,7 @@ export function useNotificationActivationWithNavigate(
       }
       input.onResult?.("success");
     },
-    [client, effectiveHostId, navigate],
+    [client, navigate],
   );
 
   return { activate };

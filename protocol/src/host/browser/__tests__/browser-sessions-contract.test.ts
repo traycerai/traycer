@@ -20,7 +20,6 @@ import {
   browserSessionsV20,
   browserSessionsV21,
   browserSessionsV22,
-  browserSessionsV23,
   browserScreencastClientFrameSchema,
   browserScreencastOpenRequestSchema,
   browserScreencastServerFrameSchema,
@@ -1385,87 +1384,6 @@ describe("browser.sessions@2.2 on-demand frames", () => {
     expect(browserSessionsV22.serverFrameSchema).toBe(
       browserSessionsV21.serverFrameSchema,
     );
-  });
-});
-
-describe("browser.sessions@2.3 owner inventory frames", () => {
-  const capability = {
-    catalogVersion: 1,
-    durableInventoryRevisions: true,
-    revisionedMutationAcks: true,
-  };
-  const live = {
-    kind: "live",
-    record: {
-      epicId: "epic-1",
-      hostId: "host-1",
-      sessionId: "session-1",
-      inventoryRevision: 3,
-      lastActivityAt: 1,
-      tabs: [{ tabId: "tab-1", title: null, url: "https://example.com" }],
-    },
-  };
-  const frames = [
-    {
-      kind: "ownerInventorySnapshot",
-      hasBinaryPayload: false,
-      capability,
-      inventory: { epicId: "epic-1", hostId: "host-1", sessions: [live] },
-    },
-    {
-      kind: "ownerInventoryUnavailable",
-      hasBinaryPayload: false,
-      epicId: "epic-1",
-      hostId: "host-1",
-      reason: "Browser inventory is unavailable. Try again.",
-    },
-    { kind: "ownerInventoryUpdated", hasBinaryPayload: false, evidence: live },
-    {
-      kind: "inventoryMutationAck",
-      hasBinaryPayload: false,
-      requestId: "request-1",
-      evidence: live,
-    },
-  ];
-
-  it("accepts every owner inventory frame on 2.3 and on no earlier minor", () => {
-    for (const frame of frames) {
-      expect(
-        browserSessionsV23.serverFrameSchema.safeParse(frame).success,
-      ).toBe(true);
-      expect(
-        browserSessionsV22.serverFrameSchema.safeParse(frame).success,
-      ).toBe(false);
-      expect(browserSessionsServerFrameSchema.safeParse(frame).success).toBe(
-        false,
-      );
-    }
-  });
-
-  it("keeps every 2.2 server frame valid on 2.3 and shares the 2.2 open and client frames", () => {
-    expect(
-      browserSessionsV23.serverFrameSchema.safeParse({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        sessions: [],
-      }).success,
-    ).toBe(true);
-    expect(browserSessionsV23.openRequestSchema).toBe(
-      browserSessionsV22.openRequestSchema,
-    );
-    expect(browserSessionsV23.clientFrameSchema).toBe(
-      browserSessionsV22.clientFrameSchema,
-    );
-  });
-
-  it("rejects a snapshot that mixes in another epic's evidence", () => {
-    const foreign = { ...live, record: { ...live.record, epicId: "epic-2" } };
-    expect(
-      browserSessionsV23.serverFrameSchema.safeParse({
-        ...frames[0],
-        inventory: { epicId: "epic-1", hostId: "host-1", sessions: [foreign] },
-      }).success,
-    ).toBe(false);
   });
 });
 

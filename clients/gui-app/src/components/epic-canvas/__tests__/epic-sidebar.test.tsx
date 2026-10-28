@@ -1938,27 +1938,10 @@ describe("Browsers panel registration", () => {
       <QueryClientProvider client={testQueryClient}>
         <BrowserCatalogContext.Provider
           value={{
-            inventory: {
-              status: "available",
-              records: [],
-              readiness: [
-                {
-                  hostId: OTHER_HOST_ID,
-                  state: "complete",
-                  indexingRevision: 1,
-                  capability: {
-                    catalogVersion: 1,
-                    durableInventoryRevisions: true,
-                    revisionedMutationAcks: true,
-                  },
-                },
-              ],
-              version: 1,
-              pendingCount: 0,
-              revokedHostIds: [],
-            },
-            hosts: new Map(),
-            refresh: vi.fn(),
+            status: "ready",
+            scope: "cloud",
+            records: [],
+            refetch: vi.fn(),
           }}
         >
           <EpicLeftPanelRail

@@ -748,6 +748,70 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     expect(text).toContain("no longer shared with you");
     expect(text).not.toContain("sandbox isn't available");
   });
+  describe("destroyed sandbox", () => {
+    it.each([
+      [true, false],
+      [false, false],
+      [true, true],
+    ] as const)(
+      "wins the ownership swaps (ownedByViewer=%s, environmentOwned=%s) and offers 'Continue on another host'",
+      (ownedByViewer, environmentOwned) => {
+        const onClone = vi.fn();
+        render(
+          <ChatDeadTileBanner
+            hostLabel="e2e-sbx-stop3"
+            reason="sandbox-destroyed"
+            ownedByViewer={ownedByViewer}
+            environmentOwned={environmentOwned}
+            cloneAllowed
+            showsPublishedCopy
+            continueTargetLabel={null}
+            cloning={false}
+            onClone={onClone}
+            testId="chat-dead-destroyed"
+            className={undefined}
+          />,
+        );
+
+        const banner = screen.getByTestId("chat-dead-destroyed");
+        expect(banner.getAttribute("data-reason")).toBe("sandbox-destroyed");
+        expect(banner.textContent).toContain("e2e-sbx-stop3");
+        expect(banner.textContent).toContain("destroyed");
+        expect(banner.textContent).not.toContain("offline");
+        expect(banner.textContent).not.toContain("another collaborator");
+        screen
+          .getByRole("button", { name: "Continue on another host" })
+          .click();
+        expect(onClone).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("offers no action to a viewer who cannot clone", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="e2e-sbx-stop3"
+          reason="sandbox-destroyed"
+          ownedByViewer
+          environmentOwned={false}
+          cloneAllowed={false}
+          showsPublishedCopy
+          continueTargetLabel={null}
+          cloning={false}
+          onClone={() => undefined}
+          testId="chat-dead-destroyed-viewer"
+          className={undefined}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: "Continue on another host" }),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("chat-dead-destroyed-viewer").textContent,
+      ).toContain("destroyed");
+    });
+  });
+
   describe("removed sandbox continue target", () => {
     it("names the sandbox the agent continues on, in the sentence and on the button", () => {
       render(

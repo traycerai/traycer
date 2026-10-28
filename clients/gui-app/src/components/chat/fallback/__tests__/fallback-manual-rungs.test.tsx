@@ -119,7 +119,7 @@ const harness = vi.hoisted(() => {
   });
   return {
     mutate: vi.fn(),
-    // `useIsMutating`'s answer, and the filters it was asked with.
+    // `useIsMutatingOf`'s answer, and the filters it was asked with.
     mutating: 0,
     mutatingArgs: [] as unknown[],
     // Every props object the stubbed chooser rendered with, newest last.
@@ -195,9 +195,8 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   useExistingChatSessionHandle: () => ({ store: harness.store }),
 }));
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useIsMutating: (filters: unknown) => {
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: (filters: unknown) => {
     harness.mutatingArgs.push(filters);
     return harness.mutating;
   },

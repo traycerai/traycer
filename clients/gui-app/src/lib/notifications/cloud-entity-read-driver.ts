@@ -20,6 +20,9 @@ export const CLOUD_ENTITY_READ_RETRY_BASE_MS = 1_000;
 export const CLOUD_ENTITY_READ_RETRY_MAX_MS = 300_000;
 
 export interface CloudEntityReadDeps {
+  /** Checked before claiming rows, including a retry after the caller's mode
+   * or account changed while this driver's timer was armed. */
+  readonly isActive: () => boolean;
   /** Resolves when the server accepted the marker, rejects otherwise. */
   readonly markRead: (entryId: string) => Promise<void>;
   readonly now: () => number;
@@ -92,6 +95,7 @@ export function requestCloudEntityRead(
   entity: HostNotificationsEntityRef,
   deps: CloudEntityReadDeps,
 ): void {
+  if (!deps.isActive()) return;
   if (inFlight) {
     queuedScope = { originHostId, entity };
     return;
@@ -119,12 +123,15 @@ export function requestCloudEntityRead(
   void (async (): Promise<void> => {
     try {
       for (const entryId of entryIds) {
+        if (generation !== passGeneration || !deps.isActive()) return;
         try {
           await deps.markRead(entryId);
+          if (generation !== passGeneration || !deps.isActive()) return;
           useCloudNotificationsStore
             .getState()
             .recordEntityReadSuccess(entryId);
         } catch {
+          if (generation !== passGeneration || !deps.isActive()) return;
           // Availability state is owned by the mutation's own onError. Here we
           // only decide when this entry may be tried again, and keep going so
           // one bad entry does not strand the rest of the batch.

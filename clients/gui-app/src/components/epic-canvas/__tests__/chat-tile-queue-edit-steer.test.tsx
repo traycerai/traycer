@@ -100,6 +100,7 @@ const MOCK_HOST_DIRECTORY = {
 // useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
+  useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
@@ -934,6 +935,7 @@ describe("chat-tile's ready line for an agent whose first message waited for its
     usePendingSandboxSendStore.getState().add(
       pendingSend({
         id: "send-ready",
+        userId: "owner-1",
         text: "fix the login bug",
         delivery: {
           chatId: CHAT_ARTIFACT.id,
@@ -961,6 +963,7 @@ describe("chat-tile's ready line for an agent whose first message waited for its
     usePendingSandboxSendStore.getState().add(
       pendingSend({
         id: "send-other",
+        userId: "owner-1",
         delivery: {
           chatId: "some-other-chat",
           hostId: "sbx-host",

@@ -495,6 +495,7 @@ export function publishedChatSessionState(
     interviewDeliveryRetry: () => null,
     ackAcceptedAction: () => undefined,
     ackFailedSendRestoration: () => undefined,
+    ackRetainedRejectedSend: () => undefined,
     stateFailedSendRestoration: () => undefined,
     markNoticeDelivered: () => undefined,
     takeSetupFailedRestoration: () => null,

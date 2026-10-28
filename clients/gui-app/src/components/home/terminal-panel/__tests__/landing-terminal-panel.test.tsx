@@ -1,3 +1,4 @@
+import type { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { useMemo, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -66,6 +67,17 @@ type TerminalListFixture = {
   readonly homeCwd: string | null;
 };
 
+vi.mock("@/components/home/terminal-panel/automation-terminal-pane", () => ({
+  AutomationTerminalPane: (
+    props: React.ComponentProps<typeof AutomationTerminalPane>,
+  ) => (
+    <div
+      data-testid="pending-automation"
+      data-host-id={props.request.existing?.hostId}
+    />
+  ),
+}));
+
 const mocks = vi.hoisted(() => {
   const initialPlainAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
@@ -129,6 +141,9 @@ const mocks = vi.hoisted(() => {
       cancelQueries: vi.fn(() => Promise.resolve()),
       fetchQuery: vi.fn(),
       getQueryData: vi.fn(() => mocks.plainCollection),
+      // `useIsMutatingOf` reads the cache through this mocked export, so it
+      // must see the real client's cache that the panel's `useMutation` writes.
+      getMutationCache: () => testQueryClient.getMutationCache(),
     },
     onChangeListeners: [] as Array<
       (event: {
@@ -492,11 +507,12 @@ function panelUi() {
 
 /**
  * A REAL client, unlike the hand-rolled `mocks.queryClient` the panel's own
- * `useQueryClient()` reads. The panel opens browser tabs through `useMutation`
- * / `useIsMutating`, and those resolve the client through react-query's own
- * internal reference rather than through this suite's mocked export - so the
- * fake never reaches them and they need a provider. Re-made per test, because
- * `useIsMutating` counts across the whole client.
+ * `useQueryClient()` reads. The panel opens browser tabs through `useMutation`,
+ * which resolves the client through react-query's own internal reference
+ * rather than through this suite's mocked export - so the fake never reaches
+ * it and it needs a provider. `useIsMutatingOf` does read the mocked export,
+ * which hands it this client's mutation cache. Re-made per test, because the
+ * pending count spans the whole client.
  */
 let testQueryClient = new QueryClient();
 
@@ -4297,6 +4313,53 @@ describe("<LandingTerminalPanel />", () => {
    * `WebContentsView` is painted over the window, so its presence and its
    * on-screen state are the props the panel decides, not DOM the test can see.
    */
+  it.each(["unknown", "unsupported", "no-active-host"] as const)(
+    "shows the Automations pane while the composer host is %s",
+    async (availability) => {
+      mocks.activeHostId = availability === "no-active-host" ? null : "host-a";
+      mocks.clientActiveHostId = mocks.activeHostId;
+      mocks.probeData = undefined;
+      mocks.freshProbeData = undefined;
+      if (availability === "unsupported") {
+        mocks.probeError = new HostRpcError({
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "unsupported",
+          requestId: "req-unsupported",
+          method: "terminal.list",
+          fatalDetails: null,
+        });
+      }
+      useLandingPanelStore.getState().openAutomationTerminal(
+        {
+          userId: "u1",
+          startedAt: Date.now(),
+          terminalId: "automation-terminal",
+          existing: {
+            hostId: "host-automation",
+            sandboxId: "sbx-automation",
+            awake: false,
+          },
+          teamEnvironmentId: null,
+        },
+        "automation-pane",
+      );
+      render(panelUi());
+      expect(
+        (await screen.findByTestId("pending-automation")).getAttribute(
+          "data-host-id",
+        ),
+      ).toBe("host-automation");
+      expect(
+        screen
+          .getByRole("tab", { name: "Automations" })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
+      expect(testLayout().maximized).toBe(true);
+      expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a live device's browser row when the target host is unsupported", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -4362,6 +4425,50 @@ describe("<LandingTerminalPanel />", () => {
     expect(tile.getAttribute("data-active")).toBe("true");
     expect(tile.getAttribute("data-panel-open")).toBe("true");
   });
+
+  it.each(["unsupported composer host", "no composer host selected"] as const)(
+    "keeps an acknowledged durable terminal visible with %s",
+    async (targetState) => {
+      if (targetState === "unsupported composer host") {
+        mocks.activeHostId = "host-a";
+        mocks.clientActiveHostId = "host-a";
+        mocks.primaryWorkspacePath = "/workspace/project";
+        mocks.probeData = undefined;
+        mocks.freshProbeData = undefined;
+        mocks.probeError = new HostRpcError({
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "terminal.list is not supported by this host",
+          requestId: "req-unsupported",
+          method: "terminal.list",
+          fatalDetails: null,
+        });
+      } else {
+        mocks.activeHostId = null;
+        mocks.clientActiveHostId = null;
+        mocks.primaryWorkspacePath = null;
+        mocks.probeData = undefined;
+        mocks.freshProbeData = undefined;
+      }
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "automation-terminal-instance",
+        sessionId: "automation-terminal-session",
+        hostId: "host-automation",
+        cwd: "/automation/work",
+        name: "Automations",
+        titleSource: "default",
+        hostAuthorityAcknowledged: true,
+      });
+      useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(panelUi());
+
+      expect(await screen.findByTestId("landing-terminal-panel")).toBeTruthy();
+      expect(
+        screen.getByTestId("landing-terminal-tab-automation-terminal-instance"),
+      ).toBeTruthy();
+      expect(await screen.findByTestId("landing-terminal-tile")).toBeTruthy();
+    },
+  );
 
   // The other half, unchanged: with only terminal rows, every row IS served by
   // the target host, so the verdict speaks for all of them and the panel still

@@ -1467,12 +1467,14 @@ const TWO_MACHINES_VIEW: TaskHostsView = {
       label: "This machine",
       principal: { kind: "user", id: USER_ID },
       reach: "same_principal",
+      sandboxEnd: null,
     },
     {
       hostId: "host-b",
       label: "Another machine",
       principal: { kind: "user", id: USER_ID },
       reach: "same_principal",
+      sandboxEnd: null,
     },
   ],
 };

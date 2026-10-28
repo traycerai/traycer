@@ -425,10 +425,6 @@ export interface UseHostMutationOptions<
    * way to have a command applied twice under one name.
    */
   readonly idempotencyKey?: (variables: TVariables) => string | null;
-  /** Cancellation for one caller-owned operation, read on each dispatch. */
-  readonly signalFor?:
-    | ((variables: TVariables) => AbortSignal | undefined)
-    | null;
   /**
    * Substitutes the response the rest of the mutation sees, with the ability to
    * SEND AGAIN first.
@@ -518,11 +514,8 @@ export function useHostMutation<
             : await args.prepareRequest(mapped, client);
         const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
         const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
-        // Omitted cancellation preserves the existing request path. A keyed
-        // dispatch needs requestWithOptions to carry the key and version floor.
+        // A keyed dispatch carries both retry identity and version floor.
         const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
-          const signal = args.signalFor?.(variables);
-          signal?.throwIfAborted();
           if (idempotencyKey !== null) {
             return client.requestWithOptions(args.method, params, {
               idempotencyKey,
@@ -532,19 +525,17 @@ export function useHostMutation<
               // does not declare for the method.
               responseTimeoutMs: null,
               requiredHostMethodVersion: requirement,
-              signal,
+              signal: undefined,
             });
           }
           if (requirement !== null)
             return client.requestWithSignalRequiringHostMethodVersion(
               args.method,
               params,
-              signal,
+              undefined,
               requirement,
             );
-          return signal === undefined
-            ? client.request(args.method, params)
-            : client.requestWithSignal(args.method, params, signal);
+          return client.request(args.method, params);
         };
         const mapDispatchError = args.mapDispatchError;
         // `.catch` directly on the dispatch, never chained after a `.then`: a

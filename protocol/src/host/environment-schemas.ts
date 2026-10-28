@@ -269,6 +269,8 @@ export type EnvironmentPlaneState = z.infer<typeof environmentPlaneStateSchema>;
  */
 export const environmentStatusResponseSchemaV11 = lazySchema(() =>
   environmentStatusResponseSchema.extend({
+    /** Current sandbox apply operation; absent on older hosts, null while unknown or applying. */
+    sandboxSettingsOperationId: z.string().min(1).nullable().optional(),
     consent: z
       .object({ acceptedAt: z.number(), planHash: z.string().min(1) })
       .nullable()

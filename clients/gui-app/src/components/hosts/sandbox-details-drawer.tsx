@@ -16,11 +16,15 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
-import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
+import {
+  SANDBOX_LIST_FAILED,
+  sandboxVerbFailureLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   closeSandboxDetails,
@@ -101,6 +105,7 @@ function SandboxDetailsSections(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
   const { summary } = props;
+  const operation = useSandboxOperation(summary.id);
   const costs = useSandboxCosts();
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
@@ -154,6 +159,25 @@ function SandboxDetailsSections(props: {
       >
         <h3 className="text-ui-sm font-medium">History</h3>
         <ol className="flex list-none flex-col gap-1 p-0 text-ui-xs">
+          {operation?.kind === "failed" ? (
+            <li
+              className="space-y-1 wrap-anywhere"
+              data-testid="sandbox-details-operation-failure"
+            >
+              <p>
+                {sandboxVerbFailureLine(
+                  operation.verb,
+                  summary.displayName,
+                  operation.reference,
+                )}
+              </p>
+              <p>{operation.error.message}</p>
+              {operation.code === null ? null : (
+                <p>{`Failure code: ${operation.code}`}</p>
+              )}
+              <p>{`Support reference: ${operation.reference}`}</p>
+            </li>
+          ) : null}
           {entry.history.map((event) => (
             <li
               key={`${event.at}:${event.label}:${event.value}`}
