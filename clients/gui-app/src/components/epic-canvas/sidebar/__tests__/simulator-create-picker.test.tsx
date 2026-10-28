@@ -39,6 +39,8 @@ const EPIC = "epic-1";
 const world = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
   negotiated: null as SchemaVersion | false | null,
+  /** The manifest registry's three states for every simulator method. */
+  support: true as boolean | null,
   openTile: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -81,8 +83,8 @@ vi.mock("@/lib/host/read-negotiated-method-version", () => ({
   readNegotiatedMethodVersion: () => world.negotiated,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostSupportsMethod: () => true,
-  useHostMethodSupport: () => true,
+  useHostSupportsMethod: () => world.support === true,
+  useHostMethodSupport: () => world.support,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: world.openTile }),
@@ -184,6 +186,8 @@ const RUNNING: SimulatorHostInstance = {
 };
 
 const opens: unknown[] = [];
+/** Whether the picker reached the host at all: the read that handshakes it. */
+const reads = { list: 0 };
 
 function answer(): SimulatorOpenResponse {
   return {
@@ -247,7 +251,9 @@ describe("SimulatorCreatePicker", () => {
     resetSimulatorPendingOpensForTests();
     freshQueryClient();
     opens.length = 0;
+    reads.list = 0;
     pack.state = READY_PACK;
+    world.support = true;
     world.negotiated = { major: 1, minor: 1 };
     world.openTile.mockReset();
     world.toastError.mockReset();
@@ -255,7 +261,10 @@ describe("SimulatorCreatePicker", () => {
       registry: hostRpcRegistry,
       requestId: () => "request",
       handlers: {
-        "simulator.list": () => listNow(),
+        "simulator.list": () => {
+          reads.list += 1;
+          return listNow();
+        },
         "simulator.status": () => statusNow(),
         "simulator.instances": () => ({ instances: [RUNNING] }),
         "config.simulator.set": () => {
@@ -358,6 +367,43 @@ describe("SimulatorCreatePicker", () => {
     ).toBeTruthy();
   });
 
+  const TOO_OLD = "Studio Mac needs an update before it can run simulators.";
+
+  it("reaches a machine this window has not addressed instead of calling it too old", async () => {
+    // Nothing is known about this machine yet: no handshake has completed, so
+    // the registry answers `null` for every simulator method.
+    world.support = null;
+    world.negotiated = null;
+    await openPicker();
+
+    // The read is what handshakes the machine, so it has to go out.
+    await waitFor(() => {
+      expect(reads.list).toBeGreaterThan(0);
+    });
+    expect(
+      await screen.findByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+    expect(screen.queryByText(TOO_OLD)).toBeNull();
+    // Boot another cannot be offered until the version is known - but then it
+    // says so rather than sitting dead.
+    expect(
+      within(screen.getByTestId("simulator-picker-running-udid-1")).getByRole(
+        "button",
+        { name: "Boot another" },
+      ),
+    ).toHaveProperty("disabled", true);
+    expect(screen.getByText("Asking Studio Mac about mobile simulators.")).
+      toBeTruthy();
+  });
+
+  it("says a machine whose manifest lacks the read needs an update, and asks it nothing", async () => {
+    world.support = false;
+    await openPicker();
+
+    expect(await screen.findByText(TOO_OLD)).toBeTruthy();
+    expect(reads.list).toBe(0);
+  });
+
   it("disables Boot another toward a 1.0 host, says why, and sends nothing for it", async () => {
     world.negotiated = { major: 1, minor: 0 };
     const user = await openPicker();
@@ -384,7 +430,9 @@ describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
     resetSimulatorPendingOpensForTests();
     freshQueryClient();
     opens.length = 0;
+    reads.list = 0;
     pack.state = READY_PACK;
+    world.support = true;
     world.negotiated = { major: 1, minor: 0 };
     world.toastError.mockReset();
     world.client = null;

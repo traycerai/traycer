@@ -38,7 +38,7 @@ import { useServingLocalHostId } from "@/hooks/browser/use-browser-open-host";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
@@ -236,7 +236,7 @@ export function SimulatorCreatePickerBody(props: {
   const v11 = simulatorVerbsAreV11(
     useHostNegotiatedMethodVersion(client, "simulator.open"),
   );
-  const listSupported = useHostSupportsMethod(hostId, "simulator.list");
+  const listSupport = useHostMethodSupport(hostId, "simulator.list");
   const list = useSimulatorListQuery(client, hostId, epicId);
   useSimulatorListFollowsPack(client, hostId);
   const instances = useSimulatorInstancesQuery(client, hostId, true);
@@ -268,7 +268,8 @@ export function SimulatorCreatePickerBody(props: {
     hostId,
     hostName,
     offline,
-    listSupported,
+    listSupport,
+    unreachable: list.isError,
     noPlatform:
       state !== null &&
       state.platforms.every((platform) => !platform.available),
@@ -292,15 +293,32 @@ export function SimulatorCreatePickerBody(props: {
           onPick={pick}
         />
       </div>
-      {v11 === false && state !== null ? (
-        <p className="border-t border-border px-3 py-2 text-ui-xs text-muted-foreground">
-          {hostName} needs an update before it can boot another copy.
-        </p>
-      ) : null}
+      {state === null ? null : (
+        <BootAnotherNote v11={v11} hostName={hostName} />
+      )}
       {state?.packState.kind === "off" && hostId !== null ? (
         <SimulatorsOffFooter hostId={hostId} hostName={hostName} />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Why Boot another is unavailable. It is refused whenever the version is not
+ * known to be `@1.1`, so both of those states say so: an old machine cannot
+ * boot a copy at all, and one still being asked may yet be able to.
+ */
+function BootAnotherNote(props: {
+  readonly v11: boolean | null;
+  readonly hostName: string;
+}) {
+  if (props.v11 === true) return null;
+  return (
+    <p className="border-t border-border px-3 py-2 text-ui-xs text-muted-foreground">
+      {props.v11 === false
+        ? `${props.hostName} needs an update before it can boot another copy.`
+        : `Asking ${props.hostName} about mobile simulators.`}
+    </p>
   );
 }
 
@@ -350,17 +368,27 @@ function PickerTopRow(props: {
   );
 }
 
+/**
+ * The sentence that replaces the two sections, or null to draw them.
+ *
+ * `listSupport` is the manifest's three states, and only the middle one is a
+ * fact about the machine's age: `null` is "not addressed yet", which the read
+ * itself resolves, so it draws the loading state and never the update line.
+ * A machine that cannot be reached says so instead of spinning.
+ */
 function pickerNote(args: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly offline: boolean;
-  readonly listSupported: boolean;
+  readonly listSupport: boolean | null;
+  readonly unreachable: boolean;
   readonly noPlatform: boolean;
 }): string | null {
   if (args.hostId === null) return "No machine to run simulators on.";
   if (args.offline) return `${args.hostName} is offline.`;
-  if (!args.listSupported)
+  if (args.listSupport === false)
     return `${args.hostName} needs an update before it can run simulators.`;
+  if (args.unreachable) return `Couldn't reach ${args.hostName}.`;
   if (args.noPlatform) return `${args.hostName} can't run simulators.`;
   return null;
 }

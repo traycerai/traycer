@@ -16,7 +16,10 @@ import {
   useHostQuery,
 } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSupport,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { queryKeys, simulatorMutationKeys } from "@/lib/query-keys";
@@ -331,7 +334,16 @@ export function useSimulatorInstancesQuery(
   });
 }
 
-/** `hostId`'s devices and this task's sessions there, as one read. */
+/**
+ * `hostId`'s devices and this task's sessions there, as one read.
+ *
+ * Gated on known ABSENCE, not on the fail-closed boolean the other verbs use:
+ * this read is the one a host-parametric surface reaches a machine with, and
+ * the handshake that records the manifest happens on its dispatch. Withheld
+ * while the manifest is merely unknown, a surface naming a machine it has not
+ * addressed could never learn anything about it - the read that would answer
+ * the question is the one the unanswered question suppresses.
+ */
 export function useSimulatorListQuery(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
@@ -340,10 +352,10 @@ export function useSimulatorListQuery(
   ResponseOfMethod<HostRpcRegistry, "simulator.list">,
   HostRpcError
 > {
-  const supported = useHostSupportsMethod(hostId, "simulator.list");
+  const support = useHostMethodSupport(hostId, "simulator.list");
   return useHostQuery<HostRpcRegistry, "simulator.list">({
     cacheKeyIdentity: undefined,
-    client: supported ? client : null,
+    client: support === false ? null : client,
     method: "simulator.list",
     params: { epicId },
     options: null,
