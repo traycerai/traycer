@@ -2293,19 +2293,28 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
   // The cleanup above stays installed after its loop finishes, so it cannot
   // say whether a restore or navigation still has a command the list holds.
-  // This does: a loop claims it when it issues and releases it when it
-  // validates, exhausts, aborts or is cancelled - releasing only while it is
-  // still the claimant, so a finished loop never clears a newer one's claim.
+  // This does. A loop claims it once it has issued its first command. However
+  // the loop ends - validated, exhausted, aborted or cancelled - its release
+  // waits for the last command it issued to settle: the list holds a command
+  // while the window paints no frames, past the timeout that gave up on it,
+  // and settles one at once when it is cancelled or superseded. A release
+  // clears only its own claim, so it never clears a newer loop's.
   const inFlightNavigationSettleRef = useRef<object | null>(null);
-  const claimNavigationSettle = useCallback((): (() => void) => {
-    const claim = {};
-    inFlightNavigationSettleRef.current = claim;
-    return () => {
-      if (inFlightNavigationSettleRef.current === claim) {
-        inFlightNavigationSettleRef.current = null;
-      }
-    };
-  }, []);
+  const claimNavigationSettle = useCallback(
+    (lastIssuedCommand: () => Promise<void>): (() => void) => {
+      const claim = {};
+      inFlightNavigationSettleRef.current = claim;
+      const release = (): void => {
+        if (inFlightNavigationSettleRef.current === claim) {
+          inFlightNavigationSettleRef.current = null;
+        }
+      };
+      return () => {
+        void lastIssuedCommand().then(release, release);
+      };
+    },
+    [],
+  );
   const resolveSuppressedEndLanding = useCallback((): boolean => {
     const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
     if (
@@ -2663,9 +2672,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (!list) return;
       const imperativeScrollGeneration =
         beginImperativeScrollOperation(animated);
-      const releaseSettle = claimNavigationSettle();
       followLatchRef.current?.beginOwnedEndNavigation();
-      void list.scrollToEnd({ animated });
+      let pendingEndScroll = list.scrollToEnd({ animated });
+      const releaseSettle = claimNavigationSettle(() => pendingEndScroll);
       const scrollNode = list.getScrollableNode();
       const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
@@ -2689,7 +2698,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         reissue: () => {
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.beginOwnedEndNavigation();
-          void list.scrollToEnd({ animated: false });
+          pendingEndScroll = list.scrollToEnd({ animated: false });
         },
         onSettledValid: () => {
           releaseSettle();
@@ -3298,8 +3307,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
       );
-      const releaseSettle = claimNavigationSettle();
       let pendingScroll = scrollToTimelineLocation(location);
+      const releaseSettle = claimNavigationSettle(() => pendingScroll);
       let lastSettleTimedOut = false;
       let cancelled = false;
       const scrollNode = list.getScrollableNode();
@@ -3481,8 +3490,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           viewOffset,
         });
 
-      const releaseSettle = claimNavigationSettle();
       let pendingRestoreScrollPromise = issue(initialIndex);
+      const releaseSettle = claimNavigationSettle(
+        () => pendingRestoreScrollPromise,
+      );
       let lastRestoreSettleTimedOut = false;
       const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
@@ -3636,7 +3647,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(false);
-      const releaseSettle = claimNavigationSettle();
       const scrollNode = list.getScrollableNode();
       const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
       const targetIndex = (): number | null =>
@@ -3670,6 +3680,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         }
         return queryMountedChatRowRoot(scrollNode, rowKey()) !== null;
       };
+
+      let pendingScrollPromise = issue(initialIndex);
+      const releaseSettle = claimNavigationSettle(() => pendingScrollPromise);
       // Idempotent: the cleanup below runs `finish` again after a landing
       // that already settled, and ownership must be released exactly once.
       let landingFinished = false;
@@ -3680,8 +3693,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         finishImperativeScrollOperation(imperativeScrollGeneration);
         followLatchRef.current?.completeOwnedFreeNavigation();
       };
-
-      let pendingScrollPromise = issue(initialIndex);
       let lastSettleTimedOut = false;
       const cancelLandingLoop = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
