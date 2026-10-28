@@ -16,7 +16,6 @@ import type {
 export function MembersList(props: {
   readonly environmentId: string;
   readonly teamName: string;
-  readonly teamHostCount: number | null;
   readonly currentUserId: string;
   readonly viewerIsAdmin: boolean;
   readonly members: readonly MembersListMember[];
@@ -47,7 +46,6 @@ export function MembersList(props: {
               member={member}
               isSelf={member.userId === props.currentUserId}
               isLastAdmin={lastAdmin}
-              teamHostCount={props.teamHostCount}
               viewerIsAdmin={props.viewerIsAdmin}
               gainedEditing={gainedEditing}
               details={props.rowDetails({

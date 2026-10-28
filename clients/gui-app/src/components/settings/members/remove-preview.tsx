@@ -10,7 +10,7 @@ import {
   removeConfirmLabel,
   removeLinkedPlanConsequence,
   removePaidSandboxesConsequence,
-  removePendingUntilDone,
+  REMOVE_PENDING_UNTIL_COMMITTED,
   removePreviewFailed,
   removePreviewLead,
   removePreviewTitle,
@@ -143,7 +143,7 @@ export function RemovePreviewDialog(props: {
               )}
             />
             <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-              {removePendingUntilDone(props.memberName, props.teamName)}
+              {REMOVE_PENDING_UNTIL_COMMITTED}
             </p>
           </>
         ) : null}

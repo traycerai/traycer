@@ -24,7 +24,6 @@ const NOTIFICATION: MergedNotificationRow = {
   source: "host",
   sourceId: "n-1",
   originHostId: null,
-  providerPackAttribution: null,
   createdAt: 10,
   readAt: null,
   title: "Checkout notifications",

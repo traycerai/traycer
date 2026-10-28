@@ -15,10 +15,7 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { MembersPage } from "@/components/settings/members/members-page";
-import {
-  useHostNotificationsStore,
-  type HostNotificationFeedEntry,
-} from "@/stores/notifications/host-notifications-store";
+import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -122,48 +119,6 @@ function rowOf(userId: string): HTMLElement {
     .find((candidate) => candidate.getAttribute("data-member-id") === userId);
   if (row === undefined) throw new Error(`no row for ${userId}`);
   return row;
-}
-
-function removalNotice(
-  id: string,
-  receiptId: string | null,
-  factState: "pending" | "done",
-): HostNotificationFeedEntry {
-  return {
-    id,
-    updatedAt: 1_700_000_000_000,
-    readAt: null,
-    sourceRef: null,
-    epicId: null,
-    chatId: null,
-    kind: "team.member.removed",
-    severity: "info",
-    outcome: "completed",
-    payload: {
-      kind: "team_member_removed",
-      environmentId: "env-a",
-      teamName: "Acme",
-      memberName: "Priya",
-      receiptId,
-      hosts: [
-        {
-          hostId: "host-local",
-          hostName: "This Mac",
-          stopped: "done",
-          credentialClosed: "done",
-          replacementDelivered: factState,
-        },
-      ],
-    },
-  };
-}
-
-function deliver(entry: HostNotificationFeedEntry): void {
-  act(() => {
-    useHostNotificationsStore
-      .getState()
-      .applyUpsertFrame(entry, [], { unreadCount: 1, attentionCount: 0 });
-  });
 }
 
 describe("MembersPage members read", () => {
@@ -816,7 +771,7 @@ describe("MembersPage invite seats", () => {
 });
 
 describe("MembersPage pending removal", () => {
-  it("keeps a removed member's row pending after the membership is gone, until a removal notice with its receipt reports every host done", async () => {
+  it("keeps a removed member's row pending while a read still lists them, and drops it once a read stops listing them", async () => {
     let removed = false;
     const harness = mountTeamPage(
       { kind: "host" },
@@ -825,10 +780,10 @@ describe("MembersPage pending removal", () => {
         "environment.members": () =>
           membersPage(removed ? [ADA] : [ADA, PRIYA]),
         "environment.members.removePreview": () => PREVIEW,
-        "environment.members.remove": () => {
-          removed = true;
-          return { outcome: "pending", receiptId: "removal:env-a:7" };
-        },
+        "environment.members.remove": () => ({
+          outcome: "pending",
+          receiptId: "removal:env-a:7",
+        }),
       },
     );
     render(<MembersPage environmentId="env-a" />, {
@@ -842,7 +797,7 @@ describe("MembersPage pending removal", () => {
     await screen.findByTestId("members-remove-preview-table");
     await userEvent.click(screen.getByTestId("members-remove-confirm"));
 
-    // The next read no longer lists Priya: the row stays, pending.
+    // A read that still lists Priya keeps her row pending.
     await vi.waitFor(() => {
       expect(harness.paramsOf("environment.members").length).toBeGreaterThan(1);
     });
@@ -851,17 +806,10 @@ describe("MembersPage pending removal", () => {
         "pending",
       );
     });
-    expect(screen.getByText("Acme · 1 person")).toBeTruthy();
-    expect(
-      within(rowOf("u-priya")).getByText("removing · waiting for 1 host"),
-    ).toBeTruthy();
 
-    deliver(removalNotice("n-other", "removal:env-a:6", "done"));
-    deliver(removalNotice("n-legacy", null, "done"));
-    deliver(removalNotice("n-partial", "removal:env-a:7", "pending"));
-    expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("pending");
-
-    deliver(removalNotice("n-partial", "removal:env-a:7", "done"));
+    // The next successful read no longer lists her: the row leaves the list.
+    removed = true;
+    await act(() => harness.queryClient.invalidateQueries());
     await vi.waitFor(() => {
       expect(
         screen
@@ -869,7 +817,7 @@ describe("MembersPage pending removal", () => {
           .some((row) => row.getAttribute("data-member-id") === "u-priya"),
       ).toBe(false);
     });
-    expect(screen.queryByText("done")).toBeNull();
+    expect(screen.getByText("Acme · 1 person")).toBeTruthy();
   });
 
   it("shows a removed member who rejoins as a member again, once a read lists them after their removal committed", async () => {
@@ -917,7 +865,7 @@ describe("MembersPage pending removal", () => {
     phase = "committed";
     await act(() => harness.queryClient.invalidateQueries());
     expect(await screen.findByText("Grace")).toBeTruthy();
-    expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("pending");
+    expect(screen.queryByText("Priya")).toBeNull();
     expect(screen.getByText("Acme · 2 people")).toBeTruthy();
 
     // Invited back and accepted: the next read lists a new membership.
