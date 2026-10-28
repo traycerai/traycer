@@ -772,7 +772,7 @@ function deferred<T>(): {
 
 describe("new-conversation modal refusals at Send", () => {
   const SENTENCE =
-    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+    "Traycer Inference setup failed - not enough disk space. Free some space, then retry.";
 
   function refusal(onAction: () => void, message: string, label: string) {
     return {
@@ -839,6 +839,42 @@ describe("new-conversation modal refusals at Send", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Choose a model" }));
     expect(chooseModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a staged refusal once the pick can run, without another Send", async () => {
+    testState.stagedNotice = refusal(
+      vi.fn(),
+      "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+      "Choose a model",
+    );
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
+    });
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    await screen.findByTestId("composer-host-notice");
+
+    // The person picks a Traycer model: the stage's check no longer refuses.
+    testState.stagedNotice = null;
+    act(() =>
+      testState.toolbarStore?.setState({
+        values: {
+          selection: {
+            harnessId: "traycer",
+            modelSlug: "claude-sonnet-5.5",
+            profileId: null,
+          },
+          permission: "supervised",
+          reasoning: "high",
+          serviceTier: "",
+        },
+      }),
+    );
+
+    expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    expect(testState.beforeStagedSend).toHaveBeenCalledOnce();
   });
 
   it("hands the same staged send over when the agent is signed in", async () => {

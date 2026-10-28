@@ -60,7 +60,7 @@ function ActiveRestingNotices(props: {
       const summary = summaries.get(notice.sandboxId);
       // The list is visibility-filtered: an absent row is not proof of deletion.
       if (summary !== undefined && restingNoticeOvertaken(summary, notice)) {
-        actions.resolveNotice(notice.row);
+        actions.retireNotice(notice.row);
       }
     }
   }, [actions, props.notices, list.data, list.isEnabled, list.isSuccess]);

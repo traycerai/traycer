@@ -15,6 +15,7 @@ import {
   refusal,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import {
   pendingSendSurfaceKey,
@@ -60,9 +61,6 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/sandboxes/use-on-team-sandbox", () => ({
   useSandboxHostConfiguration: () => null,
 }));
-vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
-  useConfigurationProvidersOpener: () => () => undefined,
-}));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: vi.fn() }),
 }));
@@ -82,8 +80,17 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-sandbox-list-query")
   >()),
+  // The held message's sandbox is awake: Stop is offered on it.
   useSandboxList: () => ({
-    data: { sandboxes: [] },
+    data: {
+      sandboxes: [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST_ID,
+          state: "awake",
+        }),
+      ],
+    },
     dataUpdatedAt: Date.now(),
     isError: false,
     refetch: () => Promise.resolve(undefined),

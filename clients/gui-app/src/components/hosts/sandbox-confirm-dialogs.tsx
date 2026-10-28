@@ -832,10 +832,10 @@ function IdleSettingsForm(props: {
         onChange={setIdle}
       />
       <p className="text-ui-xs text-muted-foreground">
-        Idle means no agent turn in progress, no running shell and no tab
-        attached. Agent turns in progress are interrupted and continue from the
-        transcript on resume; a coding CLI signed in on its own is signed out
-        before the pause.
+        Idle means no agent turn in progress, no running shell and no browser
+        tab on screen. Agent turns in progress are interrupted and continue from
+        the transcript on resume; a coding CLI signed in on its own is signed
+        out before the pause.
       </p>
       <SandboxPeriodField
         label="Destroy after resting for (empty: never)"

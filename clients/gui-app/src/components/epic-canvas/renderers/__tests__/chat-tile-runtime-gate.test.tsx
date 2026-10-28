@@ -111,6 +111,7 @@ function frameFor(
     reachability: reachability(status),
     cloneAllowed: true,
     hasReadySession: false,
+    sandboxFooter: false,
   };
 }
 

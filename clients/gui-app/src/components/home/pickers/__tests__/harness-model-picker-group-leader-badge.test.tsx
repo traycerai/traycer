@@ -78,6 +78,7 @@ function renderRail(args: {
         onOpenProviderSettings={vi.fn()}
         onRefresh={() => Promise.resolve()}
         refreshDisabledReason={undefined}
+        offeredAgents={null}
       />
     </LeaderHeldContext.Provider>,
   );

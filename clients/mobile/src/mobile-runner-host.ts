@@ -125,6 +125,7 @@ import {
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
@@ -139,6 +140,7 @@ import {
   type SandboxListFetchResult,
   type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
+  type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   decideSecretRequestViaHttp,
@@ -728,6 +730,10 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
     return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
+    return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
   createSandbox(

@@ -1866,6 +1866,95 @@ describe("<SandboxesSettingsPanel />", () => {
 
       expect(header()).toBe("1 sandbox · $0.02 today (UTC day).");
     });
+
+    it("leaves the viewer's share out when it is zero", () => {
+      mocks.configurations = [{ kind: "personal" }, TEAM_DAY];
+      host.environments = [
+        descriptor(PERSONAL_ENV, "user", "u1", "owner"),
+        descriptor(TEAM_DAY_ENV, "organization", "team-1", "viewer"),
+      ];
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: TEAM_DAY_ENV },
+      });
+      mocks.costs = costsOf(
+        [
+          {
+            environmentId: TEAM_DAY_ENV,
+            todayMillicredits: 5_000,
+            todayYoursMillicredits: 0,
+          },
+        ],
+        20,
+      );
+      renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
+
+      expect(header()).toBe("1 sandbox · $5.00 today (UTC day).");
+    });
+  });
+
+  describe("a team row's payer", () => {
+    const ACME = {
+      kind: "team",
+      teamId: "team-1",
+      teamName: "Acme",
+      environmentId: TEAM_ENV,
+    } as const;
+    const PAYER = { userId: "user-payer", displayName: "Priya" };
+
+    function viewAs(userId: string): void {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId, username: userId },
+      });
+      mocks.configurations = [ACME];
+      host.environments = [
+        descriptor(TEAM_ENV, "organization", "team-1", "editor"),
+      ];
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: TEAM_ENV },
+      });
+    }
+
+    function clockOf(id: string): string {
+      return within(rowOf(id)).getByTestId("sandboxes-row-clock").textContent;
+    }
+
+    it("reads Paid by you to the payer, and the payer's name to another member", () => {
+      const awake = row("sbx-paid", {
+        state: "awake",
+        environmentId: TEAM_ENV,
+        wakePayer: PAYER,
+      });
+      viewAs(PAYER.userId);
+      renderPanel([awake]);
+      expect(within(rowOf(awake.id)).getByText("Paid by you")).toBeDefined();
+      expect(within(rowOf(awake.id)).queryByText("Paid by Priya")).toBeNull();
+      cleanup();
+
+      viewAs("user-other");
+      renderPanel([awake]);
+      expect(within(rowOf(awake.id)).getByText("Paid by Priya")).toBeDefined();
+    });
+
+    it("tells only a member who isn't the payer that resuming makes them the payer", () => {
+      const resting = row("sbx-resting", {
+        state: "suspended",
+        environmentId: TEAM_ENV,
+        wakePayer: PAYER,
+      });
+      viewAs(PAYER.userId);
+      renderPanel([resting]);
+      expect(clockOf(resting.id)).toMatch(
+        / · Storage uses your Acme credits\.$/,
+      );
+      cleanup();
+
+      viewAs("user-other");
+      renderPanel([resting]);
+      expect(clockOf(resting.id)).toMatch(
+        / · Storage uses Priya's Acme credits\. Resuming changes the payer to you\.$/,
+      );
+    });
   });
 
   it.each([false, true])(

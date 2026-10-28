@@ -263,6 +263,7 @@ function forkTarget(): ChatForkDialogTarget {
     initialHostId: null,
     onlyHostIds: null,
     stagedSandbox: null,
+    carriesComposerDraft: false,
   };
 }
 

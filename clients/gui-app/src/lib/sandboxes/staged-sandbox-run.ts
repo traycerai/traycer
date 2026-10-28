@@ -299,7 +299,11 @@ function stagedWakeFailure(
 ): StagedSandboxFailure {
   if (typeof answered === "object" && answered !== null) {
     if (answered.kind === "credit-gate")
-      return { kind: "credits", shortfallMc: answered.shortfallMc };
+      return {
+        kind: "credits",
+        shortfallMc: answered.shortfallMc,
+        creditSource: answered.creditSource ?? null,
+      };
     if (answered.kind === "refused")
       return { kind: "credits", shortfallMc: null };
   }

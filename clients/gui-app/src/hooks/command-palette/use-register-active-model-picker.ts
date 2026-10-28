@@ -29,8 +29,8 @@ export function useRegisterActiveModelPicker(
     if (!enabled) return;
     return registerActiveModelPicker({
       toggle: () => controllerRef.current.toggle(),
-      openForHarness: (harnessId) =>
-        controllerRef.current.openForHarness?.(harnessId),
+      openForHarness: (harnessId, offeredAgents) =>
+        controllerRef.current.openForHarness?.(harnessId, offeredAgents),
       getSurfaceKey: () => controllerRef.current.getSurfaceKey?.() ?? null,
       getSelectionSummary: () => controllerRef.current.getSelectionSummary(),
     });

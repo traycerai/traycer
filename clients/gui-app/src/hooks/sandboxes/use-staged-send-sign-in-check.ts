@@ -10,6 +10,7 @@ import {
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   ADD_CREDITS_LINK,
+  CHECKING_SANDBOX_AGENTS,
   CHOOSE_ANOTHER_HOST,
   notEnoughCreditsLine,
   teamAllowanceShortLine,
@@ -20,6 +21,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   sandboxAgentNotOfferedNotice,
+  sandboxAgentsUncheckedNotice,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
@@ -52,6 +54,10 @@ export function useStagedSendSignInCheck(
   const openLink = useOpenLink();
   const offeredAgents = catalogue.data?.offeredAgents;
   const pending = catalogue.data === undefined && catalogue.isFetching;
+  // A read that ended with no catalogue is not permission: creating or waking
+  // for an agent nobody checked is the cost this gate exists to prevent.
+  const unread = catalogue.data === undefined && !catalogue.isFetching;
+  const refetchCatalogue = catalogue.refetch;
   const checkWithUser = useCallback(
     (
       stage: StagedSandbox,
@@ -108,12 +114,16 @@ export function useStagedSendSignInCheck(
         return {
           kind: "mirror",
           pending: true,
-          message: "Checking which agents run on sandboxes.",
+          message: CHECKING_SANDBOX_AGENTS,
           action: null,
         };
+      if (unread)
+        return sandboxAgentsUncheckedNotice(() => {
+          void refetchCatalogue();
+        });
       if (offeredAgents === undefined || offeredAgents.includes(harnessId))
         return null;
-      return sandboxAgentNotOfferedNotice(harnessId, {
+      return sandboxAgentNotOfferedNotice(harnessId, offeredAgents, {
         onChooseModel,
         onOpenTerminalInstead,
         onChooseAnotherHost,
@@ -126,6 +136,8 @@ export function useStagedSendSignInCheck(
       openLink,
       harnessId,
       pending,
+      unread,
+      refetchCatalogue,
       offeredAgents,
       onChooseModel,
       onOpenTerminalInstead,

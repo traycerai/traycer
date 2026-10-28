@@ -16,7 +16,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 export type SandboxRowVerb = SandboxLifecycleVerb | "destroy";
 
 export type SandboxRowOperation =
-  | { readonly kind: "pending"; readonly verb: SandboxRowVerb }
+  | {
+      readonly kind: "pending";
+      readonly verb: SandboxRowVerb;
+      /** When the verb was sent; a list answer from before it predates it. */
+      readonly submittedAt: number;
+    }
   | { readonly kind: "skipped"; readonly message: string }
   | {
       readonly kind: "failed";
@@ -62,6 +67,7 @@ export function useSandboxOperation(
           : mutation.state.variables,
       variables: mutation.state.variables,
       status: mutation.state.status,
+      submittedAt: mutation.state.submittedAt,
       error: mutation.state.error,
     }),
     [destroyKey],
@@ -74,7 +80,11 @@ export function useSandboxOperation(
   );
   if (latest === null || !isRowVerb(latest.verb)) return null;
   if (latest.status === "pending") {
-    return { kind: "pending", verb: latest.verb };
+    return {
+      kind: "pending",
+      verb: latest.verb,
+      submittedAt: latest.submittedAt,
+    };
   }
   if (latest.status !== "error" || latest.error === null) return null;
   if (latest.error instanceof SandboxDestroySkippedError) {

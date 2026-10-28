@@ -3,6 +3,7 @@ import {
   render as renderWithoutQueryClient,
   screen,
   waitFor,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -222,16 +223,103 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 }));
 // The chat's sandbox state and the viewer's epic role, stubbed at their own
 // seams: both hooks have their own suites, and this one is about the tile's
-// wiring of what they answer.
+// wiring of what they answer. With `sources` set, the REAL state hook runs
+// instead, over these stand-ins for the task's hosts, the viewer's sandbox
+// list and the directory row: the cases where what the tile shows depends on
+// how the hook reads a sandbox it cannot place yet.
 const sandboxSurface = vi.hoisted(
   (): {
     state: ChatSandboxState;
     role: "owner" | "editor" | "viewer" | null;
-  } => ({ state: { kind: "none" }, role: null }),
+    sources: {
+      taskHosts: TaskHostsView;
+      /** `null`: the list read failed, or is disabled, with nothing cached. */
+      sandboxes: SandboxSummary[] | null;
+      entry: HostDirectoryEntry | null;
+    } | null;
+  } => ({ state: { kind: "none" }, role: null, sources: null }),
 );
-vi.mock("@/hooks/sandboxes/use-chat-sandbox-state", () => ({
-  useChatSandboxState: () => sandboxSurface.state,
-}));
+vi.mock("@/hooks/sandboxes/use-chat-sandbox-state", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-chat-sandbox-state")
+    >();
+  return {
+    useChatSandboxState: (
+      epicId: string,
+      hostId: string | null,
+      reachable: boolean,
+    ) =>
+      sandboxSurface.sources === null
+        ? sandboxSurface.state
+        : actual.useChatSandboxState(epicId, hostId, reachable),
+  };
+});
+vi.mock("@/hooks/epic/use-task-hosts-view", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/epic/use-task-hosts-view")>();
+  return {
+    ...actual,
+    useTaskHostsView: (epicId: string) =>
+      sandboxSurface.sources === null
+        ? actual.useTaskHostsView(epicId)
+        : sandboxSurface.sources.taskHosts,
+  };
+});
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...actual,
+    useSandboxList: () => {
+      const sources = sandboxSurface.sources;
+      if (sources === null) return actual.useSandboxList();
+      return {
+        data:
+          sources.sandboxes === null
+            ? undefined
+            : { sandboxes: sources.sandboxes },
+        isLoading: false,
+      };
+    },
+  };
+});
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return {
+      ...actual,
+      useSandboxConfigurations: () =>
+        sandboxSurface.sources === null
+          ? actual.useSandboxConfigurations()
+          : {
+              configurations: [{ kind: "personal" }],
+              teamEnvironmentIds: new Set<string>(),
+              complete: true,
+            },
+    };
+  },
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string | null) => {
+      const sources = sandboxSurface.sources;
+      if (sources === null) return actual.useHostDirectoryEntry(hostId);
+      return sources.entry?.hostId === hostId ? sources.entry : null;
+    },
+  };
+});
 // The footer's Stop is a mutation behind a runner host this suite does not
 // mount; its boundary is stubbed and the footer's own text stays real.
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
@@ -257,13 +345,37 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
   const { ChatDeadTileBanner } = await vi.importActual<
     typeof import("@/components/epic-canvas/renderers/dead-tile-banner")
   >("@/components/epic-canvas/renderers/dead-tile-banner");
+  const { useContext } = await import("react");
+  const { ChatStateLineContext } = await vi.importActual<
+    typeof import("@/components/epic-canvas/renderers/chat-state-line")
+  >("@/components/epic-canvas/renderers/chat-state-line");
   return {
+    // The composer slot as the real one fills it: a sandbox state line with
+    // its actions when the tile hands one, else the read-only notice.
     ChatTileSessionView: (props: ChatTileSessionViewProps) => {
       chatTileSessionViewCalls.push(props);
+      const stateLine = useContext(ChatStateLineContext);
       return (
-        <div data-testid="chat-tile-session-view">{props.readOnlyNotice}</div>
+        <div data-testid="chat-tile-session-view">
+          {stateLine === null ? (
+            props.readOnlyNotice
+          ) : (
+            <>
+              {stateLine.line}
+              {stateLine.actions}
+            </>
+          )}
+        </div>
       );
     },
+    // The real actions run the clone offer, like the container below; their
+    // own buttons are pinned by `dead-tile-banner-container.test.tsx`.
+    SandboxEndActions: (props: { readonly sourceHostId: string }) => (
+      <span
+        data-testid="sandbox-end-actions"
+        data-source-host={props.sourceHostId}
+      />
+    ),
     // Stubbed at the container boundary - the real container runs the clone
     // offer's host-runtime subscription and the owner lookup's cloud query,
     // neither of which this suite mounts providers for. It records the props
@@ -533,11 +645,15 @@ afterEach(() => {
   environments.list = undefined;
   sandboxSurface.state = { kind: "none" };
   sandboxSurface.role = null;
+  sandboxSurface.sources = null;
   resetHostConnectionRegistryForTest();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 describe("PublishedChatTile - doc-replica fallback", () => {
@@ -1614,28 +1730,31 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     );
   }
 
-  it("names a destroyed sandbox in the footer by its projected name, never the raw host id, ahead of the offline sentence", () => {
+  it("says a destroyed sandbox in one footer line with its actions, and draws no banner", () => {
     sandboxSurface.state = {
       kind: "destroyed",
       ended: {
-        name: "e2e-sbx-stop3",
+        name: "e2e-sbx-p3",
         end: {
           state: "destroyed",
-          destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
+          destroyedAt: new Date(2026, 9, 28, 0, 55).getTime(),
           cause: "resting",
           actor: null,
+          idleMinutes: null,
         },
       },
     };
     signInAsOwner();
     mountCopy();
 
-    const text = screen.getByTestId("chat-tile-session-view").textContent;
-    expect(text).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period. Its files are gone; this chat stays readable.",
+    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    const footer = screen.getByTestId("chat-tile-session-view");
+    expect(footer.textContent).toBe(
+      "e2e-sbx-p3 was destroyed on Oct 28 at 00:55 after resting. Its files are gone; this chat stays readable.",
     );
-    expect(text).not.toContain("owner-host-1");
-    expect(text).not.toContain("offline");
+    // Its actions ride in the same line, for the chat's own owner host.
+    const actions = within(footer).getByTestId("sandbox-end-actions");
+    expect(actions.getAttribute("data-source-host")).toBe("owner-host-1");
   });
 
   it("passes a resting sandbox to the session view so the composer can send, with no offline banner and no lock sentence", () => {
@@ -1665,7 +1784,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     sandboxSurface.state = {
       kind: "unreachable",
       sandbox: ROW,
-      lastContactMinutes: 4,
+      lastSeenAt: null,
     };
     signInAsOwner();
     mountCopy();
@@ -1673,4 +1792,337 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
     expect(screen.getByText(/running, but Traycer can’t connect/)).toBeTruthy();
   });
+});
+
+/**
+ * The REAL state hook over its data sources: what a sandbox chat shows while
+ * its state is moving or not yet known to this device, as after a Stop and
+ * after a reload of a destroyed chat (§10).
+ */
+describe("PublishedChatTile - a sandbox chat whose state is not known yet", () => {
+  const TASK_ROW: TaskHostRow = {
+    hostId: "owner-host-1",
+    label: "e2e-sbx-p1",
+    principal: { kind: "user", id: "user-1" },
+    reach: "same_principal",
+    sandboxEnd: null,
+  };
+
+  function mountOwnCopy(): RenderResult {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: NODE.ownerUserId,
+        userName: "Owner",
+        email: "owner@example.com",
+      },
+      contextMetadata: { userId: NODE.ownerUserId, username: "Owner" },
+    });
+    // The directory has no row for the host, so reachability falls back to
+    // the raw id, as `useHostReachability` does.
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "owner-host-1",
+    });
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    return render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+  }
+
+  it("draws no offline banner, no Clone and no offline footer while the sandbox is stopping", () => {
+    sandboxSurface.sources = {
+      taskHosts: { kind: "hosts", hosts: [TASK_ROW] },
+      sandboxes: [
+        sandboxSummaryFixture({
+          id: "sbx-p1",
+          hostId: "owner-host-1",
+          displayName: "e2e-sbx-p1",
+          state: "stopping",
+        }),
+      ],
+      entry: {
+        ...remoteEntry("owner-host-1", sandboxFacts(null)),
+        label: "e2e-sbx-p1",
+      },
+    };
+    mountOwnCopy();
+
+    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    // A known move says what it is, once, never the generic unknown line.
+    const text = screen.getByTestId("chat-tile-session-view").textContent;
+    expect(text).toBe("Stopping e2e-sbx-p1 · pending");
+  });
+
+  it("never prints the raw host id of a sandbox the task names and the directory no longer lists, before and after its end arrives", () => {
+    sandboxSurface.sources = {
+      taskHosts: { kind: "hosts", hosts: [TASK_ROW] },
+      sandboxes: [],
+      entry: null,
+    };
+    const view = mountOwnCopy();
+
+    expect(view.container.textContent).not.toContain("owner-host-1");
+
+    sandboxSurface.sources = {
+      ...sandboxSurface.sources,
+      taskHosts: {
+        kind: "hosts",
+        hosts: [
+          {
+            ...TASK_ROW,
+            sandboxEnd: {
+              state: "destroyed",
+              destroyedAt: new Date(2026, 9, 28, 1, 27).getTime(),
+              cause: "verb",
+              actor: "you",
+              idleMinutes: null,
+            },
+          },
+        ],
+      },
+    };
+    view.rerender(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(view.container.textContent).not.toContain("owner-host-1");
+    expect(chatTileSessionViewCalls.at(-1)?.readOnlyNotice).toBe(
+      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.",
+    );
+  });
+});
+
+/**
+ * One precedence on the copy, through the real hook: a task end, then a
+ * listed row's known state, then a move, then a named sandbox not known here.
+ * A host nothing names as a sandbox takes the surface's own path.
+ */
+describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
+  function mountOwnCopy(): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: NODE.ownerUserId,
+        userName: "Owner",
+        email: "owner@example.com",
+      },
+      contextMetadata: { userId: NODE.ownerUserId, username: "Owner" },
+    });
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "owner-host-1",
+    });
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+  }
+
+  function listed(overrides: Partial<SandboxSummary>): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: "sbx-p1",
+      hostId: "owner-host-1",
+      displayName: "e2e-sbx-p1",
+      ...overrides,
+    });
+  }
+
+  const FAILED_AT = new Date(2026, 9, 28, 1, 2).getTime();
+  const FAILED_TIME = new Date(FAILED_AT).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  it("takes the ordinary offline path for a host nothing names as a sandbox, when both the task's hosts and the list fail", () => {
+    sandboxSurface.sources = {
+      taskHosts: { kind: "error", retry: () => undefined },
+      sandboxes: null,
+      entry: null,
+    };
+    mountOwnCopy();
+
+    expect(screen.getByTestId("published-chat-dead-tile-chat-1")).toBeTruthy();
+    expect(chatTileSessionViewCalls.at(-1)?.readOnlyNotice).not.toContain(
+      "isn't available",
+    );
+  });
+
+  it.each([
+    ["suspended", "e2e-sbx-p1 is suspended"],
+    ["stopped", "e2e-sbx-p1 is stopped"],
+  ] as const)(
+    "says a listed %s team sandbox's state alone, read-only with no wake, before its configuration resolves",
+    (state, line) => {
+      sandboxSurface.sources = {
+        taskHosts: { kind: "none" },
+        sandboxes: [
+          listed({
+            state,
+            environmentId: "env-not-loaded",
+            createdBy: { userId: "member-2", displayName: "Dana" },
+          }),
+        ],
+        entry: null,
+      };
+      mountOwnCopy();
+
+      // The composer's place is the state line, so there is no Send to press.
+      expect(chatTileSessionViewCalls.at(-1)?.restingSandbox).toBeUndefined();
+      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+        line,
+      );
+      expect(document.body.textContent).not.toContain("your next message");
+      expect(document.body.textContent).not.toContain("isn't available");
+    },
+  );
+
+  it.each([
+    [
+      "failed",
+      {
+        state: "failed",
+        failureCode: "boot-timeout",
+        lastTransitionAt: FAILED_AT,
+      },
+      `e2e-sbx-p1 failed to start (SBX-0414) at ${FAILED_TIME} · Nothing is billed for a sandbox that never woke · support reference in DetailsDetails`,
+    ],
+    [
+      "released",
+      { state: "released", kind: "automation" },
+      "e2e-sbx-p1 is suspended · files kept · the next shell starts it",
+    ],
+    [
+      "destroyed before the task records its end",
+      { state: "destroyed" },
+      "Destroying e2e-sbx-p1 · pending",
+    ],
+  ] as const)(
+    "says a listed %s sandbox's own line, never the unknown one",
+    (_state, overrides, line) => {
+      sandboxSurface.sources = {
+        taskHosts: { kind: "none" },
+        sandboxes: [listed(overrides)],
+        entry: null,
+      };
+      mountOwnCopy();
+
+      expect(
+        screen.queryByTestId("published-chat-dead-tile-chat-1"),
+      ).toBeNull();
+      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+        line,
+      );
+    },
+  );
+});
+
+/**
+ * The unknown line is the state's, never the role's: a team member and a
+ * collaborator looking at a sandbox whose state this device cannot read get
+ * the same line the owner does.
+ */
+describe("PublishedChatTile - an unknown sandbox state, for every role", () => {
+  const TEAM_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: NODE.ownerUserId,
+        ownerKind: "organization",
+        ownerId: "org-1",
+        roomId: "room-team",
+        label: "acme",
+      },
+    ],
+  };
+  const PERSONAL_ONLY_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: "viewer-user",
+        ownerKind: "user",
+        ownerId: "viewer-user",
+        roomId: "room-personal",
+        label: "Personal",
+      },
+    ],
+  };
+
+  it.each([
+    ["a team member", TEAM_ENVIRONMENTS],
+    ["a collaborator", PERSONAL_ONLY_ENVIRONMENTS],
+  ] as const)(
+    "gives %s the unknown line, by the sandbox's name",
+    (_role, list) => {
+      environments.pool = true;
+      environments.list = list;
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "viewer-user",
+          userName: "Viewer",
+          email: "viewer@example.com",
+        },
+        contextMetadata: { userId: "viewer-user", username: "Viewer" },
+      });
+      sandboxSurface.sources = {
+        taskHosts: {
+          kind: "hosts",
+          hosts: [
+            {
+              hostId: "owner-host-1",
+              label: "e2e-sbx-p1",
+              principal: { kind: "team", id: "team-1" },
+              reach: "same_principal",
+              sandboxEnd: null,
+            },
+          ],
+        },
+        sandboxes: null,
+        entry: null,
+      };
+      mockUseHostReachability.mockReturnValue({
+        status: "unreachable",
+        hostLabel: "owner-host-1",
+      });
+      mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+      mockUseChatReplicaRead.mockReturnValue(replicaOk());
+      render(
+        <PublishedChatTile
+          node={NODE}
+          viewTabId="tab-1"
+          tileId="pane-1"
+          isActive
+          epicId="epic-1"
+        />,
+      );
+
+      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+        "e2e-sbx-p1 isn't available — this chat stays readable.",
+      );
+      expect(
+        screen.queryByTestId("published-chat-dead-tile-chat-1"),
+      ).toBeNull();
+    },
+  );
 });
