@@ -1105,6 +1105,81 @@ describe("SimulatorTile on a @1.1 host", () => {
     );
   });
 
+  it("offers Connect for a still-running Android clone, whose key is an AVD name and whose tile is a serial", async () => {
+    // The same case on Android, where the two identifiers differ: the host
+    // keys the clone by its AVD name and the tile carries the serial its
+    // emulator runs on, so the key alone can never find the instance.
+    const CLONE_AVD = "Pixel_8_API_35_traycer_2";
+    const CLONE_SERIAL = "emulator-5556";
+    const cloneState: SimulatorState = {
+      ...READY_STATE,
+      platforms: [
+        { platform: "ios", available: true, reason: null },
+        { platform: "android", available: true, reason: null },
+      ],
+      simulators: [
+        ...READY_STATE.simulators,
+        {
+          simulatorId: "emulator-5554",
+          platform: "android",
+          name: "Pixel_8_API_35",
+          version: "Android 15.0",
+          booted: true,
+          physical: false,
+          instances: [
+            {
+              instanceKey: "Pixel_8_API_35",
+              name: "Pixel_8_API_35",
+              booted: true,
+              cloneOf: null,
+              drivenByAgent: false,
+              keepRunning: false,
+              idleUntil: null,
+            },
+            {
+              instanceKey: CLONE_AVD,
+              name: "Pixel_8_API_35 · 2",
+              booted: true,
+              cloneOf: "Pixel_8_API_35",
+              drivenByAgent: true,
+              keepRunning: false,
+              idleUntil: null,
+            },
+          ],
+        },
+      ],
+    };
+    const onClone = (session: SimulatorSession): SimulatorSession => ({
+      ...session,
+      simulatorId: CLONE_SERIAL,
+      instanceKey: CLONE_AVD,
+      platform: "android",
+    });
+    fakes.sessions = sessions({
+      state: { ...cloneState, sessions: [onClone(PERSON_SESSION)] },
+    });
+    const rerender = renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: CLONE_SERIAL,
+        platform: "android",
+        name: "Pixel_8_API_35 · 2",
+      }),
+    );
+    expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
+
+    fakes.sessions = sessions({
+      state: { ...cloneState, sessions: [onClone(AGENT_SESSION)] },
+    });
+    rerender();
+
+    const inventory = await screen.findByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Connect",
+    );
+  });
+
   it("asks before powering off, names what it reaches, then sends simulator.powerOff by instance key", async () => {
     fakes.sessions = sessions({
       state: { ...READY_STATE, sessions: [PERSON_SESSION] },

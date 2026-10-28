@@ -467,8 +467,11 @@ function SimulatorInventoryGate(props: {
   );
 
   // By id, or for an Android serial whose emulator has exited, the cold AVD
-  // row of the same name: that is what "Boot and connect" boots again.
-  const target = findSimulatorForTile(state.simulators, node);
+  // row of the same name: that is what "Boot and connect" boots again. A
+  // clone has no row of its own, so its instance is resolved out of the
+  // source's `instances` - for Android, through the sessions that name its
+  // key and this tile's serial together.
+  const target = findSimulatorForTile(state.simulators, node, state.sessions);
   const autoAttached = useRef(false);
   useEffect(() => {
     // The request is taken whether or not it can be acted on: a target the

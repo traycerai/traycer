@@ -17,8 +17,12 @@ import type {
  * serial to connect to).
  *
  * A `@1.1` host lists a clone only under its source's `instances`, never as a
- * device, so a tile on an iOS clone (whose udid is its instance key) finds its
- * row there, with the source's version. Null when the host lists none.
+ * device, so a tile on a clone finds its row there, with the source's
+ * version. An iOS clone's instance key IS the udid its tile carries; an
+ * Android instance is keyed by its AVD name while its tile carries the serial
+ * its emulator runs on, two different strings, so that clone is resolved
+ * through `sessions` - the one place the host names a serial and an instance
+ * key together. Null when the host lists none.
  */
 export function findSimulatorForTile(
   simulators: readonly SimulatorSummary[],
@@ -27,6 +31,7 @@ export function findSimulatorForTile(
     readonly platform: SimulatorPlatform;
     readonly name: string;
   },
+  sessions: readonly SimulatorSession[],
 ): SimulatorSummary | null {
   const byId = simulators.find(
     (simulator) => simulator.simulatorId === tile.simulatorId,
@@ -34,7 +39,10 @@ export function findSimulatorForTile(
   if (byId !== undefined) return byId;
   for (const source of simulators) {
     const instance = source.instances?.find(
-      (item) => item.instanceKey === tile.simulatorId,
+      (item) =>
+        item.instanceKey === tile.simulatorId ||
+        (item.cloneOf !== null &&
+          sessionsName(sessions, tile.simulatorId, item.instanceKey)),
     );
     if (instance === undefined) continue;
     return {
@@ -52,6 +60,28 @@ export function findSimulatorForTile(
       (simulator) =>
         simulator.platform === "android" && simulator.name === tile.name,
     ) ?? null
+  );
+}
+
+/**
+ * Whether a session on this host names both of these: one `simulatorId` and
+ * the instance it is the id of. A `@1.1` session carries the pair, which is
+ * what ties an Android clone's AVD-name key to the serial its tile holds, and
+ * every session counts - an agent's and another person's alike - because this
+ * is the host's own mapping rather than a hold on the instance. Only a CLONE
+ * is resolved through it: a root device's session names an AVD name too, and
+ * that device has a row of its own, cold under that name once its emulator
+ * has exited, which is the row to boot again.
+ */
+function sessionsName(
+  sessions: readonly SimulatorSession[],
+  simulatorId: string,
+  instanceKey: string,
+): boolean {
+  return sessions.some(
+    (session) =>
+      session.simulatorId === simulatorId &&
+      session.instanceKey === instanceKey,
   );
 }
 
