@@ -305,6 +305,10 @@ export interface ChatPreContentInput {
  * has no label - a listed entry with an empty one, a host it does not list -
  * and `resolvedHostLabel` clears only the `checking` state. A host id is not
  * a name a person can act on, so it reads as no label here.
+ *
+ * This is the directory's half. Surfaces read `useChatTileHostLabel`, which
+ * names an unreachable host the directory cannot name by what it reported to
+ * the account.
  */
 export function chatTileHostLabel(
   reachability: HostReachability,

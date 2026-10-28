@@ -53,7 +53,7 @@ import {
 } from "./chat-tile";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
 import { ChatStateLineContext } from "./chat-state-line";
-import { chatTileHostLabel } from "./chat-pre-content";
+import { useChatTileHostLabel } from "./use-chat-tile-host-label";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
@@ -155,16 +155,17 @@ interface AppliedPublishedCopy {
 }
 
 /**
- * The owning host's own name when the directory knows it, the raw id when it
- * does not. A host that has never been seen from this device is exactly the
- * case this surface exists for, so the fallback is a real answer rather than a
- * defensive one.
+ * The owning host by the name `useChatTileHostLabel` found for it, or "the
+ * host" when nothing names it - never its id. A host that has never been seen
+ * from this device is exactly the case this surface exists for, so the
+ * fallback is a real answer rather than a defensive one.
  */
 function publishedCopyOwnerLabel(
   ownerHostId: string,
-  hostLabel: string,
+  hostName: string | null,
 ): string {
-  return ownerHostId.length > 0 ? hostLabel : "another device";
+  if (ownerHostId.length === 0) return "another device";
+  return hostName ?? "the host";
 }
 
 /**
@@ -228,6 +229,8 @@ interface PublishedCopyOwnerFacts {
 
 interface PublishedChatOwner {
   readonly reachability: HostReachability;
+  /** The owner host's name, or `null` for "the host". */
+  readonly hostName: string | null;
   readonly sandboxState: ChatSandboxState;
   readonly sandbox: ChatSandboxView;
   readonly lockFacts: PublishedCopyOwnerFacts;
@@ -238,6 +241,7 @@ function usePublishedChatOwner(
   epicId: string,
 ): PublishedChatOwner {
   const reachability = useHostReachability(node.ownerHostId);
+  const hostName = useChatTileHostLabel(reachability, node.ownerHostId);
   const sandboxState = useChatSandboxState(
     epicId,
     node.ownerHostId,
@@ -266,6 +270,7 @@ function usePublishedChatOwner(
   );
   return {
     reachability,
+    hostName,
     sandboxState,
     sandbox,
     lockFacts: {
@@ -273,11 +278,7 @@ function usePublishedChatOwner(
       ownerIsReachable: reachability.status === "reachable",
       ownerRefusesStore,
       ownerIsThisHost: ownerHostIsServingHost(node.ownerHostId, node.hostId),
-      ownerLabel: copyOwnerLabel(
-        sandboxState,
-        node.ownerHostId,
-        reachability.hostLabel,
-      ),
+      ownerLabel: copyOwnerLabel(sandboxState, node.ownerHostId, hostName),
     },
   };
 }
@@ -286,11 +287,11 @@ function usePublishedChatOwner(
 function copyOwnerLabel(
   state: ChatSandboxState,
   hostId: string,
-  label: string,
+  hostName: string | null,
 ): string {
   switch (state.kind) {
     case "none":
-      return publishedCopyOwnerLabel(hostId, label);
+      return publishedCopyOwnerLabel(hostId, hostName);
     case "pending":
       return state.name;
     case "destroyed":
@@ -810,7 +811,7 @@ function PublishedChatDeadTileBanner(props: {
   readonly owner: PublishedChatOwner;
   readonly showsPublishedCopy: boolean;
 }): ReactNode {
-  const { sandbox, reachability } = props.owner;
+  const { sandbox, reachability, hostName } = props.owner;
   // A sandbox chat's one line is its only line, whatever the state.
   if (sandbox.line !== null) return null;
   if (reachability.status !== "unreachable") return null;
@@ -820,7 +821,7 @@ function PublishedChatDeadTileBanner(props: {
       tabId={props.tabId}
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
-      hostLabel={chatTileHostLabel(reachability, props.node.ownerHostId)}
+      hostLabel={hostName}
       reason="host-offline"
       showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}

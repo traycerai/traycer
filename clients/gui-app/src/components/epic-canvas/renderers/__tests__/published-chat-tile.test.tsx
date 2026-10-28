@@ -26,7 +26,14 @@ import {
   servingBehaviour,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
-import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentHostRecordV12,
+  EnvironmentListResponse,
+} from "@traycer/protocol/host/environment/contracts";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
@@ -187,9 +194,17 @@ function runtimeClient(): HostClient<HostRpcRegistry> {
   return runtime.client;
 }
 
+// The app-wide client: none, as a tile under test usually has, unless a case
+// hands one in. The account's environment host lists are read through it.
+const appHost = vi.hoisted(
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+    hostsByEnvironmentId: Map<string, EnvironmentHostRecordV12[]>;
+  } => ({ client: null, hostsByEnvironmentId: new Map() }),
+);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useOptionalHostClient: () => null,
+  useOptionalHostClient: () => appHost.client,
 }));
 // Narrow seam: the named requester over the real `HostClient`, so the REAL
 // `useHostQuery`, readiness gate and transport path run for the owner read.
@@ -611,6 +626,9 @@ beforeEach(() => {
         crossHostMessaging: null,
         sessions: null,
       }),
+      "environment.host.list": ({ environmentId }) => ({
+        hosts: appHost.hostsByEnvironmentId.get(environmentId) ?? [],
+      }),
     },
   });
   const client = new HostClient<HostRpcRegistry>({
@@ -638,6 +656,9 @@ afterEach(() => {
   runtime.client?.dispose();
   runtime.client = null;
   runtime.messenger = null;
+  appHost.client = null;
+  appHost.hostsByEnvironmentId.clear();
+  resetNegotiatedManifests();
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
@@ -1080,6 +1101,28 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
   });
 });
 
+/** A `ready` transcript built through the real publish → read → compose pipeline. */
+async function readyState(
+  cohorts: readonly (readonly JsonObject[])[],
+): Promise<CloudChatTranscriptState> {
+  const published = await publishCloudChat({
+    ...DEFAULT_PUBLISH,
+    cohorts,
+  });
+  const read = await readCloudChat({
+    identity: IDENTITY,
+    port: recordingPort(servingBehaviour(published)),
+    cache: new InMemoryChatPartCache(),
+    sha256Hex: webCryptoSha256Hex,
+  });
+  return composeCloudChatTranscriptState({
+    read,
+    readError: null,
+    payloadsOutcome: undefined,
+    payloadsSettled: true,
+  });
+}
+
 /**
  * The head-keyed refresh: once a copy has been shown, a LATER read for a
  * newer record head is applied INTO the same store (`applyConversion`)
@@ -1097,27 +1140,6 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
  * surface (scroll, memoized rows) held on the old one.
  */
 describe("PublishedChatTile - head-keyed refresh", () => {
-  async function readyState(
-    cohorts: readonly (readonly JsonObject[])[],
-  ): Promise<CloudChatTranscriptState> {
-    const published = await publishCloudChat({
-      ...DEFAULT_PUBLISH,
-      cohorts,
-    });
-    const read = await readCloudChat({
-      identity: IDENTITY,
-      port: recordingPort(servingBehaviour(published)),
-      cache: new InMemoryChatPartCache(),
-      sha256Hex: webCryptoSha256Hex,
-    });
-    return composeCloudChatTranscriptState({
-      read,
-      readError: null,
-      payloadsOutcome: undefined,
-      payloadsSettled: true,
-    });
-  }
-
   function renderTile(): RenderResult {
     return render(
       <PublishedChatTile
@@ -1258,6 +1280,177 @@ describe("PublishedChatTile - head-keyed refresh", () => {
     expect(mockUseChatReplicaRead).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false }),
     );
+  });
+});
+
+/**
+ * The name the footer and the banner give an owner host the directory does
+ * not list: its own report in the account's environment host lists, read
+ * through the REAL `useHostQueries` over the app-wide client, or "the host" -
+ * never its id.
+ */
+describe("PublishedChatTile - an unlisted owner's name", () => {
+  const PERSONAL: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: "env-personal",
+        ownerKind: "user",
+        ownerId: "user-1",
+        roomId: "room-personal",
+        label: "Personal",
+      },
+    ],
+  };
+  const OWNER_RECORD: EnvironmentHostRecordV12 = {
+    hostId: "owner-host-1",
+    hostLabel: "windows-test-machine",
+    hostPlatform: "win32",
+    enrolledByUserId: "user-1",
+    kind: "personal",
+    boundAt: 1,
+    reachable: false,
+    lastReportedAt: 1,
+    applied: [],
+    hasLocalRow: false,
+  };
+  // What `useHostReachability` answers for a host its directory does not list.
+  const UNLISTED_OWNER: MockHostReachability = {
+    status: "unreachable",
+    hostLabel: "owner-host-1",
+    unavailability: "offline",
+    hostKind: "unknown",
+  };
+
+  function hostListCalls(): readonly unknown[] {
+    if (runtime.messenger === null) {
+      throw new Error("test messenger not configured");
+    }
+    return runtime.messenger.calls
+      .filter((call) => call.method === "environment.host.list")
+      .map((call) => call.params);
+  }
+
+  /** Signed in as the chat's owner, on an app-wide host that has `methods`. */
+  function signInOnAppHost(methods: ReadonlyArray<string>): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: { userId: "user-1", userName: "Ada", email: "ada@example.com" },
+      contextMetadata: { userId: "user-1", username: "Ada" },
+    });
+    environments.list = PERSONAL;
+    appHost.client = runtimeClient().createRequesterForHostId("host-1");
+    recordNegotiatedHostMethods("host-1", methods);
+  }
+
+  /** The tile over a published copy, the copy the runner saw. */
+  async function renderTile(): Promise<RenderResult> {
+    mockUseCloudChatTranscript.mockReturnValue(
+      await readyState([FIRST_COHORT]),
+    );
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+    return render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+  }
+
+  async function settled(): Promise<void> {
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+  }
+
+  it("names the host by what it reported to the account, in the footer and the banner", async () => {
+    signInOnAppHost(["environment.list", "environment.host.list"]);
+    appHost.hostsByEnvironmentId.set("env-personal", [OWNER_RECORD]);
+    mockUseHostReachability.mockReturnValue(UNLISTED_OWNER);
+
+    const view = await renderTile();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("chat-tile-session-view").textContent,
+      ).toContain(
+        "This agent lives on windows-test-machine, which is offline — showing the last published copy. Sending resumes when that host is back.",
+      );
+    });
+    expect(
+      screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+    ).toContain(
+      'Clone this agent to continue while "windows-test-machine" is offline; the original stays there.',
+    );
+    expect(view.container.textContent).not.toContain("owner-host-1");
+  });
+
+  it.each([
+    {
+      name: "no environment lists the host",
+      methods: ["environment.list", "environment.host.list"],
+      asked: true,
+    },
+    {
+      name: "the app-wide host predates environment.host.list",
+      methods: ["environment.list"],
+      asked: false,
+    },
+  ])(
+    'says "the host", never its id, when $name',
+    async ({ methods, asked }) => {
+      signInOnAppHost(methods);
+      mockUseHostReachability.mockReturnValue(UNLISTED_OWNER);
+
+      const view = await renderTile();
+      await settled();
+
+      expect(
+        screen.getByTestId("chat-tile-session-view").textContent,
+      ).toContain(
+        "This agent lives on the host, which is offline — showing the last published copy. Sending resumes when that host is back.",
+      );
+      expect(
+        screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+      ).toContain("Clone this agent to continue while the host is offline");
+      expect(view.container.textContent).not.toContain("owner-host-1");
+      expect(hostListCalls()).toHaveLength(asked ? 1 : 0);
+    },
+  );
+
+  it("asks the account nothing for a host the directory names", async () => {
+    signInOnAppHost(["environment.list", "environment.host.list"]);
+    appHost.hostsByEnvironmentId.set("env-personal", [OWNER_RECORD]);
+    mockUseHostReachability.mockReturnValue({
+      ...UNLISTED_OWNER,
+      hostLabel: "Ada's Mac",
+    });
+
+    const view = await renderTile();
+    await settled();
+
+    expect(hostListCalls()).toHaveLength(0);
+    expect(screen.getByTestId("chat-tile-session-view").textContent).toContain(
+      "This agent lives on Ada's Mac, which is offline",
+    );
+
+    // The same mounted tile asks once the directory loses the name, so the
+    // silence above is the gate and not a harness that cannot send.
+    mockUseHostReachability.mockReturnValue(UNLISTED_OWNER);
+    view.rerender(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+    await waitFor(() => {
+      expect(hostListCalls()).toEqual([{ environmentId: "env-personal" }]);
+    });
   });
 });
 
