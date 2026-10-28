@@ -1,14 +1,16 @@
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
-import type {
+import {
   HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { filterConsumedHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 
 export type NotificationHooksStatusQuery = UseQueryResult<
@@ -35,12 +37,24 @@ export function useNotificationHooksStatus(): NotificationHooksStatusQuery {
 export function useNotificationHooksStatusForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): NotificationHooksStatusQuery {
-  return useHostQuery<HostRpcRegistry, "host.notificationHooks.status">({
+  return useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "host.notificationHooks.status",
+    ResponseOfMethod<HostRpcRegistry, "host.notificationHooks.status">,
+    string | null
+  >({
     cacheKeyIdentity: undefined,
     client,
     method: "host.notificationHooks.status",
     params: {},
     options: null,
+    captureRequestContext: () => client?.getActiveHostId() ?? null,
+    mapResponse: ({ response, queryClient, requestContext }) =>
+      filterConsumedHookRemovalNotices(
+        response,
+        queryClient,
+        requestContext ?? null,
+      ),
   });
 }
 
@@ -71,10 +85,29 @@ export function useNotificationHooksSaveForClient(
     method: "host.notificationHooks.save",
     // The list is saved whole; only a list holding a command hook can run
     // anything, so only that one asks for a grant.
-    prepareRequest: (request, requester) =>
-      request.hooks.some((hook) => hook.action.type === "command")
+    prepareRequest: (request, requester) => {
+      const hostId = requester.getActiveHostId();
+      const version =
+        hostId === null
+          ? null
+          : readNegotiatedMethodVersion(hostId, "host.notificationHooks.save");
+      if (
+        request.configurationRevision === null &&
+        (version === null || version === false || version.major >= 3)
+      ) {
+        throw new HostRpcError({
+          code: "E_INVALID_ARGUMENT",
+          requestId: "hooks-refresh-required",
+          method: "host.notificationHooks.save",
+          fatalDetails: null,
+          message:
+            "Notification hooks changed. Refresh the list before saving.",
+        });
+      }
+      return request.hooks.some((hook) => hook.action.type === "command")
         ? grant(request, requester)
-        : Promise.resolve(request),
+        : Promise.resolve(request);
+    },
     mutationKey: notificationsMutationKeys.saveHooks(),
     errorMessage: "Couldn't save notification hooks.",
     invalidateMethods: ["host.notificationHooks.status"],

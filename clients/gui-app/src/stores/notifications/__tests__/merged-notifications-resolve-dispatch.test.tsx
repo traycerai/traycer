@@ -10,7 +10,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
 } from "@traycer/protocol/host/notifications/contracts";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
@@ -128,7 +128,7 @@ const CLOUD_MUTATION_KEYS = [
 
 function actionableSandboxNotice(
   entryId: string,
-): HostNotificationsCloudFeedRowV15 {
+): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "host-cloud",

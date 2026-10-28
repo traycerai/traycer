@@ -13,7 +13,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -602,7 +602,7 @@ describe("cloud notifications store", () => {
       null,
     );
     const base = cloudRow("entry-stalled", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV15 = {
+    const row: HostNotificationsCloudFeedRowV16 = {
       ...base,
       coalesceKey: "environment.move.stalled:host-a",
       entry: {
@@ -640,7 +640,7 @@ describe("cloud notifications store", () => {
       null,
     );
     const base = cloudRow("entry-notice", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV15 = {
+    const row: HostNotificationsCloudFeedRowV16 = {
       ...base,
       coalesceKey: "sandbox-notice:sbx-1",
       entry: {

@@ -15,6 +15,7 @@ import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsMarkReadRequest,
 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 
 /**
  * Visit-to-clear in cloud mode.
@@ -46,6 +47,13 @@ const mockAuth = {
   revalidateCurrentContext: vi.fn(() => Promise.resolve(null)),
 };
 
+// This fixture has no connected remote hosts. Keep the real directory query
+// boundary mounted while notification consumption uses the local client below.
+const directory: Pick<HostDirectoryService, "list" | "onChange"> = {
+  list: () => Promise.resolve([]),
+  onChange: () => ({ dispose: () => undefined }),
+};
+
 function requireHostClient(): HostClient<HostRpcRegistry> {
   if (hostState.client === null) throw new Error("host client not created");
   return hostState.client;
@@ -65,7 +73,7 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ hostClient: requireHostClient() }),
+  useHostBinding: () => ({ hostClient: requireHostClient(), directory }),
   useHostClient: () => requireHostClient(),
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => requireHostClient(),
@@ -221,6 +229,13 @@ function createHostClient(): HostClient<HostRpcRegistry> {
         return `request-${String(requestId)}`;
       },
       handlers: {
+        "host.notificationHooks.status": () => ({
+          configPath: "/home/me/.traycer/notification-hooks.json",
+          configError: null,
+          hooks: [],
+          configurationRevision: "rev-1",
+          pendingRemovalNotices: [],
+        }),
         "host.notifications.cloudFeed.markRead": async (params) => {
           calls.cloudMarkRead.push(params.entryId);
           cloudMarkReadConcurrency.live += 1;

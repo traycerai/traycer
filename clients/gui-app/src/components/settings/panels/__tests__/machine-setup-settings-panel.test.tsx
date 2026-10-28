@@ -75,6 +75,7 @@ const ALL_METHODS = [
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   toastInfo.mockClear();
   resetNegotiatedManifests();
   hostMock.client = null;
@@ -446,6 +447,35 @@ describe("<MachineSetupSettingsPanel /> moving between computers", () => {
 });
 
 describe("<MachineSetupSettingsPanel /> runs on this host", () => {
+  it("shows each run's start with the shared Settings date format", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12));
+    renderPage({
+      ...DEFAULT_RIG,
+      attempts: [
+        attempt({
+          attemptId: "today",
+          startedAt: new Date(2026, 9, 25, 8, 35).getTime(),
+        }),
+        attempt({
+          attemptId: "earlier-this-year",
+          startedAt: new Date(2026, 9, 24, 8, 35).getTime(),
+        }),
+        attempt({
+          attemptId: "another-year",
+          startedAt: new Date(2025, 9, 25, 8, 35).getTime(),
+        }),
+      ],
+    });
+
+    const rows = await screen.findAllByTestId("setup-attempt");
+    expect(rows.map((row) => within(row).getByText(/\d/).textContent)).toEqual([
+      "08:35",
+      "24 Oct 08:35",
+      "25 Oct 2025",
+    ]);
+  });
+
   const RUNS: readonly SetupAttempt[] = [
     attempt({
       attemptId: "oldest",

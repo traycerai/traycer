@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV25,
+  type HostNotificationCloudEntryV26,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -38,7 +38,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV25,
+  entry: HostNotificationCloudEntryV26,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -131,7 +131,24 @@ export function formatHostNotificationPresentation(
       return environmentNotificationPresentation(entry.kind, known);
     case "sandbox.notice":
       return sandboxNoticePresentation(known, Date.now());
+    case "notification.hooks.removed":
+      return {
+        title: "Notification hooks removed",
+        body:
+          known?.kind === "notification_hooks_removed"
+            ? notificationHooksRemovedMessage(known.hostName, known.count)
+            : "Review notification hooks on the affected computer.",
+      };
   }
+}
+
+export function notificationHooksRemovedMessage(
+  hostName: string,
+  count: number,
+): string {
+  return count === 1
+    ? `Removed 1 notification hook from ${hostName} because it could send its private data.`
+    : `Removed ${count} notification hooks from ${hostName} because they could send its private data.`;
 }
 
 const SANDBOX_FILES_LINE =
@@ -482,13 +499,12 @@ function teamNotificationPresentation(
           host.credentialClosed === "done" &&
           host.replacementDelivered === "done",
       ).length;
-      const progress =
-        known.hosts.length === 0
-          ? "Removal complete"
-          : `${done} of ${known.hosts.length} hosts done`;
       return {
         title: "Member removed",
-        body: `${known.memberName} • ${known.teamName} • ${progress}`,
+        body:
+          done === known.hosts.length
+            ? `${known.memberName} is no longer in ${known.teamName}.`
+            : `${known.memberName} • ${known.teamName} • ${done} of ${known.hosts.length} hosts done`,
       };
     }
     case "team.member.joined":
@@ -677,6 +693,7 @@ export function hostOperationKnownCopy(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
@@ -778,6 +795,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -811,6 +829,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -844,6 +863,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -882,6 +902,7 @@ function knownStoppedReason(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -919,6 +940,7 @@ function knownProviderId(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return null;
   }
 }
@@ -968,6 +990,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return false;
   }
 }
@@ -1003,6 +1026,7 @@ function knownBackgroundWorkRunning(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "notification_hooks_removed":
       return false;
   }
 }

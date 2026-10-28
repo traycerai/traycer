@@ -438,7 +438,7 @@ describe("team notification presentation", () => {
       formatHostNotificationPresentation(
         teamEntry("team.member.removed", { ...REMOVED_PAYLOAD, hosts: [] }),
       ).body,
-    ).toBe("Sam • Acme • Removal complete");
+    ).toBe("Sam is no longer in Acme.");
   });
 
   it("tells the admins who joined and tells the newcomer where to start", () => {

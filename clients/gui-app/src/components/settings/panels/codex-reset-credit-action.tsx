@@ -4,11 +4,8 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import type { CodexResetCredit } from "@/components/settings/panels/codex-reset-credit-model";
 import { useConsumeRateLimitResetCreditMutation } from "@/hooks/providers/use-consume-rate-limit-reset-credit-mutation";
-import {
-  formatResetFullDateTime,
-  useIsFarReset,
-  useResetCountdown,
-} from "@/lib/relative-time";
+import { useIsFarReset, useResetCountdown } from "@/lib/relative-time";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 function resetCreditDescription(
   selectedCredit: CodexResetCredit | null,
@@ -22,7 +19,7 @@ function resetCreditDescription(
   let expiry = "with no expiry";
   if (selectedCredit.expiresAt !== null) {
     expiry = farExpiry
-      ? `expiring ${formatResetFullDateTime(selectedCredit.expiresAt)}`
+      ? `expiring ${formatSettingsDate(selectedCredit.expiresAt, true)}`
       : `expiring in ${expiryCountdown ?? "less than a minute"}`;
   }
   const remaining = Math.max(0, availableCount - 1);

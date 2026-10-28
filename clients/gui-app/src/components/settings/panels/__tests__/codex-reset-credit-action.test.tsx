@@ -27,11 +27,39 @@ import { CodexResetCreditAction } from "../codex-reset-credit-action";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   mocks.isPending = false;
   mocks.mutate.mockReset();
 });
 
 describe("CodexResetCreditAction", () => {
+  it("uses the Settings date for a reset that expires days from now", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 25, 12));
+    render(
+      <CodexResetCreditAction
+        profileId="personal"
+        availableCount={2}
+        selectedCredit={{
+          id: "credit-later",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: Date.now(),
+          expiresAt: new Date(2026, 10, 2, 8, 35).getTime(),
+          title: "Manual reset",
+          description: null,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Use reset" }));
+    expect(
+      screen.getByText(
+        "This uses the reset expiring 2 Nov 08:35 on the currently reached Codex usage limit. It can't be returned or undone. You'll have 1 manual reset left.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("confirms the selected expiry and sends a targeted idempotent request", () => {
     render(
       <CodexResetCreditAction

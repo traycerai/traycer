@@ -20,7 +20,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import type {
   HostNotificationSandboxNotice,
   HostNotificationSeverity,
-  HostNotificationsCloudFeedRowV15,
+  HostNotificationsCloudFeedRowV16,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -107,9 +107,9 @@ function noticeRow(
   entryId: string,
   notice: HostNotificationSandboxNotice,
   severity: HostNotificationSeverity,
-): HostNotificationsCloudFeedRowV15 & {
+): HostNotificationsCloudFeedRowV16 & {
   readonly entry: Extract<
-    HostNotificationsCloudFeedRowV15["entry"],
+    HostNotificationsCloudFeedRowV16["entry"],
     { kind: "sandbox.notice" }
   >;
 } {
@@ -139,7 +139,7 @@ function noticeRow(
 }
 
 function seedCloud(
-  rows: ReadonlyArray<HostNotificationsCloudFeedRowV15>,
+  rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
 ): void {
   notificationFeedMode.value = "cloud";
   useCloudNotificationsStore.getState().applySnapshot({
@@ -403,7 +403,7 @@ describe("a sandbox.notice row in the notification center", () => {
   });
 
   it("excludes Details-only settings failures from the task and actionable notice count", async () => {
-    const row: HostNotificationsCloudFeedRowV15 = {
+    const row: HostNotificationsCloudFeedRowV16 = {
       ...noticeRow("entry-settings", WARNING, "needs_action"),
       entry: {
         id: "entry-settings",

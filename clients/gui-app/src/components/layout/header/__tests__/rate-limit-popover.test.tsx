@@ -55,7 +55,7 @@ import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   type RateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
-import { formatResetFullDateTime } from "@/lib/relative-time";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitCluster,
@@ -2329,7 +2329,7 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
     expect(
       screen.getByText(
-        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+        `Resets ${formatSettingsDate(NOW + 3 * 24 * 60 * 60 * 1000, true)}`,
       ),
     ).toBeTruthy();
   });

@@ -225,6 +225,7 @@ export function TeamProviders(): ReactNode {
                 </p>
                 <ConfigurationOsPicker value={os} onChange={setOs} />
                 <TeamTextItems
+                  key={JSON.stringify([os, harness])}
                   items={items}
                   kind="env_override"
                   os={os}
