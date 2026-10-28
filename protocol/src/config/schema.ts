@@ -5,6 +5,11 @@ import {
   DEFAULT_CLAUDE_SESSION_NAME_TEMPLATE,
   SESSION_NAME_TEMPLATE_MAX_LENGTH,
 } from "./session-name-template";
+import {
+  SIMULATOR_IDLE_MINUTES_DEFAULT,
+  SIMULATOR_IDLE_MINUTES_MAX,
+  SIMULATOR_IDLE_MINUTES_MIN,
+} from "../host/simulator/schemas";
 
 /**
  * Current on-disk schema version for `~/.traycer/cli/config.json`. Bump it
@@ -193,12 +198,26 @@ export type SessionNamesConfig = z.infer<
  */
 export const SIMULATOR_CONFIG_DEFAULT = {
   enabled: false,
+  idleMinutes: SIMULATOR_IDLE_MINUTES_DEFAULT,
 } as const;
 export const simulatorOnlyConfigSchema = lazySchema(() =>
   z.object({
     simulator: z
       .object({
         enabled: z.boolean().default(false),
+        /**
+         * The idle window: an instance Traycer booted powers off once nothing
+         * has used it for this many minutes. A value out of range reads as
+         * the default rather than failing the block, so it can never revoke
+         * the switch beside it.
+         */
+        idleMinutes: z
+          .number()
+          .int()
+          .min(SIMULATOR_IDLE_MINUTES_MIN)
+          .max(SIMULATOR_IDLE_MINUTES_MAX)
+          .catch(SIMULATOR_IDLE_MINUTES_DEFAULT)
+          .default(SIMULATOR_IDLE_MINUTES_DEFAULT),
       })
       .default(SIMULATOR_CONFIG_DEFAULT),
   }),
