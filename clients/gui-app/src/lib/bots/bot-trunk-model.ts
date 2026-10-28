@@ -186,6 +186,34 @@ export function taskRequestPost(
   return { kind: "channel", chatId: channelId, messageId, thread: null };
 }
 
+/**
+ * How the channel opens the thread hung off `row` (decision 114), as its
+ * own row's "Reply in thread" does: a member's post opens its own thread,
+ * and a direct post the box whose first reply starts one; a question or a
+ * proposal opens its thread through that box too, and the bot's direct
+ * reply as well, marked as an answer, whose thread takes a send only while
+ * the bot's binding opens one under it. `null` for a row that roots no
+ * thread.
+ */
+export function threadOpenOf(
+  row: OpenMessage,
+): { readonly announcement: boolean; readonly answer: boolean } | null {
+  if (row.role === "user") {
+    return {
+      announcement: row.conversationRequest?.direct === true,
+      answer: false,
+    };
+  }
+  const kind = row.announcement?.kind ?? null;
+  if (kind === "question" || kind === "proposal") {
+    return { announcement: true, answer: false };
+  }
+  if (kind === null && row.repliesTo !== undefined) {
+    return { announcement: true, answer: true };
+  }
+  return null;
+}
+
 /** A post's first line, as a task row names the request it came from. */
 export function firstLineOf(text: string | null): string | null {
   const line = text?.trim().split("\n", 1)[0]?.trim() ?? "";

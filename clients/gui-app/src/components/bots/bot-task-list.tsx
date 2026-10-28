@@ -10,6 +10,7 @@ import {
   firstLineOf,
   sortTasksForDisplay,
   taskRequestPost,
+  threadOpenOf,
   type BotTaskRequestPost,
 } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
@@ -237,6 +238,7 @@ function BotViewOriginLines(props: {
     >
       {(row) => {
         const line = firstLineOf(postTextOf(row));
+        const open = row === null ? null : threadOpenOf(row);
         const opensCreator =
           creator.kind === "thread" &&
           creator.thread !== null &&
@@ -249,9 +251,9 @@ function BotViewOriginLines(props: {
                 onOpen={() =>
                   place.onOpenPost({
                     anchorMessageId: post.messageId,
-                    announcement: post.thread === null,
-                    // A member's post, never the bot's own reply.
-                    answer: false,
+                    announcement:
+                      post.thread === null || open?.announcement === true,
+                    answer: open?.answer ?? false,
                     sent: null,
                   })
                 }
@@ -304,9 +306,11 @@ function ThreadPanelRequestLine(props: {
 }
 
 /**
- * "from <the thread's post>", opening that thread in the channel; "from a
- * thread" while the list does not have it, or its post is gone or not
- * loaded. Nothing for the trunk's own task.
+ * "from <the thread's post>", opening that thread in the channel as the
+ * post's own row opens it, an answer's thread through the answer's own gate;
+ * "from a thread", with nothing to open, while the list does not have it,
+ * its post is gone, or the post is being fetched (which row it is decides
+ * how its thread opens). Nothing for the trunk's own task.
  */
 function TaskCreatorLine(props: {
   readonly botId: string;
@@ -327,24 +331,29 @@ function TaskCreatorLine(props: {
       hostId={hostId}
       conversationId={thread.conversationId}
       messageId={anchor.messageId}
-      fetchCold={false}
+      fetchCold
     >
-      {(row) => (
-        <RowLink
-          testId="bot-task-thread"
-          onOpen={() =>
-            place.onOpenPost({
-              anchorMessageId: anchor.messageId,
-              announcement: false,
-              // An existing thread, opened as its row in the channel opens it.
-              answer: false,
-              sent: null,
-            })
-          }
-        >
-          from {firstLineOf(postTextOf(row)) ?? "a thread"}
-        </RowLink>
-      )}
+      {(row) => {
+        const open = row === null ? null : threadOpenOf(row);
+        if (open === null) {
+          return <span data-testid="bot-task-thread">from a thread</span>;
+        }
+        return (
+          <RowLink
+            testId="bot-task-thread"
+            onOpen={() =>
+              place.onOpenPost({
+                anchorMessageId: anchor.messageId,
+                announcement: open.announcement,
+                answer: open.answer,
+                sent: null,
+              })
+            }
+          >
+            from {firstLineOf(postTextOf(row)) ?? "a thread"}
+          </RowLink>
+        );
+      }}
     </ChannelPost>
   );
 }

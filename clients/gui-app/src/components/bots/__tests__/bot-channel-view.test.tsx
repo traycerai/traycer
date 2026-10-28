@@ -25,6 +25,7 @@ import type {
   BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
@@ -320,6 +321,7 @@ function PostStub(props: {
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -883,6 +885,67 @@ describe("<BotChannelView /> channel", () => {
     expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
     expect(box.getAttribute("data-thread-id")).toBe("thread-answer");
     expect(box.getAttribute("data-sendable")).toBe("true");
+  });
+
+  it("gates a direct reply's thread opened from a task row as the reply's own row gates it: no send after a claim the binding does not say, and the box kept while the list drops the thread", () => {
+    // The bot's direct reply, as the channel's session holds it: a task row
+    // opens the thread rooted on it as the row's kind says (Tracy Bots T82).
+    const reply: Message = {
+      role: "assistant",
+      messageId: "answer-1",
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "claude-sonnet-4",
+        displayName: "Claude Sonnet 4",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1_000,
+      timestamp: 1_000,
+      turnId: null,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+      repliesTo: "post-1",
+    };
+    const how = threadOpenOf(reply);
+    if (how === null) throw new Error("a direct reply roots a thread");
+    const fromTask: BotOpenThread = {
+      anchorMessageId: reply.messageId,
+      ...how,
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    mocks.state.threads = [
+      thread("thread-answer", "answer-1", {
+        replyCount: 2,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(fromTask);
+    const box = screen.getByTestId("stub-bot-thread-composer");
+    expect(box.getAttribute("data-thread-id")).toBe("thread-answer");
+    expect(box.getAttribute("data-sendable")).toBe("true");
+
+    // Claimed by an older host; the cached list still lists the thread.
+    mocks.state.binding = { hostId: "host-older", epoch: 4 };
+    reopen(fromTask);
+    expect(box.getAttribute("data-thread-id")).toBe("thread-answer");
+    expect(box.getAttribute("data-sendable")).toBe("false");
+
+    // The list read under the claim drops the thread: the same box, its
+    // draft with it, still not sending.
+    mocks.state.threads = [];
+    reopen(fromTask);
+    expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
+    expect(box.getAttribute("data-announcement-id")).toBe("answer-1");
+    expect(box.getAttribute("data-sendable")).toBe("false");
   });
 
   it("says a failed read of the list after a claim beside the thread it last listed, with Retry, and takes a send once the read recovers", async () => {
