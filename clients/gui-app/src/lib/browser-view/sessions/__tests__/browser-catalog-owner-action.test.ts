@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { BrowserSessionsServerFrame } from "@traycer/protocol/host/browser/contracts";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -11,6 +11,7 @@ import {
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { appLogger } from "@/lib/logger";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const SNAPSHOT: BrowserSessionsServerFrame = {
@@ -24,9 +25,18 @@ describe("closing a Browsers panel row on a device whose stream already ended", 
   afterEach(() => {
     for (const release of releasers.splice(0)) release();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
+    vi.restoreAllMocks();
   });
 
-  it("starts the device's stream again and closes the tab, instead of failing at once", async () => {
+  /**
+   * A device coordinator held the way the link opener's provider holds it for
+   * the whole life of a view tab, so a close reuses it, with its stream ended,
+   * and a close of one of its tabs under way.
+   */
+  function closeOnEndedStream(): {
+    readonly clients: readonly FakeStreamClient[];
+    readonly settled: Promise<string>;
+  } {
     useAuthStore.setState({
       status: "signed-in",
       profile: { userId: "user-1", userName: "user-1", email: "u@example.com" },
@@ -46,8 +56,6 @@ describe("closing a Browsers panel row on a device whose stream already ended", 
       },
     };
     const scope = epicScope("epic-1");
-    // What the link opener's provider does for the whole life of a view tab:
-    // it holds this device's coordinator, so a close reuses it.
     releasers.push(
       acquireBrowserSessionsCoordinator({
         key: coordinatorKey(scope, {}),
@@ -63,16 +71,20 @@ describe("closing a Browsers panel row on a device whose stream already ended", 
     ended.emit(SNAPSHOT, null);
     ended.emitStatus("closed");
 
-    const closing = closeBrowserCatalogTab({
+    const settled = closeBrowserCatalogTab({
       identity: { epicId: "epic-1", hostId: "host-1", sessionId: "session-1" },
       tabId: "tab-1",
       owner: owner({}),
       runtime,
-    });
-    const settled = closing.then(
+    }).then(
       () => "closed",
       (error: unknown) => (error instanceof Error ? error.message : "rejected"),
     );
+    return { clients, settled };
+  }
+
+  it("starts the device's stream again and closes the tab, instead of failing at once", async () => {
+    const { clients, settled } = closeOnEndedStream();
 
     const restarted = clients.at(1)?.sessions.at(0);
     if (restarted === undefined) {
@@ -96,5 +108,27 @@ describe("closing a Browsers panel row on a device whose stream already ended", 
     );
 
     await expect(settled).resolves.toBe("closed");
+  });
+
+  it("logs that the device's stream ended again, with the state it ended in, when the close fails", async () => {
+    const warn = vi.spyOn(appLogger, "warn");
+    const { clients, settled } = closeOnEndedStream();
+
+    const restarted = clients.at(1)?.sessions.at(0);
+    if (restarted === undefined) {
+      throw new Error(`no stream was started again: ${await settled}`);
+    }
+    restarted.emitFatal("Bearer expired.");
+
+    await expect(settled).resolves.toBe("Bearer expired.");
+    expect(warn).toHaveBeenCalledWith(
+      "[browser] device stream was not ready for an action",
+      {
+        outcome: "ended",
+        lifecycle: "failed",
+        inventoryReady: false,
+        errorMessage: "Bearer expired.",
+      },
+    );
   });
 });
