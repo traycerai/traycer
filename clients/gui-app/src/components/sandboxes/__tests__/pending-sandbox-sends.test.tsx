@@ -6907,7 +6907,11 @@ describe("Stop while the sandbox boots", () => {
       seed({ ...SEEDED, phase: "creating", elapsedSeconds: 7 });
       answerSandboxRows(
         states.map((state) =>
-          sandboxSummaryFixture({ id: SANDBOX_ID, hostId: SANDBOX_HOST, state }),
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state,
+          }),
         ),
         Date.now() + 60_000,
       );

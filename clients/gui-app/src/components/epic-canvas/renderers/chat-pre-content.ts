@@ -228,7 +228,11 @@ export type ChatPreContentFatal = "none" | "verdict" | "host-update";
  * under a banner saying X is offline.
  */
 export type ChatPreContentHost =
-  "dead" | "up" | "restarting" | "starting" | "unknown";
+  | "dead"
+  | "up"
+  | "restarting"
+  | "starting"
+  | "unknown";
 
 /**
  * Which strip `ChatTile` shows above the body: `ChatHostStartingBanner`, the
