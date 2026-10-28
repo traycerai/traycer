@@ -185,10 +185,10 @@ export interface SandboxSetupLineFacts {
   /** Whether the stage's sandbox is awake now; `null` before its row is listed. */
   readonly sandboxAwake: boolean | null;
   /**
-   * The created sandbox's row reads `creating`, `starting` or `resuming`:
-   * Stop is not offered until it is awake.
+   * The stage's sandbox is listed and not `creating`, `starting` or
+   * `resuming`: Stop is offered only then.
    */
-  readonly sandboxBooting: boolean;
+  readonly sandboxStoppable: boolean;
 }
 
 /**
@@ -222,7 +222,7 @@ export function SandboxSetupLine(props: {
       : {
           ...props.actions,
           onStop:
-            stage.createdSandboxId !== null && !props.facts.sandboxBooting
+            stage.createdSandboxId !== null && props.facts.sandboxStoppable
               ? props.actions.onStop
               : null,
         };

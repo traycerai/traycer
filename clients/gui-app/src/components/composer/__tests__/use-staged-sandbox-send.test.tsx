@@ -490,6 +490,9 @@ describe("useStagedSandboxSend's setup line", () => {
   it("offers no Retry applying on a host that did not negotiate the combined retry", () => {
     mocks.retrySupported = false;
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    mocks.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state: "awake" }),
+    ];
     mount(vi.fn());
 
     expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
@@ -607,6 +610,10 @@ describe("useStagedSandboxSend's setup line", () => {
 
   it("keeps the staged sandbox and visible remedies when its standalone Stop fails", async () => {
     stageCreated("booting", null);
+    // Stop is offered once the sandbox is awake.
+    mocks.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state: "awake" }),
+    ];
     mocks.runVerb.mockRejectedValueOnce(new Error("Stop refused"));
     mount(vi.fn());
     fireEvent.click(screen.getByTestId("sandbox-setup-stop"));

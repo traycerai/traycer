@@ -465,10 +465,11 @@ export function useSetupLineFacts(
       : sandboxes?.find((candidate) => candidate.id === stageSandboxId);
   const sandboxAwake =
     stageRow === undefined ? null : stageRow.state === "awake";
-  const sandboxBooting =
-    stageRow?.state === "creating" ||
-    stageRow?.state === "starting" ||
-    stageRow?.state === "resuming";
+  const sandboxStoppable =
+    stageRow !== undefined &&
+    stageRow.state !== "creating" &&
+    stageRow.state !== "starting" &&
+    stageRow.state !== "resuming";
   // A resting sandbox of the person's costs what its row says.
   const existingPrice = useMemo<StagePrice | null>(() => {
     if (stage === null || stage.target.kind !== "existing") return null;
@@ -495,7 +496,7 @@ export function useSetupLineFacts(
         smallerShapeAffordable: false,
         offeredAgents: catalogue?.offeredAgents ?? null,
         sandboxAwake,
-        sandboxBooting,
+        sandboxStoppable,
       };
     }
     const { shape, configuration } = stage.target;
@@ -528,9 +529,9 @@ export function useSetupLineFacts(
         ),
       offeredAgents: catalogue.offeredAgents ?? null,
       sandboxAwake,
-      sandboxBooting,
+      sandboxStoppable,
     };
-  }, [catalogue, existingPrice, sandboxAwake, sandboxBooting, stage, user]);
+  }, [catalogue, existingPrice, sandboxAwake, sandboxStoppable, stage, user]);
 }
 
 /**

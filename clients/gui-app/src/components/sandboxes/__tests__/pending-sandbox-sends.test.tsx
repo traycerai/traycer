@@ -6896,12 +6896,19 @@ describe("Stop while the sandbox boots", () => {
     restoreLocks();
   });
 
-  it.each(["creating", "starting", "resuming"] as const)(
+  it.each([
+    ["creating", ["creating"]],
+    ["starting", ["starting"]],
+    ["resuming", ["resuming"]],
+    ["not yet listed", []],
+  ] as const)(
     "offers no Stop while the row is %s, and offers it once the row is awake",
-    async (state) => {
+    async (_label, states) => {
       seed({ ...SEEDED, phase: "creating", elapsedSeconds: 7 });
       answerSandboxRows(
-        [sandboxSummaryFixture({ id: SANDBOX_ID, hostId: SANDBOX_HOST, state })],
+        states.map((state) =>
+          sandboxSummaryFixture({ id: SANDBOX_ID, hostId: SANDBOX_HOST, state }),
+        ),
         Date.now() + 60_000,
       );
       mount();
@@ -7297,7 +7304,7 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(createChatCalls()).toEqual([]);
   });
 
-  it("opens the composer with the message, as Cancel does, when a stop completes in the strip that requested it", async () => {
+  it("opens the task's composer on the stopped sandbox with the message when a stop completes in the strip that requested it", async () => {
     await chooseStopAndConfirmRest();
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
@@ -7306,6 +7313,12 @@ describe("choosing Stop on an unclaimed send", () => {
       epicId: "epic-1",
       tabId: "tab-1",
     });
+    // On the sandbox it was sent to, never the composer's default host.
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        newConversationSurfaceKey("epic-1")
+      ],
+    ).toBe(SANDBOX_HOST);
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(
@@ -7379,9 +7392,10 @@ describe("choosing Stop on an unclaimed send", () => {
 
     await chooseStopAndConfirmRest();
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
+    // The message is back in the task's composer on the stopped sandbox.
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe("pinned-host");
+    ).toBe(SANDBOX_HOST);
 
     act(() => {
       useNewConversationModalStore.getState().clearDraft("epic-1");
@@ -7393,7 +7407,7 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe("pinned-host");
+    ).toBe(SANDBOX_HOST);
   });
 
   it("clears the stopped receipt when a newer send appears in the task", async () => {
