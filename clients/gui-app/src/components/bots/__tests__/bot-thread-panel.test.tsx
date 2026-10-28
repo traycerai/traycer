@@ -508,7 +508,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     expect(screen.queryByTestId("bot-thread-reply-count")).toBeNull();
     const replies = screen.getByTestId("bot-thread-replies");
     expect(replies.getAttribute("data-has-replies")).toBe("false");
-    expect(replies.className).not.toContain("flex-1");
+    expect(replies.className).not.toContain("grow");
     expect(within(replies).getByTestId("bot-chat-transcript")).toBeTruthy();
     // The empty thread's transcript draws nothing between the post and the box.
     expect(replies.textContent).toBe("");
@@ -527,7 +527,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     mountPanel(listed("user-teammate"), [botReply(null)]);
     const listedReplies = screen.getByTestId("bot-thread-replies");
     expect(listedReplies.getAttribute("data-has-replies")).toBe("true");
-    expect(listedReplies.className).toContain("flex-1");
+    expect(listedReplies.className).toContain("grow");
     expect(screen.getByTestId("bot-thread-reply-count").textContent).toBe(
       "1 reply",
     );

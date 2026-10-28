@@ -8,6 +8,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import {
   MockRunnerHost,
@@ -37,12 +38,13 @@ import "@/index.css";
  * A BOT'S THREAD PANEL WHOSE THREAD SET UP MORE TASKS THAN THE PANE HOLDS.
  *
  * The real `BotThreadPanel` fills a window-high pane, as the channel view's
- * thread column does, on a thread whose id is known (a post just sent opened
- * it, so no reply is listed): its header, the Tasks section over forty
- * labeled automations, and the box that replies in the thread. Nothing of the
- * panel is reimplemented here; the fixture supplies the provider stack and
- * the host's answers only. `?pane=<px>` makes the pane shorter than the
- * window, as a split column is.
+ * thread column does, on a listed thread with replies: its header, the post
+ * it opens on, the Tasks section over forty labeled automations, the replies'
+ * region and the box that replies in the thread. The host serves no
+ * transcript here, so the replies' region holds its connecting line; its box
+ * is what the spec measures. Nothing of the panel is reimplemented; the
+ * fixture supplies the provider stack and the host's answers only.
+ * `?pane=<px>` makes the pane shorter than the window, as a split column is.
  */
 const HOST_ID = "bot-thread-tasks-bound-host";
 const THREAD_ID = "thread-1";
@@ -112,6 +114,24 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
   }),
 );
 
+/** The thread as the channel's list has it: a member's post and its replies. */
+const thread: BotThreadSummary = {
+  threadId: THREAD_ID,
+  conversationId: "channel-1",
+  sessionChatId: "session-1",
+  anchor: {
+    messageId: "post-1",
+    requestId: "req-1",
+    senderUserId: null,
+    sentAt: 1_000,
+    resolvedAt: null,
+  },
+  replyCount: 3,
+  lastReplyAt: 2_000,
+  openRequestCount: 0,
+  costUsd: null,
+};
+
 function noop(): void {}
 
 export function SignedInFixture(props: {
@@ -155,7 +175,7 @@ export function Pane(): ReactElement {
                   conversationId="channel-1"
                   originMessageId="post-1"
                   sent={null}
-                  thread={{ kind: "posted", threadId: THREAD_ID, retry: null }}
+                  thread={{ kind: "listed", thread }}
                   tasks={tasks}
                   anchorSenderLabel={() => "You"}
                   resolveMember={UNRESOLVED_BOT_MEMBERS}

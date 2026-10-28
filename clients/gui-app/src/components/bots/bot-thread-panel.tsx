@@ -289,8 +289,9 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
 
 /**
  * The tasks the thread's session set up (Tracy Bots T82), each with where it
- * came from; nothing when it set up none. The list scrolls in a bounded band,
- * and gives way before the replies and the box do, however many there are.
+ * came from; nothing when it set up none. The list scrolls in a bounded band
+ * and, in a short pane, gives way to its heading and a row before the
+ * replies give up their share, so the conversation stays readable.
  * An automation this thread set up on another bot is that bot's, and is
  * listed there, not here.
  */
@@ -313,7 +314,7 @@ function ThreadTasks(props: {
   return (
     <section
       aria-label="Tasks"
-      className="flex max-h-[min(30dvh,16rem)] min-h-0 shrink flex-col gap-1 px-4 pt-2"
+      className="flex max-h-[min(30dvh,16rem)] min-h-[min(4rem,10dvh)] shrink-100 flex-col gap-1 px-4 pt-2"
       data-testid="bot-thread-tasks"
     >
       <h3 className="shrink-0 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
@@ -534,7 +535,10 @@ function KnownThread(
         <ThreadListReadFailure retry={retry} />
       ) : (
         <div
-          className={cn("flex min-h-0 flex-col", hasReplies && "flex-1")}
+          className={cn(
+            "flex min-h-0 flex-col",
+            hasReplies && "grow basis-[min(10rem,25dvh)]",
+          )}
           data-testid="bot-thread-replies"
           data-has-replies={hasReplies ? "true" : "false"}
         >
