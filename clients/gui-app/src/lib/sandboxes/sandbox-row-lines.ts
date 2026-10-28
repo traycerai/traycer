@@ -167,7 +167,12 @@ export function sandboxRowMoving(summary: SandboxSummary): boolean {
 
 export type SandboxKindFilter = "all" | SandboxRowKind;
 export type SandboxStateFilter =
-  "all" | "awake" | "suspended" | "stopped" | "frozen" | "failed";
+  | "all"
+  | "awake"
+  | "suspended"
+  | "stopped"
+  | "frozen"
+  | "failed";
 export type SandboxStarterFilter = "anyone" | "you" | "agent" | "others";
 
 export interface SandboxRowFilter {
