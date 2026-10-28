@@ -22,6 +22,7 @@ import type {
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for-shell-env-read";
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -219,12 +220,10 @@ export function useRpcShellConfigController(props: {
     callbacks: ShellCommandCallbacks,
   ): ShellCommandCallbacks => ({
     onSuccess: () => {
-      void queryClient
-        .refetchQueries(
-          { queryKey: queryKeys.hostMethodScope(hostId, "config.env.list") },
-          { cancelRefetch: false, throwOnError: true },
-        )
-        .then(callbacks.onSuccess, callbacks.onError);
+      void waitForShellEnvRead(
+        queryClient,
+        queryKeys.hostMethodScope(hostId, "config.env.list"),
+      ).then(callbacks.onSuccess, callbacks.onError);
     },
     onError: callbacks.onError,
   });
