@@ -8,11 +8,16 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   SimulatorOpenRequest,
   SimulatorOpenResponse,
   SimulatorPackState,
+  SimulatorPowerOffRequest,
+  SimulatorPowerOffResponse,
+  SimulatorSession,
   SimulatorShutdownRequest,
   SimulatorShutdownResponse,
   SimulatorState,
@@ -58,14 +63,25 @@ type ShutdownOnHost = (
   variables: SimulatorShutdownRequest,
 ) => Promise<SimulatorShutdownResponse>;
 
+/** The host's side of `simulator.powerOff`; never answers by default. */
+type PowerOffOnHost = (
+  variables: SimulatorPowerOffRequest,
+) => Promise<SimulatorPowerOffResponse>;
+
 const fakes = vi.hoisted(() => ({
   reachability: "reachable",
+  /** What `simulator.open` negotiated: `@1.0` unless a case says otherwise. */
+  negotiated: { major: 1, minor: 0 } as SchemaVersion | false | null,
+  viewerUserId: "user-1" as string | null,
   sessions: null as SimulatorSessionsState | null,
   configSet: vi.fn(),
   open: vi.fn<OpenOnHost>(() => new Promise<SimulatorOpenResponse>(() => {})),
   close: vi.fn(),
   shutdown: vi.fn<ShutdownOnHost>(
     () => new Promise<SimulatorShutdownResponse>(() => {}),
+  ),
+  powerOff: vi.fn<PowerOffOnHost>(
+    () => new Promise<SimulatorPowerOffResponse>(() => {}),
   ),
   action: vi.fn(),
   closeTile: vi.fn(),
@@ -84,6 +100,12 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => fakes.negotiated,
+}));
+vi.mock("@/hooks/host/use-request-context-user-id", () => ({
+  useRequestContextUserId: () => fakes.viewerUserId,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
@@ -123,6 +145,13 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
       mutation: useMutation({
         mutationFn: (variables: SimulatorShutdownRequest) =>
           fakes.shutdown(variables),
+      }),
+      supported: true,
+    }),
+    useSimulatorPowerOffMutation: () => ({
+      mutation: useMutation({
+        mutationFn: (variables: SimulatorPowerOffRequest) =>
+          fakes.powerOff(variables),
       }),
       supported: true,
     }),
@@ -340,6 +369,8 @@ const OPENED: SimulatorOpenResponse = {
 
 beforeEach(() => {
   fakes.reachability = "reachable";
+  fakes.negotiated = { major: 1, minor: 0 };
+  fakes.viewerUserId = "user-1";
   fakes.sessions = sessions({});
   fakes.streamState = STREAMING;
 });
@@ -828,5 +859,181 @@ describe("SimulatorTile", () => {
       screen.getByTestId("simulator-surface-overlay").textContent,
     ).toContain("This simulator was closed.");
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+  });
+});
+
+/**
+ * On a `@1.1` host the tile goes live only on the viewer's own person session
+ * on its instance, closes it by `sessionId` whoever sent the open, and powers
+ * off through `simulator.powerOff`.
+ */
+describe("SimulatorTile on a @1.1 host", () => {
+  const PERSON_SESSION: SimulatorSession = {
+    ...SESSION,
+    sessionId: "session-person",
+    instanceKey: UDID,
+    agentId: null,
+    requestId: "palette-request",
+  };
+  const AGENT_SESSION: SimulatorSession = {
+    ...SESSION,
+    sessionId: "session-agent",
+    instanceKey: UDID,
+    agentId: "agent-1",
+    requestId: null,
+  };
+
+  beforeEach(() => {
+    fakes.negotiated = { major: 1, minor: 1 };
+  });
+
+  it("opens the new serial, with no instance, for an Android tile whose AVD re-booted under another serial", async () => {
+    const avd = "Pixel_8_API_35";
+    const rebooted = {
+      simulatorId: "emulator-5556",
+      platform: "android",
+      name: avd,
+      version: "Android 15.0",
+      booted: true,
+      physical: false,
+    } as const;
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        simulators: [...READY_STATE.simulators, rebooted],
+      },
+    });
+    renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: "emulator-5554",
+        platform: "android",
+        name: avd,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
+    const sent = fakes.open.mock.calls[0][0];
+    expect(sent).toEqual({
+      epicId: EPIC,
+      simulatorId: "emulator-5556",
+      platform: "android",
+      boot: true,
+    });
+    expect("instance" in sent).toBe(false);
+    expect("requestId" in sent).toBe(false);
+  });
+
+  it("gets its own session beside an agent's reopened one: the agent's does not make the tile live", async () => {
+    fakes.sessions = sessions({
+      state: {
+        ...withTargetBooted(READY_STATE),
+        sessions: [AGENT_SESSION],
+      },
+    });
+    renderTile();
+
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+    const sent = fakes.open.mock.calls[0][0];
+    expect(sent).toEqual({
+      epicId: EPIC,
+      simulatorId: UDID,
+      platform: "ios",
+      boot: true,
+    });
+    expect("instance" in sent).toBe(false);
+  });
+
+  it("goes live on the viewer's own person session and ignores one owned by someone else", () => {
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        sessions: [{ ...PERSON_SESSION, ownerUserId: "user-2" }],
+      },
+    });
+    renderTile();
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+    cleanup();
+
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [AGENT_SESSION, PERSON_SESSION] },
+    });
+    renderTile();
+    expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
+  });
+
+  it("ends the person's session by its sessionId on close, though the palette sent the open", async () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [AGENT_SESSION, PERSON_SESSION] },
+    });
+    renderTile();
+    await flush();
+    // This tile sent no open: the palette did, before the tile was placed.
+    expect(fakes.open).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("simulator-close"));
+
+    expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    expect(fakes.close).toHaveBeenCalledTimes(1);
+    expect(fakes.close).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: UDID,
+      shutdown: false,
+      sessionId: "session-person",
+    });
+  });
+
+  it("powers off through simulator.powerOff by instance key, with no extra confirm, and closes the tile", async () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [PERSON_SESSION] },
+    });
+    fakes.powerOff.mockResolvedValueOnce({
+      kind: "powered-off",
+      instanceKey: UDID,
+    });
+    renderTile();
+
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+
+    await waitFor(() => {
+      expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    });
+    expect(fakes.powerOff).toHaveBeenCalledWith({
+      instanceKey: UDID,
+      confirm: false,
+    });
+    expect(fakes.shutdown).not.toHaveBeenCalled();
+  });
+
+  it("asks first when the host answers confirm-required, and sends confirm: true only once the person agrees", async () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [PERSON_SESSION] },
+    });
+    fakes.powerOff
+      .mockResolvedValueOnce({ kind: "confirm-required", instanceKey: UDID })
+      .mockResolvedValueOnce({ kind: "powered-off", instanceKey: UDID });
+    renderTile();
+
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("An agent is using it right now");
+    expect(fakes.powerOff).toHaveBeenCalledTimes(1);
+    expect(fakes.closeTile).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Power off" }));
+
+    await waitFor(() => {
+      expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    });
+    expect(fakes.powerOff).toHaveBeenNthCalledWith(2, {
+      instanceKey: UDID,
+      confirm: true,
+    });
   });
 });

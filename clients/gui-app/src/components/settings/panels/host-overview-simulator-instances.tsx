@@ -2,7 +2,8 @@
  * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Mobile simulators).
  * Update that file whenever this settings surface changes.
  */
-import { useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   SIMULATOR_IDLE_MINUTES_MAX,
@@ -11,6 +12,7 @@ import {
 } from "@traycer/protocol/host/simulator/schemas";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
+import { useSimulatorTaskTitles } from "@/components/settings/panels/use-simulator-task-titles";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SimulatorAgentBadge } from "@/components/simulator-tile/simulator-agent-badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -28,6 +30,10 @@ import {
   simulatorIdleCountdownLabel,
   simulatorVersionLabel,
 } from "@/lib/simulator-view/simulator-labels";
+import {
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
 
 /**
  * The Mobile simulators trigger's badge: how many instances run on this host
@@ -65,7 +71,30 @@ export function SimulatorRunningNowRow(props: {
   const { client, hostId } = props;
   const instances = useSimulatorInstancesQuery(client, hostId, true);
   const nowMs = useNowMs(30_000);
-  const list = instances.data?.instances ?? [];
+  const list = useMemo(
+    () => instances.data?.instances ?? [],
+    [instances.data],
+  );
+  const epicIds = useMemo(
+    () => [
+      ...new Set(
+        list.flatMap((instance) => instance.tasks.map((task) => task.epicId)),
+      ),
+    ],
+    [list],
+  );
+  const titles = useSimulatorTaskTitles(epicIds);
+  const navigate = useNavigate();
+  const openTask = useCallback(
+    (epicId: string): void => {
+      navigateToTabIntent(
+        navigate,
+        openOrFocusEpicIntent({ epicId, focus: undefined }),
+        undefined,
+      );
+    },
+    [navigate],
+  );
   let status: string | undefined;
   if (instances.isError) status = "Couldn't ask this host.";
   else if (instances.data !== undefined && list.length === 0)
@@ -88,6 +117,8 @@ export function SimulatorRunningNowRow(props: {
                 hostId={hostId}
                 instance={instance}
                 nowMs={nowMs}
+                titles={titles}
+                onOpenTask={openTask}
               />
             ))}
           </ul>
@@ -97,10 +128,45 @@ export function SimulatorRunningNowRow(props: {
   );
 }
 
-function holdersLabel(instance: SimulatorHostInstance): string {
-  const tasks = instance.tasks.length + instance.otherTaskCount;
-  if (tasks === 0) return "Open in no task";
-  return tasks === 1 ? "Open in 1 task" : `Open in ${tasks} tasks`;
+/**
+ * The tasks holding an instance: a link to each one the viewer can see, by
+ * its title where the app has one and its short id otherwise, then how many
+ * other tasks hold it.
+ */
+function SimulatorInstanceTasks(props: {
+  readonly instance: SimulatorHostInstance;
+  readonly titles: ReadonlyMap<string, string>;
+  readonly onOpenTask: (epicId: string) => void;
+}): ReactNode {
+  const { instance } = props;
+  if (instance.tasks.length === 0 && instance.otherTaskCount === 0)
+    return <span>Open in no task</span>;
+  return (
+    <span
+      className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5"
+      data-testid={`host-overview-simulator-tasks-${instance.instanceKey}`}
+    >
+      <span>Open in</span>
+      {instance.tasks.map((task) => {
+        const label = props.titles.get(task.epicId) ?? task.epicId.slice(0, 8);
+        return (
+          <Button
+            key={task.epicId}
+            type="button"
+            variant="link"
+            size="inline-xs"
+            aria-label={`Open task ${label}`}
+            onClick={() => props.onOpenTask(task.epicId)}
+          >
+            <span className="truncate">{label}</span>
+          </Button>
+        );
+      })}
+      {instance.otherTaskCount > 0 ? (
+        <span>{`+${instance.otherTaskCount} other`}</span>
+      ) : null}
+    </span>
+  );
 }
 
 function SimulatorInstanceItem(props: {
@@ -108,6 +174,8 @@ function SimulatorInstanceItem(props: {
   readonly hostId: string | null;
   readonly instance: SimulatorHostInstance;
   readonly nowMs: number;
+  readonly titles: ReadonlyMap<string, string>;
+  readonly onOpenTask: (epicId: string) => void;
 }): ReactNode {
   const { client, hostId, instance } = props;
   const powerOff = useSimulatorPowerOffMutation(
@@ -140,9 +208,14 @@ function SimulatorInstanceItem(props: {
           {instance.drivenByAgent ? <SimulatorAgentBadge /> : null}
         </div>
         <div className="text-ui-xs text-muted-foreground">
-          {[detail, holdersLabel(instance), countdown]
-            .filter((part) => part !== null)
-            .join(" · ")}
+          {[detail, countdown].filter((part) => part !== null).join(" · ")}
+        </div>
+        <div className="text-ui-xs text-muted-foreground">
+          <SimulatorInstanceTasks
+            instance={instance}
+            titles={props.titles}
+            onOpenTask={props.onOpenTask}
+          />
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
