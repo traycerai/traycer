@@ -11,7 +11,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "compile": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "compile": "node ../../scripts/tsrs.mjs --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "test": "vitest run",
     "lint": "bun run lint:files .",
     "lint:files": "eslint --cache --fix --max-warnings 0 --no-warn-ignored"
