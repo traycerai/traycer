@@ -38,7 +38,7 @@ export function useSimulatorCatalogActions(epicId: string) {
     mutationKey: simulatorMutationKeys.catalogClose(epicId),
     retry: false,
     mutationFn: async ({ hostId, records }) => {
-      await closeSimulatorCatalogSessions({
+      const outcome = await closeSimulatorCatalogSessions({
         epicId,
         hostId,
         records,
@@ -48,26 +48,31 @@ export function useSimulatorCatalogActions(epicId: string) {
           client: resolveNamedHostClient(binding, hostId),
         },
       });
-      if (userId === null) return;
-      for (const record of records)
-        noteClosedSimulatorCatalogSession(userId, record);
-      queryClient.setQueriesData<SimulatorCatalogQueryData>(
-        {
-          predicate: (query) =>
-            isSimulatorCatalogQueryKey(query.queryKey, userId, epicId),
-        },
-        (data) =>
-          data === undefined
-            ? undefined
-            : {
-                ...data,
-                records: withoutClosedSimulatorCatalogSessions(
-                  userId,
-                  epicId,
-                  data.records,
-                ),
-              },
-      );
+      // Whatever else the row refused, every session the host ended is
+      // hidden here and never asked to close again; the refusal is reported
+      // after, as the whole row's failure once was.
+      if (userId !== null) {
+        for (const record of outcome.closed)
+          noteClosedSimulatorCatalogSession(userId, record);
+        queryClient.setQueriesData<SimulatorCatalogQueryData>(
+          {
+            predicate: (query) =>
+              isSimulatorCatalogQueryKey(query.queryKey, userId, epicId),
+          },
+          (data) =>
+            data === undefined
+              ? undefined
+              : {
+                  ...data,
+                  records: withoutClosedSimulatorCatalogSessions(
+                    userId,
+                    epicId,
+                    data.records,
+                  ),
+                },
+        );
+      }
+      if (outcome.failures.length > 0) throw outcome.failures[0];
     },
     onSettled: () => {
       if (userId === null) return;

@@ -288,6 +288,13 @@ const SESSION = {
   openedAt: "2026-10-18T00:00:00.000Z",
 } as const;
 
+/**
+ * A host that has just started (or restarted): the stream is live and the
+ * tools are ready, and the inventory it publishes is empty until something
+ * runs `simulator.list`, which is what starts the hub.
+ */
+const FRESH_HOST_STATE: SimulatorState = { ...READY_STATE, simulators: [] };
+
 /** The tile with its own simulator booted, as the host lists it. */
 function withTargetBooted(state: SimulatorState): SimulatorState {
   return {
@@ -465,6 +472,45 @@ describe("SimulatorTile", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(fakes.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a fresh host for its inventory once the stream is live with the tools ready, and not again on a re-render", () => {
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    const rerender = renderTile();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks nothing while the tools are off, and asks as soon as they are ready", () => {
+    fakes.sessions = sessions({
+      state: {
+        ...FRESH_HOST_STATE,
+        packState: { kind: "off", reason: null, progress: null },
+      },
+    });
+    const rerender = renderTile();
+    expect(fakes.refresh).not.toHaveBeenCalled();
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again when the sessions stream comes back after a drop", () => {
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    const rerender = renderTile();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    // A host restart takes the stream down under a tile that never unmounted,
+    // and the hub it had started is gone with the host.
+    fakes.sessions = sessions({
+      state: FRESH_HOST_STATE,
+      lifecycle: "reconnecting",
+    });
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(2);
   });
 
   it("boots a cold simulator once when an explicit open placed the tile, and not when the tile is merely shown", async () => {
