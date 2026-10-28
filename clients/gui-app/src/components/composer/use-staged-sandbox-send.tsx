@@ -8,7 +8,10 @@ import {
   type ReactNode,
 } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
-import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxSummary,
+  SandboxVerbGesture,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
   type SandboxSetupLineFacts,
@@ -43,6 +46,10 @@ import {
   type StagePrice,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  useSandboxOperation,
+  type SandboxRowOperation,
+} from "@/hooks/sandboxes/use-sandbox-operation";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import {
@@ -442,6 +449,26 @@ export function useStagedSandboxSend(input: {
 }
 
 /**
+ * Stop needs the row's word that the sandbox is awake. A listed row can still
+ * read its resting state while a start or resume runs: the stage's boot step
+ * says so first, and a pending verb does until a list answer newer than it
+ * reads the row awake.
+ */
+function stopOffered(
+  stage: StagedSandbox | null,
+  row: SandboxSummary | undefined,
+  listedAt: number,
+  operation: SandboxRowOperation | null,
+): boolean {
+  const waking =
+    (stage?.step === "booting" && stage.failure === null) ||
+    (operation?.kind === "pending" &&
+      (operation.verb === "start" || operation.verb === "resume") &&
+      listedAt < operation.submittedAt);
+  return row?.state === "awake" && !waking;
+}
+
+/**
  * The facts the setup line reads beyond its stage: the cost line, and for the
  * shape refusal the region, the shape and whether a smaller one is affordable.
  * `null` while there is no stage.
@@ -451,7 +478,25 @@ export function useSetupLineFacts(
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
-  const sandboxes = useSandboxList().data?.sandboxes;
+  const sandboxList = useSandboxList();
+  const sandboxes = sandboxList.data?.sandboxes;
+  // Whether the stage's sandbox is awake: `null` until the list has its row.
+  const stageSandboxId =
+    stage?.createdSandboxId ??
+    (stage?.target.kind === "existing" ? stage.target.sandboxId : null);
+  const stageRow =
+    stageSandboxId === null
+      ? undefined
+      : sandboxes?.find((candidate) => candidate.id === stageSandboxId);
+  const sandboxAwake =
+    stageRow === undefined ? null : stageRow.state === "awake";
+  const operation = useSandboxOperation(stageSandboxId ?? "");
+  const sandboxStoppable = stopOffered(
+    stage,
+    stageRow,
+    sandboxList.dataUpdatedAt,
+    operation,
+  );
   // A resting sandbox of the person's costs what its row says.
   const existingPrice = useMemo<StagePrice | null>(() => {
     if (stage === null || stage.target.kind !== "existing") return null;
@@ -476,6 +521,9 @@ export function useSetupLineFacts(
         regionLabel: "",
         shapeLabel: "",
         smallerShapeAffordable: false,
+        offeredAgents: catalogue?.offeredAgents ?? null,
+        sandboxAwake,
+        sandboxStoppable,
       };
     }
     const { shape, configuration } = stage.target;
@@ -506,8 +554,11 @@ export function useSetupLineFacts(
           stageBalanceMc(user, configuration),
           smallest.awakeMcPerHour,
         ),
+      offeredAgents: catalogue.offeredAgents ?? null,
+      sandboxAwake,
+      sandboxStoppable,
     };
-  }, [catalogue, existingPrice, stage, user]);
+  }, [catalogue, existingPrice, sandboxAwake, sandboxStoppable, stage, user]);
 }
 
 /**
@@ -680,6 +731,28 @@ export interface StagedSandboxTerminal {
 }
 
 /**
+ * The repairs the created host's row admits. Settings are applied on an awake
+ * sandbox only: a repair sent to one that is resting or gone can only fail,
+ * and its failure says nothing of the settings.
+ */
+function newHostRepairs(
+  row: SandboxSummary | undefined,
+  retrySupported: boolean,
+  guestRepairSupported: boolean,
+): {
+  readonly awake: boolean;
+  readonly retry: boolean;
+  readonly setup: boolean;
+} {
+  const awake = row?.state === "awake";
+  return {
+    awake,
+    retry: awake && retrySupported,
+    setup: awake && guestRepairSupported && row.guestConfigured === false,
+  };
+}
+
+/**
  * The line's actions on the created host: `Retry applying` repairs the
  * settings there, then the wait resumes on the new verdict; `Open terminal`
  * opens a folderless one there once the host can.
@@ -711,15 +784,13 @@ export function useNewHostActions(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
   );
+  const offered = newHostRepairs(row, retrySupported, guestRepairSupported);
   return {
     applyingPending: operation === "pending",
-    applyingError: operation === "failed",
-    onRepairSetup:
-      guestRepairSupported && row?.guestConfigured === false
-        ? () => guestRepair.mutate({})
-        : null,
+    applyingError: offered.awake && operation === "failed",
+    onRepairSetup: offered.setup ? () => guestRepair.mutate({}) : null,
     repairSetupPending: guestRepair.isPending,
-    onRetryApplying: retrySupported
+    onRetryApplying: offered.retry
       ? () => {
           if (
             surfaceKey === null ||

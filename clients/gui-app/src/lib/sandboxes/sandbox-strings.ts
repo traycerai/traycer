@@ -431,13 +431,19 @@ export function sandboxCreditShortLine(
   if (creditSource === null || (!waking && creditSource === "personal")) {
     return notEnoughCreditsText(shortfallMc, options);
   }
-  const allowance =
-    configuration.kind === "team" && creditSource === "team-allowance";
+  const allowance = creditSource === "team-allowance";
   const whose = context === "sentence" ? "Your" : "your";
-  const pot =
-    configuration.kind === "team" && creditSource !== "personal"
-      ? `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`
-      : `${whose} credits`;
+  // The refusal names the pot; the configuration only supplies the team's
+  // name. A refusal from a team pot with no team configuration known (the
+  // directory had no row) still says it was the team's, never the person's.
+  let pot = `${whose} credits`;
+  if (creditSource !== "personal") {
+    if (configuration.kind === "team") {
+      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
+    } else {
+      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
+    }
+  }
   if (shortfallMc === null) {
     if (!waking && allowance)
       return `${pot} is too short to start this sandbox for an hour.`;
@@ -456,6 +462,14 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 }
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
+
+/** Held while the catalogue says which agents sandboxes run. */
+export const CHECKING_SANDBOX_AGENTS =
+  "Checking which agents run on sandboxes.";
+
+/** The catalogue could not be read, so Send is held until Retry reads it. */
+export const COULDNT_CHECK_SANDBOX_AGENTS =
+  "Couldn't check which agents run on sandboxes.";
 
 export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
@@ -581,12 +595,22 @@ export function sandboxVerbFailureLine(
 
 export const COMPUTE_CHARGED_WHILE_AWAKE =
   "Compute is charged while it is awake.";
+
+/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
+export function settingsDidntApplyOnLine(
+  configuration: string,
+  name: string,
+  reference: string,
+): string {
+  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
+}
+
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or attached tab, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────

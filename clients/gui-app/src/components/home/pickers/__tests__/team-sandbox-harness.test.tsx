@@ -224,6 +224,7 @@ function renderPanel(input: {
     activeDescendant: undefined,
     catalogHarnesses: CATALOG,
     fallbackHarnesses: CATALOG,
+    offeredAgents: null,
     profilesByHarnessId: new Map<
       GuiHarnessId,
       ReadonlyArray<ProviderProfile>

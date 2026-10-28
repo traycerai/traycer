@@ -117,6 +117,7 @@ function renderToolbarStore() {
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
       stagedSurfaceKey: null,
+      sendsToRestingSandbox: false,
     }),
   );
 }

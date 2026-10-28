@@ -627,8 +627,8 @@ function observe(
       : result(state, ["poll"], facts);
   if (facts.frozen)
     return result({ ...state, blocker: "credits" }, ["poll"], facts);
-  if (state.blocker === "credits" || state.blocker === "settings")
-    return result(state, ["poll"], facts);
+  const held = heldOnPerson(state, facts);
+  if (held !== null) return held;
   if (facts.host === "awake" && !facts.settingsReady)
     return result({ ...state, blocker: "settings" }, ["poll"], facts);
   if (state.blocker === "wake" || state.blocker === "not-sent")
@@ -639,6 +639,25 @@ function observe(
   )
     return observeStage(state, facts);
   return reachableHost(state, facts);
+}
+
+/**
+ * A credits or settings refusal holds the send for the person. Settings that
+ * didn't apply are said of an awake sandbox only: once it rests, the message
+ * goes back and the next send wakes it, never this one.
+ */
+function heldOnPerson(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition | null {
+  if (state.blocker !== "credits" && state.blocker !== "settings") return null;
+  if (
+    state.blocker === "settings" &&
+    facts.host === "resting" &&
+    withdrawalAllowed(state, facts)
+  )
+    return withdraw(state, facts);
+  return result(state, ["poll"], facts);
 }
 
 /** Reaching a live host can wake, poll or replay; it cannot erase a latched blocker. */

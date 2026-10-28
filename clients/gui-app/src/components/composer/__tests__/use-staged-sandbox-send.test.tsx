@@ -105,6 +105,8 @@ const mocks = vi.hoisted(() => ({
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
   /** The sandbox list rows the setup line prices a resting sandbox from. */
   sandboxes: null as SandboxSummary[] | null,
+  /** When the listed rows answered; `0` is an answer older than any verb. */
+  sandboxesAt: 0,
   /** The account's host directory, which names the new host once it dials. */
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   repairHostIds: [] as string[],
@@ -205,7 +207,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
     useSandboxList: (...args: Parameters<typeof actual.useSandboxList>) =>
       mocks.sandboxes === null
         ? actual.useSandboxList(...args)
-        : { data: { sandboxes: mocks.sandboxes } },
+        : {
+            data: { sandboxes: mocks.sandboxes },
+            dataUpdatedAt: mocks.sandboxesAt,
+          },
   };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
@@ -309,6 +314,16 @@ function stageCreated(
   });
 }
 
+/**
+ * A settings failure is reported only after the run's own read saw the new
+ * row awake, and that read fills the list every surface reads.
+ */
+function listCreatedAwake(): void {
+  mocks.sandboxes = [
+    sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state: "awake" }),
+  ];
+}
+
 function Harness(props: {
   readonly openTerminal: (target: TerminalLaunchTarget) => void;
 }) {
@@ -365,6 +380,7 @@ beforeEach(() => {
   mocks.user = null;
   mocks.catalogue = null;
   mocks.sandboxes = null;
+  mocks.sandboxesAt = 0;
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
@@ -408,6 +424,7 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("repairs the settings on the new host, then resumes the wait", () => {
+    listCreatedAwake();
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     mount(vi.fn());
 
@@ -425,6 +442,7 @@ describe("useStagedSandboxSend's setup line", () => {
 
   describe("the run's settings read", () => {
     function runDeps(): StagedSandboxRunDeps {
+      listCreatedAwake();
       stageCreated("applying", { kind: "settings", code: "SBX-0520" });
       mount(vi.fn());
       fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
@@ -476,6 +494,7 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("does not resume the wait when the guest is configured but the settings did not apply", () => {
+    listCreatedAwake();
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     mocks.repairMutate.mockImplementationOnce((_variables, options) => {
       options.onSuccess({ guestConfigured: true, settingsApplied: false });
@@ -490,6 +509,7 @@ describe("useStagedSandboxSend's setup line", () => {
   it("offers no Retry applying on a host that did not negotiate the combined retry", () => {
     mocks.retrySupported = false;
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    listCreatedAwake();
     mount(vi.fn());
 
     expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
@@ -561,6 +581,7 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("starts nothing when another sandbox was picked while the repair ran", () => {
+    listCreatedAwake();
     stageCreated("applying", { kind: "settings", code: "SBX-0520" });
     let finishRepair: () => void = () => undefined;
     mocks.repairMutate.mockImplementationOnce((_variables, options) => {
@@ -606,7 +627,9 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   it("keeps the staged sandbox and visible remedies when its standalone Stop fails", async () => {
-    stageCreated("booting", null);
+    // Stop is offered once the sandbox is awake and booted.
+    stageCreated("applying", null);
+    listCreatedAwake();
     mocks.runVerb.mockRejectedValueOnce(new Error("Stop refused"));
     mount(vi.fn());
     fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
@@ -619,6 +642,112 @@ describe("useStagedSandboxSend's setup line", () => {
       within(failure).getByRole("button", { name: "Details" }),
     ).toBeDefined();
     expect(readStagedSandbox(SURFACE)).not.toBeNull();
+  });
+
+  describe("Stop while a start or resume is under way", () => {
+    it.each(["start", "resume"] as const)(
+      "offers Stop again once a list answer newer than a pending %s reads the row awake",
+      async (verb) => {
+        stageCreated("applying", null);
+        listCreatedAwake();
+        const client = new QueryClient();
+        const answer = Promise.withResolvers<void>();
+        const view = render(
+          <QueryClientProvider client={client}>
+            <Harness openTerminal={vi.fn()} />
+          </QueryClientProvider>,
+        );
+        act(() => {
+          void client
+            .getMutationCache()
+            .build(client, {
+              mutationKey: sandboxMutationKeys.verb("sbx-1"),
+              mutationFn: () => answer.promise,
+              onMutate: () => ({
+                userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+              }),
+            })
+            .execute(verb);
+        });
+        await waitFor(() => {
+          expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+        });
+
+        // The verb's reply is still out; a list answer after it reads awake.
+        mocks.sandboxesAt = Date.now();
+        view.rerender(
+          <QueryClientProvider client={client}>
+            <Harness openTerminal={vi.fn()} />
+          </QueryClientProvider>,
+        );
+        expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+
+        await act(async () => {
+          answer.resolve();
+          await answer.promise;
+        });
+      },
+    );
+
+    it.each(["stopped", "suspended"] as const)(
+      "offers no Stop while the wake runs over a cached %s row",
+      (state) => {
+        const store = useStagedSandboxStore.getState();
+        store.stage(SURFACE, {
+          kind: "existing",
+          configuration: { kind: "personal" },
+          hostId: NEW_HOST,
+          sandboxId: "sbx-1",
+          name: "api-refactor",
+          verb: state === "stopped" ? "start" : "resume",
+        });
+        store.begin(SURFACE, false, Date.now(), false);
+        // What the runner publishes before it awaits the wake.
+        store.report(SURFACE, {
+          createdSandboxId: "sbx-1",
+          createdHostId: NEW_HOST,
+          step: "booting",
+          stepAt: Date.now(),
+          failure: null,
+        });
+        mocks.sandboxes = [
+          sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state }),
+        ];
+        mount(vi.fn());
+
+        expect(screen.getByTestId("sandbox-setup-line")).toBeTruthy();
+        expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+      },
+    );
+
+    it("offers no Stop on an awake row while a Start for it is pending", async () => {
+      stageCreated("applying", null);
+      listCreatedAwake();
+      const client = new QueryClient();
+      render(
+        <QueryClientProvider client={client}>
+          <Harness openTerminal={vi.fn()} />
+        </QueryClientProvider>,
+      );
+      expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+
+      act(() => {
+        void client
+          .getMutationCache()
+          .build(client, {
+            mutationKey: sandboxMutationKeys.verb("sbx-1"),
+            mutationFn: () => new Promise<never>(() => undefined),
+            onMutate: () => ({
+              userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+            }),
+          })
+          .execute("start");
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+      });
+    });
   });
 
   it("names the sandbox the send creates and counts as a stopwatch", () => {

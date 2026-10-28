@@ -77,7 +77,13 @@ const answers = vi.hoisted(() => ({
     vi.fn<(address: { configurationId: string; pageId: string }) => void>(),
   onOpenTerminalInstead: vi.fn<() => void>(),
   onChooseAnotherHost: vi.fn<() => void>(),
-  openForHarness: vi.fn<(harnessId: GuiHarnessId) => void>(),
+  openForHarness:
+    vi.fn<
+      (
+        harnessId: GuiHarnessId,
+        offeredAgents: ReadonlyArray<string> | null,
+      ) => void
+    >(),
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -317,7 +323,7 @@ describe("useSandboxAgentGate", () => {
       ],
     });
     gate.notice?.action?.onAction();
-    expect(answers.openForHarness).toHaveBeenCalledWith("traycer");
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
     gate.notice?.secondaryActions?.[0]?.onAction();
     gate.notice?.secondaryActions?.[1]?.onAction();
     expect(answers.onOpenTerminalInstead).toHaveBeenCalledOnce();
@@ -601,7 +607,7 @@ describe("useStagedSendSignInCheck", () => {
     refusal?.action?.onAction();
     refusal?.secondaryActions?.[0]?.onAction();
     refusal?.secondaryActions?.[1]?.onAction();
-    expect(answers.openForHarness).toHaveBeenCalledWith("traycer");
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
     expect(answers.onOpenTerminalInstead).toHaveBeenCalledOnce();
     expect(answers.onChooseAnotherHost).toHaveBeenCalledOnce();
   });
@@ -620,12 +626,15 @@ describe("useStagedSendSignInCheck", () => {
     });
   });
 
-  it("lets a failed catalogue request fall back to the sandbox host", () => {
+  it("refuses a staged send when the catalogue couldn't be read, offering Retry", () => {
     answers.catalogue = undefined;
     answers.catalogueError = true;
 
-    expect(checkFor("claude")(stageIn({ kind: "personal" }))).toBeNull();
-    expect(answers.refetchCatalogue).not.toHaveBeenCalled();
+    expect(checkFor("claude")(stageIn({ kind: "personal" }))).toMatchObject({
+      kind: "refused",
+      message: "Couldn't check which agents run on sandboxes.",
+      action: { label: "Retry" },
+    });
   });
 
   it("allows a picked agent present in the catalogue regardless of desktop auth", () => {
