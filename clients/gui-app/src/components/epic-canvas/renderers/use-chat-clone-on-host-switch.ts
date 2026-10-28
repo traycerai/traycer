@@ -55,11 +55,15 @@ interface CloneProfileRecoveryOffer {
  * ref and disposes it on unmount so an aborted clone doesn't leak the
  * projection-wait subscription (ticket 10).
  */
-export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
+export interface ChatCloneOnHostSwitch {
   readonly clone: () => void;
   readonly cloning: boolean;
   readonly profileRecovery: CloneProfileRecoveryOffer | null;
-} {
+}
+
+export function useChatCloneOnHostSwitch(
+  args: UseChatCloneOnHostSwitchArgs,
+): ChatCloneOnHostSwitch {
   const binding = useHostBinding();
   // Resolved at RENDER, not in the click handler: `cloneChatOnHostSwitch`
   // awaits settings resolution before it creates, and the app-wide selection

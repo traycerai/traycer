@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,7 +15,7 @@ import {
   createEpicSessionTestHarness,
   type TestEpicHarness,
 } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
-import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -143,16 +144,17 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 // The container runs the real sandbox-state hook. Its external reads are
-// controlled here so the tests can exercise both answered and offline hosts.
+// controlled here so the tests can exercise both answered and offline hosts;
+// by default the task answers that the host is a person's.
 const sandboxHookSources = vi.hoisted(
   (): {
-    ended: TaskSandboxEndedHost | null;
+    task: TaskSandboxHost;
     sandboxes: SandboxSummary[];
     configurations: SandboxConfigurations;
     hostEntry: HostDirectoryEntry | null;
     sampledNow: number;
   } => ({
-    ended: null,
+    task: { kind: "person" },
     sandboxes: [],
     configurations: {
       configurations: [{ kind: "personal" }],
@@ -169,7 +171,7 @@ vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
     await importOriginal<typeof import("@/hooks/epic/use-task-sandbox-end")>();
   return {
     ...actual,
-    useTaskSandboxEnd: () => sandboxHookSources.ended,
+    useTaskSandboxHost: () => sandboxHookSources.task,
   };
 });
 
@@ -342,7 +344,7 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   environments.pool = false;
   environments.list = undefined;
-  sandboxHookSources.ended = null;
+  sandboxHookSources.task = { kind: "person" };
   sandboxHookSources.sandboxes = [];
   sandboxHookSources.configurations = {
     configurations: [{ kind: "personal" }],
@@ -515,48 +517,63 @@ describe("ChatDeadTileBannerContainer - the sandbox's own state", () => {
     displayName: "e2e-sbx-stop3",
   });
 
-  async function mountOffline() {
+  async function mountOffline(showsPublishedCopy: boolean) {
     renderContainer({
       ownerUserId: VIEWER_USER_ID,
       providedOwnerUserId: undefined,
       permissionRole: "editor",
-      showsPublishedCopy: true,
+      showsPublishedCopy,
       reason: "host-offline",
     });
     await settleEpicSession();
   }
 
-  it("says the sandbox was destroyed, by its projected name and never its raw host id, and offers Continue on another host", async () => {
-    sandboxHookSources.ended = {
-      name: "e2e-sbx-stop3",
-      end: {
-        state: "destroyed",
-        destroyedAt: Date.UTC(2026, 9, 27, 6, 21),
-        cause: "resting",
-        actor: null,
+  function destroy(): void {
+    sandboxHookSources.task = {
+      kind: "ended",
+      ended: {
+        name: "e2e-sbx-stop3",
+        end: {
+          state: "destroyed",
+          destroyedAt: new Date(2026, 9, 27, 6, 21).getTime(),
+          cause: "verb",
+          actor: "Dana",
+          idleMinutes: null,
+        },
       },
     };
-    await mountOffline();
+  }
 
-    const banner = screen.getByTestId("banner-under-test");
-    expect(banner.getAttribute("data-reason")).toBe("sandbox-destroyed");
-    expect(banner.textContent).toContain("e2e-sbx-stop3");
-    expect(banner.textContent).not.toContain("owner-host-1");
-    expect(banner.textContent).not.toContain("offline");
+  it("states a destroyed sandbox's end in one line, by its name, with Continue on another host and Details", async () => {
+    destroy();
+    await mountOffline(false);
+
+    const line = screen.getByTestId("banner-under-test");
+    expect(line.textContent).toBe(
+      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 by Dana. Its files are gone; this chat stays readable.Continue on another hostDetails",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
-      screen.getByRole("button", { name: "Continue on another host" }),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+      (await screen.findByTestId("task-sandbox-end-details")).textContent,
+    ).not.toContain("UTC");
+  });
+
+  it("draws nothing over a copy of a destroyed sandbox's chat: the copy's footer states the end", async () => {
+    destroy();
+    await mountOffline(true);
+
+    expect(screen.queryByTestId("banner-under-test")).toBeNull();
   });
 
   it.each([
     ["resting", "suspended"],
     ["unreachable", "awake"],
+    ["stopping", "stopping"],
   ] as const)(
     "shows no generic offline banner for a %s sandbox: its footer owns the line",
     async (_name, state) => {
       sandboxHookSources.sandboxes = [sandboxSummaryFixture({ ...ROW, state })];
-      await mountOffline();
+      await mountOffline(true);
 
       expect(screen.queryByTestId("banner-under-test")).toBeNull();
     },

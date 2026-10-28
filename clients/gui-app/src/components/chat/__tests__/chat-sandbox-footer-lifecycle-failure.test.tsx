@@ -11,7 +11,10 @@ import {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import {
+  resolveChatSandbox,
+  type ChatSandboxState,
+} from "@/lib/sandboxes/chat-sandbox-state";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
@@ -54,7 +57,16 @@ function renderFooter(state: ChatSandboxState): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <ChatSandboxFooter state={state} />
+      <ChatSandboxFooter
+        line={
+          resolveChatSandbox(state, {
+            reachable: false,
+            canEdit: true,
+            ownedByViewer: true,
+            environmentOwned: false,
+          }).line
+        }
+      />
     </QueryClientProvider>,
   );
 }
@@ -67,7 +79,7 @@ function unreachable(): ChatSandboxState {
       displayName: "e2e-sbx-live",
       state: "awake",
     }),
-    lastContactMinutes: 7,
+    lastSeenAt: Date.now() - 7 * 60_000 - 20_000,
   };
 }
 

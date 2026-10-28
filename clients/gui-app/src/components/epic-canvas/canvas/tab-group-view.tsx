@@ -18,10 +18,12 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
+import {
+  ChatDeadTileBannerContainer,
+  SubstitutedCatchingUpBanner,
+} from "@/components/epic-canvas/renderers/chat-tile";
 import { chatTileHostLabel } from "@/components/epic-canvas/renderers/chat-pre-content";
 import {
-  ChatCatchingUpBanner,
   ChatDeadTileBanner,
   type ChatDeadTileBannerReason,
 } from "@/components/epic-canvas/renderers/dead-tile-banner";
@@ -828,10 +830,7 @@ function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
   readonly liveArtifact:
-    | EpicArtifactProjection
-    | EpicChatProjection
-    | EpicTuiAgentProjection
-    | null;
+    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
   readonly activeHostId: string | null;
 }): {
   /**
@@ -1184,7 +1183,9 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           />
         ) : null}
         {catchingUp !== null ? (
-          <ChatCatchingUpBanner
+          <SubstitutedCatchingUpBanner
+            epicId={epicId}
+            ownerHostId={publishedFallbackRef.ownerHostId}
             reason={catchingUp}
             testId={`chat-catching-up-${activeTab.id}`}
           />
@@ -1258,10 +1259,7 @@ interface ComputeIsRemoteDeletedArgs {
   readonly snapshotLoaded: boolean;
   readonly leafArtifact: EpicNodeRef | null;
   readonly liveArtifact:
-    | EpicArtifactProjection
-    | EpicChatProjection
-    | EpicTuiAgentProjection
-    | null;
+    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
   readonly isSelfDeleted: boolean;
   /**
    * Symmetric counterpart to `isSelfDeleted`: the local user just initiated
