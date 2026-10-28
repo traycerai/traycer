@@ -450,6 +450,12 @@ function deviation(query: DeviationQuery): Deviation {
       worst = `at ${top.toFixed(1)}, expected ${(expected + travel).toFixed(1)} (reader's travel ${travel.toFixed(1)}), ${at}`;
     }
   }
+  if (frames === 0)
+    return {
+      max: Number.POSITIVE_INFINITY,
+      worst: "no painted frame in the window",
+      frames,
+    };
   return { max, worst, frames };
 }
 

@@ -199,16 +199,15 @@ export async function settle(
   return previous;
 }
 
-/** The reader's intent for the view they are looking at now. */
+/** The reader's intent for the view they are looking at now. A view away
+ *  from the end with no reading row has no intent to hold the list to. */
 export function intentOf(view: ChatScrollView): ReaderIntent {
+  if (view.fromEnd <= STRICT_BOTTOM_PX) return { kind: "tail" };
   const reading = view.reading;
-  if (
-    view.fromEnd <= STRICT_BOTTOM_PX ||
-    reading === null ||
-    reading.messageId === null
-  ) {
-    return { kind: "tail" };
-  }
+  if (reading === null || reading.messageId === null)
+    throw new Error(
+      `no reading row to take the reader's place from: ${describe(view)}`,
+    );
   return { kind: "at", messageId: reading.messageId, offset: reading.offset };
 }
 

@@ -374,6 +374,12 @@ for (const c of CASES) {
     const streaming = frames.filter((f) => f.step === "stream");
     expect
       .soft(
+        streaming.length,
+        `frames were recorded while the reply streams\n${report}`,
+      )
+      .toBeGreaterThan(0);
+    expect
+      .soft(
         streaming.filter((f) => f.distance > 1).length,
         `painted frames off the end while the reply streams\n${report}`,
       )

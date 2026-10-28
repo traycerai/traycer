@@ -227,6 +227,7 @@ for (const c of CASES) {
       messageId = await page.evaluate(
         () => window.__followDriver?.lastMessageId() ?? null,
       );
+      if (messageId === null) throw new Error("the composer sent nothing");
     }
     const nudged = (async () => {
       if (c.delayMs <= 16) await nextFrames(page, 1);
@@ -234,7 +235,7 @@ for (const c of CASES) {
       await nudge(page, c.shape);
     })();
 
-    if (c.setup === "send" && messageId !== null) {
+    if (messageId !== null) {
       await nextFrames(page, 20);
       await mark(page, "accept");
       await host(page, { kind: "accept", messageId });

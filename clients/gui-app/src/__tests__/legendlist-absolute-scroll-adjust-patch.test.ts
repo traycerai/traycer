@@ -93,6 +93,18 @@ describe("@legendapp/list web patch", () => {
       expect(source).toContain("head: edgeAnchorHead(node)\n  };");
     });
 
+    // The anchor is recorded on every scroll event, and the element on the
+    // edge can be a whole code block: reading its `textContent` built the
+    // block's entire text each frame to keep 64 characters of it. The head
+    // walks the text nodes and stops once it has them.
+    it(`${file} reads only the head of the anchored element's text`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);\n  let head = "";\n  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {\n    head += part.data;\n  }\n  return head.slice(0, 64);',
+      );
+      expect(source).not.toContain("const text = node.textContent;");
+    });
+
     // ...and the list's own anchor decides once the element holds other text.
     it(`${file} gives up an anchor whose element now holds other content`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");

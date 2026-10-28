@@ -945,11 +945,12 @@ function awaitChatTimelineScrollPromiseSettle(
  * to `maxRetries` times. `isAborted` (checked before every check) is the
  * caller's own ownership check - a generation bump or a real gesture
  * supersedes a still-in-flight operation; it must stop correcting a position
- * nobody wants anymore - a fired `isAborted` abandons silently (someone else
- * is already driving the UI). `onSettledValid` runs once the landing
- * validates; `onSettledInvalid` runs once every retry is exhausted and the
- * landing is still off, or `shouldYieldToReader` fires (neither ever called
- * if `isAborted` fires first).
+ * nobody wants anymore - a fired `isAborted` abandons without correcting
+ * (someone else is already driving the UI) and only runs `onAborted`.
+ * `onSettledValid` runs once the landing validates; `onSettledInvalid` runs
+ * once every retry is exhausted and the landing is still off, or
+ * `shouldYieldToReader` fires (neither ever called if `isAborted` fires
+ * first).
  */
 function settleChatTimelineNavigation(input: {
   readonly awaitSettle: (onSettle: () => void) => () => void;
@@ -959,6 +960,7 @@ function settleChatTimelineNavigation(input: {
   readonly reissue: () => void;
   readonly onSettledValid: () => void;
   readonly onSettledInvalid: () => void;
+  readonly onAborted: () => void;
   readonly maxRetries: number;
 }): () => void {
   let cancelled = false;
@@ -966,7 +968,10 @@ function settleChatTimelineNavigation(input: {
   const attempt = (retriesLeft: number): void => {
     cancelActiveWait = input.awaitSettle(() => {
       if (cancelled) return;
-      if (input.isAborted()) return;
+      if (input.isAborted()) {
+        input.onAborted();
+        return;
+      }
       if (input.shouldYieldToReader()) {
         input.onSettledInvalid();
         return;
@@ -2286,6 +2291,21 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getScroller,
   });
   const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
+  // The cleanup above stays installed after its loop finishes, so it cannot
+  // say whether a restore or navigation still has a command the list holds.
+  // This does: a loop claims it when it issues and releases it when it
+  // validates, exhausts, aborts or is cancelled - releasing only while it is
+  // still the claimant, so a finished loop never clears a newer one's claim.
+  const inFlightNavigationSettleRef = useRef<object | null>(null);
+  const claimNavigationSettle = useCallback((): (() => void) => {
+    const claim = {};
+    inFlightNavigationSettleRef.current = claim;
+    return () => {
+      if (inFlightNavigationSettleRef.current === claim) {
+        inFlightNavigationSettleRef.current = null;
+      }
+    };
+  }, []);
   const resolveSuppressedEndLanding = useCallback((): boolean => {
     const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
     if (
@@ -2555,7 +2575,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // The restore or navigation this ends may have a command the list
         // still holds until its layout settles; it would land after the
         // reader's own scroll and undo it.
-        if (activeNavigationSettleCleanupRef.current !== null) {
+        if (inFlightNavigationSettleRef.current !== null) {
           chatTimelineRef.current?.cancelPendingScroll();
         }
       }
@@ -2643,10 +2663,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (!list) return;
       const imperativeScrollGeneration =
         beginImperativeScrollOperation(animated);
+      const releaseSettle = claimNavigationSettle();
       followLatchRef.current?.beginOwnedEndNavigation();
       void list.scrollToEnd({ animated });
       const scrollNode = list.getScrollableNode();
-      activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
+      const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitScrollSettle(
             scrollNode,
@@ -2671,6 +2692,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           void list.scrollToEnd({ animated: false });
         },
         onSettledValid: () => {
+          releaseSettle();
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.completeOwnedEndNavigation(true);
           // Completion cancels the owned correction; a tail that has stopped
@@ -2680,15 +2702,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // Ticket 10: free-scrolling with the pill visible beats silently
         // claiming ownership from an invalid landing.
         onSettledInvalid: () => {
+          releaseSettle();
           finishImperativeScrollOperation(imperativeScrollGeneration);
           followLatchRef.current?.completeOwnedEndNavigation(false);
           reconcileInvalidTimelineLanding();
         },
+        onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
+      activeNavigationSettleCleanupRef.current = (): void => {
+        cancelSettle();
+        releaseSettle();
+      };
     },
     [
       beginImperativeScrollOperation,
+      claimNavigationSettle,
       clearNavigationHighlight,
       finishImperativeScrollOperation,
       identity,
@@ -3269,11 +3298,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
       );
+      const releaseSettle = claimNavigationSettle();
       let pendingScroll = scrollToTimelineLocation(location);
       let lastSettleTimedOut = false;
       let cancelled = false;
       const scrollNode = list.getScrollableNode();
       const finishFreeNavigation = (): void => {
+        releaseSettle();
         finishImperativeScrollOperation(imperativeScrollGeneration);
         followLatchRef.current?.completeOwnedFreeNavigation();
         afterSettle?.();
@@ -3339,21 +3370,28 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               cancelled ||
               anchorUserScrollGenerationRef.current !== generationAtIssue
             ) {
+              releaseSettle();
               return;
             }
             finishExhausted();
           };
           void pendingScroll.then(finishTrailing, finishTrailing);
         },
+        onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
+      // A cancelled navigation has no landing of its own to decide: it only
+      // stops owning the view, which whatever cancelled it now decides.
       activeNavigationSettleCleanupRef.current = (): void => {
         cancelled = true;
         cancelSettle();
+        releaseSettle();
+        followLatchRef.current?.cancelOwnedFreeNavigation();
       };
     },
     [
       beginImperativeScrollOperation,
+      claimNavigationSettle,
       finishImperativeScrollOperation,
       scrollToTimelineLocation,
     ],
@@ -3443,9 +3481,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           viewOffset,
         });
 
+      const releaseSettle = claimNavigationSettle();
       let pendingRestoreScrollPromise = issue(initialIndex);
       let lastRestoreSettleTimedOut = false;
-      activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
+      const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitChatTimelineScrollPromiseSettle(
             () => pendingRestoreScrollPromise,
@@ -3478,6 +3517,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }
         },
         onSettledValid: () => {
+          releaseSettle();
           // This operation restores a persisted free-reading coordinate.
           // Publish that semantic result through the latch explicitly so a
           // temporary partial-transcript end report cannot remain the live
@@ -3512,12 +3552,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             lastVisibleScrollSnapshotRef.current = settledSnapshot;
           }
         },
-        onSettledInvalid: onExhausted,
+        onSettledInvalid: () => {
+          releaseSettle();
+          onExhausted();
+        },
+        onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
+      activeNavigationSettleCleanupRef.current = (): void => {
+        cancelSettle();
+        releaseSettle();
+      };
       return true;
     },
-    [captureLiveChatTabScrollSnapshot, isSavedTurnPart, setTimelineMode],
+    [
+      captureLiveChatTabScrollSnapshot,
+      claimNavigationSettle,
+      isSavedTurnPart,
+      setTimelineMode,
+    ],
   );
 
   // Find's hand-off after it navigated to an older index hit: the landed row
@@ -3583,6 +3636,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(false);
+      const releaseSettle = claimNavigationSettle();
       const scrollNode = list.getScrollableNode();
       const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
       const targetIndex = (): number | null =>
@@ -3622,6 +3676,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const finish = (): void => {
         if (landingFinished) return;
         landingFinished = true;
+        releaseSettle();
         finishImperativeScrollOperation(imperativeScrollGeneration);
         followLatchRef.current?.completeOwnedFreeNavigation();
       };
@@ -3689,6 +3744,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }
           settleScrollRequest(requestId, "exhausted");
         },
+        onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
       // Another navigation (`scrollToEnd`, find, a restore, unmount) tears
@@ -3709,6 +3765,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [
       beginImperativeScrollOperation,
       blockReveal,
+      claimNavigationSettle,
       finishImperativeScrollOperation,
       settleScrollRequest,
       showNavigationHighlight,

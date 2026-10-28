@@ -2478,6 +2478,39 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
+  it("cancelOwnedFreeNavigation decides no landing and lets the next strict-bottom report follow", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+      }),
+    );
+
+    result.current.beginOwnedFreeNavigation();
+    shim.setGeometry(node, { scrollTop: 400 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    onFollowIntentChange.mockClear();
+
+    // Back at the strict bottom when cancelled: completing would follow here.
+    shim.setGeometry(node, { scrollTop: 1000 });
+    result.current.cancelOwnedFreeNavigation();
+    expect(onFollowIntentChange).not.toHaveBeenCalled();
+
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+  });
+
   it("beginOwnedFreeNavigation does not itself change follow intent", () => {
     const node = shim.makeNode({
       scrollTop: 1000,

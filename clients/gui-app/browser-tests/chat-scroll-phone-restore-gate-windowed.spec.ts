@@ -180,9 +180,13 @@ for (const variant of ["plain", "no-touchmove", "control"] as const) {
       .slice(-25)
       .join("\n");
     if (variant === "control") return;
+    if (anchorOrdinal === null || leftOrdinal === null || finalOrdinal === null)
+      throw new Error(
+        `no reading row to measure a position from\n${summary}\n--- timeline ---\n${timeline}`,
+      );
     expect(leftOrdinal, "the drag moved the reader").not.toBe(anchorOrdinal);
     expect(
-      Math.abs((finalOrdinal ?? 0) - (leftOrdinal ?? 0)),
+      Math.abs(finalOrdinal - leftOrdinal),
       `the view was pulled from the reader's place\n${summary}\n--- timeline ---\n${timeline}`,
     ).toBeLessThanOrEqual(3);
   });

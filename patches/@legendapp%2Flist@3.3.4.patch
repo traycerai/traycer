@@ -25,7 +25,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739f2ce9f4a 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..30e3f4efefa25102df45e429ff7acaf8d6ca69e4 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -54,7 +54,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
        const footerSize = peek$(ctx, "footerSize") || 0;
        offset += footerSize;
      }
-@@ -1639,9 +1647,119 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+@@ -1639,9 +1647,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
    }
    return false;
  }
@@ -126,10 +126,18 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
 +}
 +// What the anchor holds. A renderer that reuses an element for other content
 +// (blocks inserted above it, keyed by position) leaves a node whose movement
-+// says nothing about the reader's text.
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
 +function edgeAnchorHead(node) {
-+  const text = node.textContent;
-+  return text === null ? "" : text.slice(0, 64);
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
 +}
 +function recordEdgeAnchor(ctx) {
 +  const state = ctx.state;
@@ -174,7 +182,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
    const {
      maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
    } = props;
-@@ -1670,7 +1788,11 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1670,7 +1796,11 @@ function prepareMVCP(ctx, dataChanged) {
      } else if (scrollTarget !== void 0) {
        targetId = getId(state, scrollTarget);
      } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
@@ -187,7 +195,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
      }
      if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
        for (let i = 0; i < idsInView.length; i++) {
-@@ -1752,6 +1874,9 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1752,6 +1882,9 @@ function prepareMVCP(ctx, dataChanged) {
            positionDiff = diff;
            anchorIdForLock = targetId;
            anchorPositionForLock = newPosition;
@@ -197,7 +205,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
          }
        }
        if (scrollingToViewPosition && scrollingToViewPosition > 0) {
-@@ -4844,6 +4969,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+@@ -4844,6 +4977,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
    const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
    if (diff !== 0) {
@@ -207,7 +215,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
      minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
      const { startBuffered, endBuffered } = state;
      needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
-@@ -5637,6 +5765,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5637,6 +5773,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -219,7 +227,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5672,7 +5805,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5672,7 +5813,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -230,7 +238,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6123,10 +6258,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+@@ -6123,10 +6266,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -247,7 +255,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6390,7 +6529,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6390,7 +6537,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
  function scrollAdjustBy(el, left, top) {
@@ -260,7 +268,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -7001,6 +7144,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7152,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -268,7 +276,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7283,6 +7427,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7435,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -281,7 +289,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7370,6 +7520,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7528,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -290,7 +298,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7600,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7608,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -327,7 +335,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1ef3327bd8869aa19cb34f09e4d4e739
        state.scrollProcessingEnabled = enabled;
      },
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93f047263f 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..7217598ce62e96508f2b6ef7d9f291c45669c2bb 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -356,7 +364,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
        const footerSize = peek$(ctx, "footerSize") || 0;
        offset += footerSize;
      }
-@@ -1618,9 +1626,119 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+@@ -1618,9 +1626,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
    }
    return false;
  }
@@ -428,10 +436,18 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
 +}
 +// What the anchor holds. A renderer that reuses an element for other content
 +// (blocks inserted above it, keyed by position) leaves a node whose movement
-+// says nothing about the reader's text.
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
 +function edgeAnchorHead(node) {
-+  const text = node.textContent;
-+  return text === null ? "" : text.slice(0, 64);
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
 +}
 +function recordEdgeAnchor(ctx) {
 +  const state = ctx.state;
@@ -476,7 +492,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
    const {
      maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
    } = props;
-@@ -1649,7 +1767,11 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1649,7 +1775,11 @@ function prepareMVCP(ctx, dataChanged) {
      } else if (scrollTarget !== void 0) {
        targetId = getId(state, scrollTarget);
      } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
@@ -489,7 +505,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
      }
      if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
        for (let i = 0; i < idsInView.length; i++) {
-@@ -1731,6 +1853,9 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1731,6 +1861,9 @@ function prepareMVCP(ctx, dataChanged) {
            positionDiff = diff;
            anchorIdForLock = targetId;
            anchorPositionForLock = newPosition;
@@ -499,7 +515,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
          }
        }
        if (scrollingToViewPosition && scrollingToViewPosition > 0) {
-@@ -4823,6 +4948,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+@@ -4823,6 +4956,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
    const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
    if (diff !== 0) {
@@ -509,7 +525,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
      minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
      const { startBuffered, endBuffered } = state;
      needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
-@@ -5616,6 +5744,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5616,6 +5752,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -521,7 +537,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5651,7 +5784,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5651,7 +5792,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -532,7 +548,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6102,10 +6237,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+@@ -6102,10 +6245,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -549,7 +565,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6369,7 +6508,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6369,7 +6516,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
  function scrollAdjustBy(el, left, top) {
@@ -562,7 +578,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6980,6 +7123,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7131,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -570,7 +586,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7262,6 +7406,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7414,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -583,7 +599,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7349,6 +7499,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7507,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -592,7 +608,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d5563ca4c86c5f7baf4398034825de93
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7579,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7587,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -655,7 +671,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533e50c5d1f 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..c83eae79d4faee2a1d3eeab086cc59de4630c238 100644
 --- a/react.js
 +++ b/react.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -725,7 +741,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
        const footerSize = peek$(ctx, "footerSize") || 0;
        offset += footerSize;
      }
-@@ -1639,9 +1658,119 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+@@ -1639,9 +1658,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
    }
    return false;
  }
@@ -797,10 +813,18 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
 +}
 +// What the anchor holds. A renderer that reuses an element for other content
 +// (blocks inserted above it, keyed by position) leaves a node whose movement
-+// says nothing about the reader's text.
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
 +function edgeAnchorHead(node) {
-+  const text = node.textContent;
-+  return text === null ? "" : text.slice(0, 64);
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
 +}
 +function recordEdgeAnchor(ctx) {
 +  const state = ctx.state;
@@ -845,7 +869,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
    const {
      maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
    } = props;
-@@ -1670,7 +1799,11 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1670,7 +1807,11 @@ function prepareMVCP(ctx, dataChanged) {
      } else if (scrollTarget !== void 0) {
        targetId = getId(state, scrollTarget);
      } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
@@ -858,7 +882,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
      }
      if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
        for (let i = 0; i < idsInView.length; i++) {
-@@ -1752,6 +1885,9 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1752,6 +1893,9 @@ function prepareMVCP(ctx, dataChanged) {
            positionDiff = diff;
            anchorIdForLock = targetId;
            anchorPositionForLock = newPosition;
@@ -868,7 +892,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
          }
        }
        if (scrollingToViewPosition && scrollingToViewPosition > 0) {
-@@ -4318,7 +4454,10 @@ function calculateItemsInView(ctx, params = {}) {
+@@ -4318,7 +4462,10 @@ function calculateItemsInView(ctx, params = {}) {
          }
        }
      }
@@ -880,7 +904,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
      if (dataChanged) {
        resetLayoutCachesForDataChange(state);
      }
-@@ -4806,6 +4945,11 @@ function updateItemSizesBatch(ctx, measurements) {
+@@ -4806,6 +4953,11 @@ function updateItemSizesBatch(ctx, measurements) {
  function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    var _a3, _b;
    const state = ctx.state;
@@ -892,7 +916,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -4844,6 +4988,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+@@ -4844,6 +4996,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
    const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
    if (diff !== 0) {
@@ -902,7 +926,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
      minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
      const { startBuffered, endBuffered } = state;
      needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
-@@ -5637,6 +5784,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5637,6 +5792,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -914,7 +938,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5672,7 +5824,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5672,7 +5832,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -925,7 +949,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6123,10 +6277,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+@@ -6123,10 +6285,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -942,7 +966,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6390,7 +6548,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6390,7 +6556,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
  function scrollAdjustBy(el, left, top) {
@@ -955,7 +979,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -7001,6 +7163,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7171,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -963,7 +987,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7054,7 +7217,8 @@ var ScheduledWork = class {
+@@ -7054,7 +7225,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -973,7 +997,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
      }
    }
    has(key) {
-@@ -7283,6 +7447,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7455,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -986,7 +1010,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7370,6 +7540,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7548,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -995,7 +1019,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7620,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7628,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1032,7 +1056,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..498b623ae616127d0bfca22b5aa76533
        state.scrollProcessingEnabled = enabled;
      },
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c276ed44621 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..424f0d7d0f64a0f724750565af1cc41b0235064e 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -1102,7 +1126,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
        const footerSize = peek$(ctx, "footerSize") || 0;
        offset += footerSize;
      }
-@@ -1618,9 +1637,119 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+@@ -1618,9 +1637,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
    }
    return false;
  }
@@ -1174,10 +1198,18 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
 +}
 +// What the anchor holds. A renderer that reuses an element for other content
 +// (blocks inserted above it, keyed by position) leaves a node whose movement
-+// says nothing about the reader's text.
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
 +function edgeAnchorHead(node) {
-+  const text = node.textContent;
-+  return text === null ? "" : text.slice(0, 64);
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
 +}
 +function recordEdgeAnchor(ctx) {
 +  const state = ctx.state;
@@ -1222,7 +1254,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
    const {
      maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
    } = props;
-@@ -1649,7 +1778,11 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1649,7 +1786,11 @@ function prepareMVCP(ctx, dataChanged) {
      } else if (scrollTarget !== void 0) {
        targetId = getId(state, scrollTarget);
      } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
@@ -1235,7 +1267,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
      }
      if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
        for (let i = 0; i < idsInView.length; i++) {
-@@ -1731,6 +1864,9 @@ function prepareMVCP(ctx, dataChanged) {
+@@ -1731,6 +1872,9 @@ function prepareMVCP(ctx, dataChanged) {
            positionDiff = diff;
            anchorIdForLock = targetId;
            anchorPositionForLock = newPosition;
@@ -1245,7 +1277,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
          }
        }
        if (scrollingToViewPosition && scrollingToViewPosition > 0) {
-@@ -4297,7 +4433,10 @@ function calculateItemsInView(ctx, params = {}) {
+@@ -4297,7 +4441,10 @@ function calculateItemsInView(ctx, params = {}) {
          }
        }
      }
@@ -1257,7 +1289,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
      if (dataChanged) {
        resetLayoutCachesForDataChange(state);
      }
-@@ -4785,6 +4924,11 @@ function updateItemSizesBatch(ctx, measurements) {
+@@ -4785,6 +4932,11 @@ function updateItemSizesBatch(ctx, measurements) {
  function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    var _a3, _b;
    const state = ctx.state;
@@ -1269,7 +1301,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -4823,6 +4967,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+@@ -4823,6 +4975,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
    const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
    if (diff !== 0) {
@@ -1279,7 +1311,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
      minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
      const { startBuffered, endBuffered } = state;
      needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
-@@ -5616,6 +5763,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5616,6 +5771,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -1291,7 +1323,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5651,7 +5803,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5651,7 +5811,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -1302,7 +1334,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6102,10 +6256,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+@@ -6102,10 +6264,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -1319,7 +1351,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6369,7 +6527,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6369,7 +6535,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
  function scrollAdjustBy(el, left, top) {
@@ -1332,7 +1364,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6980,6 +7142,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7150,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -1340,7 +1372,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7033,7 +7196,8 @@ var ScheduledWork = class {
+@@ -7033,7 +7204,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -1350,7 +1382,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
      }
    }
    has(key) {
-@@ -7262,6 +7426,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7434,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -1363,7 +1395,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7349,6 +7519,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7527,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -1372,7 +1404,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..754c0a7f30c039623c28255421a31c27
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7599,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7607,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },

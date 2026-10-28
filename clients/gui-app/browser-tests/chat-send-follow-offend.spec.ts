@@ -365,6 +365,15 @@ for (const [reply, runs] of [
         };
       });
       const stream = data.frames.filter((f) => f.step === "stream");
+      // A frame with no painted reading (B) or no scroller (A) measured
+      // nothing, and would count as on the end below.
+      expect(stream.length, "the recorder saw stream frames").toBeGreaterThan(
+        0,
+      );
+      expect(
+        stream.filter((f) => f.A === null || f.B === null).length,
+        "every stream frame has both readings",
+      ).toBe(0);
       const aOff = stream.filter((f) => (f.A?.dist ?? 0) > 1);
       const bOff = stream.filter((f) => (f.B?.dist ?? 0) > 1);
       // The first growth of the stream is the reply's first appearance.

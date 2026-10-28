@@ -5,8 +5,8 @@ import { fixture, nextFrames } from "./support/fixtures";
  * The element at the viewport's top edge keeps its place while the list
  * re-measures around it: a card opened or a width change below or inside the
  * row that straddles the edge, and a block that appears above the edge inside
- * that row. Runs on both lines; `EDGE_PATCH=1` also asserts the list recorded
- * an `edgeAnchor` (the patched list).
+ * that row. Runs on both lines, and asserts the list recorded an
+ * `edgeAnchor` for each re-measure.
  */
 
 declare global {
@@ -22,7 +22,6 @@ declare global {
 
 const SCROLL = '[data-testid="chat-messages-scroll"]';
 const CARD = 'button[aria-label^="Thought"]';
-const PATCHED = process.env.EDGE_PATCH === "1";
 
 async function open(page: Page, line: "legacy" | "windowed"): Promise<void> {
   await page.setViewportSize({ width: 900, height: 700 });
@@ -95,18 +94,18 @@ async function install(page: Page): Promise<void> {
       }
       fiber = fiber.return;
     }
+    if (refState === undefined)
+      throw new Error("no list refState found on the scroll node's fibers");
     const adjusts: string[] = [];
-    if (refState !== undefined) {
-      const state = refState;
-      const h = state.scrollAdjustHandler;
-      const orig = h.requestAdjust.bind(h);
-      h.requestAdjust = (add: number) => {
-        adjusts.push(
-          `${Math.round(performance.now())} requestAdjust(${add}) idsInView=${JSON.stringify((state.idsInView ?? []).slice(0, 3))}`,
-        );
-        return orig(add);
-      };
-    }
+    const state: ListRefState = refState;
+    const h = state.scrollAdjustHandler;
+    const orig = h.requestAdjust.bind(h);
+    h.requestAdjust = (add: number) => {
+      adjusts.push(
+        `${Math.round(performance.now())} requestAdjust(${add}) idsInView=${JSON.stringify((state.idsInView ?? []).slice(0, 3))}`,
+      );
+      return orig(add);
+    };
     let edgeEl: HTMLElement | null = null;
     let edgeText = "";
     /** The visible (non-`display:contents`, non-zero-height) element
@@ -127,8 +126,7 @@ async function install(page: Page): Promise<void> {
     window.__edge = {
       adjusts,
       anchor: () => {
-        if (refState === undefined) return "no refState";
-        const a = refState.edgeAnchor;
+        const a = state.edgeAnchor;
         if (a === undefined) return "edgeAnchor undefined";
         const n = a.node;
         const r = n?.getBoundingClientRect();
@@ -273,7 +271,7 @@ for (const line of ["legacy", "windowed"] as const) {
       const report = `[${line} B6] edge ${String(before)} -> ${String(after)} (Δ ${before !== null && after !== null ? (after - before).toFixed(1) : "?"}); row ref ${JSON.stringify(reading)} -> ${JSON.stringify(rowAfter)}; anchor before: ${anchor}; adjusts=${String(adjusts.length)}\n${adjusts.join("\n")}`;
       test.info().annotations.push({ type: "report", description: report });
       process.stdout.write(`${report}\n`);
-      if (PATCHED) expect(anchor, report).not.toContain("undefined");
+      expect(anchor, report).not.toContain("undefined");
       expect(before, report).not.toBeNull();
       expect(after, report).not.toBeNull();
       expect(
@@ -342,7 +340,7 @@ for (const line of ["legacy", "windowed"] as const) {
         const adjusts = await edgeAdjusts(page);
         const report = `[${line} B4 ${name}] row top ${rowTop.toFixed(0)} header ${before.toFixed(1)} -> expand ${expanded.toFixed(1)} (Δ ${(expanded - before).toFixed(1)}) -> collapse ${collapsed.toFixed(1)} (Δ ${(collapsed - before).toFixed(1)}); anchor: ${anchor}; adjusts=${String(adjusts.length)}\n${adjusts.join("\n")}`;
         process.stdout.write(`${report}\n`);
-        if (PATCHED) expect(anchor, report).not.toContain("undefined");
+        expect(anchor, report).not.toContain("undefined");
         expect(Math.abs(expanded - before), report).toBeLessThanOrEqual(1);
         expect(Math.abs(collapsed - before), report).toBeLessThanOrEqual(1);
       });
@@ -401,7 +399,7 @@ test(`legacy: a block that appears above the edge inside the row leaves the edge
   const adjusts = await edgeAdjusts(page);
   const report = `[legacy NEW] row ${rowBefore.toFixed(0)} -> ${rowAfter.toFixed(0)} (+${(rowAfter - rowBefore).toFixed(0)}); edge ${String(before)} -> ${String(after)} (Δ ${before !== null && after !== null ? (after - before).toFixed(1) : "?"}); anchor: ${anchor}; adjusts=${String(adjusts.length)}\n${adjusts.join("\n")}`;
   process.stdout.write(`${report}\n`);
-  if (PATCHED) expect(anchor, report).not.toContain("undefined");
-  expect(before, report).not.toBeNull();
-  expect(Math.abs((after ?? 0) - (before ?? 0)), report).toBeLessThanOrEqual(1);
+  expect(anchor, report).not.toContain("undefined");
+  if (before === null || after === null) throw new Error(report);
+  expect(Math.abs(after - before), report).toBeLessThanOrEqual(1);
 });

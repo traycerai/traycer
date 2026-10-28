@@ -4116,6 +4116,60 @@ describe("ChatMessages scroll policy", () => {
         view.unmount();
       });
 
+      async function mountAndClickScrollToEnd() {
+        const view = renderChatMessages({
+          messages: makeCompletedTranscript(20),
+          scrollStateKey: `t5-cancel-pending-end-${Math.random().toString(36).slice(2)}`,
+        });
+        await settleLegendList();
+        await enterFreeScrollingAwayFromEnd();
+        const pill = queryScrollToEndPill();
+        if (pill === null) throw new Error("scroll-to-end pill is not mounted");
+        fireEvent.click(pill);
+        return view;
+      }
+
+      it("cancels the command an end navigation still holds when the reader wheels", async () => {
+        const view = await mountAndClickScrollToEnd();
+        const cancel = spyCancelPendingScroll();
+
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).toHaveBeenCalledTimes(1);
+        view.unmount();
+      });
+
+      it("leaves the list's commands alone when a wheel follows a settled end navigation", async () => {
+        const view = await mountAndClickScrollToEnd();
+        await waitForNavigationSettle();
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        const cancel = spyCancelPendingScroll();
+
+        // Toward the end while following: the latch's own end correction and
+        // a structural commit's anchor lock belong to no navigation.
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
+
+      it("leaves the list's commands alone once a restore that reader input aborted has settled", async () => {
+        const view = mountWithSavedFreePosition();
+        const cancel = spyCancelPendingScroll();
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+        expect(cancel).toHaveBeenCalledTimes(1);
+        await settleLegendList();
+        await settleLegendList();
+        await fireScrollTopAndFlush(maxScrollTopFor(getScrollNode()));
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        cancel.mockClear();
+
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
+
       it("keeps the restore's command through a bare pointerdown preflight", () => {
         const view = mountWithSavedFreePosition();
         const cancel = spyCancelPendingScroll();
@@ -5542,6 +5596,42 @@ describe("ChatMessages scroll policy", () => {
         viewPosition: 0,
         viewOffset: LEGEND_LIST_HEADER_PX,
       });
+    });
+
+    it("leaves no owner behind when showing the chat cancels its navigation, so the tail is followed", async () => {
+      const messages = makeCompletedTranscript(24);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      const { rerenderWith, rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: `scroll-to-top-cancelled-${Math.random().toString(36).slice(2)}`,
+      });
+      await settleLegendList();
+      assertTrueBottomGeometry();
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      // The navigation's command never runs: it stays in flight with the
+      // view still at the tail.
+      vi.spyOn(list, "scrollToIndex").mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      act(() => {
+        getScrollNode().dispatchEvent(new ScrollToTopRequestEvent(false));
+      });
+
+      // Showing the chat again cancels it and issues nothing in its place.
+      rerenderWith({ visible: false });
+      rerenderWith({ visible: true });
+      await settleLegendList();
+      const grown = makeCompletedTranscript(26);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + grown.length * 90 + 40,
+      );
+      rerenderMessages(grown);
+      await settleLegendList();
+
+      assertTrueBottomGeometry();
     });
 
     it("leaves a request aimed at anything else inside the transcript to the default", async () => {

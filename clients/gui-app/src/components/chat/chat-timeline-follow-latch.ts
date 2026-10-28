@@ -67,6 +67,9 @@ export interface ChatTimelineFollowLatch {
   readonly beginOwnedFreeNavigation: () => void;
   /** Releases a settled no-op free navigation that never left the strict end. */
   readonly completeOwnedFreeNavigation: () => void;
+  /** Releases a free navigation cancelled with no landing to decide; whatever
+   *  cancelled it decides the view. */
+  readonly cancelOwnedFreeNavigation: () => void;
   /** Resolves owned navigation without letting its intermediate reports flap. */
   readonly completeOwnedEndNavigation: (didLandAtEnd: boolean) => void;
   /** Fresh DOM validation for explicit-navigation settle loops. */
@@ -797,6 +800,14 @@ export function useChatTimelineFollowLatch(
     setFollowIntent(false);
   }, [listRef, reconcileStrictBottom, setFollowIntent]);
 
+  const cancelOwnedFreeNavigation = useCallback((): void => {
+    if (!ownsFreeNavigationRef.current) return;
+    ownsFreeNavigationRef.current = false;
+    if (armedReaderDepartureRef.current?.source === "owned-navigation") {
+      armedReaderDepartureRef.current = null;
+    }
+  }, []);
+
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
       const readerCandidate = readerEndCandidateRef.current;
@@ -1257,6 +1268,7 @@ export function useChatTimelineFollowLatch(
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
       completeOwnedFreeNavigation,
+      cancelOwnedFreeNavigation,
       completeOwnedEndNavigation,
       isAtStrictEnd,
       hasPendingEndCorrection,
@@ -1265,6 +1277,7 @@ export function useChatTimelineFollowLatch(
     [
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
+      cancelOwnedFreeNavigation,
       completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       followEndIfPermitted,

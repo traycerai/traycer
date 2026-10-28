@@ -88,11 +88,13 @@ async function monitorFromEnd(page: Page): Promise<() => Promise<number>> {
     let running = true;
     let since: number | null = null;
     let longest = 0;
+    let measured = 0;
     const tick = (): void => {
       if (!running) return;
       const g = window.__chatScrollProbe.geometry();
       const now = performance.now();
       if (g !== null) {
+        measured += 1;
         const away = g.scrollHeight - g.clientHeight - g.scrollTop > 1;
         if (away) {
           since ??= now;
@@ -106,10 +108,16 @@ async function monitorFromEnd(page: Page): Promise<() => Promise<number>> {
     requestAnimationFrame(tick);
     window.__fromEndMonitorStop = () => {
       running = false;
-      return longest;
+      // NaN fails the caller's bound: no frame was measured.
+      return measured === 0 ? Number.NaN : longest;
     };
   });
-  return () => page.evaluate(() => window.__fromEndMonitorStop?.() ?? -1);
+  return () =>
+    page.evaluate(() => {
+      if (window.__fromEndMonitorStop === undefined)
+        throw new Error("from-end monitor not installed");
+      return window.__fromEndMonitorStop();
+    });
 }
 
 /** Every change of the controller's mode, one line per flip, per frame. */
@@ -611,6 +619,15 @@ for (const line of ["legacy", "windowed"] as const) {
       await nextFrames(page, 2);
       const startedAt = Date.now();
       const reader = await sample(page, startedAt);
+      if (
+        reader.row === null ||
+        reader.offset === null ||
+        Number.isNaN(reader.scrollTop) ||
+        Number.isNaN(preWheel.scrollTop)
+      )
+        throw new Error(
+          `no reading row or geometry to hold the reader to: ${JSON.stringify({ preWheel, reader })}`,
+        );
 
       const samples: Sample[] = [];
       while (Date.now() - startedAt < 2000) {
@@ -623,6 +640,7 @@ for (const line of ["legacy", "windowed"] as const) {
       // The reader's own position, or anything back toward the pre-wheel one.
       const violations = samples.filter(
         (s) =>
+          Number.isNaN(s.scrollTop) ||
           s.scrollTop > preWheel.scrollTop - delta / 2 ||
           Math.abs(s.scrollTop - reader.scrollTop) > 2 ||
           s.row !== reader.row ||

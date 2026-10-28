@@ -272,11 +272,13 @@ for (const line of ["legacy", "windowed"] as const) {
         Math.abs(after.fromEnd - before.fromEnd),
         `fromEnd moved\n${message}`,
       ).toBeLessThanOrEqual(3);
-      expect(after.reading?.messageId, `reading row\n${message}`).toBe(
-        before.reading?.messageId,
+      if (before.reading === null || after.reading === null)
+        throw new Error(`no reading row to compare\n${message}`);
+      expect(after.reading.messageId, `reading row\n${message}`).toBe(
+        before.reading.messageId,
       );
       expect(
-        Math.abs((after.reading?.offset ?? 0) - (before.reading?.offset ?? 0)),
+        Math.abs(after.reading.offset - before.reading.offset),
         `reading offset\n${message}`,
       ).toBeLessThanOrEqual(2);
     });

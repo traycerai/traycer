@@ -127,7 +127,7 @@ gh release download v1.7.4 -R tlaplus/tlaplus -p tla2tools.jar -D clients/gui-ap
 clients/gui-app/formal/gen-configs.py          # writes every ChatScroll_<name>.cfg
 clients/gui-app/formal/check.sh ChatScroll_nav_follow
 clients/gui-app/formal/run-all.sh ChatScroll_nav_follow   # every invariant, one trace each
-clients/gui-app/formal/trace.py results/ChatScroll_nav_follow.I_IntentHeld.out
+clients/gui-app/formal/trace.py clients/gui-app/formal/results/ChatScroll_nav_follow.I_IntentHeld.out
 ```
 
 `check.sh` runs one config with 2 workers and a 3 GB heap (`TLC_WORKERS`,

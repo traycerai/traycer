@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Writes every ChatScroll_<name>.cfg. Edit this, not the configs."""
 
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 BASE = dict(
     R=3, VH=2, EST=2, Heights='"mixed"', MaxH=3, NAVOFF=0,
     HasWheel="TRUE", TouchInput="FALSE", TouchMoveDelivered="FALSE",
@@ -80,7 +84,7 @@ def write(name, doc, consts):
     lines = [f"\\* {doc}", "SPECIFICATION Spec", "CONSTANTS"]
     lines += [f"    {k} = {v}" for k, v in consts.items()]
     lines += ["INVARIANTS"] + [f"    {i}" for i in INVARIANTS]
-    with open(f"ChatScroll_{name}.cfg", "w") as f:
+    with open(os.path.join(HERE, f"ChatScroll_{name}.cfg"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
