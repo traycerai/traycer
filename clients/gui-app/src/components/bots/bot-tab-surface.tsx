@@ -370,6 +370,14 @@ function BotTabContent(props: {
     },
     [onViewChange],
   );
+  // A task's post, from the bot's view: its thread opens beside the channel.
+  const openPostInChannel = useCallback(
+    (open: BotOpenThread) => {
+      setOpenThread(open);
+      onViewChange("messages");
+    },
+    [onViewChange, setOpenThread],
+  );
   const openBotActivity = useCallback(() => {
     setSessionChatId(null);
     onViewChange("under-the-hood");
@@ -473,6 +481,7 @@ function BotTabContent(props: {
                 directive={snapshot.bot.directive}
                 appConversationChatId={snapshot.bot.appConversationChatId}
                 resolveMember={resolveMember}
+                tasks={snapshot.tasks}
                 openThread={openThread}
                 onOpenThread={setOpenThread}
                 onOpenUnderTheHood={openUnderTheHood}
@@ -495,6 +504,8 @@ function BotTabContent(props: {
                 environmentBots={environmentBots}
                 sessionChatId={sessionChatId}
                 onSelectSession={setSessionChatId}
+                channelId={snapshot.bot.appConversationChatId}
+                onOpenPost={openPostInChannel}
               />
             </TabsContent>
           </Tabs>

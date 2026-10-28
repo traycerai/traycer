@@ -1,5 +1,4 @@
 import { useMemo, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type {
@@ -13,18 +12,17 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import { BotTaskList } from "@/components/bots/bot-task-list";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { BotSessionsElsewhere } from "@/components/bots/bot-sessions-elsewhere";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
@@ -38,25 +36,15 @@ import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import {
   deliveredTaskCheckins,
-  describeCadence,
   describeNotificationWatch,
   pendingTaskCheckins,
   pendingTaskOverdue,
-  sortTasksForDisplay,
 } from "@/lib/bots/bot-trunk-model";
-import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import {
-  formatCompactRelativeTime,
-  formatWaitTime,
-  useSampledNow,
-} from "@/lib/relative-time";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicAgentActivity } from "@/stores/agent-activity-store";
+import { formatCompactRelativeTime, useSampledNow } from "@/lib/relative-time";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
 
-const EMPTY_TASK_IDS: ReadonlyArray<string> = [];
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const EMPTY_STOP_IDS: ReadonlySet<string> = new Set();
 const noop = (): void => undefined;
@@ -64,7 +52,7 @@ const noStop = (): string | null => null;
 
 /**
  * What the bot is doing (Tracy Bots): what it and its environment have
- * cost, its threads, the tasks it tracks and when each checks in, the
+ * cost, its threads, the tasks it set up and where each came from, the
  * check-ins waiting on its queue, the ones it has already read, the
  * background work its trunk is running, and the transcript of the trunk or
  * of a thread's session - the existing chat view, read-only, with no
@@ -97,6 +85,10 @@ export function BotUnderTheHoodPanel(props: {
   /** The thread session whose transcript is shown; `null` shows the trunk. */
   readonly sessionChatId: string | null;
   readonly onSelectSession: (sessionChatId: string | null) => void;
+  /** The bot's channel; `null` from a host that does not name it. */
+  readonly channelId: string | null;
+  /** Opens a post's thread beside the channel, in the channel's view. */
+  readonly onOpenPost: (open: BotOpenThread) => void;
 }): ReactNode {
   const {
     botId,
@@ -104,6 +96,8 @@ export function BotUnderTheHoodPanel(props: {
     botTitle,
     trunkChatId,
     tasks,
+    channelId,
+    onOpenPost,
     openRequestCount,
     notificationSubscriptions,
     boundHost,
@@ -149,7 +143,14 @@ export function BotUnderTheHoodPanel(props: {
               onSelectSession={onSelectSession}
             />
           ) : null}
-          <BotTasksList tasks={tasks} />
+          <BotTasksSection
+            botId={botId}
+            hostId={hostId}
+            tasks={tasks}
+            threads={threads}
+            channelId={channelId}
+            onOpenPost={onOpenPost}
+          />
           <BotNotificationWatches
             botId={botId}
             hostId={hostId}
@@ -436,20 +437,23 @@ function BotThreadsListBody(props: {
   );
 }
 
-function BotTasksList(props: {
+/**
+ * Every task the bot set up, its trunk's and every thread's (Tracy Bots
+ * T82), each with where it came from.
+ */
+function BotTasksSection(props: {
+  readonly botId: string;
+  readonly hostId: string;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
+  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly channelId: string | null;
+  readonly onOpenPost: (open: BotOpenThread) => void;
 }): ReactNode {
-  const { tasks } = props;
-  const userId = useAuthStore((s) => s.profile?.userId ?? null);
-  const taskIds = useMemo(
-    () => (tasks.length === 0 ? EMPTY_TASK_IDS : tasks.map((t) => t.taskId)),
-    [tasks],
+  const { botId, hostId, tasks, threads, channelId, onOpenPost } = props;
+  const place = useMemo(
+    () => ({ kind: "bot" as const, channelId, onOpenPost }),
+    [channelId, onOpenPost],
   );
-  const contexts = useEpicGetTaskContexts(taskIds, userId, {
-    enabled: taskIds.length > 0,
-  });
-  const sorted = useMemo(() => sortTasksForDisplay(tasks), [tasks]);
-  const now = useSampledNow();
   return (
     <section
       aria-label="Tasks"
@@ -459,25 +463,16 @@ function BotTasksList(props: {
       <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         Tasks
       </h3>
-      {sorted.length === 0 ? (
-        <p className="py-1 text-ui-xs text-muted-foreground">
-          Not tracking any task yet.
-        </p>
+      {tasks.length === 0 ? (
+        <p className="py-1 text-ui-xs text-muted-foreground">No tasks yet.</p>
       ) : (
-        <ul className="flex flex-col gap-1">
-          {sorted.map((task) => (
-            <li key={task.taskId}>
-              <BotTaskRow
-                task={task}
-                title={
-                  contexts.tasksById.get(task.taskId)?.epic?.light?.title ??
-                  null
-                }
-                now={now}
-              />
-            </li>
-          ))}
-        </ul>
+        <BotTaskList
+          botId={botId}
+          hostId={hostId}
+          tasks={tasks}
+          threads={threads}
+          place={place}
+        />
       )}
     </section>
   );
@@ -552,67 +547,6 @@ function WatchingThreadLabel(props: {
       prefix="Thread: "
       fetchCold={false}
     />
-  );
-}
-
-function BotTaskRow(props: {
-  readonly task: BotTaskEntry;
-  readonly title: string | null;
-  readonly now: number;
-}): ReactNode {
-  const { task, title, now } = props;
-  const working = useEpicAgentActivity(task.taskId).working.size;
-  const navigate = useNavigate();
-  const tracking = task.state === "tracking";
-  return (
-    <button
-      type="button"
-      data-testid="bot-task-row"
-      data-task-id={task.taskId}
-      data-task-state={task.state}
-      className={cn(
-        "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
-        !tracking && "opacity-70",
-      )}
-      onClick={() =>
-        navigateToTabIntent(
-          navigate,
-          openEpicFromListIntent({
-            epicId: task.taskId,
-            focus: undefined,
-            name: title ?? undefined,
-            replaceEmptyDraftId: null,
-          }),
-          undefined,
-        )
-      }
-    >
-      <span className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {title ?? task.taskId}
-        </span>
-        {working > 0 ? (
-          <Badge variant="success" size="xs">
-            {working === 1 ? "1 agent working" : `${working} agents working`}
-          </Badge>
-        ) : null}
-        {tracking ? null : (
-          <Badge variant="muted" size="xs">
-            Ended
-          </Badge>
-        )}
-      </span>
-      <span className="flex flex-wrap gap-x-2 text-ui-xs text-muted-foreground">
-        <span>Check-ins {describeCadence(task.cadence)}</span>
-        {task.nextAt === null ? null : (
-          <span>next {formatWaitTime(task.nextAt, now)}</span>
-        )}
-        {task.lastCheckinAt === null ? null : (
-          <span>last {ago(task.lastCheckinAt, now)}</span>
-        )}
-        {task.endedReason === null ? null : <span>{task.endedReason}</span>}
-      </span>
-    </button>
   );
 }
 

@@ -12,13 +12,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotNotificationSubscription } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotNotificationSubscription,
+  BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
+import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 
 interface ThreadListAnswer {
@@ -32,6 +37,7 @@ const mocks = vi.hoisted(() => {
   return {
     client: { stub: "tab-host-client" },
     refetchThreads: vi.fn<() => void>(),
+    openPost: vi.fn<(open: BotOpenThread) => void>(),
     /** Every chat id the panel asked the session registry for. */
     sessionRequests: [] as string[],
     state: {
@@ -47,6 +53,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      /** Task titles by task id, as the task-context read answers them. */
+      taskTitles: {},
     },
   };
 });
@@ -79,7 +87,14 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
-  useEpicGetTaskContexts: () => ({ tasksById: new Map() }),
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(
+      Object.entries(mocks.state.taskTitles).map(([taskId, title]) => [
+        taskId,
+        { epic: { light: { title } } },
+      ]),
+    ),
+  }),
 }));
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
@@ -221,6 +236,9 @@ let boundHost: { hostId: string; isThisHost: boolean };
 /** The notification watches the next panel renders with. */
 let notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
 
+/** The bot's task list the next panel renders with. */
+let tasks: ReadonlyArray<BotTaskEntry>;
+
 function Panel(props: {
   readonly onSelectSession: (sessionChatId: string | null) => void;
   readonly sessionChatId: string | null;
@@ -235,7 +253,7 @@ function Panel(props: {
       hostId={HOST_ID}
       botTitle="Release Bot"
       trunkChatId={TRUNK_ID}
-      tasks={[]}
+      tasks={tasks}
       openRequestCount={null}
       notificationSubscriptions={notificationSubscriptions}
       boundHost={boundHost}
@@ -243,6 +261,8 @@ function Panel(props: {
       environmentBots={props.environmentBots}
       sessionChatId={props.sessionChatId}
       onSelectSession={props.onSelectSession}
+      channelId={CHANNEL_ID}
+      onOpenPost={mocks.openPost}
     />
   );
 }
@@ -271,6 +291,8 @@ beforeEach(() => {
   mocks.state.connectable = { hostIds: [], resolved: true };
   boundHost = { hostId: HOST_ID, isThisHost: true };
   notificationSubscriptions = null;
+  tasks = [];
+  mocks.state.taskTitles = {};
   useBotTabsStore.setState({ tabs: {} });
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
@@ -594,6 +616,154 @@ describe("<BotUnderTheHoodPanel /> the post a thread answers", () => {
     const [row] = screen.getAllByTestId("bot-thread-row");
     expect(within(row).queryByText("Please review the release")).toBeNull();
     expect(within(row).getByText("Thread")).toBeTruthy();
+  });
+});
+
+/** A task the bot runs every six hours, set up by nobody the list names. */
+function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "every", seconds: 21_600 },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+    ...overrides,
+  };
+}
+
+function taskRow(taskId: string): HTMLElement {
+  const row = screen
+    .getAllByTestId("bot-task-row")
+    .find((element) => element.getAttribute("data-task-id") === taskId);
+  if (row === undefined) throw new Error(`no row for ${taskId}`);
+  return row;
+}
+
+describe("<BotUnderTheHoodPanel /> tasks", () => {
+  function renderPanel(): void {
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
+  }
+
+  it("lists every task the trunk and each thread set up, each with its title, name, post, thread and an automation's interval", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [
+      thread("thread-a", "Please review the release\nIt ships Friday.", {}),
+    ];
+    const directPost = conversationRequestMessageId("req-direct");
+    mocks.state.channelPosts[directPost] = "Check the nightly run";
+    mocks.state.taskTitles = {
+      "task-watch": "Release watch",
+      "task-fix": "Fix the flaky shard",
+      "task-nightly": "Nightly run",
+    };
+    tasks = [
+      task("task-watch", {
+        label: "Watching the release",
+        originRequestId: "req-thread-a",
+        createdByChatId: "thread-a",
+      }),
+      task("task-fix", {
+        cadence: { kind: "on-completion" },
+        originRequestId: "req-followup",
+        createdByChatId: "thread-a",
+      }),
+      task("task-nightly", {
+        cadence: { kind: "on-completion" },
+        originRequestId: "req-direct",
+      }),
+    ];
+    renderPanel();
+
+    const watch = taskRow("task-watch");
+    expect(within(watch).getByTestId("bot-task-open").textContent).toBe(
+      "Release watch",
+    );
+    expect(within(watch).getByTestId("bot-task-label").textContent).toBe(
+      "Watching the release",
+    );
+    expect(within(watch).getByTestId("bot-task-interval").textContent).toBe(
+      "every 6 hours",
+    );
+    // The post the task came from opens its thread, which the row then does
+    // not name a second time.
+    expect(within(watch).getByTestId("bot-task-request").textContent).toBe(
+      "for Please review the release",
+    );
+    expect(within(watch).queryByTestId("bot-task-thread")).toBeNull();
+    await user.click(within(watch).getByTestId("bot-task-request"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "post-thread-a",
+      announcement: false,
+      sent: null,
+    });
+
+    // A one-off task set up for a message inside a thread: no interval, and
+    // the thread it came from, opening that thread.
+    const fix = taskRow("task-fix");
+    expect(within(fix).queryByTestId("bot-task-interval")).toBeNull();
+    expect(within(fix).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(fix).getByTestId("bot-task-thread").textContent).toBe(
+      "from Please review the release",
+    );
+    await user.click(within(fix).getByTestId("bot-task-thread"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "post-thread-a",
+      announcement: false,
+      sent: null,
+    });
+
+    // The trunk's task, set up for a post the bot answered on the channel.
+    const nightly = taskRow("task-nightly");
+    expect(within(nightly).queryByTestId("bot-task-thread")).toBeNull();
+    expect(within(nightly).getByTestId("bot-task-request").textContent).toBe(
+      "for Check the nightly run",
+    );
+    await user.click(within(nightly).getByTestId("bot-task-request"));
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: directPost,
+      announcement: true,
+      sent: null,
+    });
+
+    const section = screen.getByTestId("bot-tasks");
+    expect(section.textContent).not.toMatch(/check-in|next|last|ago/i);
+  });
+
+  it("draws a task from a host that does not say where it came from with its title and interval alone", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    tasks = [
+      task("task-watch", {
+        spun: null,
+        label: null,
+        originRequestId: null,
+        createdByChatId: null,
+      }),
+    ];
+    renderPanel();
+
+    const row = taskRow("task-watch");
+    expect(within(row).getByTestId("bot-task-open").textContent).toBe(
+      "task-watch",
+    );
+    expect(within(row).getByTestId("bot-task-interval").textContent).toBe(
+      "every 6 hours",
+    );
+    expect(within(row).queryByTestId("bot-task-label")).toBeNull();
+    expect(within(row).queryByTestId("bot-task-request")).toBeNull();
+    expect(within(row).queryByTestId("bot-task-thread")).toBeNull();
   });
 });
 

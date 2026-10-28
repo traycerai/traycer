@@ -37,6 +37,8 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type {
   AgentSender,
   Message,
@@ -143,6 +145,13 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
+}));
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map([
+      ["task-watch", { epic: { light: { title: "Release watch" } } }],
+    ]),
+  }),
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
@@ -328,6 +337,8 @@ const channelRelease = vi.fn<() => void>();
 let sent: ReadonlyArray<BotConversationSendRequest>;
 /** The post as its send opened the thread; `null` for a thread opened from a row. */
 let panelSent: BotSentPost | null;
+/** The bot's task list the panel is handed. */
+let panelTasks: ReadonlyArray<BotTaskEntry>;
 const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
 /** What the host answers the next `bot.conversation.send` with. */
 let sendAnswer: () => Promise<BotConversationSendResponse>;
@@ -398,6 +409,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               originMessageId={originOf(thread)}
               sent={panelSent}
               thread={thread}
+              tasks={panelTasks}
               anchorSenderLabel={(senderUserId) =>
                 senderUserId === null ? "You" : "Tess Teammate"
               }
@@ -420,6 +432,7 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 beforeEach(() => {
   sent = [];
   panelSent = null;
+  panelTasks = [];
   mocks.threadHandle.held = false;
   onEditPost.mockClear();
   activityStore.setState({ activity: null });
@@ -1463,5 +1476,83 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(
       within(anchor).queryByTestId("bot-message-unanswered-edit"),
     ).toBeNull();
+  });
+});
+
+describe("<BotThreadPanel /> the thread's tasks", () => {
+  function task(
+    taskId: string,
+    overrides: Partial<BotTaskEntry>,
+  ): BotTaskEntry {
+    return {
+      taskId,
+      cadence: { kind: "on-completion" },
+      lastCheckinAt: null,
+      lastCheckin: null,
+      nextAt: null,
+      state: "tracking",
+      endedReason: null,
+      createdByUserId: null,
+      spun: true,
+      label: null,
+      originRequestId: null,
+      createdByChatId: THREAD_ID,
+      ...overrides,
+    };
+  }
+
+  it("lists only the tasks this thread set up, each with the message it was set up for and no link out", () => {
+    channelMessages = [announcement("anchor-1", "Please review the release")];
+    panelTasks = [
+      task("task-watch", {
+        cadence: { kind: "every", seconds: 3_600 },
+        label: "Watching the release",
+        originRequestId: "req-1",
+      }),
+      task("task-fix", { originRequestId: "req-followup" }),
+      task("task-trunk", { createdByChatId: null }),
+      task("task-other", { createdByChatId: "thread-2" }),
+    ];
+    mountPanel(listed("user-teammate"), [
+      announcement(
+        conversationRequestMessageId("req-followup"),
+        "Also rerun the flaky shard",
+      ),
+    ]);
+
+    const section = screen.getByTestId("bot-thread-tasks");
+    const rows = within(section).getAllByTestId("bot-task-row");
+    expect(rows.map((row) => row.getAttribute("data-task-id"))).toEqual([
+      "task-watch",
+      "task-fix",
+    ]);
+    const [watch, fix] = rows;
+    expect(within(watch).getByTestId("bot-task-open").textContent).toBe(
+      "Release watch",
+    );
+    expect(within(watch).getByTestId("bot-task-label").textContent).toBe(
+      "Watching the release",
+    );
+    expect(within(watch).getByTestId("bot-task-interval").textContent).toBe(
+      "every hour",
+    );
+    const request = within(watch).getByTestId("bot-task-request");
+    expect(request.textContent).toBe("for Please review the release");
+    expect(request.tagName).toBe("SPAN");
+    expect(within(fix).getByTestId("bot-task-request").textContent).toBe(
+      "for Also rerun the flaky shard",
+    );
+    expect(within(fix).queryByTestId("bot-task-interval")).toBeNull();
+    expect(within(section).queryByTestId("bot-task-thread")).toBeNull();
+  });
+
+  it("draws nothing when the thread set up no task", () => {
+    panelTasks = [
+      task("task-trunk", { createdByChatId: null }),
+      task("task-other", { createdByChatId: "thread-2" }),
+    ];
+    mountPanel(listed("user-teammate"), []);
+
+    expect(screen.queryByTestId("bot-thread-tasks")).toBeNull();
   });
 });

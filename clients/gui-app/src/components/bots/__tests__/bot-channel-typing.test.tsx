@@ -476,6 +476,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
       resolveMember={resolveMember}
+      tasks={[]}
       openThread={openThread}
       onOpenThread={(open) =>
         useBotOpenThreadStore.getState().setOpenThread(BOT_ID, open)

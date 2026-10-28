@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
@@ -20,6 +21,7 @@ import {
 } from "@/components/bots/bot-channel-notices";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { BotTaskList } from "@/components/bots/bot-task-list";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
@@ -31,6 +33,7 @@ import {
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentation-context";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
+import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
@@ -84,6 +87,8 @@ export function BotThreadPanel(props: {
   /** That post as the person sent it, when its send opened the thread; `null` otherwise. */
   readonly sent: BotSentPost | null;
   readonly thread: BotThreadPanelThread;
+  /** The bot's tasks: the panel lists the ones this thread set up. */
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The viewer's own name for their posts, as the channel shows them. */
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
@@ -150,6 +155,15 @@ export function BotThreadPanel(props: {
         </Button>
       </header>
       <ThreadOrigin {...props} sendFailure={sendFailure} />
+      {threadId === null ? null : (
+        <ThreadTasks
+          botId={props.botId}
+          hostId={props.hostId}
+          threadId={threadId}
+          thread={thread}
+          tasks={props.tasks}
+        />
+      )}
       <ThreadPanelBody {...props} sendFailure={sendFailure} />
     </section>
   );
@@ -270,6 +284,46 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         );
       }}
     </ChannelPost>
+  );
+}
+
+/**
+ * The tasks the thread's session set up (Tracy Bots T82), each with where it
+ * came from; nothing when it set up none.
+ */
+function ThreadTasks(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadId: string;
+  /** The thread as listed; `null` while the list has not returned it. */
+  readonly thread: BotThreadSummary | null;
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
+}): ReactNode {
+  const { botId, hostId, threadId, thread, tasks } = props;
+  const own = useMemo(() => tasksOfThread(tasks, threadId), [tasks, threadId]);
+  const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
+  const place = useMemo(
+    () => ({ kind: "thread" as const, threadId }),
+    [threadId],
+  );
+  if (own.length === 0) return null;
+  return (
+    <section
+      aria-label="Tasks"
+      className="flex shrink-0 flex-col gap-1 px-4 pt-2"
+      data-testid="bot-thread-tasks"
+    >
+      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+        Tasks
+      </h3>
+      <BotTaskList
+        botId={botId}
+        hostId={hostId}
+        tasks={own}
+        threads={threads}
+        place={place}
+      />
+    </section>
   );
 }
 

@@ -378,6 +378,7 @@ function mount(options: MountOptions): {
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
             resolveMember={resolveMember}
+            tasks={[]}
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenUnderTheHood={onOpenUnderTheHood}

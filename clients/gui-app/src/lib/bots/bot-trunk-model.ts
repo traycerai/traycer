@@ -4,7 +4,9 @@ import type {
   ChatQueuedTaskOverdueItem,
   OpenChatQueuedItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 
 /**
  * What the "Under the hood" panel reads off a bot's TRUNK chat (Tracy Bots).
@@ -77,16 +79,13 @@ const MINUTE_S = 60;
 const HOUR_S = 3600;
 const DAY_S = 86_400;
 
-/** The check-in cadence as a short phrase: "every 30 min", "when it finishes". */
-export function describeCadence(cadence: BotTaskEntry["cadence"]): string {
-  switch (cadence.kind) {
-    case "every":
-      return `every ${describeSeconds(cadence.seconds)}`;
-    case "on-completion":
-      return "when it finishes";
-    case "none":
-      return "no check-ins";
-  }
+/**
+ * An automation's interval as a short phrase ("every 6 hours"); `null` for a
+ * one-off task, and for a task the bot no longer runs.
+ */
+export function describeTaskInterval(task: BotTaskEntry): string | null {
+  if (task.state !== "tracking" || task.cadence.kind !== "every") return null;
+  return `every ${describeSeconds(task.cadence.seconds)}`;
 }
 
 /** One of the bot's chats watching the person's notifications (T84), in words. */
@@ -113,14 +112,79 @@ function plural(count: number, unit: string): string {
   return count === 1 ? unit : `${count} ${unit}s`;
 }
 
+/** Tasks the bot still runs first, each group in the list's own order. */
 export function sortTasksForDisplay(
   tasks: ReadonlyArray<BotTaskEntry>,
 ): ReadonlyArray<BotTaskEntry> {
-  return [...tasks].sort((a, b) => {
-    if (a.state !== b.state) return a.state === "tracking" ? -1 : 1;
-    const aNext = a.nextAt ?? Number.POSITIVE_INFINITY;
-    const bNext = b.nextAt ?? Number.POSITIVE_INFINITY;
-    if (aNext !== bNext) return aNext - bNext;
-    return a.taskId.localeCompare(b.taskId);
-  });
+  return [...tasks].sort((a, b) => stateRank(a) - stateRank(b));
+}
+
+function stateRank(task: BotTaskEntry): number {
+  return task.state === "tracking" ? 0 : 1;
+}
+
+/**
+ * The tasks a thread's session set up, by the thread id its entries name
+ * (Tracy Bots T82); none from a host that does not say.
+ */
+export function tasksOfThread(
+  tasks: ReadonlyArray<BotTaskEntry>,
+  threadId: string,
+): ReadonlyArray<BotTaskEntry> {
+  return tasks.filter((task) => task.createdByChatId === threadId);
+}
+
+/**
+ * Where the post a task was set up for is (Tracy Bots T82): a member's
+ * message, whose row id its request id names. On the channel when it is a
+ * thread's post (`thread`, the thread it opens) or the trunk set the task up;
+ * in the creating thread's record (`thread-message`) otherwise. `null` for a
+ * task set up for no request, and for a trunk's task while the channel is
+ * not known.
+ */
+export type BotTaskRequestPost =
+  | {
+      readonly kind: "channel";
+      readonly chatId: string;
+      readonly messageId: string;
+      readonly thread: BotThreadSummary | null;
+    }
+  | {
+      readonly kind: "thread-message";
+      readonly threadId: string;
+      readonly messageId: string;
+    };
+
+export function taskRequestPost(
+  task: BotTaskEntry,
+  threads: ReadonlyArray<BotThreadSummary>,
+  channelId: string | null,
+): BotTaskRequestPost | null {
+  const requestId = task.originRequestId;
+  if (requestId === null) return null;
+  for (const thread of threads) {
+    if (thread.anchor?.requestId !== requestId) continue;
+    return {
+      kind: "channel",
+      chatId: thread.conversationId,
+      messageId: thread.anchor.messageId,
+      thread,
+    };
+  }
+  const messageId = conversationRequestMessageId(requestId);
+  if (task.createdByChatId !== null) {
+    return {
+      kind: "thread-message",
+      threadId: task.createdByChatId,
+      messageId,
+    };
+  }
+  if (channelId === null) return null;
+  return { kind: "channel", chatId: channelId, messageId, thread: null };
+}
+
+/** A post's first line, as a task row names the request it came from. */
+export function firstLineOf(text: string | null): string | null {
+  const line = text?.trim().split("\n", 1)[0]?.trim() ?? "";
+  return line.length === 0 ? null : line;
 }
