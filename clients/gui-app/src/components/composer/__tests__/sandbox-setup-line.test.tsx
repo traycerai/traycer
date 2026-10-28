@@ -52,6 +52,7 @@ function facts(smallerShapeAffordable: boolean): SandboxSetupLineFacts {
     shapeLabel: "2 vCPU · 4 GB",
     smallerShapeAffordable,
     offeredAgents: null,
+    sandboxAwake: null,
     sandboxBooting: false,
   };
 }

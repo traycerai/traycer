@@ -5310,6 +5310,83 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
   );
 });
 
+describe("a send held on settings that didn't apply, once its sandbox leaves awake", () => {
+  const FRESH = Date.now() + 60_000;
+  let restoreLocks: () => void = () => undefined;
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(() => {
+    restoreLocks();
+  });
+
+  function rowIn(state: SandboxSummary["state"]): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state,
+      guestConfigured: true,
+    });
+  }
+
+  async function mountHeld(): Promise<void> {
+    mocks.settingsStatus = {
+      principal: { kind: "personal" },
+      items: [{ kind: "variable", status: "failed" }],
+    };
+    seed({
+      ...SEEDED,
+      send: SEND_BY_KIND.chat,
+      phase: "creating",
+      created: true,
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+    answerSandboxRows([rowIn("awake")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await screen.findByTestId("pending-sandbox-sends");
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "settings", code: "SBX-0520" },
+      });
+    });
+    await screen.findByTestId("sandbox-setup-retry-applying");
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toMatch(
+      /is awake, but .*'s settings didn't apply/,
+    );
+  }
+
+  it("gives the message back once the sandbox suspends, so the chat shows its resting footer, and never wakes it", async () => {
+    await mountHeld();
+
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    expect(screen.queryByText(/is awake, but/)).toBeNull();
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+  });
+
+  it("stops saying the sandbox is awake and offers no Retry applying while it suspends", async () => {
+    await mountHeld();
+
+    answerSandboxRows([rowIn("suspending")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
+    });
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).not.toMatch(/is awake/);
+    expect(line.textContent).not.toMatch(/Compute is charged/);
+    expect(line.textContent).toMatch(/'s settings didn't apply on /);
+    expect(mocks.repairFinishers).toHaveLength(0);
+    expect(mocks.wake).not.toHaveBeenCalled();
+  });
+});
+
 describe("a send whose created sandbox stalled on credits or settings while it was still being created", () => {
   const FRESH = Date.now() + 60_000;
   const BLOCKERS = [
@@ -6982,9 +7059,11 @@ describe("choosing Stop on an unclaimed send", () => {
     });
     mocks.listSandboxes.mockResolvedValue(listAnswers([resting]));
     answerSandboxRows([resting], readAt);
+    // A refusal that holds the send at rest: the read neither wakes the
+    // sandbox nor gives the message back.
     act(() => {
       useStagedSandboxStore.getState().report(SURFACE, {
-        failure: { kind: "settings", code: "SBX-0520" },
+        failure: { kind: "failed", code: "wake", step: "booting" },
       });
     });
     fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));

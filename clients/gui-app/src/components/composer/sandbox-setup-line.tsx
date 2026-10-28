@@ -53,6 +53,7 @@ import {
   SANDBOX_READY,
   agentNotOfferedOnSandboxesLine,
   enableSandboxInferenceLine,
+  settingsDidntApplyOnLine,
   stepApplyingSettings,
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -181,6 +182,8 @@ export interface SandboxSetupLineFacts {
   readonly smallerShapeAffordable: boolean;
   /** The agents sandboxes run, which Choose a model opens on; `null` unknown. */
   readonly offeredAgents: ReadonlyArray<string> | null;
+  /** Whether the stage's sandbox is awake now; `null` before its row is listed. */
+  readonly sandboxAwake: boolean | null;
   /**
    * The created sandbox's row reads `creating`, `starting` or `resuming`:
    * Stop is not offered until it is awake.
@@ -521,6 +524,7 @@ function SandboxProgressLine(props: {
     resuming,
     configuration,
     takingLonger,
+    sandboxAwake: props.facts.sandboxAwake,
   };
   return (
     <SandboxSetupLineFrame
@@ -559,6 +563,7 @@ interface ProgressView {
   readonly resuming: boolean;
   readonly configuration: string;
   readonly takingLonger: boolean;
+  readonly sandboxAwake: boolean | null;
 }
 
 function isTakingLonger(
@@ -580,11 +585,10 @@ function progressTitle(view: ProgressView, name: string): string {
     return resuming ? couldntResumeLine(name) : couldntStartLine(name);
   }
   if (failure?.kind === "settings") {
-    return sandboxSettingsFailureLine(
-      name,
-      view.configuration,
-      sandboxSupportReference(failure.code) ?? "SBX-0520",
-    );
+    const reference = sandboxSupportReference(failure.code) ?? "SBX-0520";
+    return view.sandboxAwake === false
+      ? settingsDidntApplyOnLine(view.configuration, name, reference)
+      : sandboxSettingsFailureLine(name, view.configuration, reference);
   }
   if (view.takingLonger) {
     return resuming ? RESUMING_TAKING_LONGER : STARTING_TAKING_LONGER;
@@ -665,7 +669,11 @@ function ProgressDetail(props: {
           configuration={configuration}
         />
       ) : null}
-      <FailureSentence failure={failure} resuming={resuming} />
+      <FailureSentence
+        failure={failure}
+        resuming={resuming}
+        sandboxAwake={props.view.sandboxAwake}
+      />
       {failure?.kind === "settings" ? (
         <>
           <p className="m-0">
@@ -698,6 +706,7 @@ function ProgressDetail(props: {
 function FailureSentence(props: {
   readonly failure: StagedSandboxFailure | null;
   readonly resuming: boolean;
+  readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
     // A sandbox that failed after it woke was charged while it was awake.
@@ -712,7 +721,7 @@ function FailureSentence(props: {
       </p>
     );
   }
-  if (props.failure?.kind === "settings") {
+  if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
     return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
   }
   return null;

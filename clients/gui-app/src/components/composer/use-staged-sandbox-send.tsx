@@ -8,7 +8,10 @@ import {
   type ReactNode,
 } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
-import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxSummary,
+  SandboxVerbGesture,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
   type SandboxSetupLineFacts,
@@ -452,6 +455,20 @@ export function useSetupLineFacts(
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
   const sandboxes = useSandboxList().data?.sandboxes;
+  // Whether the stage's sandbox is awake: `null` until the list has its row.
+  const stageSandboxId =
+    stage?.createdSandboxId ??
+    (stage?.target.kind === "existing" ? stage.target.sandboxId : null);
+  const stageRow =
+    stageSandboxId === null
+      ? undefined
+      : sandboxes?.find((candidate) => candidate.id === stageSandboxId);
+  const sandboxAwake =
+    stageRow === undefined ? null : stageRow.state === "awake";
+  const sandboxBooting =
+    stageRow?.state === "creating" ||
+    stageRow?.state === "starting" ||
+    stageRow?.state === "resuming";
   // A resting sandbox of the person's costs what its row says.
   const existingPrice = useMemo<StagePrice | null>(() => {
     if (stage === null || stage.target.kind !== "existing") return null;
@@ -461,15 +478,6 @@ export function useSetupLineFacts(
       ? null
       : { awakeMcPerHour: row.priceMcPerHour.awakeMc, exact: true };
   }, [sandboxes, stage]);
-  const createdId = stage?.createdSandboxId ?? null;
-  const createdState =
-    createdId === null
-      ? undefined
-      : sandboxes?.find((candidate) => candidate.id === createdId)?.state;
-  const sandboxBooting =
-    createdState === "creating" ||
-    createdState === "starting" ||
-    createdState === "resuming";
   return useMemo(() => {
     if (stage === null) return null;
     if (stage.target.kind === "existing" || catalogue === null) {
@@ -486,6 +494,7 @@ export function useSetupLineFacts(
         shapeLabel: "",
         smallerShapeAffordable: false,
         offeredAgents: catalogue?.offeredAgents ?? null,
+        sandboxAwake,
         sandboxBooting,
       };
     }
@@ -518,9 +527,10 @@ export function useSetupLineFacts(
           smallest.awakeMcPerHour,
         ),
       offeredAgents: catalogue.offeredAgents ?? null,
+      sandboxAwake,
       sandboxBooting,
     };
-  }, [catalogue, existingPrice, sandboxBooting, stage, user]);
+  }, [catalogue, existingPrice, sandboxAwake, sandboxBooting, stage, user]);
 }
 
 /**
@@ -693,6 +703,28 @@ export interface StagedSandboxTerminal {
 }
 
 /**
+ * The repairs the created host's row admits. Settings are applied on an awake
+ * sandbox only: a repair sent to one that is resting or gone can only fail,
+ * and its failure says nothing of the settings.
+ */
+function newHostRepairs(
+  row: SandboxSummary | undefined,
+  retrySupported: boolean,
+  guestRepairSupported: boolean,
+): {
+  readonly awake: boolean;
+  readonly retry: boolean;
+  readonly setup: boolean;
+} {
+  const awake = row?.state === "awake";
+  return {
+    awake,
+    retry: awake && retrySupported,
+    setup: awake && guestRepairSupported && row.guestConfigured === false,
+  };
+}
+
+/**
  * The line's actions on the created host: `Retry applying` repairs the
  * settings there, then the wait resumes on the new verdict; `Open terminal`
  * opens a folderless one there once the host can.
@@ -724,15 +756,13 @@ export function useNewHostActions(
     terminal === null ? "" : terminal.epicId,
     terminal === null ? null : createdHostId,
   );
+  const offered = newHostRepairs(row, retrySupported, guestRepairSupported);
   return {
     applyingPending: operation === "pending",
-    applyingError: operation === "failed",
-    onRepairSetup:
-      guestRepairSupported && row?.guestConfigured === false
-        ? () => guestRepair.mutate({})
-        : null,
+    applyingError: offered.awake && operation === "failed",
+    onRepairSetup: offered.setup ? () => guestRepair.mutate({}) : null,
     repairSetupPending: guestRepair.isPending,
-    onRetryApplying: retrySupported
+    onRetryApplying: offered.retry
       ? () => {
           if (
             surfaceKey === null ||

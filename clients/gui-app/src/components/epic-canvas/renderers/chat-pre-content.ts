@@ -150,6 +150,11 @@ export interface ChatTilePreContentFrame {
   readonly cloneAllowed: boolean;
   /** See `ChatPreContentInput.hasReadySession`. */
   readonly hasReadySession: boolean;
+  /**
+   * A resting or unreachable sandbox's footer under the tile says why the
+   * chat is not loading, so the body narrates no offline host of its own.
+   */
+  readonly sandboxFooter: boolean;
 }
 
 /**
@@ -223,11 +228,7 @@ export type ChatPreContentFatal = "none" | "verdict" | "host-update";
  * under a banner saying X is offline.
  */
 export type ChatPreContentHost =
-  | "dead"
-  | "up"
-  | "restarting"
-  | "starting"
-  | "unknown";
+  "dead" | "up" | "restarting" | "starting" | "unknown";
 
 /**
  * Which strip `ChatTile` shows above the body: `ChatHostStartingBanner`, the
