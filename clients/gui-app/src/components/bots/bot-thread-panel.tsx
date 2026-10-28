@@ -359,7 +359,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         announcementId={box.announcementId}
         sendable={thread.sendable}
         placeholder="Reply…"
-        label={box.label}
+        label={edit === null ? box.label : IN_THREAD_LABEL}
         testId="bot-thread-composer"
         failure={props.sendFailure}
         edit={edit}
@@ -369,6 +369,13 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     </>
   );
 }
+
+/**
+ * The box's name where what it sends goes into the thread: a thread whose id
+ * is known, and an edit, which replaces a message of the thread wherever the
+ * list has the thread.
+ */
+const IN_THREAD_LABEL = "Reply in the thread";
 
 /**
  * Where the box sends: into a thread whose id is known, or under a post
@@ -397,14 +404,14 @@ function boxOf(
       conversationId: thread.thread.conversationId,
       threadId: thread.thread.threadId,
       announcementId: null,
-      label: "Reply in the thread",
+      label: IN_THREAD_LABEL,
     };
   }
   return {
     conversationId,
     threadId: thread.threadId,
     announcementId: null,
-    label: "Reply in the thread",
+    label: IN_THREAD_LABEL,
   };
 }
 

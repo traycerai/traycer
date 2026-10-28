@@ -1512,6 +1512,10 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     );
     expect(box).toHaveProperty("value", "Hold for now please");
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+    // What it sends still replaces a message of the thread.
+    expect(screen.getByRole("textbox", { name: "Reply in the thread" })).toBe(
+      box,
+    );
     panel.rerender(panelTree(taking));
     expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
     expect(box).toHaveProperty("value", "Hold for now please");
@@ -1572,6 +1576,10 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       expect(box).toHaveProperty("value", "");
     });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    // With the edit ended, the box under the reply starts its thread again.
+    expect(screen.getByRole("textbox", { name: "Reply in a new thread" })).toBe(
+      box,
+    );
     panel.rerender(panelTree(taking));
     expect(box).toHaveProperty("value", "");
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
