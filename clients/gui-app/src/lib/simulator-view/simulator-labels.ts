@@ -30,14 +30,19 @@ export function simulatorVersionLabel(
  * The countdown an idle instance shows: "Idle · powers off in 7 min", rounded
  * up so the last minute still reads "in 1 min". Null while the instance has
  * no deadline (in use, kept running, or booted outside Traycer).
+ *
+ * Past the deadline the row stops counting down: the host's tick runs about
+ * once a minute, and a label that read "in 1 min" on every refresh made a
+ * stuck tick indistinguishable from a healthy one.
  */
 export function simulatorIdleCountdownLabel(
   idleUntil: number | null,
   nowMs: number,
 ): string | null {
   if (idleUntil === null) return null;
-  const minutes = Math.max(1, Math.ceil((idleUntil - nowMs) / 60_000));
-  return `Idle · powers off in ${minutes} min`;
+  const remainingMs = idleUntil - nowMs;
+  if (remainingMs <= 0) return "Idle · powering off";
+  return `Idle · powers off in ${Math.ceil(remainingMs / 60_000)} min`;
 }
 
 /** Why a closed row's session ended, as its notice says it. */

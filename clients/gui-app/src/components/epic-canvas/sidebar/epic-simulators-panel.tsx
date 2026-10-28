@@ -417,7 +417,7 @@ function SimulatorPendingRowItem(props: { readonly row: SimulatorPendingRow }) {
           <Smartphone className="size-4 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1 truncate">{row.name}</span>
           <span className="shrink-0 text-ui-xs text-muted-foreground">
-            Booting
+            {row.attaching ? "Opening" : "Booting"}
           </span>
           <AgentSpinningDots
             className="shrink-0"

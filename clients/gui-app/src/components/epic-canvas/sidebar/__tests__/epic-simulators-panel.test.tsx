@@ -715,6 +715,21 @@ describe("Mobile simulators panel", () => {
       expect(place).not.toHaveBeenCalled();
     });
 
+    it("says Opening for a watch of a running instance and Booting for a cold device", async () => {
+      renderPanel(vi.fn());
+
+      fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+
+      // Nothing boots: the instance is already running and the open only adds
+      // the person's session to it.
+      expect(await screen.findByText("Opening")).toBeTruthy();
+      expect(screen.queryByText("Booting")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+
+      expect(await screen.findByText("Booting")).toBeTruthy();
+    });
+
     it("watches the row's instance from the panel: an open naming it, and the tile placed on its answer", async () => {
       // The person's own session ended elsewhere; only the agent's holds the
       // instance, so the row has to ask for a session of its own rather than

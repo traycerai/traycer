@@ -63,6 +63,11 @@ export interface SimulatorPendingRow {
   readonly platform: SimulatorPlatform;
   readonly version: string;
   readonly requestId: string;
+  /**
+   * The open named an instance that is already running, so there is nothing
+   * to boot: it is a session being added to it.
+   */
+  readonly attaching: boolean;
 }
 
 export type SimulatorListRow =
@@ -150,6 +155,7 @@ function pendingRow(open: SimulatorPendingOpen): SimulatorPendingRow {
     platform: open.platform,
     version: open.version,
     requestId: open.requestId,
+    attaching: open.instanceKey !== null,
   };
 }
 

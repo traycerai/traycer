@@ -144,7 +144,7 @@ function SwitcherSimulatorRow(props: {
         disabled={false}
         icon={icon}
         label={row.name}
-        secondaryLabel="Booting"
+        secondaryLabel={row.attaching ? "Opening" : "Booting"}
         badge={
           <AgentSpinningDots
             className="shrink-0"
