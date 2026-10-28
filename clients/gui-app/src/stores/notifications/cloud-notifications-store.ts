@@ -6,6 +6,7 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV15,
+  isBotThreadVerdictNotification,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationsCloudFeedRowV15,
   type HostNotificationsCloudFeedSummary,
@@ -13,6 +14,7 @@ import {
   type HostNotificationSandboxNoticePayload,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { countsTowardEntityUnread } from "@/lib/notifications/unread-count";
 import {
   isReopenableHostStreamClose,
   type HostReconnectEngine,
@@ -153,13 +155,7 @@ export function selectCloudEntityReadTargets(
   for (const row of Object.values(state.rows)) {
     if (row === undefined) continue;
     const { entry } = row;
-    if (
-      entry.severity !== "needs_action" &&
-      entry.severity !== "done" &&
-      entry.severity !== "failure"
-    )
-      continue;
-    if (entry.readAt !== null) continue;
+    if (!countsTowardEntityUnread(entry)) continue;
     // A focused tile supplies its bound host and must only acknowledge that
     // exact lineage. An epic-only surface has no host binding, so it retains
     // the existing epic-level behavior across visible origins.
@@ -203,6 +199,17 @@ export function selectCloudEntityReadRetries(
   return { due, dropped };
 }
 
+/**
+ * Whether the cloud lane is delivering this client's cloud rows right now:
+ * its snapshot has landed and it stays connected. While it is not, the GUI
+ * still holds the rows it last received, and the host serves its own origin.
+ */
+export function selectCloudLaneServing(
+  state: Pick<CloudNotificationsState, "hasSnapshot" | "connectionState">,
+): boolean {
+  return state.hasSnapshot && state.connectionState === "connected";
+}
+
 export function cloudNotificationFeedId(entryId: string): string {
   return `cloud:${encodeURIComponent(entryId)}`;
 }
@@ -213,10 +220,12 @@ function rowKey(
   return cloudNotificationFeedId(row.entryId);
 }
 
+/** The relay summary's `attentionCount` predicate (the seam's `needsAttention`). */
 function isUnreadAttention(row: HostNotificationsCloudFeedRowV15): boolean {
   return (
     (row.entry.severity === "needs_action" ||
-      row.entry.severity === "failure") &&
+      row.entry.severity === "failure" ||
+      isBotThreadVerdictNotification(row.entry)) &&
     row.entry.readAt === null
   );
 }

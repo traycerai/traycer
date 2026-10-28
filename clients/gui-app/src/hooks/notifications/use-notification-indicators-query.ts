@@ -4,7 +4,10 @@ import {
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  selectCloudLaneServing,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   mergeLocalPartitionIntoCloudIndicators,
@@ -16,21 +19,21 @@ import {
  * Per-entity indicator flags for one surface, from whichever feeds are
  * authoritative - mirroring how the notification center itself is mode-aware.
  *
- * ## Mixed mode is two EXACT partitions, ORed
+ * ## Mixed mode: one plane serves at a time
  *
- * The mode label is still `cloud`, but its inputs are two disjoint
- * durable-home partitions: the host's `indicatorState@1.1` response under
- * `home: "local"`, and the cloud snapshot. A foreign cloud row never enters
- * the local origin and a local-homed row is absent from the cloud partition,
- * so the per-flag OR neither drops a notification nor double-counts one.
+ * The mode label is still `cloud`, and its inputs are the host's
+ * `indicatorState` response under `home: "local"` and the cloud snapshot.
+ * While the cloud lane serves, the host answers an EMPTY local partition and
+ * the cloud rows are the whole answer; while it does not, the host answers
+ * its whole origin and the cloud rows are what this client last received.
+ * Flags OR across the two either way, which drops no lit flag and invents
+ * none. Counts take each origin from one plane, chosen by the lane
+ * (`mergeLocalPartitionIntoCloudIndicators`), because adding the two would
+ * count a notification held by both twice.
  *
- * That disjointness is what licenses folding host feed bits in at all. Before
- * the `home` selector the host answered over its WHOLE SQLite, where an entry
- * produced on host B never appears - so its answer could not light a tab bound
- * to host A, and only the host-local `pendingFork` bit was safe to import.
- * `pendingFork` still comes from the host in both modes, but it now arrives as
- * one flag of the partition rather than as a special case: fork truth lives on
- * the connected host's notice board, which is part of that host's local plane.
+ * `pendingFork` comes from the host in both modes, as one flag of its answer:
+ * fork truth lives on the connected host's notice board, which is part of
+ * that host's local plane.
  *
  * The cloud store keeps owning optimistic cloud-row reads, so its visible row
  * and its contribution to the indicator stay coherent while a mark-read
@@ -102,6 +105,7 @@ export function useNotificationIndicators(
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
+  const cloudLaneServing = useCloudNotificationsStore(selectCloudLaneServing);
   const cloudIndicators = useMemo<SurfaceNotificationIndicators>(() => {
     if (!isMixed || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
     const projection = selectCloudNotificationIndicatorProjection(
@@ -119,6 +123,7 @@ export function useNotificationIndicators(
         cloudIndicators,
         hostIndicators.data,
         readHostId,
+        cloudLaneServing,
       )
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
 }

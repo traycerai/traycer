@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Bot } from "lucide-react";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { Badge } from "@/components/ui/badge";
 import { HoverCard } from "@/components/ui/hover-card";
 import {
   formatUnreadCount,
@@ -50,16 +51,18 @@ export function TracyEntryIcon(props: {
         aria-hidden="true"
         data-testid="tracy-entry-icon"
       />
-      <span
+      <Badge
+        variant="destructive"
+        size="xs"
         aria-hidden
         data-testid="tracy-entry-unread-count"
         className={cn(
           SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-          "translate-x-1/2 -translate-y-1/2 bg-destructive text-center font-semibold text-destructive-foreground tabular-nums",
+          "translate-x-1/2 -translate-y-1/2 tabular-nums",
         )}
       >
         {formatUnreadCount(unreadCount)}
-      </span>
+      </Badge>
     </span>
   );
 }

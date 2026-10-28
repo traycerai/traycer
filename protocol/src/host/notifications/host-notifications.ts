@@ -1823,8 +1823,9 @@ export type HostNotificationsIndicatorStateV11 = z.infer<
 
 /**
  * `indicatorState@1.2`: how many of the entity's visible notifications are
- * unread, of any severity, beside the flags. `null` only when an `@1.1` host
- * answered, which did not count: a client keeps the flags then.
+ * unread and cleared by reading it (prompts, failures and completions; an
+ * informational row is neither), beside the flags. `null` only when an `@1.1`
+ * host answered, which did not count: a client keeps the flags then.
  */
 export const hostNotificationsIndicatorStateSchema = lazySchema(() =>
   hostNotificationsIndicatorStateSchemaV11.extend({

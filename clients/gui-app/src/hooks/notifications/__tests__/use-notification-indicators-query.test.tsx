@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -18,7 +18,10 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import {
+  NotificationIndicatorsContext,
+  useSurfaceNotificationIndicatorState,
+} from "@/components/notifications/notification-indicator-context";
 import {
   cloudNotificationFeedId,
   useCloudNotificationsStore,
@@ -245,6 +248,25 @@ function IndicatorProbe(props: {
   return (
     <span data-testid={props.testId}>
       {lit.length === 0 ? "none" : lit.join(",")}
+    </span>
+  );
+}
+
+/** The chat's unread count as the surface holds it, with the host-only fork
+ * bit that shows the host's answer has been folded in. */
+function CountProbe(props: {
+  readonly chatId: string;
+  readonly testId: string;
+}): ReactNode {
+  const indicators = useContext(NotificationIndicatorsContext);
+  const state = Object.hasOwn(indicators.chats, props.chatId)
+    ? indicators.chats[props.chatId]
+    : undefined;
+  return (
+    <span data-testid={props.testId}>
+      {state === undefined
+        ? "absent"
+        : `${String(state.unreadCount)}${state.pendingFork ? ",pendingFork" : ""}`}
     </span>
   );
 }
@@ -812,6 +834,44 @@ describe("mixed-plane notification indicators", () => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
     expect(indicatorText("row-read")).toBe("unread");
+  });
+
+  it("counts a notification once when the host answers for the same row the retained cloud snapshot holds, until the lane serves again", async () => {
+    const heldByBoth = cloudRow({
+      entryId: "entry-a",
+      originHostId: CONNECTED_HOST_ID,
+      readAt: null,
+    });
+    const harness = createHarness({
+      epics: {},
+      chats: {
+        [CHAT_ID]: {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: true,
+          unreadFailure: false,
+          unreadDone: true,
+          unreadCount: 1,
+        },
+      },
+    });
+    applyCloudSnapshot([heldByBoth], 1);
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: <CountProbe chatId={CHAT_ID} testId="count" />,
+    });
+
+    await waitFor(() => {
+      expect(indicatorText("count")).toBe("1,pendingFork");
+    });
+
+    applyCloudSnapshot([heldByBoth], 2);
+    await waitFor(() => {
+      expect(indicatorText("count")).toBe("1,pendingFork");
+    });
   });
 
   it("folds unread app-local failures in alongside the cloud rows", async () => {

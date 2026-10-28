@@ -3,6 +3,7 @@ import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsCloudFeedRowV15,
   HostNotificationsIndicatorState,
+  HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   indicatorHasUnread,
@@ -793,17 +794,40 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
-  it("lights no glyph for an unread info row, which is counted all the same", () => {
+  it("neither counts nor lights an unread info row, so the entity cannot read as unread", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([stopped("info", "info", null)]),
       ["epic-1"],
       ["chat-1"],
     );
+    const resolved = selectNotificationIndicatorState(
+      { byId: {} },
+      { epicId: "epic-1", chatId: "chat-1" },
+      null,
+      result,
+    );
 
-    expect(result).toEqual({
-      epics: { "epic-1": counted(1) },
-      chats: { "chat-1": counted(1) },
+    expect(result).toEqual({ epics: {}, chats: {} });
+    expect(resolved).toEqual({
+      unreadFailure: false,
+      unreadNonTerminalFailure: false,
+      unreadTerminalFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: false,
     });
+  });
+
+  it("counts only the rows reading the entity clears when an info row sits beside them", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([stopped("info", "info", null), stopped("done", "done", null)]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"].unreadCount).toBe(1);
+    expect(result.epics["epic-1"].unreadCount).toBe(1);
   });
 
   it("counts each unread row on its epic and its chat, and gives a thread with only read rows no entry", () => {
@@ -836,38 +860,147 @@ describe("cloud notification indicator derivation", () => {
 });
 
 describe("an entity's unread count", () => {
-  it("adds the host's local partition to the cloud's, keeping the one count a host did not give", () => {
+  /** One origin's rows as the cloud holds them, on an epic and a chat. */
+  function partition(
+    count: number | null,
+  ): HostNotificationsIndicatorStateResponse {
+    return {
+      epics: { "epic-1": counted(count) },
+      chats: { "chat-1": counted(count) },
+    };
+  }
+
+  it("counts a notification once when the retained cloud snapshot and the fallback host answer both hold it", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { ...partition(1), byOriginHostId: { "host-a": partition(1) } },
+      partition(1),
+      "host-a",
+      false,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(1) });
+    expect(merged.chats).toEqual({ "chat-1": counted(1) });
+    expect(merged.byOriginHostId).toEqual({ "host-a": partition(1) });
+  });
+
+  it("keeps the cloud's count while its lane serves, whatever the host answers", () => {
     const merged = mergeLocalPartitionIntoCloudIndicators(
       {
-        epics: {
-          "both-counted": counted(2),
-          "cloud-uncounted": counted(null),
-          "local-uncounted": counted(2),
-          "neither-counted": counted(null),
+        epics: { "epic-1": counted(2) },
+        chats: {},
+        byOriginHostId: {
+          "host-a": { epics: { "epic-1": counted(2) }, chats: {} },
         },
-        chats: { "thread-1": counted(2) },
       },
       {
         epics: {
-          "both-counted": counted(1),
-          "cloud-uncounted": counted(4),
-          "local-uncounted": counted(null),
-          "neither-counted": counted(null),
-          "local-only": counted(3),
+          "epic-1": counted(5),
+          "epic-2": { ...counted(4), pendingFork: true },
         },
-        chats: { "thread-1": counted(1) },
+        chats: {},
       },
-      null,
+      "host-a",
+      true,
     );
 
     expect(merged.epics).toEqual({
-      "both-counted": counted(3),
-      "cloud-uncounted": counted(4),
-      "local-uncounted": counted(2),
-      "neither-counted": counted(null),
-      "local-only": counted(3),
+      "epic-1": counted(2),
+      "epic-2": { ...counted(0), pendingFork: true },
     });
-    expect(merged.chats).toEqual({ "thread-1": counted(3) });
+    expect(merged.byOriginHostId?.["host-a"].epics["epic-1"]).toEqual(
+      counted(2),
+    );
+  });
+
+  it("lets the host's answer replace the bound origin's cloud count but keeps every other origin's rows", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        ...partition(3),
+        byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
+      },
+      partition(1),
+      "host-a",
+      false,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(3) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual(partition(1));
+    expect(merged.byOriginHostId?.["host-b"]).toEqual(partition(2));
+  });
+
+  it("drops the bound origin's cloud rows from the count once the host has read them", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      {
+        ...partition(3),
+        byOriginHostId: { "host-a": partition(1), "host-b": partition(2) },
+      },
+      { epics: {}, chats: {} },
+      "host-a",
+      false,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.byOriginHostId?.["host-a"]).toEqual({
+      epics: { "epic-1": counted(null) },
+      chats: { "chat-1": counted(null) },
+    });
+  });
+
+  it("leaves a host that does not count unknown where the cloud holds nothing", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { epics: {}, chats: {}, byOriginHostId: { "host-a": partition(1) } },
+      { epics: { "epic-9": counted(null) }, chats: {} },
+      "host-a",
+      false,
+    );
+
+    expect(merged.epics).toEqual({ "epic-9": counted(null) });
+    expect(merged.byOriginHostId?.["host-a"].epics["epic-9"]).toEqual(
+      counted(null),
+    );
+  });
+
+  it("counts from the cloud alone when the host answers with no origin to attribute it to", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      partition(2),
+      partition(1),
+      null,
+      false,
+    );
+
+    expect(merged.epics).toEqual({ "epic-1": counted(2) });
+    expect(merged.chats).toEqual({ "chat-1": counted(2) });
+  });
+
+  it("ORs the flags across planes in either lane state", () => {
+    const hostLit = {
+      epics: { "epic-1": { ...counted(1), pendingFork: true } },
+      chats: {},
+    };
+    const cloudLit = {
+      epics: { "epic-1": { ...counted(1), unreadFailure: true } },
+      chats: {},
+      byOriginHostId: {
+        "host-a": {
+          epics: { "epic-1": { ...counted(1), unreadFailure: true } },
+          chats: {},
+        },
+      },
+    };
+
+    for (const serving of [true, false]) {
+      const merged = mergeLocalPartitionIntoCloudIndicators(
+        cloudLit,
+        hostLit,
+        "host-a",
+        serving,
+      );
+      expect(merged.epics["epic-1"]).toMatchObject({
+        pendingFork: true,
+        unreadFailure: true,
+        unreadCount: 1,
+      });
+    }
   });
 
   it.each([

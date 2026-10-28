@@ -38,6 +38,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import {
   openCloudNotificationsStream,
+  selectCloudLaneServing,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import {
@@ -130,10 +131,7 @@ function poolCloudLane(): HostNotificationsCloudLane | null {
 }
 
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
-  serving: () => {
-    const state = useCloudNotificationsStore.getState();
-    return state.hasSnapshot && state.connectionState === "connected";
-  },
+  serving: () => selectCloudLaneServing(useCloudNotificationsStore.getState()),
   subscribe: (listener) => useCloudNotificationsStore.subscribe(listener),
 };
 

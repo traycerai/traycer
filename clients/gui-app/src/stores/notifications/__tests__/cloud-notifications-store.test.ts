@@ -122,6 +122,39 @@ function cloudPromptRow(
   };
 }
 
+/** A bot's answer: the unread `done` row that counts toward attention. */
+function cloudBotAnswerRow(
+  entryId: string,
+  createdAt: number,
+): HostNotificationsCloudFeedRowV15 {
+  return {
+    entryId,
+    originHostId: "host-a",
+    coalesceKey: `host.operation.finished:${entryId}`,
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: null,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "bot_thread_verdict",
+        operation: "bot.thread.verdict",
+        title: "Tracy answered",
+        message: "Your question about the release",
+        botId: "bot-1",
+        threadId: "chat-1",
+        replyMessageId: entryId,
+      },
+    },
+    presentation: { epicTitle: null, chatTitle: null },
+  };
+}
+
 class ControlledSession implements IStreamSession {
   private statusChangeHandler: StatusChangeHandler | null = null;
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -291,6 +324,24 @@ describe("cloud notifications store", () => {
     ).toEqual(["failure-a"]);
   });
 
+  it("does not target an unread info row that shares a chat with a failure", () => {
+    const info = cloudRow("info-a", 1, "host-a");
+    const failure = cloudFailureRow("failure-a", 2);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [info, failure],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 1,
+    });
+
+    expect(
+      selectCloudEntityReadTargets(
+        useCloudNotificationsStore.getState(),
+        { epicId: "epic-1", chatId: "chat-1" },
+        null,
+      ),
+    ).toEqual(["failure-a"]);
+  });
+
   it("adopts a newer version from a content-identical snapshot", () => {
     const row = cloudRow("entry-a", 1, "host-a");
     useCloudNotificationsStore.getState().applySnapshot({
@@ -429,6 +480,44 @@ describe("cloud notifications store", () => {
       cloud.rows[cloudNotificationFeedId(failure.entryId)]?.entry.readAt,
     ).toBe(20);
     expect(cloud.summary).toEqual({
+      totalCount: 1,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
+  it("removes an unread bot answer from both optimistic summary counts when marked read", () => {
+    const answer = cloudBotAnswerRow("entry-answer", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [answer],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markReadLocally(answer.entryId, 20);
+
+    const cloud = useCloudNotificationsStore.getState();
+    expect(
+      cloud.rows[cloudNotificationFeedId(answer.entryId)]?.entry.readAt,
+    ).toBe(20);
+    expect(cloud.summary).toEqual({
+      totalCount: 1,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
+  it("removes an unread bot answer from both optimistic summary counts during entity-read fan-out", () => {
+    const answer = cloudBotAnswerRow("entry-answer", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [answer],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().beginEntityRead([answer.entryId], 30);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
       totalCount: 1,
       unreadCount: 0,
       attentionCount: 0,

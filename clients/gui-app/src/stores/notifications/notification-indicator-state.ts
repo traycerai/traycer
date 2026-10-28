@@ -10,6 +10,7 @@ import {
   notificationPayloadBelongsToEntity,
   notificationPayloadBelongsToEpic,
 } from "@/lib/notifications";
+import { countsTowardEntityUnread } from "@/lib/notifications/unread-count";
 import {
   useAppLocalNotificationsStore,
   type AppLocalNotificationsState,
@@ -340,7 +341,7 @@ function collectCloudIndicatorEntry(
   const { entry, originHostId } = row;
   const contribution = mergeOptionalIndicatorFlags(
     indicatorContribution(entry),
-    entry.readAt === null ? UNREAD_ROW_CONTRIBUTION : null,
+    countsTowardEntityUnread(entry) ? UNREAD_ROW_CONTRIBUTION : null,
   );
   const { epicId, chatId } = entry;
   if (epicId !== null && accumulator.wantedEpicIds.has(epicId)) {
@@ -570,73 +571,153 @@ function mergeIndicatorFlags(
 }
 
 /**
- * ORs the host's EXACT local durable-home partition into the cloud partition.
+ * Folds the host's `home: "local"` answer into the cloud partition.
  *
- * This supersedes the pendingFork-only import below, and the reason is the
- * `home: "local"` request selector rather than a change of mind about
- * authority. That helper was written when the host's `indicatorState` answered
- * over its WHOLE SQLite: rows produced on host B never enter host A's database,
- * so folding host A's answer into a cross-host cloud view could neither light
- * nor clear correctly, and only the host-local `pendingFork` bit was safe to
- * take. With `@1.1`'s selector the host answers for its local-homed partition
- * ONLY, and the cloud snapshot is exactly the complement - so the two are
- * disjoint and a per-flag OR (and a sum of the counts) neither drops a row
- * nor double-counts one.
+ * Flags OR. While the cloud lane serves, the host answers an EMPTY local
+ * partition (the cloud feed is the whole feed); while it does not, the host
+ * answers its WHOLE origin, and the GUI still holds the cloud rows it last
+ * received. Either way an OR of booleans neither drops a lit flag nor
+ * invents one, which is why this used to be the whole rule.
+ *
+ * Counts are not booleans: in the fallback the same notification is in both
+ * inputs, and adding them counts it twice. So one plane is authoritative per
+ * origin at any moment, chosen by `cloudLaneServing` (the GUI's own view of
+ * the lane, `selectCloudLaneServing`): while it serves, every origin's count
+ * comes from the cloud rows; while it does not, this host's origin
+ * (`originHostId`) counts from the host's answer and every other origin from
+ * the cloud rows retained for it. With no origin to attribute the host's rows
+ * to, the cloud rows count alone.
  *
  * `byOriginHostId` gets the same treatment for the ACTIVE host's bucket alone:
- * the local partition belongs to that origin and to no other, so merging it
- * into every bucket would let one host's local rows decorate a tab bound to
+ * the host's answer belongs to that origin and to no other, so merging it
+ * into every bucket would let one host's rows decorate a tab bound to
  * another.
  */
 export function mergeLocalPartitionIntoCloudIndicators(
   cloud: SurfaceNotificationIndicators,
   hostLocal: HostNotificationsIndicatorStateResponse,
   originHostId: string | null,
+  cloudLaneServing: boolean,
 ): SurfaceNotificationIndicators {
-  const aggregate = orIndicatorResponses(cloud, hostLocal);
-  if (originHostId === null || cloud.byOriginHostId === undefined) {
+  const scoped =
+    originHostId === null || cloud.byOriginHostId === undefined
+      ? null
+      : (cloud.byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE);
+  const hostCounts = !cloudLaneServing && originHostId !== null;
+  const aggregate = mergePartitions(
+    cloud,
+    hostLocal,
+    hostCounts
+      ? {
+          kind: "host-and-other-origins",
+          cloudOwn: scoped ?? EMPTY_INDICATOR_STATE_RESPONSE,
+        }
+      : CLOUD_COUNTS,
+  );
+  if (originHostId === null || scoped === null) {
     return { ...aggregate, byOriginHostId: cloud.byOriginHostId };
   }
-  const scoped =
-    cloud.byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE;
   return {
     ...aggregate,
     byOriginHostId: {
       ...cloud.byOriginHostId,
-      [originHostId]: orIndicatorResponses(scoped, hostLocal),
+      [originHostId]: mergePartitions(
+        scoped,
+        hostLocal,
+        hostCounts ? HOST_COUNTS : CLOUD_COUNTS,
+      ),
     },
   };
 }
 
-function orIndicatorResponses(
-  base: HostNotificationsIndicatorStateResponse,
-  overlay: HostNotificationsIndicatorStateResponse,
+/**
+ * Where a merged entity's count comes from: the cloud rows alone; the host's
+ * answer alone (a bucket that is this host's origin only); or the host's
+ * answer for this host's origin plus the cloud rows of every other origin
+ * (the cloud count less `cloudOwn`, the cloud's count for this origin).
+ */
+type CountAuthority =
+  | { readonly kind: "cloud" }
+  | { readonly kind: "host" }
+  | {
+      readonly kind: "host-and-other-origins";
+      readonly cloudOwn: HostNotificationsIndicatorStateResponse;
+    };
+
+const CLOUD_COUNTS: CountAuthority = { kind: "cloud" };
+const HOST_COUNTS: CountAuthority = { kind: "host" };
+
+function mergePartitions(
+  cloud: HostNotificationsIndicatorStateResponse,
+  host: HostNotificationsIndicatorStateResponse,
+  counts: CountAuthority,
 ): HostNotificationsIndicatorStateResponse {
   return {
-    epics: orIndicatorRecord(base.epics, overlay.epics),
-    chats: orIndicatorRecord(base.chats, overlay.chats),
+    epics: mergePartitionRecords(
+      cloud.epics,
+      host.epics,
+      counts,
+      counts.kind === "host-and-other-origins" ? counts.cloudOwn.epics : {},
+    ),
+    chats: mergePartitionRecords(
+      cloud.chats,
+      host.chats,
+      counts,
+      counts.kind === "host-and-other-origins" ? counts.cloudOwn.chats : {},
+    ),
   };
 }
 
-/**
- * `Object.hasOwn` rather than an inline `=== undefined`: the wire type is a
- * `z.record`, which TypeScript widens to a TOTAL `Record<string, T>`, so the
- * inline check reads as dead code to the checker while being the only thing
- * standing between a partition that lacks the id and a `.pendingApproval` on
- * `undefined`.
- */
-function orIndicatorRecord(
-  base: HostNotificationsIndicatorStateResponse["epics"],
-  overlay: HostNotificationsIndicatorStateResponse["epics"],
+function mergePartitionRecords(
+  cloud: HostNotificationsIndicatorStateResponse["epics"],
+  host: HostNotificationsIndicatorStateResponse["epics"],
+  counts: CountAuthority,
+  cloudOwn: HostNotificationsIndicatorStateResponse["epics"],
 ): HostNotificationsIndicatorStateResponse["epics"] {
-  const merged = { ...base };
-  for (const [id, state] of Object.entries(overlay)) {
-    merged[id] = mergeIndicatorFlags(
-      Object.hasOwn(merged, id) ? merged[id] : undefined,
-      state,
-    );
+  const merged: HostNotificationsIndicatorStateResponse["epics"] = {};
+  for (const id of new Set([...Object.keys(cloud), ...Object.keys(host)])) {
+    const fromCloud = Object.hasOwn(cloud, id) ? cloud[id] : undefined;
+    const fromHost = Object.hasOwn(host, id) ? host[id] : undefined;
+    const flags =
+      fromHost === undefined
+        ? fromCloud
+        : mergeIndicatorFlags(fromCloud, fromHost);
+    if (flags === undefined) continue;
+    merged[id] = {
+      ...flags,
+      unreadCount: entityUnreadCount(
+        counts,
+        fromCloud,
+        fromHost,
+        Object.hasOwn(cloudOwn, id) ? cloudOwn[id] : undefined,
+      ),
+    };
   }
   return merged;
+}
+
+function entityUnreadCount(
+  counts: CountAuthority,
+  fromCloud: HostNotificationsIndicatorState | undefined,
+  fromHost: HostNotificationsIndicatorState | undefined,
+  cloudOwn: HostNotificationsIndicatorState | undefined,
+): number | null {
+  const hostCount = fromHost === undefined ? null : fromHost.unreadCount;
+  switch (counts.kind) {
+    case "cloud":
+      return fromCloud?.unreadCount ?? 0;
+    case "host":
+      return hostCount;
+    case "host-and-other-origins": {
+      // Every other origin's rows, as the cloud holds them; `null` where the
+      // cloud holds nothing for the entity, so an uncounting host stays unknown.
+      const otherOrigins =
+        fromCloud === undefined
+          ? null
+          : (fromCloud.unreadCount ?? 0) - (cloudOwn?.unreadCount ?? 0);
+      return addUnreadCounts(otherOrigins, hostCount);
+    }
+  }
 }
 
 /**

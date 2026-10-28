@@ -18,3 +18,20 @@ export function labelWithUnreadCount(
     ? label
     : `${label}, ${formatUnreadCount(unreadCount)} unread`;
 }
+
+/**
+ * Whether a row counts toward its entity's unread count: unread, and of a
+ * severity that reading the entity marks, so looking at it always clears the
+ * count. An informational row is neither marked nor counted.
+ */
+export function countsTowardEntityUnread(entry: {
+  readonly severity: string;
+  readonly readAt: number | null;
+}): boolean {
+  return (
+    entry.readAt === null &&
+    (entry.severity === "needs_action" ||
+      entry.severity === "done" ||
+      entry.severity === "failure")
+  );
+}

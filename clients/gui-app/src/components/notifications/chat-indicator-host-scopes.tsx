@@ -8,7 +8,10 @@ import {
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { ChatIndicatorHostScope } from "@/lib/notifications/chat-indicator-scopes";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  selectCloudLaneServing,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   mergeLocalPartitionIntoCloudIndicators,
@@ -143,11 +146,11 @@ function ChatIndicatorHostLayers(props: {
  * One host's answer, folded into whatever the layers above already established.
  *
  * The two feed modes fold differently, and cloud mode's fold follows what was
- * ASKED: the layer requests the host's `home: local` partition, which is
- * disjoint from the cloud snapshot the base holds, so the whole partition ORs
- * in - the reasoning `mergeLocalPartitionIntoCloudIndicators` documents. (A
- * whole-origin answer would only permit the pendingFork-only import.) In
- * local mode the host response IS the answer, so it merges whole.
+ * ASKED: the layer requests the host's `home: local` partition, whose flags OR
+ * into the cloud snapshot the base holds and whose counts stand for this
+ * host's origin only while the cloud lane does not serve - the reasoning
+ * `mergeLocalPartitionIntoCloudIndicators` documents. In local mode the host
+ * response IS the answer, so it merges whole.
  */
 function ChatIndicatorHostLayer(props: {
   readonly hostId: string;
@@ -168,6 +171,7 @@ function ChatIndicatorHostLayer(props: {
     enabled: props.chatIds.length > 0 && !(props.isCloud && feedModeSettling),
   });
   const inherited = useContext(NotificationIndicatorsContext);
+  const cloudLaneServing = useCloudNotificationsStore(selectCloudLaneServing);
   const merged: SurfaceNotificationIndicators = useMemo(
     () =>
       props.isCloud
@@ -175,6 +179,7 @@ function ChatIndicatorHostLayer(props: {
             inherited,
             host.data,
             props.hostId,
+            cloudLaneServing,
           )
         : {
             ...mergeIndicatorStateResponses(inherited, host.data),
@@ -189,7 +194,7 @@ function ChatIndicatorHostLayer(props: {
               ),
             },
           },
-    [props.isCloud, inherited, host.data, props.hostId],
+    [props.isCloud, inherited, host.data, props.hostId, cloudLaneServing],
   );
   return (
     <NotificationIndicatorsProvider indicators={merged}>
