@@ -91,6 +91,7 @@ import {
   withoutQueueEditRecord,
   type QueueEditEvidence,
   type QueueEditFold,
+  type QueueEditFollowUpReplacement,
   type QueueEditIntent,
   type QueueEditRecord,
   type QueueEditRecords,
@@ -2197,11 +2198,13 @@ export interface ChatSessionState {
   ) => string | null;
   /**
    * Removes and returns the steer refusal named, or `null` when it is no
-   * longer held. Its tile calls it once the person answers the dialog, which
-   * also settles the steer of the queue edit it belonged to.
+   * longer held. Its tile calls it once the person answers the dialog, after
+   * dispatching the frame the answer sent in the steer's place (`null` when it
+   * sent none), and the queue edit the steer belonged to follows that frame.
    */
   takeSteerRestartRefusal: (
     clientActionId: string,
+    replacement: QueueEditFollowUpReplacement | null,
   ) => SteerRestartRefusal | null;
   /** Release a closed tile's pending and held steers without dropping their payloads. */
   releaseSteerRestartInitiator: (initiatorId: string) => void;
@@ -11741,7 +11744,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           initiatorId: origin.initiatorId,
           editSettings: origin.editSettings,
         }),
-      takeSteerRestartRefusal: (clientActionId) => {
+      takeSteerRestartRefusal: (clientActionId, replacement) => {
         const refusals = get().steerRestartRefusals;
         const refusal =
           refusals.find((held) => held.clientActionId === clientActionId) ??
@@ -11752,6 +11755,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueEditRecords: answerQueueEditAwaitingConfirmation(
             state.queueEditRecords,
             clientActionId,
+            replacement,
           ),
         }));
         return refusal;

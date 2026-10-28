@@ -8645,15 +8645,21 @@ describe("createChatSessionStore", () => {
       },
     ]);
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal("other-action"),
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal("other-action", null),
     ).toBeNull();
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal(clientActionId, null),
     ).toMatchObject({ queueItemId: "queue-1" });
     // Taken once, when the sending tile's dialog is answered.
     expect(harness.handle.store.getState().steerRestartRefusals).toEqual([]);
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal(clientActionId, null),
     ).toBeNull();
   });
 
@@ -8693,10 +8699,10 @@ describe("createChatSessionStore", () => {
     }
 
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal(first),
+      harness.handle.store.getState().takeSteerRestartRefusal(first, null),
     ).toMatchObject({ queueItemId: "queue-1", initiatorId: "tile-1" });
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal(second),
+      harness.handle.store.getState().takeSteerRestartRefusal(second, null),
     ).toMatchObject({ queueItemId: "queue-2", initiatorId: "tile-2" });
     expect(harness.handle.store.getState().errorNotices).toEqual([]);
   });

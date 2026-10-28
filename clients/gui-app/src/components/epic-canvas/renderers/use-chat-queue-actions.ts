@@ -26,6 +26,7 @@ import {
   releaseComposerContentImageRoots,
 } from "@/lib/composer/composer-content-image-roots";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
+import type { QueueEditFollowUpReplacement } from "@/stores/chats/queue-edit-custody";
 import type { ChatTileUiAction } from "./chat-tile-session-state";
 
 const SETTINGS_RESTART_REASONS: ReadonlyArray<ChatQueueSteerRestartReason> = [
@@ -459,18 +460,22 @@ export function useChatQueueActions(
   );
 
   // Answering the dialog settles whichever question it showed: the local
-  // settings one, or the host's refusal, which leaves the store with it.
-  const settleSteerRestart = useCallback((): void => {
-    if (pendingSteerRestart !== null) {
-      setPendingSteerRestart(null);
-      return;
-    }
-    if (ownRefusal !== null) {
-      handle.store
-        .getState()
-        .takeSteerRestartRefusal(ownRefusal.clientActionId);
-    }
-  }, [handle.store, ownRefusal, pendingSteerRestart]);
+  // settings one, or the host's refusal, which leaves the store with it. A
+  // queue edit's refused steer hands its custody to the frame the answer sent.
+  const settleSteerRestart = useCallback(
+    (replacement: QueueEditFollowUpReplacement | null): void => {
+      if (pendingSteerRestart !== null) {
+        setPendingSteerRestart(null);
+        return;
+      }
+      if (ownRefusal !== null) {
+        handle.store
+          .getState()
+          .takeSteerRestartRefusal(ownRefusal.clientActionId, replacement);
+      }
+    },
+    [handle.store, ownRefusal, pendingSteerRestart],
+  );
 
   const confirmSteerRestart = useCallback((): void => {
     if (steerRestartPrompt === null) return;
@@ -490,7 +495,7 @@ export function useChatQueueActions(
       { initiatorId: tileInstanceId, editSettings },
     );
     if (actionId === null) return;
-    settleSteerRestart();
+    settleSteerRestart({ clientActionId: actionId, intent: "steer" });
   }, [
     chatActions,
     handle.store,
@@ -502,9 +507,10 @@ export function useChatQueueActions(
   const handleSteerRestartOpenChange = useCallback(
     (open: boolean): void => {
       if (open) return;
-      // Declining a queue edit's steer keeps the rest of the edit: its text
-      // was saved, and the settings it asked for rode only on the steer. A
-      // save that cannot go out leaves the question open, as Confirm does.
+      // Declining a queue edit's steer keeps the rest of the edit: the
+      // settings it asked for rode only on the steer, so they go as a save of
+      // their own. A save that cannot go out leaves the question open, as
+      // Confirm does.
       if (
         steerRestartPrompt !== null &&
         steerRestartPrompt.editSettings !== null
@@ -514,8 +520,10 @@ export function useChatQueueActions(
           steerRestartPrompt.editSettings,
         );
         if (saveId === null) return;
+        settleSteerRestart({ clientActionId: saveId, intent: "save" });
+        return;
       }
-      settleSteerRestart();
+      settleSteerRestart(null);
     },
     [chatActions, settleSteerRestart, steerRestartPrompt],
   );

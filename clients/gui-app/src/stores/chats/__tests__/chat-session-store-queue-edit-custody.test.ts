@@ -1075,9 +1075,11 @@ describe("an edit refused while its steer waits for the person to confirm ending
     expect(followUpAloneNotices(harness)).toEqual([]);
     expect(state.failedSendRestoration?.content).toEqual(EDITED);
     expect(state.queueEditRecords).toEqual({});
-    expect(state.takeSteerRestartRefusal(followUpActionId)).toMatchObject({
-      queueItemId: QUEUE_ITEM_ID,
-    });
+    expect(state.takeSteerRestartRefusal(followUpActionId, null)).toMatchObject(
+      {
+        queueItemId: QUEUE_ITEM_ID,
+      },
+    );
   });
 
   it("does not say the steer went ahead when the steer's refusal comes first", () => {
@@ -1141,7 +1143,9 @@ describe("a saved edit whose steer waits for the person to confirm ending the tu
     expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
 
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal(followUpActionId),
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal(followUpActionId, null),
     ).toMatchObject({ queueItemId: QUEUE_ITEM_ID });
 
     expect(harness.handle.store.getState().queueEditRecords).toEqual({});
@@ -1189,7 +1193,9 @@ describe("a saved edit whose steer waits for the person to confirm ending the tu
 
     refuseSteerForSettings(harness, followUpActionId);
     expect(
-      harness.handle.store.getState().takeSteerRestartRefusal(followUpActionId),
+      harness.handle.store
+        .getState()
+        .takeSteerRestartRefusal(followUpActionId, null),
     ).toMatchObject({ queueItemId: QUEUE_ITEM_ID });
 
     // The text is still unaccounted for: the record and the chat's hold stay.
@@ -1219,7 +1225,9 @@ describe("a saved edit whose steer waits for the person to confirm ending the tu
     );
 
     refuseSteerForSettings(harness, followUpActionId);
-    harness.handle.store.getState().takeSteerRestartRefusal(followUpActionId);
+    harness.handle.store
+      .getState()
+      .takeSteerRestartRefusal(followUpActionId, null);
     ack(harness, {
       clientActionId: editActionId,
       action: "queueEdit",
@@ -1231,6 +1239,168 @@ describe("a saved edit whose steer waits for the person to confirm ending the tu
     expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
     expect(state.failedSendRestoration).toBeNull();
     expect(noticesTellingTheSteerOrPartialOutcome(harness)).toEqual([]);
+  });
+
+  /**
+   * The dialog's answer is itself a frame: Cancel with other settings saves
+   * them (`queueSettingsUpdate`), Restart sends the steer again confirmed. The
+   * record follows that frame until its own ack or a reconnect sweep.
+   */
+  function refusedSteerWithTextAccepted(): EditFrames & {
+    readonly live: Harness;
+  } {
+    const harnessInUse = openWithQueuedRow();
+    harness = harnessInUse;
+    const frames = submitEdit(harnessInUse, "steer", OTHER_SETTINGS, []);
+    ack(harnessInUse, {
+      clientActionId: frames.editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    refuseSteerForSettings(harnessInUse, frames.followUpActionId);
+    return { ...frames, live: harnessInUse };
+  }
+
+  function cancelDialogSavingSettings(
+    target: Harness,
+    refusedActionId: string,
+  ): string {
+    const saveId = target.handle.store
+      .getState()
+      .queueSettingsUpdate(QUEUE_ITEM_ID, OTHER_SETTINGS);
+    if (saveId === null) throw new Error("expected a queueSettingsUpdate");
+    target.handle.store.getState().takeSteerRestartRefusal(refusedActionId, {
+      clientActionId: saveId,
+      intent: "save",
+    });
+    return saveId;
+  }
+
+  function restartDialogSteering(
+    target: Harness,
+    refusedActionId: string,
+  ): string {
+    const steerId = target.handle.store
+      .getState()
+      .queueSteerNow(QUEUE_ITEM_ID, OTHER_SETTINGS, true, {
+        initiatorId: "tile-1",
+        editSettings: OTHER_SETTINGS,
+      });
+    if (steerId === null) throw new Error("expected a queueSteerNow");
+    target.handle.store.getState().takeSteerRestartRefusal(refusedActionId, {
+      clientActionId: steerId,
+      intent: "steer",
+    });
+    return steerId;
+  }
+
+  function noticesFor(target: Harness, clientActionId: string) {
+    return target.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.clientActionId === clientActionId,
+      );
+  }
+
+  it("keeps the record on the settings save the Cancel sent, and says so when a reconnect sweeps it", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const saveId = cancelDialogSavingSettings(live, followUpActionId);
+
+    expect(live.handle.store.getState().queueEditRecords).not.toEqual({});
+    expect(chatCapHasActiveWork(live.handle, null)).toBe(true);
+
+    reconnectWithItems(live, [queuedRow(EDITED)]);
+
+    const stated = noticesFor(live, saveId);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not confirmed after reconnecting",
+    );
+    expect(stated[0].message).toContain("You asked for");
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+
+  it("reports the settings save the Cancel sent as not applied when the host refuses it", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const saveId = cancelDialogSavingSettings(live, followUpActionId);
+
+    live.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: saveId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+      reason: "Queue item not found.",
+      code: "QUEUE_ITEM_NOT_FOUND",
+      backgroundStopTaskIds: [],
+      token: null,
+    });
+
+    const stated = noticesFor(live, saveId);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not applied (Queue item not found)",
+    );
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+
+  it("releases the chat quietly when the settings save the Cancel sent is accepted", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const saveId = cancelDialogSavingSettings(live, followUpActionId);
+
+    ack(live, {
+      clientActionId: saveId,
+      action: "queueSettingsUpdate",
+      status: "accepted",
+    });
+
+    const state = live.handle.store.getState();
+    expect(state.queueEditRecords).toEqual({});
+    expect(chatCapHasActiveWork(live.handle, null)).toBe(false);
+    expect(noticesTellingTheSteerOrPartialOutcome(live)).toEqual([]);
+    expect(state.failedSendRestoration).toBeNull();
+  });
+
+  it("keeps the record on the confirmed steer Restart sent, and says so when a reconnect sweeps it", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const steerId = restartDialogSteering(live, followUpActionId);
+
+    expect(live.handle.store.getState().queueEditRecords).not.toEqual({});
+    expect(chatCapHasActiveWork(live.handle, null)).toBe(true);
+
+    reconnectWithItems(live, [queuedRow(EDITED)]);
+
+    const stated = noticesFor(live, steerId);
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toContain(
+      "Text saved; settings/steering were not confirmed after reconnecting",
+    );
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
+  });
+
+  it("asks again when the confirmed steer is refused on a turn change, and settles when that dialog is cancelled", () => {
+    const { followUpActionId, live } = refusedSteerWithTextAccepted();
+    const steerId = restartDialogSteering(live, followUpActionId);
+
+    refuseSteerForSettings(live, steerId);
+
+    const held = live.handle.store.getState();
+    const record = Object.values(held.queueEditRecords)[0];
+    expect(record).toMatchObject({
+      followUp: "confirming",
+      followUpActionId: steerId,
+    });
+    expect(
+      held.steerRestartRefusals.filter(
+        (refusal) => refusal.clientActionId === steerId,
+      ),
+    ).toHaveLength(1);
+
+    live.handle.store.getState().takeSteerRestartRefusal(steerId, null);
+
+    expect(live.handle.store.getState().queueEditRecords).toEqual({});
   });
 });
 

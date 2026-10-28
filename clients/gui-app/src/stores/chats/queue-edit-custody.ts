@@ -35,9 +35,9 @@ export type QueueEditIntent = "save" | "steer";
  * answered ({@link answerQueueEditAwaitingConfirmation}): until then the
  * settings it asked for ride on nothing the host has seen.
  *
- * `answered` is that steer once the dialog is answered. Its Restart or Cancel
- * goes out as a frame of its own, so this one is settled and, like
- * `confirming`, tells nothing - but a text still unanswered keeps the record.
+ * `answered` is that steer once the dialog is answered with no frame sent in
+ * its place (a Cancel with no settings to save). Like `confirming` it tells
+ * nothing, but a text still unanswered keeps the record.
  */
 export type QueueEditFrameOutcome =
   | "pending"
@@ -459,16 +459,30 @@ export function foldQueueEditSteerAwaitingConfirmation(
 }
 
 /**
- * Settle the steer the confirm dialog has just answered: the Restart re-sends
- * the steer and the Cancel saves its settings, each as a frame of its own. A
- * record whose text is already saved is retired; one whose text is still
- * unanswered stays in custody, since the refusal can arrive first and a later
- * refusal of the text must still hand it back. Unchanged for an action id that
- * is no record's refused steer.
+ * The frame a confirm dialog's answer sent in place of the steer it asked
+ * about: Restart's confirmed steer, or Cancel's save of the edit's settings.
+ */
+export interface QueueEditFollowUpReplacement {
+  readonly clientActionId: string;
+  readonly intent: QueueEditIntent;
+}
+
+/**
+ * Settle the steer the confirm dialog has just answered.
+ *
+ * With a replacement frame, the record follows it as its second frame, pending
+ * until that frame's own ack or a reconnect accounts for it: what the
+ * submission asked for now rides on that frame alone. With none (a Cancel with
+ * no settings to save), the steer is `answered`; a record whose text is
+ * already saved is retired, and one whose text is still unanswered stays in
+ * custody, since the refusal can arrive first and a later refusal of the text
+ * must still hand it back. Unchanged for an action id that is no record's
+ * refused steer.
  */
 export function answerQueueEditAwaitingConfirmation(
   records: QueueEditRecords,
   followUpActionId: string,
+  replacement: QueueEditFollowUpReplacement | null,
 ): QueueEditRecords {
   const record = queueEditRecordForAction(records, followUpActionId);
   if (
@@ -477,6 +491,15 @@ export function answerQueueEditAwaitingConfirmation(
     record.followUp !== "confirming"
   ) {
     return records;
+  }
+  if (replacement !== null) {
+    return withQueueEditRecord(records, {
+      ...record,
+      intent: replacement.intent,
+      followUpActionId: replacement.clientActionId,
+      followUp: "pending",
+      followUpReason: null,
+    });
   }
   return record.edit === "accepted"
     ? withoutQueueEditRecord(records, record.editActionId)

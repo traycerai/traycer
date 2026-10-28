@@ -901,6 +901,85 @@ describe("answering a held steer refusal", () => {
     ]);
     expect(handle.store.getState().steerRestartRefusals).toEqual([]);
   });
+
+  /** A queue edit asking for other settings, text saved, steer refused, dialog open. */
+  function openDialogOverRefusedEditSteer() {
+    const { handle, callbacks, sent } = openRunningChat();
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+    ack(callbacks, {
+      clientActionId: editId,
+      action: "queueEdit",
+      refusedUnconfirmed: false,
+    });
+    ack(callbacks, {
+      clientActionId: steerId,
+      action: "queueSteerNow",
+      refusedUnconfirmed: true,
+    });
+    const tile = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(handle, "tile-a", () => null),
+        chatActions: fakeChatActions({
+          queueSettingsUpdate: (queueItemId, settings) =>
+            handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+          queueSteerNow: (queueItemId, settings, confirmed, origin) =>
+            handle.store
+              .getState()
+              .queueSteerNow(queueItemId, settings, confirmed, origin),
+        }),
+      }),
+    );
+    expect(tile.result.current.steerRestart.open).toBe(true);
+    return { handle, sent, tile, editId };
+  }
+
+  it("follows the settings save the Cancel sent, not the declined steer", () => {
+    const { handle, sent, tile, editId } = openDialogOverRefusedEditSteer();
+
+    act(() => {
+      tile.result.current.steerRestart.onOpenChange(false);
+    });
+
+    const saveFrame = sent.at(-1);
+    if (saveFrame?.kind !== "queueSettingsUpdate") {
+      throw new Error("Expected the Cancel to send queueSettingsUpdate");
+    }
+    expect(handle.store.getState().queueEditRecords[editId]).toMatchObject({
+      followUpActionId: saveFrame.clientActionId,
+      intent: "save",
+      followUp: "pending",
+    });
+  });
+
+  it("follows the confirmed steer the Restart sent, not the declined one", () => {
+    const { handle, sent, tile, editId } = openDialogOverRefusedEditSteer();
+
+    act(() => {
+      tile.result.current.steerRestart.onRestart();
+    });
+
+    const steerFrame = sent.at(-1);
+    if (steerFrame?.kind !== "queueSteerNow") {
+      throw new Error("Expected the Restart to send queueSteerNow");
+    }
+    expect(handle.store.getState().queueEditRecords[editId]).toMatchObject({
+      followUpActionId: steerFrame.clientActionId,
+      intent: "steer",
+      followUp: "pending",
+    });
+  });
 });
 
 describe("steering a queued prompt from the row", () => {
