@@ -21,7 +21,12 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 const PAGE_ITEM_KINDS: Readonly<
   Partial<Record<SettingsSectionId, ReadonlySet<string>>>
 > = {
-  providers: new Set(["managed_profile", "env_override", "pack_policy"]),
+  providers: new Set([
+    "managed_profile",
+    "env_override",
+    "pack_policy",
+    "traycer_inference",
+  ]),
   fallback: new Set(["fallback_policy"]),
   shell: new Set(["variable", "shell"]),
   agents: new Set(["agent_selection_guide", "agent_definition"]),
@@ -103,6 +108,7 @@ const PAGE_NAMED_KINDS: Readonly<Partial<Record<string, string>>> = {
   browser_agent_access: "Browser agent access",
   auto_policy: "Permissions",
   sandbox_defaults: "Sandbox defaults",
+  traycer_inference: "Traycer Inference",
 };
 
 /**

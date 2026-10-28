@@ -359,3 +359,75 @@ describe("TeamProviders items", () => {
     }
   });
 });
+
+describe("TeamProviders: Traycer Inference", () => {
+  const traycerInference = (enabled: boolean, revision: number) =>
+    configurationItem({
+      kind: "traycer_inference",
+      key: "traycer",
+      value: { enabled },
+      revision,
+    });
+
+  async function openTraycer(): Promise<void> {
+    const rail = await screen.findByRole("navigation", { name: "Providers" });
+    await userEvent.click(
+      within(rail).getByRole("button", { name: /Traycer Inference/ }),
+    );
+  }
+
+  it("turns Traycer Inference on for the whole team from an unset item", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => []),
+      "environment.configuration.items": () => ({
+        items: [],
+        servedKinds: ["managed_profile", "traycer_inference"],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 1,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await openTraycer();
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Traycer Inference",
+    });
+    expect(toggle).toHaveProperty("ariaChecked", "false");
+    await userEvent.click(toggle);
+
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "traycer_inference",
+        key: "traycer",
+        os: null,
+        value: { enabled: true },
+        revision: null,
+      },
+    ]);
+  });
+
+  it("gives a viewer the team's On with no switch", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
+      ...handlers(() => []),
+      "environment.configuration.items": () => ({
+        items: [traycerInference(true, 3)],
+        servedKinds: ["traycer_inference"],
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await openTraycer();
+
+    const heading = await screen.findByRole("heading", {
+      name: "Traycer Inference",
+    });
+    const card = heading.closest("section");
+    if (card === null) throw new Error("Traycer Inference card not found");
+    expect(within(card).getByText("On")).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Traycer Inference" })).toBe(
+      null,
+    );
+  });
+});

@@ -95,7 +95,16 @@ export type EnvironmentConfigurationItem = z.infer<
 >;
 
 export const environmentConfigurationItemsResponseSchema = lazySchema(() =>
-  z.object({ items: z.array(environmentConfigurationItemSchema) }),
+  z.object({
+    items: z.array(environmentConfigurationItemSchema),
+    /**
+     * The kinds the cloud answered for, every one of them read whole: a kind
+     * absent here may hold rows the serving tier did not read (a tier or a
+     * cloud older than the kind), so its items cannot be read as none.
+     * Absent from a tier older than the field.
+     */
+    servedKinds: z.array(environmentItemKindSchema).optional(),
+  }),
 );
 export type EnvironmentConfigurationItemsResponse = z.infer<
   typeof environmentConfigurationItemsResponseSchema

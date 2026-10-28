@@ -22,6 +22,7 @@ const ROOM_KINDS = new Set(["skill", "agent_selection_guide"]);
 const KIND_PAGE: Readonly<Record<string, RetrospectivePageId>> = {
   managed_profile: "providers",
   env_override: "providers",
+  traycer_inference: "providers",
   variable: "shell",
   shell: "shell",
   mcp_server: "mcp-servers",

@@ -38,6 +38,7 @@ import { TeamProfileItem, TeamPackItem } from "./team-provider-items";
 import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { TeamPlans } from "./team-plans";
+import { TeamTraycerInference } from "./team-traycer-inference";
 import { TeamProviderKeys } from "./team-provider-keys";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
@@ -187,6 +188,14 @@ export function TeamProviders(): ReactNode {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
+                {providerId === "traycer" ? (
+                  <TeamTraycerInference
+                    teamName={teamName}
+                    onOutcome={(result) =>
+                      setIssue(configurationWriteIssue(result))
+                    }
+                  />
+                ) : null}
                 <TeamPlans
                   providerId={providerId}
                   adminNames={members.adminNames}

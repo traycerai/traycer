@@ -51,6 +51,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "member",
   "secret",
   "sandbox_defaults",
+  "traycer_inference",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),
