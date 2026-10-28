@@ -60,7 +60,6 @@ import {
   selectHostNotificationUnreadRecentHasLoadedOnce,
   useHostNotificationById,
   useHostNotificationIds,
-  useHostNotificationUnreadCount,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import {
@@ -99,6 +98,7 @@ import {
   type HostNotificationsCloudFeedRowV16,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
+  type HostNotificationsSummary,
   HOST_NOTIFICATIONS_HOME_ORDER,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
@@ -722,15 +722,40 @@ export function useMergedNotificationRow(
   });
 }
 
+/**
+ * The host summary less the held rows the merged list drops: the one adjusted
+ * host summary behind the bell, the unread count and the Mark-all gate. A
+ * host whose protocol hides those kinds already leaves them out of its
+ * summary, so nothing is subtracted there; this is the fallback for an older
+ * host.
+ */
+function useShownHostNotificationSummary(): HostNotificationsSummary | null {
+  const rawHostSummary = useHostNotificationsStore(
+    selectHostNotificationSummary,
+  );
+  const hostById = useHostNotificationsStore((state) => state.byId);
+  return useMemo(() => {
+    if (rawHostSummary === null) return null;
+    const dropped = droppedHostSummaryContribution(hostById);
+    return {
+      ...rawHostSummary,
+      unreadCount: Math.max(0, rawHostSummary.unreadCount - dropped.unread),
+      attentionCount: Math.max(
+        0,
+        rawHostSummary.attentionCount - dropped.attention,
+      ),
+    };
+  }, [rawHostSummary, hostById]);
+}
+
+/** The host plane's unread count as the merged list shows it. */
+export function useShownHostNotificationUnreadCount(): number {
+  return useShownHostNotificationSummary()?.unreadCount ?? 0;
+}
+
 export function useMergedNotificationUnreadCount(): number {
   const feedMode = useNotificationFeedMode();
-  const rawHostUnread = useHostNotificationUnreadCount();
-  const hostById = useHostNotificationsStore((state) => state.byId);
-  // The host summary counts held rows the merged list drops.
-  const hostUnread = Math.max(
-    0,
-    rawHostUnread - droppedHostSummaryContribution(hostById).unread,
-  );
+  const hostUnread = useShownHostNotificationUnreadCount();
   const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
@@ -780,24 +805,8 @@ export type NotificationBellState =
  */
 export function useNotificationBellState(): NotificationBellState {
   const feedMode = useNotificationFeedMode();
-  const rawHostSummary = useHostNotificationsStore(
-    selectHostNotificationSummary,
-  );
-  const hostById = useHostNotificationsStore((state) => state.byId);
-  // The host summary counts held rows the merged list drops; the cloud
-  // store's summary already leaves them out.
-  const hostSummary = useMemo(() => {
-    if (rawHostSummary === null) return null;
-    const dropped = droppedHostSummaryContribution(hostById);
-    return {
-      ...rawHostSummary,
-      unreadCount: Math.max(0, rawHostSummary.unreadCount - dropped.unread),
-      attentionCount: Math.max(
-        0,
-        rawHostSummary.attentionCount - dropped.attention,
-      ),
-    };
-  }, [rawHostSummary, hostById]);
+  // The cloud store's summary already leaves the dropped kinds out.
+  const hostSummary = useShownHostNotificationSummary();
   // App-local rows are always severity "failure" (`rowFromAppLocalEntry`
   // hardcodes it), so the app-local unread count already IS its
   // unread-failure count - no extra filter needed to fold it into attention.

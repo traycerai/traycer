@@ -1,16 +1,19 @@
 import {
   isBotThreadVerdictNotification,
+  RETIRED_HOST_NOTIFICATION_KINDS,
   type HostNotificationKind,
 } from "@traycer/protocol/host/notifications/contracts";
 
 /**
  * The notification center carries agent states only. Sandbox state and
  * settings delivery are read on the Sandboxes page, the setup line and
- * Details, so a row of these kinds that a host or the feed still holds is
- * dropped wherever rows enter the merged list.
+ * Details. A host on this protocol already leaves the retired kinds out; a
+ * row of them that an older host or the cloud feed still holds is dropped
+ * wherever rows enter the merged list.
  */
-const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
-  new Set<HostNotificationKind>(["sandbox.notice", "environment.apply.failed"]);
+const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
+  RETIRED_HOST_NOTIFICATION_KINDS,
+);
 
 /**
  * Whether a feed row is one the notification center no longer shows. A cloud

@@ -830,17 +830,28 @@ export function streamCarriesChannelEmissionFrame(
 }
 
 /**
- * The complement of {@link visibleHostNotificationKinds}. Read paths filter on
- * this rather than on the visible set so a fully-capable caller produces an
- * EMPTY exclusion - and therefore byte-identical SQL to before this projection
- * existed, which is what keeps the attention/recent partial indexes selected.
+ * Kinds no notification surface shows any more: the server no longer writes
+ * them, and a read leaves out any row a store still holds. Released contracts
+ * already exclude both, so no released caller's exclusion changes.
+ */
+export const RETIRED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
+  ["environment.apply.failed", "sandbox.notice"];
+
+/**
+ * The complement of {@link visibleHostNotificationKinds}, plus the
+ * {@link RETIRED_HOST_NOTIFICATION_KINDS} at every version. Read paths filter
+ * on this rather than on the visible set, so the retired kinds leave pages,
+ * cursors and summaries alike.
  */
 export function hiddenHostNotificationKinds(
   surface: HostNotificationsSurface,
   schemaVersion: { readonly major: number; readonly minor: number },
 ): readonly HostNotificationKind[] {
   const visible = new Set(visibleHostNotificationKinds(surface, schemaVersion));
-  return ALL_HOST_NOTIFICATION_KINDS.filter((kind) => !visible.has(kind));
+  return ALL_HOST_NOTIFICATION_KINDS.filter(
+    (kind) =>
+      !visible.has(kind) || RETIRED_HOST_NOTIFICATION_KINDS.includes(kind),
+  );
 }
 
 export const hostNotificationCursorSchemaV10 = lazySchema(() =>
