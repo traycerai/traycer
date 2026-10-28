@@ -721,7 +721,7 @@ describe("sandbox row operations", () => {
       const history = await screen.findByRole("region", { name: "History" });
       expect(history.textContent).toContain(sentence);
       expect(history.textContent).toContain(
-        "It's in use (an agent turn, a running shell or an open tab), so it stays awake.",
+        "It's in use (an agent turn or a running shell), so it stays awake.",
       );
       expect(history.textContent).toContain("Failure code: sandbox_busy");
       expect(history.textContent).toContain(
