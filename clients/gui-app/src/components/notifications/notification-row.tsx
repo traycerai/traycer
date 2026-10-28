@@ -30,7 +30,6 @@ import {
 } from "@traycer/protocol/host/notifications/host-notifications";
 import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
 import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
-import { SandboxNoticeActions } from "@/components/notifications/sandbox-notice-actions";
 import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -42,10 +41,6 @@ import {
 import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
-import {
-  useSandboxSettingsNoticeTitle,
-  type SandboxApplyFailedDetail,
-} from "@/hooks/sandboxes/use-sandbox-settings-notice";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import {
@@ -60,9 +55,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
-  sandboxIdOfNotificationRow,
   useMergedNotificationRow,
-  useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
 import {
   type NotificationEvent,
@@ -198,7 +191,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     hasLocalHost: runnerHost?.hasLocalHost ?? false,
     localHostId: localHost?.hostId ?? null,
     body: row.body,
-    hasPayload: rowHasDestination(row),
+    hasPayload: row.payload !== null,
   });
   const isRead = row.readAt !== null;
   const originUnavailability = originRefusal({
@@ -327,8 +320,8 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
 /**
  * Extra content sits UNDER the row's main area and never inside it, because
  * that area is one button when the row is navigable and the extra controls
- * are buttons of their own. Secrets (grant / export), P2's five
- * environment rows and the sandbox notices share this wrapper.
+ * are buttons of their own. Secrets (grant / export) and P2's environment
+ * rows share this wrapper.
  *
  * Every other row gets its main area back untouched, with no wrapper.
  */
@@ -339,16 +332,10 @@ function NotificationRowWithSecrets(props: {
 }): ReactNode {
   const secrets = props.row.secrets ?? null;
   const environmentDetail = props.row.environmentDetail ?? null;
-  const sandboxNotice = props.row.sandboxNotice ?? null;
   const hooksRemoved =
     props.row.hostKind === "notification.hooks.removed" &&
     props.row.payload !== null;
-  if (
-    secrets === null &&
-    environmentDetail === null &&
-    sandboxNotice === null &&
-    !hooksRemoved
-  )
+  if (secrets === null && environmentDetail === null && !hooksRemoved)
     return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -372,47 +359,9 @@ function NotificationRowWithSecrets(props: {
         resolved={props.row.resolvedAt !== null}
       />
       {environmentDetail === null ? null : (
-        <EnvironmentNoticeExtra row={props.row} detail={environmentDetail} />
-      )}
-      {sandboxNotice === null ? null : (
-        <SandboxNoticeExtra
-          row={props.row}
-          notice={sandboxNotice}
-          onActivate={props.onActivate}
-        />
+        <EnvironmentNotificationExtra detail={environmentDetail} />
       )}
     </div>
-  );
-}
-
-function EnvironmentNoticeExtra(props: {
-  readonly row: MergedNotificationRow;
-  readonly detail: NonNullable<MergedNotificationRow["environmentDetail"]>;
-}): ReactNode {
-  const actions = useMergedNotificationsActions();
-  return (
-    <EnvironmentNotificationExtra
-      detail={props.detail}
-      onSettingsApplied={() => actions.retireNotice(props.row)}
-    />
-  );
-}
-
-/** Details opens the row as activating it does; Dismiss clears it. */
-function SandboxNoticeExtra(props: {
-  readonly row: MergedNotificationRow;
-  readonly notice: NonNullable<MergedNotificationRow["sandboxNotice"]>;
-  readonly onActivate: (row: MergedNotificationRow) => void;
-}): ReactNode {
-  const actions = useMergedNotificationsActions();
-  return (
-    <SandboxNoticeActions
-      notice={props.notice}
-      onDetails={() => props.onActivate(props.row)}
-      onDismiss={() => actions.clear(props.row)}
-      active={props.row.resolvedAt === null}
-      onExtended={() => actions.retireNotice(props.row)}
-    />
   );
 }
 
@@ -428,14 +377,6 @@ function NotificationSecretsExtra(props: {
     );
   }
   return <SecretExportNoticeLine detail={secrets} />;
-}
-
-/**
- * Whether activating the row goes somewhere: its payload, or for a sandbox
- * push (which has none) the Sandboxes row its key names.
- */
-function rowHasDestination(row: MergedNotificationRow): boolean {
-  return row.payload !== null || sandboxIdOfNotificationRow(row) !== null;
 }
 
 function resolvePackRowPresentation(options: {
@@ -483,23 +424,13 @@ function NotificationRowMain(props: {
   readonly remoteHostLabel: string | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
 }): ReactNode {
-  const detail = props.row.environmentDetail ?? null;
-  const body =
-    detail?.kind === "environment_apply_failed" &&
-    detail.sandbox !== null &&
-    detail.sandbox !== undefined ? (
-      <SandboxSettingsFailedRowBody
-        detail={detail}
-        title={props.row.title}
-        isRead={props.isRead}
-      />
-    ) : (
-      <NotificationRowBody
-        title={props.row.title}
-        body={props.displayBody}
-        isRead={props.isRead}
-      />
-    );
+  const body = (
+    <NotificationRowBody
+      title={props.row.title}
+      body={props.displayBody}
+      isRead={props.isRead}
+    />
+  );
 
   if (props.isNavigable && props.originUnavailability === null) {
     return (
@@ -599,19 +530,6 @@ function NotificationRowControlButton(
       </button>
     </TooltipWrapper>
   );
-}
-
-/**
- * A sandbox's settings failure: its line follows the sandbox's row now, and
- * its explanation is the card's alone (the body any host formats repeats it).
- */
-function SandboxSettingsFailedRowBody(props: {
-  readonly detail: SandboxApplyFailedDetail;
-  readonly title: string;
-  readonly isRead: boolean;
-}): ReactNode {
-  const title = useSandboxSettingsNoticeTitle(props.detail, props.title);
-  return <NotificationRowBody title={title} body="" isRead={props.isRead} />;
 }
 
 interface NotificationRowBodyProps {
@@ -754,16 +672,16 @@ const HOST_KIND_GLYPHS: Record<
   "secret.export.minted": SECRET_GLYPH,
   "secret.rotated": SECRET_GLYPH,
   "secret.removed": SECRET_GLYPH,
-  // Only reachable for an `info` row: the severity branches above claim a
-  // warning and a destroy.
+  // Never rendered: the merged rows drop the kind.
   "sandbox.notice": NEUTRAL_BELL,
   "notification.hooks.removed": NEUTRAL_BELL,
   // A change in a team the reader belongs to.
   "team.role.changed": TEAM_GLYPH,
   "team.host.returned": TEAM_GLYPH,
   // Only reachable for an `info` row: the severity branches above claim a
-  // failed move or apply.
+  // failed move.
   "environment.move.stalled": NEUTRAL_BELL,
+  // Never rendered: the merged rows drop the kind.
   "environment.apply.failed": NEUTRAL_BELL,
 };
 

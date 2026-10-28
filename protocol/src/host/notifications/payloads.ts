@@ -900,11 +900,7 @@ export type HostNotificationEnvironmentMoveStalledPayload = z.infer<
   typeof hostNotificationEnvironmentMoveStalledPayloadSchema
 >;
 
-/**
- * `environment.apply.failed`: a host could not apply one item of its
- * configuration. `itemKey` names the item, never its value; `reason` is an
- * open code.
- */
+/** `environment.apply.failed`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
   () =>
     z
@@ -987,27 +983,7 @@ export type HostNotificationSecretRemovedPayload = z.infer<
   typeof hostNotificationSecretRemovedPayloadSchema
 >;
 
-/**
- * What happened to a sandbox, by the control plane's notice kind. Times are
- * epoch ms, so each reader formats them in its own time zone.
- *
- * - `resting_warning`: the resting clock destroys it at `destroyAt` unless it
- *   is used; `periodMinutes` is its resting period, which a new rest starts
- *   over.
- * - `resting_destroyed`: the resting clock destroyed it.
- * - `frozen`: its payer's credits ran out, or a team row's payer left.
- * - `frozen_warning`: frozen for lack of credits, it is deleted in
- *   `daysLeft` days unless credits are added.
- * - `frozen_deleting` / `frozen_destroyed`: frozen for 30 days, it is being
- *   deleted, or was.
- * - `create_failed`, `lost`: its create failed for good; the provider no
- *   longer has it.
- * - `destroyed_by_member`: a member destroyed it (`actorName` when known).
- *   New notices include the confirmed `destroyedAt` and the recipient's own
- *   `stoppedAgentTaskTitles`, checked against their task access before send.
- * - `manual_rest`: a Suspend or Stop settled, `byYou` when the reader asked
- *   for it.
- */
+/** The `sandbox.notice` payload's notice. The server no longer writes this kind; readers drop it. */
 export const hostNotificationSandboxNoticeSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1048,7 +1024,7 @@ export type HostNotificationSandboxNotice = z.infer<
   typeof hostNotificationSandboxNoticeSchema
 >;
 
-/** `sandbox.notice`: one sandbox, named, and what happened to it. */
+/** `sandbox.notice`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationSandboxNoticePayloadSchema = lazySchema(() =>
   z
     .object({

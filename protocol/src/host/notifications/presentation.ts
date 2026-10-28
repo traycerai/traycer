@@ -190,7 +190,7 @@ export function sandboxDestroyWhen(destroyAt: number, now: number): string {
   return `on ${date} at ${time}`;
 }
 
-/** The sandbox rows: what happened to one sandbox, by name. */
+/** `sandbox.notice`: The server no longer writes this kind; readers drop it. */
 function sandboxNoticePresentation(
   known: HostNotificationKnownPayload | null,
   now: number,

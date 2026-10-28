@@ -1,7 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EnvironmentApplyFailedCard } from "@/components/notifications/environment-apply-failed-card";
 import { EnvironmentMoveStalledCard } from "@/components/notifications/environment-move-stalled-card";
 import { SecretRemovedCard } from "@/components/notifications/secret-removed-card";
 import { TeamHostReturnedCard } from "@/components/notifications/team-host-returned-card";
@@ -123,15 +122,5 @@ describe("EnvironmentMoveStalledCard", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "Open Overview" })).toBeNull();
-  });
-});
-
-describe("EnvironmentApplyFailedCard", () => {
-  it("names the host while keeping setting keys and raw reasons in diagnostics", () => {
-    render(<EnvironmentApplyFailedCard hostName="dev-box" details={DETAILS} />);
-    expect(
-      screen.getByTestId("environment-apply-failed-body").textContent,
-    ).toBe("dev-box's settings didn't apply.");
-    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
   });
 });

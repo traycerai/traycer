@@ -18,7 +18,7 @@ import {
   useSandboxDetailsStore,
 } from "@/stores/sandboxes/sandbox-details-store";
 import {
-  revealSandboxOnPage,
+  requestSandboxesPageConfiguration,
   useSandboxesPageStore,
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
@@ -429,7 +429,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
   it("closes the Details drawer and resets the Sandboxes page on user-switch", () => {
     openSandboxDetails("sbx-alice");
-    revealSandboxOnPage({ kind: "team", teamId: "team-alice" }, "sbx-alice");
+    requestSandboxesPageConfiguration({ kind: "team", teamId: "team-alice" });
 
     render(
       <EpicSessionLifecycleBridge>
@@ -442,10 +442,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useSandboxDetailsStore.getState().sandboxId).toBeNull();
-    expect(useSandboxesPageStore.getState()).toMatchObject({
-      requestedConfiguration: null,
-      revealSandboxId: null,
-    });
+    expect(useSandboxesPageStore.getState().requestedConfiguration).toBeNull();
   });
 
   it("drops the shared watch-host pick on sign-out", () => {
