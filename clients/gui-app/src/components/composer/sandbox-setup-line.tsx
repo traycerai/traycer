@@ -366,7 +366,6 @@ function SandboxRefusalLine(props: {
       sentence = agentRefusalSentence(failure, props.name);
       remedies = (
         <SandboxAgentRefusalRemedies
-          failure={failure}
           actions={actions}
           offeredAgents={props.facts.offeredAgents}
         />
@@ -433,17 +432,16 @@ function agentRefusalSentence(
 
 /**
  * Remedies keep the sandbox and preserve the requested agent until the person
- * chooses. Traycer Inference is that sandbox's own switch, and no Settings
- * page reaches it, so its refusal offers only the exits.
+ * chooses: every agent refusal leads with Choose a model on what sandboxes
+ * offer. Traycer Inference is that sandbox's own switch, and no Settings page
+ * reaches it, so no refusal links a Providers page.
  */
 function SandboxAgentRefusalRemedies(props: {
-  readonly failure: AgentRefusalFailure;
   readonly actions: SandboxSetupLineActions;
   readonly offeredAgents: ReadonlyArray<string> | null;
 }): ReactNode {
-  const { failure, actions, offeredAgents } = props;
-  if (failure.kind !== "agent-not-offered" || actions.onChooseModel === null)
-    return null;
+  const { actions, offeredAgents } = props;
+  if (actions.onChooseModel === null) return null;
   return (
     <LineButton
       label="Choose a model"

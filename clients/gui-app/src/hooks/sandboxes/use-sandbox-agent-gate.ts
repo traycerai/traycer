@@ -14,7 +14,7 @@ import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandb
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   sandboxAgentNotOfferedNotice,
-  sandboxAgentSecondaryActions,
+  sandboxAgentRefusedNotice,
   sandboxAgentsUncheckedNotice,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
@@ -141,10 +141,16 @@ function sandboxAgentGateFor(args: {
   readonly remedies: SandboxAgentRemedies;
 }): SandboxAgentGate {
   const { harnessId, readiness, offeredAgents, remedies } = args;
-  // Before the catalogue: with the sandbox's own switch off no model runs
-  // there, so "Choose a model" would only lead to another refusal.
+  const offered = offeredAgents ?? null;
+  // Before the catalogue: with the sandbox's own switch off no agent runs
+  // there, whatever the pick, so that is what the refusal says.
   if (readiness.kind === "traycer-off")
-    return refusedOnSandboxGate(traycerOffOnSandboxLine(null), null, remedies);
+    return refusedOnSandboxGate(
+      traycerOffOnSandboxLine(null),
+      offered,
+      null,
+      remedies,
+    );
   if (
     readiness.kind === "not-offered" ||
     (offeredAgents !== undefined && !offeredAgents.includes(harnessId))
@@ -158,33 +164,31 @@ function sandboxAgentGateFor(args: {
     case "unusable":
       return refusedOnSandboxGate(
         agentsCantRunOnSandboxLine(null),
+        offered,
         null,
         remedies,
       );
     case "setup-failed":
       return refusedOnSandboxGate(
         readiness.detail,
+        offered,
         args.setupFailedAction,
         remedies,
       );
   }
 }
 
-/** A pick the sandbox cannot run, refused with the remedies beside it. */
+/** A pick the sandbox cannot run, refused with every remedy beside it. */
 function refusedOnSandboxGate(
   message: string,
-  action: ComposerHostNoticeAction | null,
+  offeredAgents: ReadonlyArray<string> | null,
+  extra: ComposerHostNoticeAction | null,
   remedies: SandboxAgentRemedies,
 ): SandboxAgentGate {
   return {
     blocked: true,
     hint: message,
-    notice: {
-      kind: "refused",
-      message,
-      action,
-      secondaryActions: sandboxAgentSecondaryActions(remedies),
-    },
+    notice: sandboxAgentRefusedNotice(message, offeredAgents, remedies, extra),
   };
 }
 
@@ -260,7 +264,12 @@ export function useRestingSandboxAgentGate(
   );
   if (!input.resting || input.harnessId === null) return NOT_BLOCKED;
   if (traycerOff)
-    return refusedOnSandboxGate(traycerOffOnSandboxLine(null), null, input);
+    return refusedOnSandboxGate(
+      traycerOffOnSandboxLine(null),
+      catalogue.data?.offeredAgents ?? null,
+      null,
+      input,
+    );
   if (catalogue.data === undefined) {
     if (catalogue.isFetching) return CHECKING_OFFERED_AGENTS;
     const notice = sandboxAgentsUncheckedNotice(() => {

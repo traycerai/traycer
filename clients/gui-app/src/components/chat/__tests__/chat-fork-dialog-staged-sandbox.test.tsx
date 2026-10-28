@@ -1152,7 +1152,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       );
     });
 
-    it("refuses Fork for an agent the sandbox cannot run, with no Providers link, creating, attaching and handing nothing, and keeping the dialog, title and chip", () => {
+    it("refuses Fork for an agent the sandbox cannot run, choosing a model and with no Providers link, creating, attaching and handing nothing, and keeping the dialog, title and chip", () => {
       dialogMocks.harnessAvailable = false;
       renderDialog();
       fillTitle();
@@ -1175,7 +1175,10 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
         screen.getByRole("button", { name: "Harness picker" }),
       ).toBeTruthy();
 
-      expect(screen.queryByTestId("composer-host-notice-action")).toBeNull();
+      expect(
+        screen.getByTestId("composer-host-notice-action").textContent,
+      ).toBe("Choose a model");
+      expect(screen.getByRole("alert").textContent).not.toContain("Providers");
     });
 
     it("retires the notice when another host is picked", () => {

@@ -221,6 +221,15 @@ function gateOn(
   ).result.current;
 }
 
+/** The focused composer's picker, which a refusal's Choose a model opens. */
+function registerOpenForHarness(): void {
+  registerActiveModelPicker({
+    toggle: vi.fn(),
+    openForHarness: answers.openForHarness,
+    getSelectionSummary: () => null,
+  });
+}
+
 describe("useSandboxAgentGate", () => {
   it("holds Send until Traycer's actual engine is ready, including missing line facts", () => {
     answers.harnesses = [harnessRow("traycer", {})];
@@ -260,10 +269,11 @@ describe("useSandboxAgentGate", () => {
     rerender();
     expect(result.current.notice).toMatchObject({
       kind: "refused",
-      action: { label: "Open Personal's Providers" },
+      action: { label: "Choose a model" },
+      secondaryActions: [{ label: "Open Personal's Providers" }],
     });
     expect(result.current.notice?.message).toContain("disk space");
-    result.current.notice?.action?.onAction();
+    result.current.notice?.secondaryActions?.[0]?.onAction();
     expect(answers.openEnvironmentPage).toHaveBeenCalledWith({
       configurationId: "personal",
       pageId: "providers",
@@ -309,11 +319,7 @@ describe("useSandboxAgentGate", () => {
 
   it("refuses an agent not offered on sandboxes, with the model picker and other remedies", () => {
     answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
-    registerActiveModelPicker({
-      toggle: vi.fn(),
-      openForHarness: answers.openForHarness,
-      getSelectionSummary: () => null,
-    });
+    registerOpenForHarness();
     const gate = gateOn(SANDBOX_HOST, "claude");
 
     expect(gate.blocked).toBe(true);
@@ -336,19 +342,21 @@ describe("useSandboxAgentGate", () => {
   });
 
   // Traycer Inference is each computer's own switch, and no Settings page
-  // reaches a sandbox's, so the refusal names it and links nowhere.
+  // reaches a sandbox's, so the refusal names it and links nowhere. Choose a
+  // model still opens on Traycer's cloud models, as on every refusal.
   it.each([
     ["Traycer", SANDBOX_HOST, "traycer"],
     ["an agent sandboxes don't offer", SANDBOX_HOST, "claude"],
     ["Traycer on a team's sandbox", TEAM_SANDBOX_HOST, "traycer"],
   ] as const)(
-    "refuses %s when the sandbox's own Traycer Inference is off, with no model to choose",
+    "refuses %s when the sandbox's own Traycer Inference is off, choosing a model on what sandboxes run",
     (_label, hostId, harnessId) => {
       answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
       answers.harnesses = [harnessRow("traycer", { enabled: false })];
       answers.providers = [
         { ...providerRow("traycer", { status: "installed" }), enabled: false },
       ];
+      registerOpenForHarness();
 
       const gate = gateOn(hostId, harnessId);
 
@@ -359,13 +367,17 @@ describe("useSandboxAgentGate", () => {
           kind: "refused",
           message:
             "Traycer Inference is off on this sandbox, so agents can't run on it.",
-          action: null,
+          action: { label: "Choose a model" },
           secondaryActions: [
             { label: "Open terminal instead" },
             { label: "Choose another host" },
           ],
         },
       });
+      gate.notice?.action?.onAction();
+      expect(answers.openForHarness).toHaveBeenCalledWith("traycer", [
+        "traycer",
+      ]);
     },
   );
 
@@ -373,25 +385,62 @@ describe("useSandboxAgentGate", () => {
     ["Personal's", SANDBOX_HOST],
     ["a team's", TEAM_SANDBOX_HOST],
   ] as const)(
-    "says no agent runs on %s sandbox whose Traycer Inference is on but unavailable",
+    "says no agent runs on %s sandbox whose Traycer Inference is on but unavailable, choosing a model on what sandboxes run",
     (_label, hostId) => {
       answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
       answers.harnesses = [harnessRow("traycer", { available: false })];
       answers.providers = [providerRow("traycer", { status: "installed" })];
+      registerOpenForHarness();
 
       const gate = gateOn(hostId, "traycer");
 
       expect(gate.notice).toMatchObject({
         kind: "refused",
         message: "Agents can't run on this sandbox.",
-        action: null,
+        action: { label: "Choose a model" },
         secondaryActions: [
           { label: "Open terminal instead" },
           { label: "Choose another host" },
         ],
       });
+      gate.notice?.action?.onAction();
+      expect(answers.openForHarness).toHaveBeenCalledWith("traycer", [
+        "traycer",
+      ]);
     },
   );
+
+  it("refuses a failed install with Choose a model, the exits, then the configuration's Providers", () => {
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
+    answers.harnesses = [harnessRow("traycer", {})];
+    answers.providers = [
+      providerRow("traycer", { status: "installed" }),
+      opencodeProviderRow(
+        {
+          status: "error",
+          reason: "disk-full",
+          message: "ENOSPC",
+          retryAtMs: null,
+        },
+        {},
+      ),
+    ];
+    registerOpenForHarness();
+
+    const gate = gateOn(SANDBOX_HOST, "traycer");
+
+    expect(gate.notice).toMatchObject({
+      kind: "refused",
+      action: { label: "Choose a model" },
+      secondaryActions: [
+        { label: "Open terminal instead" },
+        { label: "Choose another host" },
+        { label: "Open Personal's Providers" },
+      ],
+    });
+    gate.notice?.action?.onAction();
+    expect(answers.openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
+  });
 
   it("offers no Providers link for a failed install while the team's environment is unread", () => {
     answers.environments = [];
@@ -414,7 +463,10 @@ describe("useSandboxAgentGate", () => {
 
     expect(gate.blocked).toBe(true);
     expect(gate.notice?.message).toContain("disk space");
-    expect(gate.notice?.action).toBeNull();
+    expect(gate.notice?.secondaryActions?.map(({ label }) => label)).toEqual([
+      "Open terminal instead",
+      "Choose another host",
+    ]);
   });
 
   it.each([

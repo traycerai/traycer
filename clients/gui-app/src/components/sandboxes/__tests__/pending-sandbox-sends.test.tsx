@@ -923,6 +923,12 @@ const CODEX_NOT_OFFERED: HostAnswers = {
   providers: [providerRow("claude-code", { status: "installed" })],
 };
 
+/** The woken sandbox's own Traycer Inference switch is off. */
+const TRAYCER_OFF: HostAnswers = {
+  harnesses: [harnessRow("traycer", { enabled: false })],
+  providers: [{ ...providerRow("traycer", null), enabled: false }],
+};
+
 interface SeedOptions {
   readonly send: Partial<PendingSandboxSend>;
   readonly target: StagedSandboxTarget;
@@ -1779,7 +1785,8 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(createChatCalls()).toEqual([]);
   });
 
-  it("refuses a Personal send whose agent cannot run there, uses no other agent, and links no Providers", async () => {
+  it("refuses a Personal send whose agent cannot run there, uses no other agent, offers Choose a model, and links no Providers", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
     seed({
       ...SEEDED,
       send: { settings: { ...PICKED_SETTINGS, harnessId: "traycer" } },
@@ -1808,6 +1815,9 @@ describe("a send waiting for the requested agent on its sandbox", () => {
       "fix the login bug",
     );
 
+    expect(
+      await within(line).findByRole("button", { name: "Choose a model" }),
+    ).toBeDefined();
     expect(line.textContent).not.toContain("Providers");
   });
 
@@ -2083,17 +2093,13 @@ describe("a send waiting for the requested agent on its sandbox", () => {
   // Traycer Inference is that sandbox's own switch, so the line names the
   // sandbox, not its configuration, and no Settings page reaches it.
   describe("on a woken sandbox whose own Traycer Inference is off", () => {
-    const TRAYCER_OFF: HostAnswers = {
-      harnesses: [harnessRow("traycer", { enabled: false })],
-      providers: [{ ...providerRow("traycer", null), enabled: false }],
-    };
-
     it.each([
       ["Personal's", NEW_TARGET],
       ["a team's", TEAM_TARGET],
     ] as const)(
-      "on %s sandbox, names its switch, links no Providers, and delivers nothing",
+      "on %s sandbox, names its switch, offers Choose a model, links no Providers, and delivers nothing",
       async (_label, target) => {
+        onTestFinished(installImmediateExclusiveLocks());
         seed({
           ...SEEDED,
           target,
@@ -2107,6 +2113,9 @@ describe("a send waiting for the requested agent on its sandbox", () => {
           within(line).getByText(
             "Traycer Inference is off on api-refactor, so agents can't run on it.",
           ),
+        ).toBeDefined();
+        expect(
+          await within(line).findByRole("button", { name: "Choose a model" }),
         ).toBeDefined();
         expect(line.textContent).not.toContain("Providers");
         expect(readStagedSandbox(SURFACE)?.failure).toEqual({
@@ -3368,7 +3377,7 @@ describe("a message for an existing chat whose sandbox rests", () => {
       "Details",
     ];
 
-    function seedRefused(): void {
+    function seedRefused(answers: HostAnswers): void {
       seed({
         ...SEEDED,
         target: RESUME_TARGET,
@@ -3380,53 +3389,65 @@ describe("a message for an existing chat whose sandbox rests", () => {
       mocks.listReadAt = FRESH;
       mocks.sandboxes = [rowIn("awake")];
       mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
-      answerHost(SANDBOX_HOST, CODEX_NOT_OFFERED);
+      answerHost(SANDBOX_HOST, answers);
     }
 
-    async function refusalLine(): Promise<HTMLElement> {
+    async function refusalLine(
+      failure: Partial<StagedSandboxFailure>,
+    ): Promise<HTMLElement> {
       const line = await screen.findByTestId("sandbox-refusal-line");
       await waitFor(() => {
-        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
-          kind: "agent-not-offered",
-          harnessId: "codex",
-        });
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject(failure);
       });
       return line;
     }
 
-    it("offers the bound chat's remedies in order, and no shape change", async () => {
-      const restoreLocks = installImmediateExclusiveLocks();
-      try {
-        seedRefused();
-        mountInChat();
+    const NOT_OFFERED: StagedSandboxFailure = {
+      kind: "agent-not-offered",
+      harnessId: "codex",
+    };
 
-        const line = await refusalLine();
+    it.each([
+      ["an agent sandboxes don't offer", CODEX_NOT_OFFERED, NOT_OFFERED],
+      ["its own Traycer Inference off", TRAYCER_OFF, { kind: "traycer-off" }],
+      ["no agent it can run", CODEX_UNAVAILABLE, { kind: "no-provider" }],
+      ["a failed install", CODEX_SETUP_FAILED, { kind: "agent-setup-failed" }],
+    ] as const)(
+      "offers the bound chat's remedies in order, and no shape change, for %s",
+      async (_label, answers, failure) => {
+        const restoreLocks = installImmediateExclusiveLocks();
+        try {
+          seedRefused(answers);
+          mountInChat();
 
-        await waitFor(() => {
+          const line = await refusalLine(failure);
+
+          await waitFor(() => {
+            expect(
+              within(line)
+                .getAllByRole("button")
+                .map((button) => button.textContent)
+                .filter((label) => BOUND_REMEDIES.includes(label)),
+            ).toEqual(BOUND_REMEDIES);
+          });
           expect(
-            within(line)
-              .getAllByRole("button")
-              .map((button) => button.textContent)
-              .filter((label) => BOUND_REMEDIES.includes(label)),
-          ).toEqual(BOUND_REMEDIES);
-        });
-        expect(
-          within(line).queryByRole("button", { name: /Change shape/ }),
-        ).toBeNull();
-        expect(createChatCalls()).toEqual([]);
-      } finally {
-        restoreLocks();
-      }
-    });
+            within(line).queryByRole("button", { name: /Change shape/ }),
+          ).toBeNull();
+          expect(createChatCalls()).toEqual([]);
+        } finally {
+          restoreLocks();
+        }
+      },
+    );
 
     it("Choose another host hands the message back to the chat's composer, then opens the chat's clone flow", async () => {
       const restoreLocks = installImmediateExclusiveLocks();
       const openClone = vi.fn<() => void>();
       const unregister = registerChatCloneOpener("existing-chat", openClone);
       try {
-        seedRefused();
+        seedRefused(CODEX_NOT_OFFERED);
         mountInChat();
-        const line = await refusalLine();
+        const line = await refusalLine(NOT_OFFERED);
 
         fireEvent.click(
           await within(line).findByRole("button", {
@@ -3463,9 +3484,9 @@ describe("a message for an existing chat whose sandbox rests", () => {
         getSelectionSummary: () => null,
       });
       try {
-        seedRefused();
+        seedRefused(CODEX_NOT_OFFERED);
         mountInChat();
-        const line = await refusalLine();
+        const line = await refusalLine(NOT_OFFERED);
 
         fireEvent.click(
           await within(line).findByRole("button", { name: "Choose a model" }),

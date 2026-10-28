@@ -398,8 +398,8 @@ describe("SandboxSetupLine's agent refusals", () => {
   });
 
   // Traycer Inference is the sandbox's own switch, which no Settings page
-  // reaches: the line names it and offers only the exits, on a team's
-  // sandbox as on Personal's.
+  // reaches: the line names it and links no Providers, on a team's sandbox as
+  // on Personal's. Choose a model leads every agent refusal.
   it.each([
     [
       "its Traycer Inference is off",
@@ -411,25 +411,37 @@ describe("SandboxSetupLine's agent refusals", () => {
       { kind: "no-provider" },
       "Agents can't run on api-refactor.",
     ],
+    [
+      "the agent's install failed",
+      { kind: "agent-setup-failed", detail: "Install failed" },
+      "Install failed",
+    ],
   ] as const)(
-    "names the sandbox when %s, with no Providers link",
+    "names the sandbox when %s, choosing a model before the exits, with no Providers link",
     (_label, failure, sentence) => {
       for (const configuration of [
         { kind: "personal" },
         { kind: "team", teamId: "team-9", teamName: "Acme" },
       ] as const) {
+        const onChooseModel = vi.fn();
         const line = mountRefusal(configuration, failure, false, {
           ...ACTIONS,
           onOpenTerminal: vi.fn(),
+          onChooseModel,
         });
 
         expect(line.textContent).toContain(sentence);
         expect(line.textContent).not.toContain("Providers");
         expect(buttonLabels(line)).toEqual([
+          "Choose a model",
           "Open terminal instead",
           "Choose another host",
           "Cancel the message",
         ]);
+        fireEvent.click(
+          within(line).getByRole("button", { name: "Choose a model" }),
+        );
+        expect(onChooseModel).toHaveBeenCalledOnce();
         cleanup();
       }
     },

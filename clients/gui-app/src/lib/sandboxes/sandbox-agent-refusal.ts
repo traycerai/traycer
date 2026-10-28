@@ -58,7 +58,7 @@ export interface SandboxAgentRemedies {
   readonly onDetails?: () => void;
 }
 
-export function sandboxAgentSecondaryActions(
+function sandboxAgentSecondaryActions(
   remedies: SandboxAgentRemedies,
 ): readonly ComposerHostNoticeAction[] {
   const actions: ComposerHostNoticeAction[] = [];
@@ -92,27 +92,45 @@ export function sandboxAgentDisplayName(harnessId: GuiHarnessId): string {
 }
 
 /**
- * A rejected pick stays selected until the person chooses its replacement.
- * "Choose a model" opens on what sandboxes offer (`offeredAgents`, the cloud
- * catalogue's list), never on the rail of the host the picker reads.
+ * A pick the sandbox cannot run, whatever the reason. A rejected pick stays
+ * selected until the person chooses its replacement, so every such refusal
+ * leads with "Choose a model", which opens on what sandboxes offer
+ * (`offeredAgents`, the cloud catalogue's list), never on the rail of the
+ * host the picker reads. `extra` is a remedy only this refusal has, after
+ * the exits.
  */
-export function sandboxAgentNotOfferedNotice(
-  harnessId: GuiHarnessId,
+export function sandboxAgentRefusedNotice(
+  message: string,
   offeredAgents: ReadonlyArray<string> | null,
   remedies: SandboxAgentRemedies,
+  extra: ComposerHostNoticeAction | null,
 ): ComposerHostNoticeState {
   const chooseModel =
     remedies.onChooseModel ??
     ((offered: ReadonlyArray<string> | null) => {
       openActiveModelPickerForHarness("traycer", null, offered);
     });
+  const exits = sandboxAgentSecondaryActions(remedies);
   return {
     kind: "refused",
-    message: agentNotOfferedOnSandboxesLine(sandboxAgentDisplayName(harnessId)),
+    message,
     action: {
       label: "Choose a model",
       onAction: () => chooseModel(offeredAgents),
     },
-    secondaryActions: sandboxAgentSecondaryActions(remedies),
+    secondaryActions: extra === null ? exits : [...exits, extra],
   };
+}
+
+export function sandboxAgentNotOfferedNotice(
+  harnessId: GuiHarnessId,
+  offeredAgents: ReadonlyArray<string> | null,
+  remedies: SandboxAgentRemedies,
+): ComposerHostNoticeState {
+  return sandboxAgentRefusedNotice(
+    agentNotOfferedOnSandboxesLine(sandboxAgentDisplayName(harnessId)),
+    offeredAgents,
+    remedies,
+    null,
+  );
 }

@@ -35,6 +35,7 @@ import {
 } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
+  GuiHarnessId,
   GuiHarnessOption,
   HostRpcRegistry,
 } from "@traycer/protocol/host/index";
@@ -309,6 +310,7 @@ vi.mock("@/components/chat/segments/steer-settings-conflict-dialog", () => ({
 
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
+import { registerActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { queryKeys } from "@/lib/query-keys";
 import {
   bindComposerDraftHost,
@@ -432,6 +434,26 @@ function mountChatTileCloneFlow(): Mock<() => void> {
   const unregister = registerChatCloneOpener("chat-p3", openClone);
   onTestFinished(unregister);
   return openClone;
+}
+
+/** The focused composer's picker, which a refusal's Choose a model opens. */
+function mountModelPicker(): Mock<
+  (harnessId: GuiHarnessId, offeredAgents: ReadonlyArray<string> | null) => void
+> {
+  const openForHarness =
+    vi.fn<
+      (
+        harnessId: GuiHarnessId,
+        offeredAgents: ReadonlyArray<string> | null,
+      ) => void
+    >();
+  const unregister = registerActiveModelPicker({
+    toggle: vi.fn(),
+    openForHarness,
+    getSelectionSummary: () => null,
+  });
+  onTestFinished(unregister);
+  return openForHarness;
 }
 
 function mountComposer(settings: ChatRunSettings) {
@@ -653,8 +675,8 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
     expect(submitted().sendDisabled).toBe(false);
   });
 
-  // Off is refused before anything wakes, and with nothing to choose: no
-  // model runs while the switch is off, whatever the pick.
+  // Off is refused before anything wakes, whatever the pick, with the full
+  // list: Choose a model still opens on what sandboxes run.
   it.each(["traycer", "codex"] as const)(
     "refuses a %s pick before any wake when the sandbox's Traycer Inference was last read off",
     (harnessId) => {
@@ -662,16 +684,19 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
         providers: TRAYCER_OFF_PROVIDERS,
       });
       mountChatTileCloneFlow();
+      const openForHarness = mountModelPicker();
       const sent = vi.fn(() => true);
 
       mountComposerWith(seed(harnessId), sent);
 
       expect(screen.getByText(TRAYCER_OFF_LINE)).toBeTruthy();
-      expect(noticeButtons()).toEqual(REFUSAL_LIST.slice(1));
+      expect(noticeButtons()).toEqual(REFUSAL_LIST);
       expect(submitted()).toMatchObject({
         sendDisabled: true,
         sendDisabledHint: TRAYCER_OFF_LINE,
       });
+      clickNoticeButton("Choose a model");
+      expect(openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
       expect(sent).not.toHaveBeenCalled();
     },
   );
@@ -723,7 +748,7 @@ describe("the composer of an awake sandbox's chat, served by the sandbox", () =>
     });
   });
 
-  it("refuses at Send when the sandbox's own providers list shows Traycer off, with no model to choose", () => {
+  it("refuses at Send when the sandbox's own providers list shows Traycer off, with the full list", () => {
     answers.tabHostId = "sbx-awake-host";
     answers.sandboxes = [
       sandboxSummaryFixture({ id: "sbx-awake", hostId: "sbx-awake-host" }),
@@ -732,14 +757,17 @@ describe("the composer of an awake sandbox's chat, served by the sandbox", () =>
     answers.providers = TRAYCER_OFF_PROVIDERS;
     installHostDirectoryRows([sandboxHostEntry("sbx-awake-host", null)]);
     mountChatTileCloneFlow();
+    const openForHarness = mountModelPicker();
 
     mountComposerOn(seed("traycer"), null, () => true);
 
     expect(screen.getByText(TRAYCER_OFF_LINE)).toBeTruthy();
-    expect(noticeButtons()).toEqual(REFUSAL_LIST.slice(1));
+    expect(noticeButtons()).toEqual(REFUSAL_LIST);
     expect(submitted()).toMatchObject({
       sendDisabled: true,
       sendDisabledHint: TRAYCER_OFF_LINE,
     });
+    clickNoticeButton("Choose a model");
+    expect(openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
   });
 });
