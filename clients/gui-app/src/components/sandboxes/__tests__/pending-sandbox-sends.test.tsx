@@ -8063,7 +8063,7 @@ describe("the ready line above an agent whose first message waited", () => {
     fireEvent.click(screen.getByTestId("sandbox-ready-line-toggle"));
 
     expect(screen.getByTestId("sandbox-ready-line-detail").textContent).toBe(
-      "After 45 minutes with no agent turn, running shell or attached tab, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.",
+      "After 45 minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.",
     );
   });
 

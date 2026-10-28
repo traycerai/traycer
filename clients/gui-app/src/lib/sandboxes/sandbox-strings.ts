@@ -600,7 +600,7 @@ export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or attached tab, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
