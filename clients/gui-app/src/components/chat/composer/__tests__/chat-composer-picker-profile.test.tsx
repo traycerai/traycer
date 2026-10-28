@@ -38,6 +38,13 @@ const captured = vi.hoisted(() => ({
   } | null,
 }));
 
+// These cases are about the preview features' on behaviour: the picker reaches
+// the verdict, and `usePreviewFeature` reads the user record through
+// `useAuthUser`, which this harness mounts no `HostRuntimeProvider` for.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // A chat composer on a sandbox host, or on a resting sandbox's chat, refuses
 // an unrunnable agent at Send; nothing in this suite sits on either.
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({

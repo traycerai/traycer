@@ -71,6 +71,12 @@ const state = vi.hoisted(() => ({
   binding: null as NotificationBinding | null,
   client: null as HostRequester<HostRpcRegistry> | null,
 }));
+// These cases are about the sandboxes-on behaviour: the notice is driven by the
+// sandbox list, and `usePreviewFeature` reads the user record through
+// `useAuthUser`, which this harness mounts no `HostRuntimeProvider` for.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
 vi.mock("@/lib/host", async (original) => ({
   ...(await original<typeof import("@/lib/host")>()),
   useHostBinding: () => state.binding,
