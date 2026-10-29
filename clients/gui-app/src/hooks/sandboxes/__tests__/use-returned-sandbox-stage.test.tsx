@@ -16,7 +16,14 @@ import {
 } from "@/stores/composer/staged-sandbox-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
-import { useNewConversationReturnedSandbox } from "../use-returned-sandbox-stage";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import {
+  useLandingReturnedSandbox,
+  useNewConversationReturnedSandbox,
+} from "../use-returned-sandbox-stage";
 
 const EPIC_ID = "epic-1";
 const SURFACE = newConversationSurfaceKey(EPIC_ID);
@@ -131,5 +138,57 @@ describe("useNewConversationReturnedSandbox", () => {
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID],
     ).toBeUndefined();
+  });
+});
+
+describe("useLandingReturnedSandbox", () => {
+  const WINDOW_SURFACE = "landing:window-test";
+
+  function installReturnedDraft(id: string, returned: ReturnedSandbox): void {
+    const drafts = useLandingDraftStore.getState();
+    drafts.installLandingDraft({
+      id,
+      content: MESSAGE,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: null,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+    });
+    drafts.setDraftReturnedSandbox(id, returned);
+  }
+
+  beforeEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  afterEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  it("stages only the shown draft's sandbox when a hidden draft's composer is also mounted", () => {
+    const shown: ReturnedSandbox = {
+      target: {
+        kind: "existing",
+        hostId: "sbx-shown-host",
+        sandboxId: "sbx-shown",
+        name: "shown-box",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      },
+      clientRequestId: null,
+    };
+    installReturnedDraft("draft-hidden", RETURNED);
+    installReturnedDraft("draft-shown", shown);
+
+    renderHook(() =>
+      useLandingReturnedSandbox(WINDOW_SURFACE, "draft-hidden", false),
+    );
+    renderHook(() =>
+      useLandingReturnedSandbox(WINDOW_SURFACE, "draft-shown", true),
+    );
+
+    expect(readStagedSandbox(WINDOW_SURFACE)?.target).toEqual(shown.target);
   });
 });

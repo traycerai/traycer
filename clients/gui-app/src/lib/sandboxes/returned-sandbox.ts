@@ -19,6 +19,28 @@ export interface ReturnedSandbox {
   readonly clientRequestId: string | null;
 }
 
+const supersedeBySurface = new Map<string, () => void>();
+
+/**
+ * The active composer on `surfaceKey` forgets its draft's returned sandbox
+ * when the person picks a placement there. Returns the unsubscribe.
+ */
+export function onReturnedSandboxSuperseded(
+  surfaceKey: string,
+  forget: () => void,
+): () => void {
+  supersedeBySurface.set(surfaceKey, forget);
+  return () => {
+    if (supersedeBySurface.get(surfaceKey) === forget)
+      supersedeBySurface.delete(surfaceKey);
+  };
+}
+
+/** A placement the person picked on `surfaceKey` supersedes a returned sandbox. */
+export function supersedeReturnedSandbox(surfaceKey: string): void {
+  supersedeBySurface.get(surfaceKey)?.();
+}
+
 /**
  * Whether a stage is the returned destination, not a pick of the person's. A
  * sandbox not yet created is known by its create key; one whose create was
