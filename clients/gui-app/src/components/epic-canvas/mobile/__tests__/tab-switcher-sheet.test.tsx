@@ -59,6 +59,9 @@ vi.mock("@/components/epic-canvas/mobile/switcher-browsers-list", () => ({
     <div role="note" aria-label="browsers category body" />
   ),
 }));
+vi.mock("@/components/epic-canvas/mobile/switcher-simulators-list", () => ({
+  SwitcherSimulatorsList: () => <div data-testid="mock-simulators-list" />,
+}));
 vi.mock("@/components/epic-canvas/mobile/switcher-artifacts-list", () => ({
   SwitcherArtifactsList: () => <div data-testid="mock-artifacts-list" />,
 }));
@@ -119,6 +122,7 @@ describe("<TabSwitcherSheet />", () => {
       "mobile-switcher-tab-artifacts",
       "mobile-switcher-tab-terminals",
       "mobile-switcher-tab-browsers",
+      "mobile-switcher-tab-simulators",
       "mobile-switcher-tab-git-diff",
       "mobile-switcher-tab-pull-requests",
       "mobile-switcher-tab-file-tree",

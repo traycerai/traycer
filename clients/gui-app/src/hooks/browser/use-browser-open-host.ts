@@ -21,8 +21,8 @@ import { isSurfacePinDeposed } from "@/stores/host/surface-host-selection-store"
  *
  * Only link opens honour the pin (`BrowserOpenSessionsProvider`). The Browsers
  * panel's create picker suggests {@link useServingLocalHostId} over the task's
- * host and ignores the pin: there the person names the device themselves, and
- * the pin mostly scopes the Simulators group.
+ * host and ignores the pin: there the person names the device themselves. The
+ * pin is the Browsers filter's "Open links on" choice.
  *
  * `tabHostId` is the host the link used before this existed, the tile it was
  * clicked in. `null` asks only for the first two tiers.

@@ -50,6 +50,7 @@ import {
 } from "@/components/settings/panels/host-overview-ports-tab";
 import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
+import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -2024,6 +2025,12 @@ export function HostOverviewPanel(props: {
               portForwards.count === null ? null : (
                 <HostOverviewPortsCount count={portForwards.count} />
               ),
+            simulators: (
+              <HostOverviewSimulatorsCount
+                client={client}
+                hostId={host.hostId}
+              />
+            ),
             // Same gate and same query as the Command-line tools hint on
             // the tab, so the dot and the hint come and go together.
             installation: props.hasLocalBridge ? (

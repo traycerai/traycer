@@ -1349,6 +1349,7 @@ const ANALYTICS_LAYOUT_REGIONS = new Set<string>(
     railAgents: true,
     railTerminals: true,
     railBrowsers: true,
+    railSimulators: true,
     railArtifacts: true,
     railGitDiff: true,
     railPullRequests: true,
