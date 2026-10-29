@@ -21,7 +21,7 @@ class ControllableResizeObserver implements ResizeObserver {
 
   constructor(callback: ResizeObserverCallback) {
     this.callback = callback;
-    controllableResizeObservers.push(this);
+    constructedResizeObservers.push(this);
   }
 
   observe(target: Element): void {
@@ -37,27 +37,46 @@ class ControllableResizeObserver implements ResizeObserver {
   }
 }
 
-let controllableResizeObservers: ControllableResizeObserver[] = [];
+/** Every observer this file has constructed, never reset between tests.
+ *  LegendList creates its one process-wide observer on first use and keeps it
+ *  for every later test, so a list emptied per test would stop reaching it
+ *  after the first. A list unmounting unobserves its own elements, so only
+ *  the current test's targets are ever observed. */
+const constructedResizeObservers: ControllableResizeObserver[] = [];
 
+function fireResizeObserver(
+  observer: ControllableResizeObserver,
+  targets: Iterable<Element>,
+): void {
+  const entries = [...targets].map((target) => {
+    const contentRect = target.getBoundingClientRect();
+    const size = [
+      { inlineSize: contentRect.width, blockSize: contentRect.height },
+    ];
+    return {
+      target,
+      contentRect,
+      borderBoxSize: size,
+      contentBoxSize: size,
+      devicePixelContentBoxSize: size,
+    };
+  });
+  observer.callback(entries, observer);
+}
+
+/** Reports the current size of every observed element. */
 function fireAllResizeObservers(): void {
-  for (const observer of controllableResizeObservers) {
-    const entries = [...observer.observed].map((target) => {
-      const contentRect = target.getBoundingClientRect();
-      return {
-        target,
-        contentRect,
-        borderBoxSize: [
-          { inlineSize: contentRect.width, blockSize: contentRect.height },
-        ],
-        contentBoxSize: [
-          { inlineSize: contentRect.width, blockSize: contentRect.height },
-        ],
-        devicePixelContentBoxSize: [
-          { inlineSize: contentRect.width, blockSize: contentRect.height },
-        ],
-      };
-    });
-    observer.callback(entries, observer);
+  for (const observer of constructedResizeObservers) {
+    fireResizeObserver(observer, observer.observed);
+  }
+}
+
+/** Reports the current size of one element only. */
+function fireResizeObserversOf(target: Element): void {
+  for (const observer of constructedResizeObservers) {
+    if (observer.observed.has(target)) {
+      fireResizeObserver(observer, [target]);
+    }
   }
 }
 
@@ -128,7 +147,6 @@ function positionGapsAndSizes(list: LegendListRef): {
 
 describe("LegendList estimate recovery", () => {
   beforeEach(() => {
-    controllableResizeObservers = [];
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       writable: true,
@@ -638,6 +656,131 @@ describe("LegendList estimate recovery", () => {
   });
 
   /**
+   * A transcript is end-aligned, so the rows near its top are never rendered
+   * or measured and each caches the estimate from mount time. Once the type
+   * average has jumped those estimates are stale, and any pass that
+   * re-estimates them moves every row below them, the reader's included. A
+   * pass that anchors nothing has to keep them.
+   */
+  describe("a pass that maintains no visible content position", () => {
+    function endAlignedList(
+      count: number,
+      listRef: React.RefObject<LegendListRef | null>,
+    ) {
+      return (
+        <LegendList
+          ref={listRef}
+          data={rows(count)}
+          estimatedItemSize={90}
+          getItemType={() => "assistant"}
+          initialScrollAtEnd
+          keyExtractor={(item) => item.id}
+          maintainScrollAtEndThreshold={0}
+          maintainVisibleContentPosition={{ data: false, size: true }}
+          recycleItems={false}
+          renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+        />
+      );
+    }
+
+    /** Mounts end-aligned, then pushes the type average past twice the cached
+     *  estimate of the never-measured rows above the window. */
+    async function mountWithStaleEstimates(
+      listRef: React.RefObject<LegendListRef | null>,
+    ) {
+      const view = render(endAlignedList(70, listRef));
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const measuredSize = list.getState().getAverageItemSizes()
+        .assistant.average;
+      act(() => {
+        list.setItemSize("row-69", {
+          height: measuredSize * 60,
+          width: 800,
+        });
+      });
+      await settleLegendList();
+      expect(
+        list.getState().getAverageItemSizes().assistant.average,
+      ).toBeGreaterThan(measuredSize * 2);
+      return { list, measuredSize, rerender: view.rerender };
+    }
+
+    it("an append that MVCP does not anchor keeps the unmeasured rows above the view at their estimates", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      const { list, measuredSize, rerender } =
+        await mountWithStaleEstimates(listRef);
+
+      // Park the reader well above the end, with the unmeasured rows between
+      // the top of the list and the view.
+      const SCROLL_TARGET = 30 * measuredSize;
+      const scrollNode = list.getScrollableNode();
+      act(() => {
+        scrollNode.scrollTop = SCROLL_TARGET;
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+      await settleLegendList();
+
+      const state = list.getState();
+      let anchorIndex = 0;
+      while (state.positionAtIndex(anchorIndex) < state.scroll) {
+        anchorIndex += 1;
+      }
+      const offsetOf = (): number => {
+        const current = list.getState();
+        return current.positionAtIndex(anchorIndex) - current.scroll;
+      };
+      const before = offsetOf();
+
+      // `{data: false}` anchors nothing for a data change, so the rows above
+      // the view are the only thing that could move the reader's row.
+      rerender(endAlignedList(71, listRef));
+      await settleLegendList();
+
+      expect(offsetOf()).toBeCloseTo(before, -1);
+    });
+
+    it("the settled re-layout after an end request leaves the rows above the view alone", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      const { list, measuredSize } = await mountWithStaleEstimates(listRef);
+
+      // Park the reader above the end, then ask for the end.
+      const scrollNode = list.getScrollableNode();
+      act(() => {
+        scrollNode.scrollTop = 30 * measuredSize;
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+      await settleLegendList();
+
+      const rowCount = 70;
+      const positionsBefore = Array.from({ length: rowCount }, (_, index) =>
+        list.getState().positionAtIndex(index),
+      );
+
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await settleLegendList();
+
+      // The settled pass after an end request anchors nothing, so it must
+      // keep the estimate of every unmeasured row the reader has left above
+      // the view.
+      const after = list.getState();
+      const movedAboveView = positionsBefore.flatMap((before, index) =>
+        before < after.scroll && after.positionAtIndex(index) !== before
+          ? [index]
+          : [],
+      );
+      expect(movedAboveView).toEqual([]);
+    });
+  });
+
+  /**
    * The transcript mounts end-aligned (`initialScrollAtEnd`), and rows
    * appended while it is still at the end re-arm that bootstrap. A reader who
    * wheels up in that window gets a pass the library runs with
@@ -798,6 +941,60 @@ describe("LegendList estimate recovery", () => {
       await advanceLegendListFrames(1);
 
       expect(scrollNode.scrollTop).toBeCloseTo(wheeledTo + growth, 0);
+    });
+  });
+
+  /**
+   * The initial scroll to the end leaves its end target standing so that a
+   * resize keeps the reader at the tail. A reader who then scrolls up has left
+   * the tail, and a layout change shortly after must not carry them back to
+   * it. The footer is what keeps the target alive past the scroll event
+   * itself: with a footer layout pending, a scroll away only retargets it, so
+   * it is the reader's own scroll that has to retire it.
+   */
+  describe("a reader's scroll away from the end after the initial scroll to the end", () => {
+    it("retires the end target: a later layout change leaves the reader where they are", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        <LegendList
+          ref={listRef}
+          data={rows(70)}
+          estimatedItemSize={90}
+          getItemType={() => "assistant"}
+          initialScrollAtEnd
+          keyExtractor={(item) => item.id}
+          ListFooterComponent={<div aria-hidden="true" />}
+          maintainScrollAtEndThreshold={0}
+          maintainVisibleContentPosition={{ data: false, size: true }}
+          recycleItems={false}
+          renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+        />,
+      );
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const scrollNode = list.getScrollableNode();
+
+      // The reader scrolls up from the end: one native scroll event.
+      const readerOffset = scrollNode.scrollTop - 1_500;
+      act(() => {
+        scrollNode.scrollTop = readerOffset;
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+      await advanceLegendListFrames(2);
+      expect(scrollNode.scrollTop).toBe(readerOffset);
+
+      // The scroller's height changes, well inside the target's lifetime.
+      vi.spyOn(scrollNode, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, 0, 800, 500),
+      );
+      act(() => {
+        fireResizeObserversOf(scrollNode);
+      });
+      await advanceLegendListFrames(10);
+
+      expect(scrollNode.scrollTop).toBe(readerOffset);
     });
   });
 
