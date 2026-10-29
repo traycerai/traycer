@@ -708,6 +708,64 @@ describe("The Skills page", () => {
     });
   });
 
+  it("holds each removed row on its own, so a second removal releases neither the first nor itself when it is refused", async () => {
+    negotiateMethods(BASE_METHODS);
+    const SECOND: EnvironmentSkill = {
+      ...REVIEW,
+      name: "second",
+      description: null,
+    };
+    // The list keeps holding both names, as it does until a read catches up.
+    const world = { refuse: false };
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW, SECOND]), hostSkills: [] }),
+      "environment.configuration.skills.remove": () =>
+        world.refuse
+          ? { outcome: "refused" as const, reason: null }
+          : { outcome: "removed" as const, reason: null },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    const rowOf = async (skill: string): Promise<HTMLElement> => {
+      const found = (await screen.findByText(skill)).closest("li");
+      if (found === null) throw new Error(`no row for ${skill}`);
+      return found;
+    };
+    const removeFrom = async (skill: string): Promise<void> => {
+      await userEvent.click(
+        within(await rowOf(skill)).getByRole("button", { name: "Remove" }),
+      );
+      await userEvent.click(
+        within(await screen.findByRole("dialog")).getByRole("button", {
+          name: "Remove skill",
+        }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+    };
+
+    await removeFrom("review");
+    await waitFor(async () => {
+      expect(within(await rowOf("review")).getByText("Removing…")).toBeTruthy();
+    });
+
+    // The second removal is refused: it goes back to its verbs, and the first
+    // one — still accepted, still listed — keeps saying it is going.
+    world.refuse = true;
+    await removeFrom("second");
+
+    await waitFor(async () => {
+      expect(
+        within(await rowOf("second")).getByRole("button", { name: "Remove" }),
+      ).toBeTruthy();
+    });
+    expect(within(await rowOf("review")).getByText("Removing…")).toBeTruthy();
+    expect(
+      within(await rowOf("review")).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
+  });
+
   it("says the read failed, naming the configuration, and Retry reads again", async () => {
     negotiateMethods(BASE_METHODS);
     let fail = true;

@@ -252,12 +252,15 @@ function SkillsPageList(props: {
   const { remove } = useEnvironmentSkillMutations(useConfigurationReadClient());
   const [open, setOpen] = useState<EnvironmentSkill | null>(null);
   const [removing, setRemoving] = useState<EnvironmentSkill | null>(null);
-  // The name a removal was sent for. A removal's own answer comes back before
-  // the list is read again, so the row says it is going until the list no
-  // longer holds it, rather than offering its verbs again in between.
-  const [leaving, setLeaving] = useState<string | null>(null);
-  if (leaving !== null && !props.skills.some((skill) => skill.name === leaving))
-    setLeaving(null);
+  // Every name a removal was sent for. A removal's own answer comes back
+  // before the list is read again, so each row says it is going until the list
+  // no longer holds it, rather than offering its verbs again in between — and
+  // one name per row, because a second removal must not release the first.
+  const [leaving, setLeaving] = useState<readonly string[]>([]);
+  const stillListed = leaving.filter((entry) =>
+    props.skills.some((skill) => skill.name === entry),
+  );
+  if (stillListed.length !== leaving.length) setLeaving(stillListed);
   const removeIssue =
     remove.data === undefined
       ? null
@@ -289,7 +292,7 @@ function SkillsPageList(props: {
                   </div>
                 )}
                 <div className="text-ui-xs text-muted-foreground">
-                  {leaving === skill.name
+                  {leaving.includes(skill.name)
                     ? REMOVING_SKILL_LINE
                     : skillPageLine(
                         skill,
@@ -302,7 +305,7 @@ function SkillsPageList(props: {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {leaving === skill.name ? null : (
+                {leaving.includes(skill.name) ? null : (
                   <>
                     {props.hosted ? (
                       <Button
@@ -343,13 +346,18 @@ function SkillsPageList(props: {
           onClose={() => setRemoving(null)}
           onConfirm={() => {
             if (source.kind !== "pool") return;
-            setLeaving(removing.name);
+            const sent = removing.name;
+            setLeaving((names) => [...names, sent]);
+            // A removal that was refused releases its own row, and only its
+            // own: another row's accepted removal is still under way.
+            const release = (): void =>
+              setLeaving((names) => names.filter((entry) => entry !== sent));
             remove.mutate(
-              { environmentId: source.environmentId, name: removing.name },
+              { environmentId: source.environmentId, name: sent },
               {
-                onError: () => setLeaving(null),
+                onError: release,
                 onSuccess: (answer) => {
-                  if (answer.outcome !== "removed") setLeaving(null);
+                  if (answer.outcome !== "removed") release();
                 },
                 onSettled: () => setRemoving(null),
               },

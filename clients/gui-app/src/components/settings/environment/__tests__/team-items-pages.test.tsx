@@ -310,6 +310,46 @@ describe("TeamVariablesAndShells", () => {
     ).toBeTruthy();
     expect(harness.paramsOf("config.shell.get")).toHaveLength(0);
   });
+
+  it("says the host list could not be read, with Retry, rather than that the team runs nowhere", async () => {
+    const world = { failing: true };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () => {
+        if (world.failing) throw new Error("the cloud could not be reached");
+        return { hosts: [] };
+      },
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "editor" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Couldn't read Acme's hosts.")).toBeTruthy();
+    // An unread inventory is not an empty one: it cannot say a sandbox is
+    // what the reader needs.
+    expect(screen.queryByText(/sandbox to see/)).toBeNull();
+    expect(screen.queryByText(/Live values need a host running/)).toBeNull();
+
+    world.failing = false;
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByText(/Live values need a host running/),
+    ).toBeTruthy();
+  });
 });
 
 describe("TeamMcpServers", () => {

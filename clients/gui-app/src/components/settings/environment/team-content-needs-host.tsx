@@ -22,8 +22,11 @@ const NEED_OPENING: Readonly<Record<TeamHostNeed, string>> = {
 
 /**
  * A card that only a host running the picked configuration can fill, with no
- * such host picked. Three states, each with its own remedy:
+ * such host picked. Four states, each with its own remedy:
  *
+ * - the host inventory could not be read: that, and Retry. An unread
+ *   inventory is not an empty one, so this state claims nothing about where
+ *   the configuration runs;
  * - a host can be picked: `Pick one.`, which opens the picker;
  * - the configuration runs somewhere, but nothing there can be reached right
  *   now: that, and Retry, which reads the host list again;
@@ -40,50 +43,83 @@ export function TeamContentNeedsHost(props: {
   const scope = useTeamViewingHost();
   const personal = useConfigurationIsPersonal();
   const hosts = scope.hosts.data?.hosts ?? [];
-  const pickable = hosts.some((host) => scope.canSelectHost(host.hostId));
-  const object = props.content === "guide" ? "it" : "them";
   return (
     <p
       role="status"
       className="flex flex-wrap items-center gap-1 text-ui-sm text-muted-foreground"
     >
-      {!pickable && hosts.length > 0 ? (
-        <>
-          <span>
-            No {personal ? "computer" : "host"} running {props.teamName} can be
-            reached.
-          </span>
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={() => void scope.hosts.refetch()}
-          >
-            Retry
-          </Button>
-        </>
-      ) : (
-        <>
-          <span>
-            {NEED_OPENING[props.content]} a host running {props.teamName}.
-          </span>
-          {pickable ? (
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              onClick={props.onPickHost}
-            >
-              Pick one.
-            </Button>
-          ) : (
-            <span>
-              Start {withIndefiniteArticle(props.teamName)} sandbox to see{" "}
-              {object}.
-            </span>
-          )}
-        </>
-      )}
+      {needsHostLine({
+        content: props.content,
+        teamName: props.teamName,
+        personal,
+        unread: scope.hosts.isError,
+        listed: hosts.length,
+        pickable: hosts.some((host) => scope.canSelectHost(host.hostId)),
+        onPickHost: props.onPickHost,
+        onRetry: () => void scope.hosts.refetch(),
+      })}
     </p>
+  );
+}
+
+/** The line the card reads, by what the host inventory says. */
+function needsHostLine(state: {
+  readonly content: TeamHostNeed;
+  readonly teamName: string;
+  readonly personal: boolean;
+  readonly unread: boolean;
+  readonly listed: number;
+  readonly pickable: boolean;
+  readonly onPickHost: () => void;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const retry = (
+    <Button type="button" variant="link" size="sm" onClick={state.onRetry}>
+      Retry
+    </Button>
+  );
+  if (state.unread) {
+    return (
+      <>
+        <span>
+          Couldn&apos;t read {state.teamName}&apos;s{" "}
+          {state.personal ? "computers" : "hosts"}.
+        </span>
+        {retry}
+      </>
+    );
+  }
+  if (!state.pickable && state.listed > 0) {
+    return (
+      <>
+        <span>
+          No {state.personal ? "computer" : "host"} running {state.teamName} can
+          be reached.
+        </span>
+        {retry}
+      </>
+    );
+  }
+  return (
+    <>
+      <span>
+        {NEED_OPENING[state.content]} a host running {state.teamName}.
+      </span>
+      {state.pickable ? (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          onClick={state.onPickHost}
+        >
+          Pick one.
+        </Button>
+      ) : (
+        <span>
+          Start {withIndefiniteArticle(state.teamName)} sandbox to see{" "}
+          {state.content === "guide" ? "it" : "them"}.
+        </span>
+      )}
+    </>
   );
 }
