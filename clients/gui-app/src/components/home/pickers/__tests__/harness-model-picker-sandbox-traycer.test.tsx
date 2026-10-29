@@ -303,7 +303,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
   createComposerToolbarStore,
@@ -513,6 +516,21 @@ describe("a sandbox refusal's model picker on a host with Traycer off", () => {
 
 const SANDBOX_HOST_ID = "sbx-t1-host";
 const STAGED_SURFACE = "landing:window-1";
+const STAGED_TARGET: StagedSandboxTarget = {
+  kind: "new",
+  configuration: { kind: "personal" },
+  shape: {
+    os: "linux",
+    cpus: 2,
+    memoryMb: 8192,
+    diskMb: null,
+    region: "us-east",
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  },
+  name: "",
+  wakeString: null,
+};
 
 /** The person's Traycer pick, as the composer is seeded with it. */
 const TRAYCER_PICK = {
@@ -605,21 +623,7 @@ describe("a Traycer pick sent to a sandbox, labelled and listed from the cloud c
 
   // OBS 10: the Start page with a sandbox staged, on a host with Traycer off.
   it("names a staged sandbox's Traycer model on the chip while the picker host refuses Traycer", async () => {
-    useStagedSandboxStore.getState().stage(STAGED_SURFACE, {
-      kind: "new",
-      configuration: { kind: "personal" },
-      shape: {
-        os: "linux",
-        cpus: 2,
-        memoryMb: 8192,
-        diskMb: null,
-        region: "us-east",
-        idleMinutes: 30,
-        destroyAfterRestingMinutes: null,
-      },
-      name: "",
-      wakeString: null,
-    });
+    useStagedSandboxStore.getState().stage(STAGED_SURFACE, STAGED_TARGET);
 
     renderSandboxComposerPicker(HOST_ID, "staged");
 
@@ -628,6 +632,24 @@ describe("a Traycer pick sent to a sandbox, labelled and listed from the cloud c
     ).toBeTruthy();
     expect(screen.queryByText("Select model")).toBeNull();
     expect(mocks.hostModelReads.has("traycer")).toBe(false);
+  });
+
+  it("offers only the agents a staged sandbox's catalogue names, never Traycer when it leaves Traycer out", async () => {
+    useStagedSandboxStore.getState().stage(STAGED_SURFACE, STAGED_TARGET);
+    renderSandboxComposerPicker(HOST_ID, "staged");
+
+    // What a refusal's "Choose a model" does for a catalogue of Codex alone:
+    // it opens on Traycer, narrowed to the catalogue's list.
+    act(() => {
+      expect(openActiveModelPickerForHarness("traycer", null, ["codex"])).toBe(
+        true,
+      );
+    });
+    await screen.findByRole("textbox", { name: /^Search/ });
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([expect.stringContaining("codex-main")]);
   });
 
   it("names a resting chat's Traycer model, and lists the cloud's rows rather than calling the sandbox offline", async () => {

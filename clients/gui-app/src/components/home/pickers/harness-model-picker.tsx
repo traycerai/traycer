@@ -400,7 +400,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
-  const sandboxPick = useSandboxTraycerPick(store, selection.harnessId);
   const reasoning = useStore(store, (s) => s.reasoning);
   const serviceTier = useStore(store, (s) => s.serviceTier);
   const setReasoning = useStore(store, (s) => s.setReasoning);
@@ -450,6 +449,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     selection.profileId,
     disabled,
+  );
+  const sandboxPick = useSandboxTraycerPick(
+    store,
+    selection.harnessId,
+    offeredAgents,
   );
   const openForHarness = useOpenHarnessModels(
     props.openForHarnessRef,
@@ -1853,16 +1857,20 @@ interface SandboxTraycerPick {
 /**
  * A Traycer pick sent to a sandbox is answered by the cloud catalog, which
  * the store already reads: the run-target host's own list says nothing about
- * it, and a resting sandbox answers nothing at all.
+ * it, and a resting sandbox answers nothing at all. Not while the picker is
+ * narrowed to agents that leave Traycer out (`cloudTraycerOffered`).
  */
 function useSandboxTraycerPick(
   store: ComposerToolbarStore,
   harnessId: ProviderId,
+  offeredAgents: ReadonlyArray<string> | null,
 ): SandboxTraycerPick {
   const target = useStore(store, (s) => s.sandboxRunTarget);
   const models = useStore(store, (s) => s.catalog.models);
   const modelsLoaded = useStore(store, (s) => s.catalog.modelsLoaded);
-  const fromCloud = target !== null && harnessId === "traycer";
+  const fromCloud =
+    harnessId === "traycer" &&
+    cloudTraycerOffered(offeredAgents, target !== null);
   return { target, models: fromCloud ? models : null, modelsLoaded };
 }
 
@@ -1911,19 +1919,31 @@ interface CloudTraycerModels {
 const EMPTY_CLOUD_MODELS: ReadonlyArray<ModelOption> = [];
 
 /**
- * The cloud catalog's Traycer models while the composer sends to a sandbox, or
- * the picker is narrowed to what sandboxes run and Traycer is among them;
- * `null` otherwise, and nothing is read. Read only while the picker's catalog
- * is active.
+ * Whether Traycer is answered from the cloud catalog. A picker narrowed to
+ * what sandboxes run (`offeredAgents`) follows that list, so a catalogue that
+ * leaves Traycer out never gets it back. Unnarrowed, it is whenever the
+ * composer sends to a sandbox.
+ */
+function cloudTraycerOffered(
+  offeredAgents: ReadonlyArray<string> | null,
+  sendsToSandbox: boolean,
+): boolean {
+  return offeredAgents === null
+    ? sendsToSandbox
+    : offeredAgents.includes("traycer");
+}
+
+/**
+ * The cloud catalog's Traycer models while Traycer is answered from there
+ * (`cloudTraycerOffered`); `null` otherwise, and nothing is read. Read only
+ * while the picker's catalog is active.
  */
 function useCloudTraycerModels(
   offeredAgents: ReadonlyArray<string> | null,
   sendsToSandbox: boolean,
   catalogActive: boolean,
 ): CloudTraycerModels | null {
-  const sandboxTraycer =
-    sendsToSandbox ||
-    (offeredAgents !== null && offeredAgents.includes("traycer"));
+  const sandboxTraycer = cloudTraycerOffered(offeredAgents, sendsToSandbox);
   const query = useSandboxTraycerModels(catalogActive && sandboxTraycer);
   const { data, error, isPending } = query;
   return useMemo(
