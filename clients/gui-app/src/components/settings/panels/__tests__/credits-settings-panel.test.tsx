@@ -278,6 +278,22 @@ describe("CreditsSettingsPanel credit offers", () => {
     setMobileApp(false);
   });
 
+  it("neither asks for nor shows offers in a team context", () => {
+    mocks.data = {
+      ...userWithOffers([offer({})]),
+      teamSubscriptions: [teamSubscription(100)],
+    };
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+
+    renderPanel();
+
+    expect(screen.getByTestId("credits-ready")).toBeTruthy();
+    expect(screen.queryByTestId("credits-offers")).toBeNull();
+    expect(mocks.auth.listCreditOffers).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, []])(
     "renders no offers section when campaignCredits is %j",
     (campaignCredits) => {
@@ -289,6 +305,17 @@ describe("CreditsSettingsPanel credit offers", () => {
       expect(screen.queryByTestId("credits-offers")).toBeNull();
     },
   );
+
+  it("leaves out an offer that has already ended, and the section with it", () => {
+    mocks.data = userWithOffers([
+      offer({ endsAt: new Date(Date.now() - 60 * 1000).toISOString() }),
+    ]);
+
+    renderPanel();
+
+    expect(screen.getByTestId("credits-ready")).toBeTruthy();
+    expect(screen.queryByTestId("credits-offers")).toBeNull();
+  });
 
   it("lists each offer in dollars with its name, description and time left", () => {
     mocks.data = userWithOffers([
@@ -429,13 +456,18 @@ describe("CreditsSettingsPanel claiming offers", () => {
     setMobileApp(false);
   });
 
-  it("offers Claim on an unclaimed offer, a disabled Sold out on a full one, and hides a revoked one", async () => {
+  it("offers Claim on an unclaimed offer, a disabled Sold out on a full one, and hides a revoked or ended one", async () => {
     mocks.auth.listCreditOffers.mockResolvedValue({
       kind: "ok",
       offers: [
         listed({ id: "open", name: "Open offer" }),
         listed({ id: "full", name: "Full offer", claim: "sold_out" }),
         listed({ id: "gone", name: "Revoked offer", claim: "revoked" }),
+        listed({
+          id: "old",
+          name: "Ended offer",
+          endsAt: new Date(Date.now() - 60 * 1000).toISOString(),
+        }),
       ],
     });
 
@@ -453,6 +485,7 @@ describe("CreditsSettingsPanel claiming offers", () => {
       }),
     ).toHaveProperty("disabled", true);
     expect(screen.queryByText("Revoked offer")).toBeNull();
+    expect(screen.queryByText("Ended offer")).toBeNull();
   });
 
   it("lists an offer the user record already carries once", async () => {
@@ -571,20 +604,5 @@ describe("CreditsSettingsPanel claiming offers", () => {
       CREDITS_PAGE.claimSoldOut,
     );
     expect(fallback).toBe(CREDITS_PAGE.claimFailed);
-  });
-
-  it("never asks for offers in a team context", async () => {
-    mocks.data = userRecord([], [teamSubscription(100)]);
-    useAccountContextStore.setState({
-      accountContext: { type: "TEAM", teamId: "team-1" },
-    });
-
-    renderPanel();
-
-    await screen.findByTestId("credits-ready");
-    expect(mocks.auth.listCreditOffers).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: CREDITS_PAGE.offerClaim }),
-    ).toBeNull();
   });
 });

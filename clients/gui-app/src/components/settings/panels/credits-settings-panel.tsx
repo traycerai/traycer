@@ -2,8 +2,8 @@
  * Account ▸ Credits. E4 mounts this under the `credits` row. The balance is
  * the signed-in user's remaining credits, $0.00 included (a user with no
  * subscription has none); `Add credits ↗` opens the dashboard billing page.
- * Credit offers are listed under it, never added into it: the claimed ones
- * the user record carries, and in the personal account context the ones still
+ * In the personal account context, credit offers are listed under it, never
+ * added into it: the claimed ones the user record carries, then the ones still
  * open to claim.
  */
 import type { AuthenticatedUserCampaignCredit } from "@traycer/protocol/auth";
@@ -48,6 +48,7 @@ const MC_PER_CREDIT = 1000;
 
 const NO_OFFERS: ReadonlyArray<AuthenticatedUserCampaignCredit> = [];
 const NO_LISTED_OFFERS: ReadonlyArray<CreditOffer> = [];
+const NO_OFFER_ROWS: ReadonlyArray<OfferRow> = [];
 
 /**
  * One row of the offers section: an offer the user holds, or one still open
@@ -113,8 +114,8 @@ export function CreditsSettingsPanel(): ReactNode {
   const user = query.data ?? null;
   const remainingMc = sandboxBalanceMc(user);
 
-  // Offers belong to the personal account, so a team context never asks for
-  // them. Resolved against the loaded user's teams, as the subscription card
+  // Offers belong to the personal account, so a team context neither asks for
+  // nor shows them. Resolved against the loaded user's teams, as the subscription card
   // resolves it, so a stale stored team cannot read as personal before then.
   const storedContext = useAccountContextStore((s) => s.accountContext);
   const personal =
@@ -154,7 +155,11 @@ export function CreditsSettingsPanel(): ReactNode {
         error={query.isError}
         onRetry={() => void query.refetch()}
         remainingMc={remainingMc}
-        offers={offerRows(user?.campaignCredits ?? NO_OFFERS, listed)}
+        offers={
+          personal
+            ? offerRows(user.campaignCredits ?? NO_OFFERS, listed)
+            : NO_OFFER_ROWS
+        }
         claimingId={claim.isPending ? claim.variables : null}
         onClaim={(campaignId) => claim.mutate(campaignId)}
         installedApp={installedApp}
@@ -240,14 +245,12 @@ function CreditsBody(props: {
           />
         )}
       </div>
-      {props.offers.length === 0 ? null : (
-        <CreditOffers
-          offers={props.offers}
-          claimingId={props.claimingId}
-          onClaim={props.onClaim}
-          installedApp={props.installedApp}
-        />
-      )}
+      <CreditOffers
+        offers={props.offers}
+        claimingId={props.claimingId}
+        onClaim={props.onClaim}
+        installedApp={props.installedApp}
+      />
     </div>
   );
 }
@@ -264,6 +267,11 @@ function CreditOffers(props: {
   readonly installedApp: boolean;
 }): ReactNode {
   const headingId = useId();
+  // The auth user does not poll, so an offer that ends while the panel is open
+  // leaves on the shared minute clock rather than on the next refresh.
+  const now = useSampledNow();
+  const live = props.offers.filter((row) => Date.parse(row.offer.endsAt) > now);
+  if (live.length === 0) return null;
   return (
     // A container, so a narrow pane (the phone, a slim modal) moves the time
     // under the offer's name instead of squeezing the name into a sliver.
@@ -301,7 +309,7 @@ function CreditOffers(props: {
       {/* Subgrid rows: the figure column is as wide as the widest figure, so
           every row's name starts at the same edge. */}
       <ul className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 divide-y divide-border/60 rounded-lg border border-border/60 bg-card/40 px-5 @md:grid-cols-[auto_minmax(0,1fr)_auto]">
-        {props.offers.map((row) =>
+        {live.map((row) =>
           row.kind === "claimed" ? (
             <CreditOfferRow
               key={row.offer.campaignId}
@@ -442,10 +450,6 @@ function CreditOfferRow(props: {
 function CreditOfferTimeLeft(props: { readonly endsAt: string }): ReactNode {
   const now = useSampledNow();
   const end = Date.parse(props.endsAt);
-  // The wire carries the end as a bare string; an unreadable one has no time
-  // to show, and must not take the panel down with a RangeError.
-  if (Number.isNaN(end)) return null;
-  const ended = end <= now;
   return (
     <TooltipWrapper
       label={CREDITS_PAGE.offerEnds(offerEndFormat.format(end))}
@@ -461,9 +465,7 @@ function CreditOfferTimeLeft(props: { readonly endsAt: string }): ReactNode {
       >
         <Timer aria-hidden className="size-3.5" />
         <time dateTime={props.endsAt}>
-          {ended
-            ? CREDITS_PAGE.offerEnded
-            : CREDITS_PAGE.offerTimeLeft(formatDistanceStrict(end, now))}
+          {CREDITS_PAGE.offerTimeLeft(formatDistanceStrict(end, now))}
         </time>
       </button>
     </TooltipWrapper>

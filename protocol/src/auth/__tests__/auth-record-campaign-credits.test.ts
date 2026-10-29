@@ -97,6 +97,14 @@ describe("authenticated-user-response campaignCredits", () => {
     it.each([
       ["a string", "not-a-list"],
       ["an item missing name", [{ ...campaignCredits[0], name: undefined }]],
+      [
+        "a negative remainingCredits",
+        [{ ...campaignCredits[0], remainingCredits: -5 }],
+      ],
+      [
+        "an endsAt that is not a date",
+        [{ ...campaignCredits[0], endsAt: "soon" }],
+      ],
     ])("drops %s to undefined without rejecting the record", (_n, bad) => {
       const result = record.schema.safeParse({
         ...base(),
