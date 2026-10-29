@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import {
+  markReturnedSandboxRestored,
   onReturnedSandboxSuperseded,
   sameReturnedSandbox,
   stageIsReturnedSandbox,
+  takeReturnedSandboxRestored,
   type ReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
 import {
@@ -98,13 +100,15 @@ function useReturnedSandboxStage(
   useEffect(() => {
     if (surfaceKey === null) return;
     return () => {
-      // Runs before the next shown draft installs its own. A stage the
-      // person picked has already superseded this draft's, so never matches,
-      // and one a send or create has taken up is left to it.
+      // Runs before the next shown draft installs its own. Only a stage this
+      // draft restored is released: a pick has dropped the mark, and one a
+      // send or create has taken up is left to it.
       const live = read();
+      if (live === null) return;
+      const restored = takeReturnedSandboxRestored(surfaceKey, live);
       const stage = readStagedSandbox(surfaceKey);
       if (
-        live !== null &&
+        restored &&
         stage?.phase === "staged" &&
         stageIsReturnedSandbox(stage, live)
       )
@@ -125,6 +129,7 @@ function useReturnedSandboxStage(
     staged.stage(surfaceKey, returned.target);
     if (returned.clientRequestId !== null)
       staged.report(surfaceKey, { clientRequestId: returned.clientRequestId });
+    markReturnedSandboxRestored(surfaceKey, returned);
   }, [read, returned, surfaceKey]);
 
   const stage = useStagedSandbox(surfaceKey ?? "");

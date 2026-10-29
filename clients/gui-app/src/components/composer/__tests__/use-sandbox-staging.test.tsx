@@ -907,6 +907,48 @@ describe("a returned sandbox on the open landing draft", () => {
         .drafts.find((draft) => draft.id === "draft-other")?.returnedSandbox,
     ).toEqual(otherDraft);
   });
+
+  it("never releases the person's pick of the same sandbox a draft had returned", () => {
+    useLandingDraftStore.getState().installLandingDraft({
+      id: "draft-plain",
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+    });
+    function ShownDraft(props: { readonly draftId: string }): null {
+      useLandingReturnedSandbox(SURFACE, props.draftId, true);
+      return null;
+    }
+    const show = (draftId: string): void =>
+      view.rerender(
+        <>
+          <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+          <ShownDraft draftId={draftId} />
+        </>,
+      );
+    const view = render(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ShownDraft draftId={DRAFT_ID} />
+      </>,
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+    show("draft-plain");
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+
+    // On the plain draft, the person picks the sandbox the first draft had.
+    act(() => staging().composer.onPickHost(SUSPENDED));
+    show(DRAFT_ID);
+    show("draft-plain");
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      sandboxId: "sbx-box-suspended",
+    });
+  });
 });
 
 describe("useSandboxStaging host picks", () => {
