@@ -44,6 +44,11 @@ const dialogMocks = vi.hoisted(() => ({
   providersByClient: new Map<unknown, ProviderCliState[]>(),
 }));
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({
     create: dialogMocks.create,

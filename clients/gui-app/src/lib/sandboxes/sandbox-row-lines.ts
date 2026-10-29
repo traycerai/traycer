@@ -403,9 +403,6 @@ export function automationsShapeLine(
     : "Runs your long-running shells · agents can't run here · no charge";
 }
 
-const NEVER_WOKE_CLAUSE =
-  "Nothing is billed for a sandbox that never woke · support reference in Details";
-
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
 /**
  * The Automations host at rest, or not created yet: the next shell starts it.
@@ -667,7 +664,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      return `${sandboxFailedToStart(summary.failureCode)} at ${formatSandboxTime(summary.lastTransitionAt)} · ${NEVER_WOKE_CLAUSE}`;
+      return sandboxFailedChatLine(summary);
     case "creating":
       return "Starting";
     case "awake":
@@ -775,9 +772,13 @@ function stoppedLead(
   return `Stopped by ${sandboxMemberName(operation.actor, viewerUserId)}`;
 }
 
-/** The failed row's line with the sandbox as its subject, for its chat. */
+/** The failed-create sentence shared by the row and its chat. */
 export function sandboxFailedChatLine(summary: SandboxSummary): string {
-  return `${summary.displayName} failed to start${referenceSuffix(summary.failureCode)} at ${formatSandboxTime(summary.lastTransitionAt)} · ${NEVER_WOKE_CLAUSE}`;
+  return joinParts(
+    `Couldn't start ${summary.displayName} at ${formatSandboxTime(summary.lastTransitionAt)}`,
+    sandboxSupportReference(summary.failureCode),
+    "nothing was charged",
+  );
 }
 
 /**

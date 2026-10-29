@@ -1558,6 +1558,7 @@ function chatTileTestTree(
 function chatTileSessionViewTestTree(
   queryClient: QueryClient,
   handle: ChatSessionStoreHandle,
+  isLiveSession: boolean,
 ) {
   return chatTileProviders(
     queryClient,
@@ -1570,7 +1571,7 @@ function chatTileSessionViewTestTree(
       currentEpicId={EPIC_ID}
       restingSandbox={RESTING_COPY_SANDBOX}
       readOnlyNotice={null}
-      isLiveSession={false}
+      isLiveSession={isLiveSession}
       preContent={null}
     />,
   );
@@ -1594,7 +1595,28 @@ function renderRestingCopy(handle: ChatSessionStoreHandle) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileSessionViewTestTree(queryClient, handle));
+  return render(chatTileSessionViewTestTree(queryClient, handle, false));
+}
+
+/**
+ * The live tile of a chat whose sandbox rests: a tab opened while the sandbox
+ * was awake stays bound to it, and the pool serves the stream at rest. The
+ * tab's host answers nothing, so its workspace reads never settle.
+ */
+function renderServedAtRest(handle: ChatSessionStoreHandle) {
+  // A sandbox task starts with no workspace folders and binds none.
+  act(() => {
+    handle.store.setState({ worktreeBinding: null, missingWorktreePaths: [] });
+  });
+  workspaceRpcTestState.methods.length = 0;
+  workspaceRpcTestState.settingsWrites.length = 0;
+  usePendingSandboxSendStore.setState({ sends: {} });
+  useStagedSandboxStore.getState().clearAll();
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(chatTileSessionViewTestTree(queryClient, handle, true));
 }
 
 function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
@@ -2431,6 +2453,57 @@ describe("<ChatTile />", () => {
     },
   );
 
+  it("keeps an unconfirmed send and its delivery check beside a resting sandbox footer", async () => {
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+    ];
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+    renderChatTile();
+    await waitForChatTileLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) throw new Error("expected the live chat handle");
+    // The deadline's local fact belongs to a real dispatched, unanswered send.
+    act(() =>
+      handle.store.setState({
+        unconfirmedSendActionIds: new Set([frame.clientActionId]),
+      }),
+    );
+
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        state: "suspended",
+      }),
+    ];
+    act(() =>
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(
+          /resting-box is suspended · your next message resumes it/,
+        ),
+      ).toHaveLength(1),
+    );
+    expect(
+      screen.getByTestId("chat-composer-delivery-unconfirmed").textContent,
+    ).toContain("Delivery not confirmed");
+    expect(screen.getByRole("button", { name: "Check delivery" })).toBeTruthy();
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+  });
+
   it("lets a sandbox state explain a dead lease before the first snapshot, even while the directory says reachable", async () => {
     directoryListTestState.entries = [
       {
@@ -2457,9 +2530,7 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(
-      screen.getAllByText(
-        "stopping-box isn't available — this chat stays readable.",
-      ),
+      screen.getAllByText("stopping-box is running, but Traycer can’t connect"),
     ).toHaveLength(1);
     expect(document.body.textContent).not.toContain("is offline");
     expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
@@ -2494,6 +2565,51 @@ describe("<ChatTile />", () => {
     expect(
       screen.getByTestId("chat-composer-reconnecting").textContent,
     ).toContain("Reconnecting to the host — sending is paused");
+  });
+
+  it("sends from a resting chat's live tile whose host can't answer for its workspace folders", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+
+    renderServedAtRest(handle);
+
+    // A hint leaves the button focusable and marks it `aria-disabled` instead.
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-disabled")).toBeNull();
+    });
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "worktree.listBindingsForEpic",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.request).toMatchObject({
+      kind: "message",
+      chatId: CHAT_ARTIFACT.id,
+      hostId: RESTING_COPY_SANDBOX.sandbox.hostId,
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
   });
 
   it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {

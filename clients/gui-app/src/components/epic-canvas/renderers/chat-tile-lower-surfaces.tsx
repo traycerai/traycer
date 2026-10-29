@@ -998,7 +998,7 @@ function LiveChatComposer(props: {
             tabHostId={tabHostId}
             onContinue={model.composer.onContinueOnTeamHosts}
           />
-          {sandboxSays ? null : <ChatComposerDeliveryStatus />}
+          <ChatComposerDeliveryStatus hideReconnecting={sandboxSays} />
           <ChatComposerOpencodeLineHeld />
         </>
       }

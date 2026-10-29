@@ -47,6 +47,10 @@ const mocks = vi.hoisted(() => ({
   modelsByHarness: new Map<string, ReadonlyArray<ModelOption>>(),
   /** Every harness whose models the picker asked its HOST for. */
   hostModelReads: new Set<string>(),
+  /** Harnesses whose `listModels` the host refuses (Traycer off there). */
+  hostModelsRefused: new Set<string>(),
+  /** Hosts the directory reads as unreachable. */
+  unreachableHosts: new Set<string>(),
   cloud: {
     data: undefined as ReadonlyArray<ModelOption> | undefined,
     isPending: false,
@@ -58,6 +62,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/sandboxes/use-on-team-sandbox", () => ({
   useOnTeamSandbox: (): boolean => false,
   useHostOwnerTeamId: (): string | null => null,
+  useSandboxHostConfiguration: (): null => null,
+}));
+
+vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
+  useRegisterFocusedComposerControls: () => undefined,
+}));
+
+vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
+  useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
+    profileId,
 }));
 
 // The cloud's Traycer catalog, `GET /api/traycer/models`.
@@ -152,7 +166,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => ({
-    status: "reachable",
+    status: mocks.unreachableHosts.has(hostId) ? "unreachable" : "reachable",
     hostLabel: hostId,
     unavailability: null,
     basis: "directory",
@@ -233,6 +247,15 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       };
     }
     if (activity.enabled) mocks.hostModelReads.add(harnessId);
+    if (mocks.hostModelsRefused.has(harnessId)) {
+      return {
+        data: undefined,
+        isPending: false,
+        isError: true,
+        error: new Error("PROVIDER_DISABLED"),
+        refetch: () => Promise.resolve({ data: undefined }),
+      };
+    }
     return {
       data: activity.enabled
         ? { harnessId, models: mocks.modelsByHarness.get(harnessId) ?? [] }
@@ -278,6 +301,12 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
+import {
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
   createComposerToolbarStore,
@@ -482,5 +511,178 @@ describe("a sandbox refusal's model picker on a host with Traycer off", () => {
     await screen.findByRole("textbox", { name: /^Search/ });
 
     expect(mocks.cloud.enabled).not.toContain(true);
+  });
+});
+
+const SANDBOX_HOST_ID = "sbx-t1-host";
+const STAGED_SURFACE = "landing:window-1";
+const STAGED_TARGET: StagedSandboxTarget = {
+  kind: "new",
+  configuration: { kind: "personal" },
+  shape: {
+    os: "linux",
+    cpus: 2,
+    memoryMb: 8192,
+    diskMb: null,
+    region: "us-east",
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  },
+  name: "",
+  wakeString: null,
+};
+
+/** The person's Traycer pick, as the composer is seeded with it. */
+const TRAYCER_PICK = {
+  harnessId: "traycer",
+  model: "traycer:claude-sonnet-5-5",
+  permissionMode: "supervised",
+  reasoningEffort: null,
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+} as const;
+
+/**
+ * A composer's own toolbar store, fed by the real hook, under the real picker:
+ * the send runs on a sandbox that either is staged on this surface or rests
+ * under this chat.
+ */
+function SandboxComposerPicker(props: {
+  readonly hostId: string;
+  readonly target: "staged" | "resting";
+}): ReactNode {
+  const store = useComposerToolbarStore(
+    null,
+    fallbackSeedSource(TRAYCER_PICK, null),
+    null,
+    {
+      hostClient: null,
+      hostId: props.hostId,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: props.target === "staged" ? STAGED_SURFACE : null,
+      sendsToRestingSandbox: props.target === "resting",
+    },
+  );
+  return (
+    <HarnessModelPicker
+      labelDisplay="responsive"
+      store={store}
+      maxModeContext={{ kind: "none" }}
+      withServiceTier={false}
+      withReasoning
+      tuiOnly={false}
+      lockedHarnessId={null}
+      disabled={false}
+      registerActivation
+      createProfileHostId={null}
+      runTargetHostId={props.hostId}
+      profileAdmission={null}
+      terminalLoginSurface={null}
+      embedding={null}
+    />
+  );
+}
+
+function renderSandboxComposerPicker(
+  hostId: string,
+  target: "staged" | "resting",
+): void {
+  render(
+    <SurfaceActivityProvider active>
+      <TooltipProvider delayDuration={0}>
+        <SandboxComposerPicker hostId={hostId} target={target} />
+      </TooltipProvider>
+    </SurfaceActivityProvider>,
+  );
+}
+
+describe("a Traycer pick sent to a sandbox, labelled and listed from the cloud catalog", () => {
+  beforeEach(() => {
+    installHostWithTraycerOff();
+    mocks.hostModelReads.clear();
+    mocks.hostModelsRefused = new Set(["traycer"]);
+    mocks.unreachableHosts = new Set();
+    mocks.cloud.data = CLOUD_MODELS;
+    mocks.cloud.isPending = false;
+    mocks.cloud.error = null;
+    mocks.cloud.enabled = [];
+    useStagedSandboxStore.setState({ bySurface: {} });
+    useComposerHarnessMemoryStore.getState().resetForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.hostModelsRefused = new Set();
+    mocks.unreachableHosts = new Set();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    resetActiveModelPickerForTests();
+    resetPaneActivationFocusIntentsForTests();
+    useComposerHarnessMemoryStore.getState().resetForTests();
+  });
+
+  // OBS 10: the Start page with a sandbox staged, on a host with Traycer off.
+  it("names a staged sandbox's Traycer model on the chip while the picker host refuses Traycer", async () => {
+    useStagedSandboxStore.getState().stage(STAGED_SURFACE, STAGED_TARGET);
+
+    renderSandboxComposerPicker(HOST_ID, "staged");
+
+    expect(
+      await screen.findByRole("button", { name: /^Claude Sonnet 5\.5/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Select model")).toBeNull();
+    expect(mocks.hostModelReads.has("traycer")).toBe(false);
+  });
+
+  it("offers only the agents a staged sandbox's catalogue names, never Traycer when it leaves Traycer out", async () => {
+    useStagedSandboxStore.getState().stage(STAGED_SURFACE, STAGED_TARGET);
+    renderSandboxComposerPicker(HOST_ID, "staged");
+
+    // What a refusal's "Choose a model" does for a catalogue of Codex alone:
+    // it opens on Traycer, narrowed to the catalogue's list.
+    act(() => {
+      expect(openActiveModelPickerForHarness("traycer", null, ["codex"])).toBe(
+        true,
+      );
+    });
+    await screen.findByRole("textbox", { name: /^Search/ });
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([expect.stringContaining("codex-main")]);
+  });
+
+  it("names a resting chat's Traycer model, and lists the cloud's rows rather than calling the sandbox offline", async () => {
+    mocks.unreachableHosts = new Set([SANDBOX_HOST_ID]);
+
+    renderSandboxComposerPicker(SANDBOX_HOST_ID, "resting");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Claude Sonnet 5\.5/ }),
+    );
+    await screen.findByRole("textbox", { name: /^Search/ });
+
+    expect(screen.queryByText(`${SANDBOX_HOST_ID} is offline`)).toBeNull();
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      expect.stringContaining("Claude Sonnet 5.5"),
+      expect.stringContaining("GPT 6.1"),
+    ]);
+  });
+
+  it("waits on the cloud's rows for a resting chat, never calling the sandbox offline", async () => {
+    mocks.unreachableHosts = new Set([SANDBOX_HOST_ID]);
+    mocks.cloud.data = undefined;
+    mocks.cloud.isPending = true;
+
+    renderSandboxComposerPicker(SANDBOX_HOST_ID, "resting");
+    act(() => {
+      expect(openActiveModelPickerForHarness("traycer", null, null)).toBe(true);
+    });
+    await screen.findByRole("textbox", { name: /^Search/ });
+
+    expect(screen.getByText("Loading models")).toBeTruthy();
+    expect(screen.queryByText(`${SANDBOX_HOST_ID} is offline`)).toBeNull();
   });
 });

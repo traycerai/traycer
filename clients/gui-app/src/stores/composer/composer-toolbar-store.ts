@@ -178,6 +178,14 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * slug, so `model: ""` never reaches persistence or the wire.
    */
   readonly pendingSettingsEmit: boolean;
+  /**
+   * The sandbox this composer's send runs on instead of its host: one staged
+   * for a new task, or the resting sandbox a chat's next message wakes;
+   * `null` when the send runs on the host. Its Traycer models are the cloud
+   * catalog's, so the picker labels and lists Traycer from there, and a
+   * resting one is never described as an offline host.
+   */
+  readonly sandboxRunTarget: "staged" | "resting" | null;
 }
 
 /**
@@ -348,6 +356,7 @@ export function createComposerToolbarStore(
       ...deriveToolbarState(input.values, initialCatalog, null, policy),
       onSettingsChange: input.onSettingsChange,
       pendingSettingsEmit: false,
+      sandboxRunTarget: null,
 
       setPermission: (next) => {
         update({ permission: next });

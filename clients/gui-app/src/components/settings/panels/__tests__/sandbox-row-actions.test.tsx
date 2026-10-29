@@ -18,6 +18,7 @@ import type {
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
+import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -249,12 +250,14 @@ beforeEach(() => {
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
   useLandingPanelStore.getState().resetForTests();
+  useSandboxDetailsStore.setState({ sandboxId: null });
 });
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useSandboxDetailsStore.setState({ sandboxId: null });
 });
 
 function TerminalPaneHarness() {
@@ -1198,11 +1201,26 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
     });
 
-    it("still reaches Destroy from an awake sandbox whose settings did not apply", async () => {
-      renderFailed({ state: "awake" }, false);
+    it.each([
+      { guestConfigured: false, settingsFailed: false },
+      { guestConfigured: true, settingsFailed: true },
+    ])(
+      "keeps Details only inline and keeps the lifecycle menu for guestConfigured=$guestConfigured, settingsFailed=$settingsFailed",
+      async ({ guestConfigured, settingsFailed }) => {
+        renderFailed({ state: "awake", guestConfigured }, settingsFailed);
+        const details = screen.getByRole("button", { name: "Details" });
 
-      expect(await menuItems()).toContain("Destroy");
-    });
+        expect(await menuItems()).toEqual([
+          "Open terminal",
+          "Rename",
+          "Stop",
+          "Destroy",
+        ]);
+        await userEvent.keyboard("{Escape}");
+        await userEvent.click(details);
+        expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx-failed");
+      },
+    );
 
     it("retries with the combined retry, never the guest-only repair", async () => {
       renderFailed({ state: "awake" }, false);
@@ -1344,6 +1362,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       renderFailed({ state: "awake", guestConfigured: true }, false);
 
       expect(screen.getByRole("button", { name: "Suspend" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
       expect(await menuItems()).toEqual([
         "Open a tab",
         "Open terminal",

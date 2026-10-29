@@ -182,5 +182,5 @@ function useSandboxLifecycleRead(
     };
   }, [auth, userId, revision, directory, queryClient, signedIn, available]);
 
-  return completedRevision < revision;
+  return auth !== null && signedIn && available && completedRevision < revision;
 }

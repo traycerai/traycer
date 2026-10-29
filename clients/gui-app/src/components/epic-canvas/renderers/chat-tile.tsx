@@ -2514,6 +2514,7 @@ function useChatTileSessionViewModel(
   // chat's binding so sibling chat folders do not appear in this chip.
   const workspaceAvailability = useChatWorkspaceAvailability({
     isCopy,
+    resting: props.restingSandbox !== undefined,
     currentEpicId,
     worktreeBinding: state.worktreeBinding,
     snapshotLoaded: state.snapshotLoaded,
@@ -4704,20 +4705,25 @@ function useChatMissingWorktreeFocusRefresh(args: {
 
 function useChatWorkspaceAvailability(args: {
   readonly isCopy: boolean;
+  /** The chat's sandbox rests and its next message wakes it. */
+  readonly resting: boolean;
   readonly currentEpicId: string;
   readonly worktreeBinding: WorktreeBinding | null;
   readonly snapshotLoaded: boolean;
   readonly missingWorktreePaths: ReadonlyArray<string>;
 }): WorkspaceComposerAvailability {
   const client = useTabHostClient();
+  const sendsToSandbox = args.isCopy || args.resting;
   const epicWorkspaces = useChatSendGateWorkspaceBindingsForClient({
     client,
     epicId: args.currentEpicId,
-    enabled: !args.isCopy && client !== null,
+    enabled: !sendsToSandbox && client !== null,
   });
-  // A resting copy sends to its sandbox, whose workspace is checked on delivery.
-  // The serving host's folders cannot determine whether that send is allowed.
-  if (args.isCopy) return WORKSPACE_COMPOSER_READY;
+  // A resting chat - its published copy, or its live tile served at rest -
+  // sends to its sandbox, whose workspace is checked on delivery. The tab
+  // host's folders cannot decide that send: it serves the copy, or it is the
+  // resting sandbox itself and answers nothing.
+  if (sendsToSandbox) return WORKSPACE_COMPOSER_READY;
   const epicWorkspaceCount =
     epicWorkspaces.data === undefined ? null : epicWorkspaces.data.rows.length;
 

@@ -19,11 +19,13 @@ const sources = vi.hoisted(
     serving: ChatServing | null;
     status: StreamConnectionStatus;
     task: TaskSandboxHost;
+    unavailableReason: string | null;
   } => ({
     binding: null,
     serving: null,
     status: "open",
     task: { kind: "other" },
+    unavailableReason: null,
   }),
 );
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -58,7 +60,7 @@ vi.mock(
   }),
 );
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
-  useSandboxControlUnavailableReason: () => null,
+  useSandboxControlUnavailableReason: () => sources.unavailableReason,
 }));
 
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
@@ -139,6 +141,7 @@ beforeEach(() => {
   sources.serving = LIVE;
   sources.status = "open";
   sources.task = { kind: "other" };
+  sources.unavailableReason = null;
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: VIEWER, username: "Viewer" },
@@ -154,6 +157,44 @@ afterEach(() => {
 });
 
 describe("a live chat's sandbox lifecycle reconciliation", () => {
+  it.each(["unverified", "control unavailable"] as const)(
+    "does not claim a lifecycle read is pending while %s, and resumes when eligible",
+    async (reason) => {
+      const { result, rerender, binding } = setup(listed("awake"));
+      await waitFor(() => expect(result.current.listedState).toBe("awake"));
+      if (reason === "unverified") {
+        act(() => useAuthStore.setState({ status: "unverified" }));
+      } else {
+        sources.unavailableReason = "Unavailable in this build";
+      }
+      sources.status = "reconnecting";
+      rerender();
+
+      expect(result.current.state.kind).toBe("unreachable");
+      expect(result.current.view.line?.text).toBe(
+        "test-box is running, but Traycer can’t connect",
+      );
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
+
+      const read = deferredAnswer();
+      binding.auth.listSandboxes.mockReturnValueOnce(read.promise);
+      sources.unavailableReason = null;
+      act(() => useAuthStore.setState({ status: "signed-in" }));
+      rerender();
+      await waitFor(() =>
+        expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
+      );
+      expect(result.current.state.kind).toBe("pending");
+      await act(async () => {
+        read.answer(listed("awake"));
+        await read.promise;
+      });
+      await waitFor(() =>
+        expect(result.current.state.kind).toBe("unreachable"),
+      );
+    },
+  );
+
   it("finishes the shared lifecycle read when the live tile unmounts during substitution", async () => {
     const live = setup(listed("awake"));
     await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
