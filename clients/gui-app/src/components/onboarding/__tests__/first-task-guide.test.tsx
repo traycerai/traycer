@@ -30,33 +30,50 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+interface ToastOptions {
+  readonly id?: string;
+  readonly description?: ReactNode;
+  readonly action?: {
+    readonly label: string;
+    readonly onClick: () => void;
+  };
+  readonly cancel?: {
+    readonly label: string;
+    readonly onClick: () => void;
+  };
+  readonly onDismiss?: () => void;
+}
+
 const toastState = vi.hoisted(() => {
   let onDismiss: (() => void) | undefined;
   let onAction: (() => void) | undefined;
+  /** The options each toast was last shown under, by the id it carries. */
+  const byId = new Map<string, ToastOptions>();
   const toast = Object.assign(
-    vi.fn(
-      (
-        _message: string,
-        options: {
-          readonly description?: ReactNode;
-          readonly action?: {
-            readonly label: string;
-            readonly onClick: () => void;
-          };
-          readonly onDismiss?: () => void;
-        },
-      ) => {
-        onDismiss = options.onDismiss;
-        onAction = options.action?.onClick;
-      },
-    ),
+    vi.fn((_message: string, options: ToastOptions) => {
+      onDismiss = options.onDismiss;
+      onAction = options.action?.onClick;
+      if (options.id !== undefined) byId.set(options.id, options);
+    }),
     {
-      dismiss: vi.fn(() => onDismiss?.()),
+      dismiss: vi.fn((id: string) => {
+        const handler = byId.get(id)?.onDismiss ?? onDismiss;
+        handler?.();
+      }),
       invokeDismiss: () => onDismiss?.(),
       invokeAction: (): void => onAction?.(),
+      /** The options of the toast shown under `id`, or `null` for none. */
+      optionsFor: (id: string): ToastOptions | null => byId.get(id) ?? null,
+      invokeActionFor: (id: string): void => {
+        byId.get(id)?.action?.onClick();
+      },
+      invokeCancelFor: (id: string): void => {
+        byId.get(id)?.cancel?.onClick();
+      },
       reset: () => {
         onDismiss = undefined;
         onAction = undefined;
+        byId.clear();
       },
     },
   );
@@ -305,8 +322,10 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       expect.anything(),
     );
     const [, options] = toastState.mock.calls[toastState.mock.calls.length - 1];
-    expect(render(options.description).container.textContent).toBe("Review");
-    expect(options.action?.label).toBe("Open");
+    // The verb is the toast's own action: `… · Review`, with no line of its
+    // own repeating it.
+    expect(options.description ?? null).toBeNull();
+    expect(options.action?.label).toBe("Review");
 
     act(() => toastState.invokeAction());
     expect(useRetrospectiveSheetStore.getState()).toMatchObject({
@@ -356,6 +375,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       "Move them to use them everywhere",
     );
     expect(options.action?.label).toBe("Show me what moves");
+    expect(options.cancel?.label).toBe("Not now");
 
     act(() => toastState.invokeAction());
     expect(useMoveSheetStore.getState().target).toEqual({
@@ -382,6 +402,91 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
   describe("the move toast", () => {
     const MOVE_TOAST = "This computer's settings aren't in Personal.";
+    // The two toasts the Start page shows, each under its own id: the
+    // invitation is not the setup reminder's other wording.
+    const MOVE_INVITATION_TOAST_ID = "traycer-move-invitation";
+    const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
+
+    /**
+     * This computer, whose `environment.status` answers whatever `answer`
+     * holds: the move's own state as the host reports it over time.
+     */
+    function computerWhoseStatusChanges(
+      answer: () => EnvironmentStatusResponseV11,
+    ): void {
+      const { client } = buildEnvironmentClient({
+        hostId: "old",
+        handlers: {
+          "environment.review": () => ({
+            entries: [],
+            shownAt: null,
+            acknowledgedAt: null,
+            evidence: { version: null, at: null },
+          }),
+          "environment.status": () => answer(),
+        },
+      });
+      recordNegotiatedHostManifest("old", {
+        "environment.review": { major: 1, minor: 2 },
+        "environment.status": { major: 1, minor: 1 },
+      });
+      thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+    }
+
+    it("carries its own id, so the setup reminder never stands in its place", async () => {
+      computerWithStatus(NOT_MOVED_STATUS);
+      mountGuide();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+
+      expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull();
+      expect(toastState.optionsFor(SETUP_REMINDER_TOAST_ID)).toBeNull();
+    });
+
+    it("stays up when the status stops naming a move to make, pressed or × only", async () => {
+      let answer = NOT_MOVED_STATUS;
+      computerWhoseStatusChanges(() => answer);
+      const { queryClient } = mountGuide();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+      toastState.dismiss.mockClear();
+
+      // The read stops naming a move: an accepted move, a host swap, a
+      // version without the planes. The invitation is nobody's to withdraw.
+      answer = environmentStatusFixture({});
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+
+      expect(toastState.dismiss).not.toHaveBeenCalledWith(
+        MOVE_INVITATION_TOAST_ID,
+      );
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+      // Its action still opens the sheet it named.
+      act(() => toastState.invokeActionFor(MOVE_INVITATION_TOAST_ID));
+      expect(useMoveSheetStore.getState().target).toEqual({
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    });
+
+    it("records its dismissal when Not now is pressed", async () => {
+      computerWithStatus(NOT_MOVED_STATUS);
+      mountGuide();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+
+      act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
+
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    });
 
     async function mountedMoveToast(): Promise<RenderResult> {
       computerWithStatus(NOT_MOVED_STATUS);
@@ -462,7 +567,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       });
       await waitFor(() =>
         expect(toastState.dismiss).toHaveBeenCalledWith(
-          "traycer-getting-started",
+          MOVE_INVITATION_TOAST_ID,
         ),
       );
 

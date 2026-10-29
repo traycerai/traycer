@@ -7,6 +7,7 @@ import type {
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
@@ -388,6 +389,68 @@ const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 2 * SECOND_MS,
   maxDelayMs: 5 * MINUTE_MS,
 };
+
+/**
+ * This computer's move into Personal, while it can still progress.
+ *
+ * `environment.status` is the ONLY source of the move's own state, so this
+ * read's cadence IS the frame rate of the line a person is watching - the
+ * Local row's note and the Overview's settings card both read `Moving this
+ * computer's settings to Personal · <n> of <m> items applied` from it. Same
+ * reasoning as `providers.list`'s installing lane below, and the same shape.
+ *
+ * The steady lane cannot resolve this at all: a move of a handful of items
+ * finishes in a couple of seconds, so the whole moving window falls between
+ * two of its ticks and the pre-move note stands through it.
+ */
+const ENVIRONMENT_MOVE_RUNNING_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.move-running",
+  initialDelayMs: 500,
+  maxDelayMs: 2 * SECOND_MS,
+};
+/**
+ * Every other answer, at the cadence every environments surface has read the
+ * status at: an edit goes from `applying` to `applied` in seconds and nothing
+ * else tells the page it did. Pinned rather than backing off, and reset on
+ * each settlement, so a second move still starts at the lane above's first
+ * delay instead of inheriting the first move's.
+ */
+const ENVIRONMENT_STATUS_STEADY_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.steady",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 5 * SECOND_MS,
+};
+/** The read itself failed: the host's reachability is the scope's problem first. */
+const ENVIRONMENT_STATUS_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.error",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
+const ENVIRONMENT_STATUS_RESET_LANES: ReadonlySet<string> = new Set([
+  ENVIRONMENT_STATUS_STEADY_POLL_LANE.id,
+]);
+/** Why a move stopped (`hostSettingsCardState`); `state` is open, so these are named. */
+const MOVE_STOPPED_STATES: ReadonlySet<string> = new Set(["stalled", "failed"]);
+
+/**
+ * Whether the host reports a move that can still move: the person accepted it
+ * (`consent`) and setup has not left `moving_settings`, with no reason
+ * recorded for having stopped.
+ *
+ * The consent is what makes this precise. An un-moved computer rests at
+ * `moving_settings`/`awaiting_consent` for as long as nobody moves it, so the
+ * stage alone would put every un-moved computer on the fast lane for ever. A
+ * stopped move is terminal until a Retry, which re-reads the status itself.
+ */
+function moveCanStillProgress(data: EnvironmentStatusResponseV11): boolean {
+  const setup = data.setup;
+  return (
+    setup !== null &&
+    setup.stage === "moving_settings" &&
+    data.consent !== null &&
+    !MOVE_STOPPED_STATES.has(setup.state)
+  );
+}
 
 const LATEST_SCHEDULING = {
   mode: "latest",
@@ -2454,10 +2517,22 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: { kind: "fixed", intervalMs: 5_000 },
   },
   // A Personal page re-reads it while open: an edit goes from "applying" to
-  // "applied" in seconds and nothing else tells the page it did.
+  // "applied" in seconds and nothing else tells the page it did. While this
+  // computer's move into Personal runs, the same read is the move's progress
+  // bar, which the steady lane cannot resolve - see the lanes above.
   "environment.status": {
     ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 5_000 },
+    poll: defineConditionPolicy("environment.status", {
+      classify: (data) => {
+        if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
+        return moveCanStillProgress(data)
+          ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
+          : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
+      },
+      initialErrorLane: ENVIRONMENT_STATUS_ERROR_POLL_LANE,
+      staleDataErrorLane: ENVIRONMENT_STATUS_ERROR_POLL_LANE,
+      resetLaneIds: ENVIRONMENT_STATUS_RESET_LANES,
+    }),
   },
   "environment.notices": { ...LATEST_SCHEDULING, poll: null },
   "environment.review": { ...LATEST_SCHEDULING, poll: null },

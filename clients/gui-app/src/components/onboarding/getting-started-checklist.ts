@@ -1,4 +1,11 @@
-import { Coins, Download, KeyRound, Lock, SquarePen } from "lucide-react";
+import {
+  Coins,
+  Download,
+  KeyRound,
+  Lock,
+  MonitorUp,
+  SquarePen,
+} from "lucide-react";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -15,6 +22,11 @@ import {
 import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
+import { useThisComputer } from "@/components/settings/move/this-computer";
+import {
+  useThisComputersMove,
+  type ThisComputersMove,
+} from "@/components/settings/move/use-this-computers-move";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 const CARDS = [
@@ -35,6 +47,12 @@ const CARDS = [
     icon: Lock,
     row: GETTING_STARTED.definitions.secret,
     action: "Open Secrets",
+  },
+  {
+    id: "move",
+    icon: MonitorUp,
+    row: GETTING_STARTED.definitions.move,
+    action: "Show me what moves",
   },
   {
     id: "install",
@@ -60,6 +78,8 @@ export interface GettingStartedFacts {
   readonly hasSecondPersonalComputer: boolean;
   readonly sandboxStaged: boolean;
   readonly creditsAboveZero: boolean;
+  /** Where this computer's own settings stand against Personal. */
+  readonly thisComputersMove: ThisComputersMove;
 }
 
 /** Everything a card prints, derived once so the markup only reads it. */
@@ -85,6 +105,8 @@ function stepIsDone(
       return facts.hasTask;
     case "secret":
       return facts.hasSecret;
+    case "move":
+      return facts.thisComputersMove === "moved";
     case "install":
       return facts.hasSecondPersonalComputer;
     case "credits":
@@ -92,16 +114,35 @@ function stepIsDone(
   }
 }
 
+/**
+ * Whether a card is shown at all. Two are conditional, each on a fact about
+ * whether the step EXISTS for this person rather than whether it is done:
+ * credits while a sandbox is staged in this window, and the move while this
+ * computer can say where its settings stand - a card nobody can finish would
+ * hold the checklist open for ever.
+ */
+function cardApplies(
+  card: GettingStartedCard,
+  facts: GettingStartedFacts,
+): boolean {
+  if (card.id === "credits") return facts.sandboxStaged;
+  if (card.id === "move") {
+    const move = facts.thisComputersMove;
+    return move === "not_moved" || move === "moved";
+  }
+  return true;
+}
+
 export function gettingStartedVisibleCards(
   facts: GettingStartedFacts,
 ): readonly GettingStartedCard[] {
-  return CARDS.filter((card) => card.id !== "credits" || facts.sandboxStaged);
+  return CARDS.filter((card) => cardApplies(card, facts));
 }
 
 /**
  * True when every step the Guide group currently shows is done. E4 hides
  * the group from this. Credits is in the count only while a sandbox is
- * staged in this window.
+ * staged in this window, and the move only while this computer can answer it.
  */
 export function gettingStartedGuideIsComplete(
   facts: GettingStartedFacts,
@@ -121,6 +162,16 @@ function cardPresentation(
     status: done ? "Complete" : "Not started",
     action: card.action,
   };
+}
+
+/** One entry per visible card, everything a card prints already derived. */
+export function gettingStartedEntries(
+  facts: GettingStartedFacts,
+): readonly GettingStartedEntry[] {
+  return gettingStartedVisibleCards(facts).map((card) => ({
+    card,
+    presentation: cardPresentation(card, facts),
+  }));
 }
 
 export function useGettingStartedFacts(): GettingStartedFacts {
@@ -150,6 +201,11 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   const running = useHostsRunningPersonal();
   const user = useAuthUser().data ?? null;
   const staged = useStagedSandboxInThisWindow();
+  // The move is about THIS computer, not the host this window happens to be
+  // bound to: it is the computer whose settings the card offers to move, and
+  // the one the sheet the card opens is for.
+  const computer = useThisComputer();
+  const thisComputersMove = useThisComputersMove(computer, true);
   return {
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),
@@ -159,6 +215,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
       running.hosts.filter((host) => host.kind === "personal").length >= 2,
     sandboxStaged: sandboxIsStagedInThisWindow(staged),
     creditsAboveZero: (sandboxBalanceMc(user) ?? 0) > 0,
+    thisComputersMove,
   };
 }
 
@@ -186,16 +243,12 @@ export function useGettingStartedChecklist(): {
   readonly allDone: boolean;
 } {
   const facts = useGettingStartedFacts();
-  const cards = gettingStartedVisibleCards(facts);
-  const entries = cards.map((card) => ({
-    card,
-    presentation: cardPresentation(card, facts),
-  }));
+  const entries = gettingStartedEntries(facts);
   const complete = entries.filter((entry) => entry.presentation.done).length;
   return {
     entries,
     complete,
-    guideCount: cards.length,
+    guideCount: entries.length,
     allDone: gettingStartedGuideIsComplete(facts),
   };
 }
