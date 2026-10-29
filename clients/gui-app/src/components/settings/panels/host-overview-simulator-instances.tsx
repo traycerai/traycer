@@ -256,7 +256,7 @@ function KeepRunningButton(props: {
           tone="muted"
         />
       ) : null}
-      {instance.keepRunning ? "Kept running" : "Keep running"}
+      Keep running
     </Button>
   );
 }
