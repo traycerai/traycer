@@ -44,6 +44,7 @@ describe("findSimulatorForTile", () => {
     const serialTile = {
       simulatorId: "emulator-5554",
       platform: "android",
+      instanceKey: null,
       name: "Pixel_8_API_35",
     } as const;
     expect(
@@ -77,6 +78,7 @@ describe("findSimulatorForTile", () => {
     const tile = {
       simulatorId: "udid-gone",
       platform: "ios",
+      instanceKey: null,
       name: "iPhone 16",
     } as const;
     expect(
@@ -113,6 +115,7 @@ describe("findSimulatorForTile on a @1.1 host", () => {
   const cloneTile = {
     simulatorId: "udid-clone",
     platform: "ios",
+    instanceKey: null,
     name: "iPhone 16 · 2",
   } as const;
 
@@ -181,6 +184,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
   const cloneTile = {
     simulatorId: "emulator-5558",
     platform: "android",
+    instanceKey: null,
     name: "Pixel_8_API_35 · 3",
   } as const;
   const base = {
@@ -321,6 +325,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
     const serialTile = {
       simulatorId: BOOTED_EMULATOR.simulatorId,
       platform: "android",
+      instanceKey: null,
       name: "Pixel_8_API_35",
     } as const;
     expect(
@@ -393,6 +398,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
     const tileNamedAfterSource = {
       simulatorId: "emulator-5558",
       platform: "android",
+      instanceKey: null,
       name: BOOTED_EMULATOR.name,
     } as const;
     expect(
@@ -422,6 +428,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
     const serialTile = {
       simulatorId: BOOTED_EMULATOR.simulatorId,
       platform: "android",
+      instanceKey: null,
       name: "Pixel_8_API_35",
     } as const;
     expect(

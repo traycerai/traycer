@@ -314,6 +314,7 @@ const PLACED_NODE: SimulatorTileRef = {
   hostId: HOST,
   simulatorId: "udid-1",
   platform: "ios",
+  instanceKey: null,
 };
 
 /**
