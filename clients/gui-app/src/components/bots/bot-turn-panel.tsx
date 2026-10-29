@@ -119,7 +119,7 @@ export function BotTurnPanel(props: {
             surface={null}
             resolveMember={resolveMember}
             showConnecting
-            landOnMessageId={ref.userMessageId}
+            landOn={{ messageId: ref.userMessageId, visit: 0 }}
           />
         </div>
       ) : (

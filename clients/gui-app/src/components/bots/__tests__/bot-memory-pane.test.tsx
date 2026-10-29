@@ -158,11 +158,14 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
+      scrollRequest: { messageId?: string; requestId: number } | null;
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div
           data-testid="chat-messages-stub"
           data-instance-id={props.instanceId}
+          data-scroll-row-id={props.scrollRequest?.messageId ?? ""}
+          data-scroll-request-id={props.scrollRequest?.requestId ?? ""}
         >
           {props.messages.map((message) => (
             <ChatMessage
@@ -186,6 +189,8 @@ const NOW = Date.now();
 /** The member's post a memory was learned from, in the channel. */
 const MEMORY_REQUEST = "req-memory";
 const MEMORY_POST_LINE = "Remember: the nightly gates releases";
+/** The channel row of the post the memory was learned from. */
+const MEMORY_POST_ROW_ID = conversationRequestMessageId(MEMORY_REQUEST);
 
 function entry(input: {
   readonly id: string;
@@ -323,6 +328,15 @@ afterEach(() => {
   mocks.stream = null;
 });
 
+/** The channel's list, with the scroll it was last asked for. */
+function channelList(): HTMLElement {
+  const list = document.querySelector(
+    `[data-instance-id="bot-channel:${BOT_ID}"]`,
+  );
+  if (!(list instanceof HTMLElement)) throw new Error("no channel list");
+  return list;
+}
+
 /** Opens the bot's full card from its name on its reply in the channel. */
 async function openCard(user: UserEvent): Promise<HTMLElement> {
   const list = document.querySelector(
@@ -457,6 +471,40 @@ describe("what the bot knows, in the rail", () => {
     expect(metaOf(rowsOf(shared)[0])).toMatch(
       /^Written .+ by Audit Bot · never confirmed since$/,
     );
+  });
+
+  it("says where the bot learned a shared entry it wrote, as its own entries do", async () => {
+    const user = userEvent.setup();
+    render(<MountedKnowingChannel />);
+    const sharedByBot = entry({
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FA8",
+      text: "Releases wait for the nightly",
+      tags: ["all"],
+      botId: BOT_ID,
+      chatId: TRUNK_ID,
+      requestId: MEMORY_REQUEST,
+      at: NOW - 6 * DAY,
+      confirmedAt: NOW - 6 * DAY,
+    });
+    const pane = await openPane(
+      user,
+      memoryOf([...MEMORY.entries, sharedByBot]),
+    );
+
+    const [, ownShared] = rowsOf(within(pane).getByTestId("bot-memory-shared"));
+    await waitFor(() =>
+      expect(metaOf(ownShared)).toMatch(
+        new RegExp(
+          `^Written .+ by Release Bot from "${escaped(MEMORY_POST_LINE)}" · never confirmed since$`,
+        ),
+      ),
+    );
+    await user.click(
+      within(ownShared).getByRole("button", {
+        name: `from "${MEMORY_POST_LINE}"`,
+      }),
+    );
+    expect(screen.queryByTestId("bot-memory-pane")).toBeNull();
   });
 
   it("meters the bot's own memory against its ceiling, saying what happens when it fills", async () => {
@@ -628,5 +676,20 @@ describe("the memory in the rail's one slot", () => {
 
     expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toBeUndefined();
     expect(screen.queryByTestId("bot-memory-pane")).toBeNull();
+    const channel = channelList();
+    await waitFor(() =>
+      expect(channel.dataset.scrollRowId).toBe(MEMORY_POST_ROW_ID),
+    );
+    const firstVisit = channel.dataset.scrollRequestId;
+
+    // The same link, followed again, shows the post again.
+    const again = await openPane(user, MEMORY);
+    await user.click(
+      within(again).getByRole("button", { name: `from "${MEMORY_POST_LINE}"` }),
+    );
+    await waitFor(() =>
+      expect(channelList().dataset.scrollRequestId).not.toBe(firstVisit),
+    );
+    expect(channelList().dataset.scrollRowId).toBe(MEMORY_POST_ROW_ID);
   });
 });

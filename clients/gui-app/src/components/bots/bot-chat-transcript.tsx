@@ -291,7 +291,7 @@ export function BotChatTranscript(props: {
   readonly resolveMember: BotMemberResolver;
   readonly showConnecting: boolean;
   /** A message the list lands on once it loads; `null` keeps where it opens. */
-  readonly landOnMessageId: string | null;
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
     props;
@@ -323,7 +323,7 @@ export function BotChatTranscript(props: {
         instanceId={instanceId}
         surface={surface}
         resolveMember={resolveMember}
-        landOnMessageId={props.landOnMessageId}
+        landOn={props.landOn}
       />
     </TileErrorBoundary>
   );
@@ -357,7 +357,7 @@ function BotChatTranscriptBody(props: {
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
-  readonly landOnMessageId: string | null;
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const {
     handle,
@@ -368,7 +368,7 @@ function BotChatTranscriptBody(props: {
     instanceId,
     surface,
     resolveMember,
-    landOnMessageId,
+    landOn,
   } = props;
   const { state, messages } = useBotSessionMessages({
     handle,
@@ -468,7 +468,7 @@ function BotChatTranscriptBody(props: {
       current !== null && current.requestId === requestId ? null : current,
     );
   }, []);
-  useLandOnMessage(landOnMessageId, state.snapshotLoaded, scrollToMessage);
+  useLandOnMessage(landOn, state.snapshotLoaded, scrollToMessage);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
@@ -603,20 +603,41 @@ function BotChatTranscriptBody(props: {
 }
 
 /**
- * A list opened to show one turn lands on its message once the snapshot is
- * in, once per message: settled during render (the adjust-state-on-prop-change
+ * A message the list lands on, and the visit that asks it to: a request to
+ * land on the message the list last landed on is a new visit, and lands
+ * again.
+ */
+export interface BotTranscriptLanding {
+  readonly messageId: string;
+  readonly visit: number;
+}
+
+/**
+ * A list opened to show one message lands on it once the snapshot is in,
+ * once per visit: settled during render (the adjust-state-on-prop-change
  * pattern), as a pending jump is, so no effect sets state.
  */
 function useLandOnMessage(
-  messageId: string | null,
+  landing: BotTranscriptLanding | null,
   ready: boolean,
   scrollToMessage: (messageId: string) => void,
 ): void {
-  const [landedOn, setLandedOn] = useState<string | null>(null);
-  if (messageId !== null && ready && landedOn !== messageId) {
-    setLandedOn(messageId);
-    scrollToMessage(messageId);
+  const [landed, setLanded] = useState<BotTranscriptLanding | null>(null);
+  if (landing !== null && ready && !sameLanding(landed, landing)) {
+    setLanded(landing);
+    scrollToMessage(landing.messageId);
   }
+}
+
+function sameLanding(
+  landed: BotTranscriptLanding | null,
+  landing: BotTranscriptLanding,
+): boolean {
+  return (
+    landed !== null &&
+    landed.messageId === landing.messageId &&
+    landed.visit === landing.visit
+  );
 }
 
 /** The turn receipts and failed-turn recovery a channel or thread draws, for its presentation. */

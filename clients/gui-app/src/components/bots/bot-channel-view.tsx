@@ -22,6 +22,7 @@ import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   BotChatTranscript,
+  type BotTranscriptLanding,
   type BotTranscriptSurface,
   type BotTurnOpen,
   type QuestionAnswerSend,
@@ -393,8 +394,9 @@ export function BotChannelView(props: {
     openMemory,
     onOpenTurn,
   });
-  // A memory's link to the post it was learned from shows the channel there.
-  const [landOnMessageId, setLandOnMessageId] = useState<string | null>(null);
+  // A memory's link to the post it was learned from shows the channel there,
+  // each follow a new visit, so the same link followed again lands again.
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(null);
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
       openThread: (anchorMessageId) =>
@@ -406,7 +408,11 @@ export function BotChannelView(props: {
         }),
       showInChannel: (messageId) => {
         onOpenMemory(null);
-        if (messageId !== null) setLandOnMessageId(messageId);
+        if (messageId === null) return;
+        setLanding((previous) => ({
+          messageId,
+          visit: (previous?.visit ?? 0) + 1,
+        }));
       },
     }),
     [onOpenMemory, onOpenThread],
@@ -595,7 +601,7 @@ export function BotChannelView(props: {
             surface={surface}
             resolveMember={resolveMember}
             showConnecting
-            landOnMessageId={landOnMessageId}
+            landOn={landing}
           />
           <BotReplyingStrip
             botTitle={botTitle}

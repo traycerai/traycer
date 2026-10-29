@@ -78,6 +78,8 @@ export function fillOf(usage: BotMemoryTagUsage): number {
 export function fullnessOf(usage: BotMemoryTagUsage): string | null {
   if (usage.entries === 0) return null;
   const share = usage.chars / usage.ceiling;
+  // Copy bands, not limits: they split the bar into the readings a person
+  // tells apart at a glance, with "nearly full" left before the limit.
   if (share > 1) return "over its limit";
   if (share >= 0.9) return "nearly full";
   if (share > 0.6) return "more than half full";

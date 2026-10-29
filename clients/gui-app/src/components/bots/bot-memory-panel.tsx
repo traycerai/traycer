@@ -348,7 +348,7 @@ function MemoryRow(
           <Stamp prefix="Written " at={entry.at} />
         )}
         {writer === null ? null : ` by ${writer}`}
-        {props.shared ? null : <EntryWhere {...props} />}
+        <EntryWhere {...props} />
         {isNew || confirmedSinceWritten(entry)
           ? null
           : " · never confirmed since"}
@@ -383,7 +383,8 @@ function KnownStamp(props: {
 /**
  * Where the bot learned the entry, as a link there: the member's post it was
  * answering in the channel, the thread it was written in, or the channel
- * when the post is unknown. Nothing for a chat this bot no longer has.
+ * when the post is unknown; a shared entry's too, when this bot wrote it.
+ * Nothing for a chat this bot no longer has, or another bot's.
  */
 function EntryWhere(
   props: ListProps & { readonly entry: BotMemoryEntry },
