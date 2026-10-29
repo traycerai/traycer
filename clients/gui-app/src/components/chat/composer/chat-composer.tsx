@@ -92,7 +92,6 @@ import {
   type ComposerHostNoticeState,
 } from "@/components/home/composer/composer-host-notice";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
-import { ChatSecretExportNotices } from "./chat-secret-export-notices";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "./profile-disabled-banner";
 import {
@@ -1038,7 +1037,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
             eligibility={profileEligibility}
             onChooseProfile={toggleActiveModelPicker}
           />
-          <ChatSecretExportNotices chatId={taskId} />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}

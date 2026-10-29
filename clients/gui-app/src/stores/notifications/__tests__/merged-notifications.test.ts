@@ -718,9 +718,7 @@ describe("merged notifications feed", () => {
       resolvedAt: null,
       sourceRef: null,
       originHostId: "host-a",
-      providerPackAttribution: null,
       category: "system",
-      environmentDetail: null,
     });
   });
 
@@ -760,117 +758,6 @@ describe("merged notifications feed", () => {
       category: "collaboration",
       resolvedAt: null,
       severity: "info",
-    });
-  });
-
-  it("routes a worktree-deletion row to the worktree settings surface with the host's own copy", () => {
-    expect(
-      rowFromHostEntry({
-        id: "worktree.deletion:command-1",
-        updatedAt: 10,
-        readAt: null,
-        kind: "host.operation.finished",
-        sourceRef: "command-1",
-        severity: "failure",
-        outcome: "errored",
-        epicId: null,
-        chatId: null,
-        payload: {
-          kind: "worktree_deletion",
-          operation: "worktree.deletion",
-          title: "Some worktrees were not deleted",
-          message: "Deleted 2 of 3 worktrees; 1 failed.",
-          commandId: "command-1",
-          source: "settings",
-          requestedCount: 3,
-          deletedCount: 2,
-          failedCount: 1,
-        },
-      }),
-    ).toMatchObject({
-      title: "Some worktrees were not deleted",
-      body: "Deleted 2 of 3 worktrees; 1 failed.",
-      // Surface-only: the worktree the row describes is gone, so there is no
-      // resource left to focus.
-      payload: {
-        kind: "hostSurface",
-        surface: "worktreeSettings",
-        focus: undefined,
-      },
-    });
-  });
-
-  it("routes an automatic-cleanup row to that host's cleanup history, focused on the run", () => {
-    expect(
-      rowFromHostEntry({
-        id: "worktree.autoCleanup:run-7",
-        updatedAt: 10,
-        readAt: null,
-        kind: "host.operation.finished",
-        sourceRef: "run-7",
-        // Informational even with a failure in the mix: an unattended pass
-        // reports, it does not demand attention. Detail lives in history.
-        severity: "info",
-        outcome: "completed",
-        epicId: null,
-        chatId: null,
-        payload: {
-          kind: "worktree_auto_cleanup",
-          operation: "worktree.autoCleanup",
-          title: "Automatic cleanup removed 3 worktrees",
-          message: "Removed 3 worktrees; 1 skipped, 1 failed.",
-          runId: "run-7",
-          hostId: "host-1",
-          deletedCount: 3,
-          skippedCount: 1,
-          failedCount: 1,
-          interruptedCount: 0,
-        },
-      }),
-    ).toMatchObject({
-      title: "Automatic cleanup removed 3 worktrees",
-      body: "Removed 3 worktrees; 1 skipped, 1 failed.",
-      // Unlike a manual deletion, this row HAS something that outlives the
-      // worktrees it removed: its own history entry.
-      payload: {
-        kind: "hostSurface",
-        surface: "worktreeSettings",
-        view: "cleanupHistory",
-        // History is host-local, so the row names the host whose history is
-        // the destination - the reader may be administering another one.
-        hostId: "host-1",
-        focus: { resourceId: "run-7" },
-      },
-    });
-  });
-
-  it("routes a Task sweep completion back to the Task that initiated it", () => {
-    expect(
-      rowFromHostEntry({
-        id: "worktree.deletion:command-task-sweep",
-        updatedAt: 10,
-        readAt: null,
-        kind: "host.operation.finished",
-        sourceRef: "command-task-sweep",
-        severity: "done",
-        outcome: "completed",
-        epicId: null,
-        chatId: null,
-        payload: {
-          kind: "worktree_deletion",
-          operation: "worktree.deletion",
-          title: "Worktrees deleted",
-          message: "Deleted 2 worktrees.",
-          commandId: "command-task-sweep",
-          source: "task_sweep",
-          epicId: "epic-1",
-          requestedCount: 2,
-          deletedCount: 2,
-          failedCount: 0,
-        },
-      }),
-    ).toMatchObject({
-      payload: { kind: "epic", epicId: "epic-1" },
     });
   });
 
@@ -1129,21 +1016,6 @@ describe("merged notifications feed", () => {
       });
     });
 
-    it("projects a minted export into the export-minted detail", () => {
-      const row = rowFromHostEntry(exportEntry);
-      expect(row.secrets).toEqual({
-        kind: "export-minted",
-        secretName: "DEPLOY_KEY",
-        exportKind: "presigned_url",
-        expiresAt: 1_700_000_900_000,
-      });
-      expect(row.payload).toEqual({
-        kind: "chat",
-        epicId: "epic-1",
-        chatId: "chat-1",
-      });
-    });
-
     it("has no navigation payload when the host named no chat", () => {
       const row = rowFromHostEntry({
         ...grantEntry,
@@ -1184,16 +1056,11 @@ describe("merged notifications feed", () => {
       const row = rowFromCloudFeedRow({
         entryId: "entry-secret",
         originHostId: "host-a",
-        coalesceKey: "secret.export.minted:export-1",
-        entry: exportEntry,
+        coalesceKey: "secret.grant.requested:request-1",
+        entry: grantEntry,
         presentation: { epicTitle: "Deploy", chatTitle: "Release" },
       });
-      expect(row.secrets).toEqual({
-        kind: "export-minted",
-        secretName: "DEPLOY_KEY",
-        exportKind: "presigned_url",
-        expiresAt: 1_700_000_900_000,
-      });
+      expect(row.secrets).toMatchObject({ kind: "grant-request" });
     });
   });
 });

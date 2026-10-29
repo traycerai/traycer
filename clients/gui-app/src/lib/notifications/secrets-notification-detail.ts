@@ -7,41 +7,33 @@ import {
 
 /**
  * What a secrets notification row says beyond its title and body: the grant
- * request an agent raised, or the short-lived export one minted. Parsed once,
- * where the row is built, from the row's own typed payload - so a row whose
- * payload this build cannot read has no detail and renders as any other row.
+ * request an agent raised. Parsed once, where the row is built, from the row's
+ * own typed payload - so a row whose payload this build cannot read has no
+ * detail and renders as any other row.
  *
  * Every string here was written by an agent or by the guest. It is rendered
  * as plain text and never interpreted.
  */
-export type SecretsNotificationDetail =
-  | {
-      readonly kind: "grant-request";
-      /** The broker's request id: what the decision is posted against. */
-      readonly requestId: string;
-      /** `null` when the agent named only a destination. */
-      readonly secretName: string | null;
-      readonly destination: string | null;
-      readonly port: number | null;
-      readonly protocol: string | null;
-      readonly reason: string;
-      readonly sandboxName: string | null;
-      /** The environment the request is decided in; `null` is Personal. */
-      readonly environmentId: string | null;
-      /** A team request's team, by display name; `null` for Personal. */
-      readonly teamName: string | null;
-      /** Once resolved: how (known: approved, declined, expired). */
-      readonly decision: string | null;
-      /** Once resolved: whose answer settled it, by display name. */
-      readonly decidedBy: string | null;
-    }
-  | {
-      readonly kind: "export-minted";
-      readonly secretName: string;
-      readonly exportKind: string;
-      /** Epoch milliseconds. */
-      readonly expiresAt: number;
-    };
+export type SecretsNotificationDetail = {
+  readonly kind: "grant-request";
+  /** The broker's request id: what the decision is posted against. */
+  readonly requestId: string;
+  /** `null` when the agent named only a destination. */
+  readonly secretName: string | null;
+  readonly destination: string | null;
+  readonly port: number | null;
+  readonly protocol: string | null;
+  readonly reason: string;
+  readonly sandboxName: string | null;
+  /** The environment the request is decided in; `null` is Personal. */
+  readonly environmentId: string | null;
+  /** A team request's team, by display name; `null` for Personal. */
+  readonly teamName: string | null;
+  /** Once resolved: how (known: approved, declined, expired). */
+  readonly decision: string | null;
+  /** Once resolved: whose answer settled it, by display name. */
+  readonly decidedBy: string | null;
+};
 
 export function secretsNotificationDetail(
   kind: HostNotificationKind,
@@ -63,14 +55,6 @@ export function secretsNotificationDetail(
       teamName: known.teamName ?? null,
       decision: known.decision ?? null,
       decidedBy: known.decidedBy ?? null,
-    };
-  }
-  if (known.kind === "secret_export_minted") {
-    return {
-      kind: "export-minted",
-      secretName: known.secretName,
-      exportKind: known.exportKind,
-      expiresAt: known.expiresAt,
     };
   }
   return null;
@@ -166,24 +150,4 @@ export function secretRequestStatusLine(status: string): string {
   return Object.hasOwn(STATUS_LINE, status)
     ? STATUS_LINE[status]
     : "This request is closed.";
-}
-
-const EXPORT_KIND_WORDS: Readonly<Record<string, string>> = {
-  presigned_url: "a presigned URL",
-  short_lived_credentials: "short-lived credentials",
-};
-
-/**
- * The export notice: what was exported and the one thing to know about it. An
- * export works until its expiry wherever it is copied, and revoking the
- * secret does not recall it.
- */
-export function secretExportNotice(
-  detail: Extract<SecretsNotificationDetail, { kind: "export-minted" }>,
-  formatTime: (at: number) => string,
-): string {
-  const what = Object.hasOwn(EXPORT_KIND_WORDS, detail.exportKind)
-    ? EXPORT_KIND_WORDS[detail.exportKind]
-    : "a short-lived export";
-  return `An agent minted ${what} from ${detail.secretName}. It works until ${formatTime(detail.expiresAt)} wherever it is copied.`;
 }

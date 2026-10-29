@@ -238,9 +238,8 @@ export function BackgroundGlyph(props: {
  * Names the machine a prompt came from, and only when that is not THIS
  * machine - on a single-host install the chip never renders.
  *
- * Compared against the local host rather than the app-wide effective one, the
- * same call `notification-row` makes for pack attribution: an origin-bound
- * prompt has to be acted on where it was raised, so "not the machine you are
+ * Compared against the local host rather than the app-wide effective one: an
+ * origin-bound prompt has to be acted on where it was raised, so "not the machine you are
  * sitting at" is the fact worth a chip. It also keeps this row out of the
  * app-wide host-read layer, which Home is not part of. A build with no local
  * host (the browser client) can't tell the two apart and shows nothing rather

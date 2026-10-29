@@ -294,7 +294,7 @@ function sandboxNoticePresentation(
   }
 }
 
-/** The environments rows: what happened to a configuration, by name. */
+/** The environments rows. The server no longer writes these kinds; readers drop them. */
 function environmentNotificationPresentation(
   kind:
     | "environment.move.stalled"
@@ -391,13 +391,7 @@ function secretRemovedStatus(
   }
 }
 
-/**
- * A replaced secret's row. The state is read from the payload as a string:
- * a state newer than this build reads "Value replaced". "Enforced" is said
- * only when the payload's state is `enforced`; the per-class proof beside it
- * is counted from the evidence kinds this build knows, never from a fence or
- * a deadline.
- */
+/** `secret.rotated`: The server no longer writes this kind; readers drop it. */
 function secretRotatedPresentation(
   known: HostNotificationKnownPayload | null,
 ): HostNotificationPresentation {
@@ -470,7 +464,7 @@ function rotationProofSummary(
   return parts.length === 0 ? null : parts.join(", ");
 }
 
-/** The team rows: what changed in the team, by name. */
+/** The team rows. The server no longer writes these kinds; readers drop them. */
 function teamNotificationPresentation(
   kind:
     | "team.member.removed"
@@ -695,6 +689,7 @@ export function hostOperationKnownCopy(
     case "sandbox_notice":
     case "notification_hooks_removed":
       return null;
+    // The host no longer writes the worktree operations; readers drop them.
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
       if (
@@ -709,8 +704,9 @@ export function hostOperationKnownCopy(
         body: `${payload.title} • ${payload.message}`,
       };
     }
-    // These arms retain the host-composed copy used by delivery hooks.
     case "worktree_auto_cleanup":
+      return null;
+    // Retains the host-composed copy used by delivery hooks.
     case "managed_command_delivery_parked":
       return null;
   }

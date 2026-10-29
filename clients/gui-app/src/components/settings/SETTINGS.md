@@ -5987,7 +5987,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     second card: it replaces the panel body and carries a back control. Reached
     from the cleanup popover's **History** link (which closes the popover on
     the way, since history is the full-panel view), or arrived at directly from
-    an automatic-cleanup notification. Cursor-paginated newest-first over
+    an OS notification for an automatic-cleanup run that a desktop showed before
+    the notification center dropped those rows. Cursor-paginated newest-first over
     `worktree.listAutoCleanupRuns` with an explicit **Load more** (no
     auto-advance: history holds up to 200 runs and the user asked for the newest
     ones); expanding a run fetches its targets through
@@ -6009,7 +6010,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
       an ordinary new row, never folded into the attempt before it.
       `worktreePath` renders verbatim — it names a directory on the very host
       the panel is already talking to, which is why history never leaves it.
-    - **Arriving from a notification.** A `worktree_auto_cleanup` row routes
+    - **Arriving from a notification.** The notification center no longer
+      shows worktree operation rows; an OS notification shown before that still
+      routes. A `worktree_auto_cleanup` row routes
       through the `hostSurface` family with `view: "cleanupHistory"`, the run id
       as its focus hint, AND the run's `hostId`.
       `routeHostSurfaceNotification` applies both BEFORE navigating, so the
