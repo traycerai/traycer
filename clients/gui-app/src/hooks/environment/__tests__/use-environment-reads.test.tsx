@@ -95,7 +95,13 @@ describe("a Personal revision change", () => {
         },
         "environment.configuration.skills.list": () => {
           skillsAsked += 1;
-          return { outcome: "listed" as const, revision: null, skills: [] };
+          return {
+            outcome: "listed" as const,
+            revision: null,
+            policyRevision: null,
+            skills: [],
+            deletedBundled: [],
+          };
         },
       },
     });
