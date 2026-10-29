@@ -33,6 +33,10 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { useSampledNow } from "@/lib/relative-time";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
+import {
+  resolveAccountContext,
+  useAccountContextStore,
+} from "@/stores/auth/account-context-store";
 
 const MC_PER_CREDIT = 1000;
 
@@ -61,6 +65,17 @@ export function CreditsSettingsPanel(): ReactNode {
   const user = query.data ?? null;
   const remainingMc = sandboxBalanceMc(user);
 
+  // Offers belong to the personal account, so a team context never shows
+  // them. Resolved against the loaded user's teams, as the subscription card
+  // resolves it, so a stale stored team cannot read as personal before then.
+  const storedContext = useAccountContextStore((s) => s.accountContext);
+  const personal =
+    user !== null &&
+    resolveAccountContext(
+      storedContext,
+      new Set(user.teamSubscriptions.map((t) => t.team.id)),
+    ).type === "PERSONAL";
+
   return (
     <SettingsPanelShell
       title={CREDITS_PAGE.label}
@@ -81,7 +96,7 @@ export function CreditsSettingsPanel(): ReactNode {
         error={query.isError}
         onRetry={() => void query.refetch()}
         remainingMc={remainingMc}
-        offers={user?.campaignCredits ?? NO_OFFERS}
+        offers={personal ? (user.campaignCredits ?? NO_OFFERS) : NO_OFFERS}
         installedApp={installedApp}
         billingUrl={billingUrl}
         openLink={openLink}

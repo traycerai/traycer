@@ -5,10 +5,12 @@ import type {
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  teamSubscription,
   userSubscription,
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 
 const mocks = vi.hoisted(() => ({
   data: null as AuthenticatedUser | null,
@@ -207,6 +209,22 @@ describe("CreditsSettingsPanel credit offers", () => {
   afterEach(() => {
     cleanup();
     setMobileApp(false);
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+  });
+
+  it("shows no offers in a team context", () => {
+    mocks.data = {
+      ...userWithOffers([offer({})]),
+      teamSubscriptions: [teamSubscription(100)],
+    };
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-ready")).toBeTruthy();
+    expect(screen.queryByTestId("credits-offers")).toBeNull();
   });
 
   it.each([undefined, []])(
