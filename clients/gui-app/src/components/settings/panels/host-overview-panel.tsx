@@ -952,6 +952,13 @@ export function HostOverviewPanel(props: {
   // freeze during the accepted-to-first-progress gap, not only the rest of
   // the page.
   const updateGatePending = gatePending || updateInstallAcceptedAt !== null;
+  // Whatever deployed this host owns its version (`host.status@1.10`): the
+  // update region retires to its one-line reason before a catalog is fetched,
+  // the same retirement the first refused install used to be the only way to
+  // discover. `null` is a host that predates the field, which keeps that
+  // discovery path.
+  const updatesExternallyManaged =
+    statusQuery.data?.updatesExternallyManaged === true;
 
   // DISPATCH OWNERSHIP (D8). One token per mount, registered while this panel
   // is on screen, captured by every update dispatch at arm time.
@@ -1063,9 +1070,19 @@ export function HostOverviewPanel(props: {
     // The check reads on its own now, so this gate is load-bearing rather than
     // cosmetic: without it the page would spawn a CLI process on the host from
     // a scope that has not resolved, and cache the answer under this page's key.
-    enabled: usable,
-    checkDegrade: updateCheckDegrade,
-    installDegrade: updateInstallDegrade,
+    // It also waits for a status ANSWER: the host says there whether anything
+    // here can change its version, and a catalog fetched before that answer
+    // would put a version list on screen for the next render to retire. An
+    // answer, not merely a settled query: a failed first read leaves the query
+    // settled with no data, and a host that recovers from it would show the
+    // list for the span until its status arrived.
+    enabled: usable && statusQuery.data !== undefined,
+    checkDegrade: updatesExternallyManaged
+      ? "externally-managed"
+      : updateCheckDegrade,
+    installDegrade: updatesExternallyManaged
+      ? "externally-managed"
+      : updateInstallDegrade,
     busy: updateGatePending,
     foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,

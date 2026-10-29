@@ -22,7 +22,7 @@ import type { RailRegionId } from "@/lib/layout/region-id";
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 
 /**
- * The sidebar rail's nine regions, which are nine because each icon is
+ * The sidebar rail's ten regions, which are ten because each icon is
  * hoverable, selectable and separately shown or hidden.
  *
  * Everything they say identically is said once in {@link railRegionBase}, and
