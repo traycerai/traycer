@@ -4188,6 +4188,15 @@ describe("ChatMessages scroll policy", () => {
             settleAll: (): void => {
               for (const settle of settlers.splice(0)) settle();
             },
+            // Holds the first command only. Later ones (the latch's own end
+            // correction, issued behind the pill's) run to completion, so the
+            // pill's is the one command left held.
+            holdFirst: (): Promise<void> => {
+              if (settlers.length > 0) return Promise.resolve();
+              return new Promise<void>((resolve) => {
+                settlers.push(resolve);
+              });
+            },
           };
         }
 
@@ -4259,7 +4268,7 @@ describe("ChatMessages scroll policy", () => {
           if (pill === null)
             throw new Error("scroll-to-end pill is not mounted");
           vi.spyOn(requireList(), "scrollToEnd").mockImplementation(
-            holdListCommands().hold,
+            holdListCommands().holdFirst,
           );
           fireEvent.click(pill);
           return view;
