@@ -1069,7 +1069,7 @@ describe("LegendList estimate recovery", () => {
       readonly scrollNode: HTMLElement;
       readonly endBefore: number;
       readonly land: () => void;
-      readonly growTail: () => number;
+      readonly resize: (index: number, delta: number) => number;
     }> {
       const listRef = createRef<LegendListRef | null>();
       render(
@@ -1098,9 +1098,18 @@ describe("LegendList estimate recovery", () => {
       });
       await advanceLegendListFrames(1);
 
-      let tailSize = list.getState().sizeAtIndex(69);
       return {
         endBefore,
+        resize: (index: number, delta: number) => {
+          const before = list.getState().sizeAtIndex(index);
+          act(() => {
+            list.setItemSize(`row-${String(index)}`, {
+              height: before + delta,
+              width: 800,
+            });
+          });
+          return list.getState().sizeAtIndex(index) - before;
+        },
         land: () => {
           held.mockImplementation(
             (options: ScrollToOptions | number | undefined) => {
@@ -1110,50 +1119,78 @@ describe("LegendList estimate recovery", () => {
             },
           );
         },
-        growTail: () => {
-          const before = tailSize;
-          act(() => {
-            list.setItemSize("row-69", { height: before + 28, width: 800 });
-          });
-          tailSize = list.getState().sizeAtIndex(69);
-          return tailSize - before;
-        },
         scrollNode,
       };
     }
 
-    it("leaves the reader at the top they wrote, which the command did not", async () => {
-      const { scrollNode, land, growTail } = await heldEndCommandAtTheEnd();
-
-      // The reader presses Home: an absolute write to the scroller, reported.
+    /** The reader presses Home: an absolute write to the scroller, reported. */
+    function pressHome(scrollNode: HTMLElement): void {
       scrollNode.scrollTop = 0;
       act(() => {
         scrollNode.dispatchEvent(new Event("scroll"));
       });
+    }
+
+    it("leaves the reader at the top they wrote, which the command did not", async () => {
+      const { scrollNode, land, resize } = await heldEndCommandAtTheEnd();
+      pressHome(scrollNode);
       land();
 
-      expect(growTail()).toBeGreaterThan(0);
+      expect(resize(69, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+
+      expect(scrollNode.scrollTop).toBe(0);
+    });
+
+    // The command anchors on its own target row, so a row ABOVE that row is the
+    // other route to the same symptom: the reader is nowhere near the growth,
+    // and the target's own shift would carry them off the top just the same.
+    it("leaves the reader at the top when a row above the target grows", async () => {
+      const { scrollNode, land, resize } = await heldEndCommandAtTheEnd();
+      pressHome(scrollNode);
+      land();
+
+      expect(resize(68, 28)).toBeGreaterThan(0);
       await advanceLegendListFrames(3);
 
       expect(scrollNode.scrollTop).toBe(0);
     });
 
     it("pins the view to the new end while that command still holds it", async () => {
-      const { scrollNode, endBefore, land, growTail } =
+      const { scrollNode, endBefore, land, resize } =
         await heldEndCommandAtTheEnd();
       land();
 
-      // Nobody else moved the view, so the command still owns it: every
-      // growth of its target row carries the view to the end that growth
-      // made. The second one needs the command's own target to have come
-      // along with the first, or it reads the view as somebody else's.
-      const first = growTail();
+      // Nobody else moved the view, so the command still owns it: every growth
+      // of its target row carries the view to the end that growth made. The
+      // second one needs the command's own record of where it put the view to
+      // have come along with the first, or it reads the view as somebody
+      // else's.
+      const first = resize(69, 28);
       await advanceLegendListFrames(3);
       expect(scrollNode.scrollTop).toBe(endBefore + first);
 
-      const second = growTail();
+      const second = resize(69, 28);
       await advanceLegendListFrames(3);
       expect(scrollNode.scrollTop).toBe(endBefore + first + second);
+    });
+
+    // A row above the target moves the target itself, so the view travels by
+    // that shift as well. That shift has to come along too, or the command
+    // reads every later growth as somebody else's and the pin to a streaming
+    // reply dies after the first row above it settles its estimate.
+    it("keeps pinning after a row above the target has moved the view", async () => {
+      const { scrollNode, endBefore, land, resize } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      const above = resize(68, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + above);
+
+      const tail = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + above + tail);
     });
   });
 });
