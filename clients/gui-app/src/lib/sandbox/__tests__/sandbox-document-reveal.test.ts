@@ -543,7 +543,8 @@ describe("body overflow inside a frame", () => {
   // the next ones. `contain` names the containment; `container-type` and
   // `content-visibility` apply it with `contain` itself left `none`.
   // `content-visibility: hidden` is in neither list: it contains, and the
-  // walk reads it as the viewport's anyway, which the last test here covers.
+  // walk never asks, because a reveal inside skipped contents is over
+  // before it starts. The "skipped" tests below cover that.
   const CONTAINS: Record<string, string>[] = [
     { contain: "paint" },
     { contain: "layout" },
@@ -732,6 +733,87 @@ describe("body overflow inside a frame", () => {
       ]);
     },
   );
+
+  // `content-visibility` takes effect only where layout containment can
+  // apply. On these the computed value still reads `hidden` while the engine
+  // reveals as though it were not set, each measured in Chrome against its
+  // own control.
+  it.each([
+    "contents",
+    "inline",
+    "table",
+    "inline-table",
+    "table-row-group",
+    "table-header-group",
+    "table-footer-group",
+    "table-row",
+    "ruby",
+  ])(
+    "reveals past a skipped ancestor that display: %s makes inert",
+    (display) => {
+      const frame = startFrame(false);
+      const { html, target } = skippedPage(
+        frame,
+        { ...HIDDEN, display },
+        "an ancestor",
+      );
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([
+        { scroller: html, top: 300, left: 0, behavior: "auto" },
+      ]);
+    },
+  );
+
+  // A display containment does apply to, so the same ancestor skips.
+  it.each(["block", "flex", "grid", "inline-block", "table-cell"])(
+    "scrolls nothing into view past a skipped display: %s ancestor",
+    (display) => {
+      const frame = startFrame(false);
+      const { target } = skippedPage(
+        frame,
+        { ...HIDDEN, display },
+        "an ancestor",
+      );
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([]);
+    },
+  );
+
+  // The walk is over the flat tree, so a hidden element between a slot and
+  // its host skips the light-DOM element assigned to that slot, which no
+  // chain of `parentElement` would reach.
+  it("scrolls nothing into view when a slot's hidden wrapper skips it", () => {
+    const frame = startFrame(false);
+    const doc = frame.window.document;
+    const host = doc.createElement("div");
+    const target = doc.createElement("button");
+    doc.body.append(host);
+    host.append(target);
+    const wrapper = doc.createElement("div");
+    const slot = doc.createElement("slot");
+    wrapper.append(slot);
+    host.attachShadow({ mode: "open" }).append(wrapper);
+    const roomy = {
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+    };
+    frame.place(doc.documentElement, { ...roomy, style: VISIBLE });
+    frame.place(doc.body, { ...roomy, style: VISIBLE });
+    frame.place(host, { style: {} });
+    frame.place(wrapper, { style: HIDDEN });
+    frame.place(slot, { style: {} });
+    frame.place(target, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([]);
+  });
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {
