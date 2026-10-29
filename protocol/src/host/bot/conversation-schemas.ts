@@ -325,16 +325,18 @@ export type BotTurnLocateRequest = z.infer<typeof botTurnLocateRequestSchema>;
 
 /**
  * One turn of a bot's session as the bound host recorded it, kept for the
- * week the bot's Activity page shows: the session chat and turn, the
- * session's message that started it, the thread it ran for (`null` for the
- * trunk), when it started and ended (`null` while it runs), and its activity
- * as the transcript's group labels it (`null` while it runs).
- * `messageIds` and `requestIds` are the asked ones that led here.
+ * week the bot's Activity page shows: the session chat; every id the turn
+ * ran under (`turnIds`, oldest first: a launch's provisional id, the
+ * provider's, a retry's), which together name its rows in the session's
+ * transcript; the session's message that started it; the thread it ran for
+ * (`null` for the trunk); when it started and ended (`null` while it runs);
+ * and its activity as the transcript's group labels it (`null` while it
+ * runs). `messageIds` and `requestIds` are the asked ones that led here.
  */
 export const botTurnRefSchema = lazySchema(() =>
   z.object({
     chatId: z.string().min(1),
-    turnId: z.string().min(1),
+    turnIds: z.array(z.string().min(1)).min(1),
     userMessageId: z.string().min(1),
     threadId: z.string().min(1).nullable(),
     startedAt: z.number().int(),

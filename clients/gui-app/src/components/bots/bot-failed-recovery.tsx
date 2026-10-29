@@ -12,7 +12,7 @@ import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-
  * surface's posts - the trunk beside the channel, a thread's session in its
  * panel - which this holds open while the surface shows. Offered for a post
  * whose turn (`turnOfRequest`) is the one that session names as its last
- * failed attempt, in the reason's label the agent chat's error row uses and
+ * failed attempt, under any of the ids the turn ran under, in the reason's label the agent chat's error row uses and
  * with its Retry, Switch to… and Wait until; `null` for any other post, and
  * for a reason this client has no label for, where the row keeps the bot's
  * own line. `sessionChatId` `null` offers none.
@@ -39,7 +39,7 @@ export function useBotFailedRecovery(args: {
       if (
         turn === null ||
         turn.chatId !== sessionChatId ||
-        turn.turnId !== attempt.turnId
+        !turn.turnIds.includes(attempt.turnId)
       ) {
         return null;
       }

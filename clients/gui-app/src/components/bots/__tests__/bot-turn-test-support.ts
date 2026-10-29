@@ -152,48 +152,58 @@ export function sessionPrompt(
   };
 }
 
-/**
- * A turn of a session chat that read one file, and what it cost: the record
- * the turn's rail draws its activity group, model and cost from.
- */
-export function sessionTurn(input: {
+interface ToolCallInput {
+  readonly blockId: string;
+  readonly toolName: string;
+  readonly inputSummary: string;
+  readonly agentMessageSend: Extract<
+    ContentBlock,
+    { type: "tool_call" }
+  >["agentMessageSend"];
+  readonly startedAt: number;
+  readonly endedAt: number;
+}
+
+function toolCallBlock(input: ToolCallInput): ContentBlock {
+  return {
+    type: "tool_call",
+    blockId: input.blockId,
+    toolName: input.toolName,
+    inputSummary: input.inputSummary,
+    inputDetail: null,
+    taskTodoItems: null,
+    error: null,
+    agentMessageSend: input.agentMessageSend,
+    managedCommand: null,
+    agentMessageReceipt: null,
+    agentMessageDelivery: null,
+    artifact: null,
+    mcpApp: null,
+    progress: null,
+    backgroundOutput: null,
+    backgroundTask: false,
+    stopped: false,
+    status: "completed",
+    timestamp: input.endedAt,
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+    imageResults: [],
+  };
+}
+
+function assistantTurn(input: {
   readonly messageId: string;
   readonly turnId: string;
   readonly startedAt: number;
   readonly endedAt: number;
   readonly costUsd: number;
+  readonly blocks: ReadonlyArray<ContentBlock>;
 }): Extract<Message, { role: "assistant" }> {
   return {
     role: "assistant",
     messageId: input.messageId,
     sender: BOT_SENDER,
-    blocks: [
-      {
-        type: "tool_call",
-        blockId: `${input.messageId}:read`,
-        toolName: "Read",
-        inputSummary: "src/app.ts",
-        inputDetail: null,
-        taskTodoItems: null,
-        error: null,
-        agentMessageSend: null,
-        managedCommand: null,
-        agentMessageReceipt: null,
-        agentMessageDelivery: null,
-        artifact: null,
-        mcpApp: null,
-        progress: null,
-        backgroundOutput: null,
-        backgroundTask: false,
-        stopped: false,
-        status: "completed",
-        timestamp: input.endedAt,
-        startedAt: input.startedAt,
-        endedAt: input.endedAt,
-        imageResults: [],
-      },
-      textBlock(`${input.messageId}:text`, "Done.", input.endedAt),
-    ],
+    blocks: [...input.blocks],
     startedAt: input.startedAt,
     timestamp: input.endedAt,
     turnId: input.turnId,
@@ -210,6 +220,97 @@ export function sessionTurn(input: {
   };
 }
 
+/**
+ * A turn of a session chat that read one file, and what it cost: the record
+ * the turn's rail draws its activity group, model and cost from.
+ */
+export function sessionTurn(input: {
+  readonly messageId: string;
+  readonly turnId: string;
+  readonly startedAt: number;
+  readonly endedAt: number;
+  readonly costUsd: number;
+}): Extract<Message, { role: "assistant" }> {
+  return assistantTurn({
+    ...input,
+    blocks: [
+      toolCallBlock({
+        blockId: `${input.messageId}:read`,
+        toolName: "Read",
+        inputSummary: "src/app.ts",
+        agentMessageSend: null,
+        startedAt: input.startedAt,
+        endedAt: input.endedAt,
+      }),
+      textBlock(`${input.messageId}:text`, "Done.", input.endedAt),
+    ],
+  });
+}
+
+export const SUBAGENT_NAME = "Log reader";
+export const SENT_MESSAGE = "Please rerun the nightly.";
+export const BACKGROUND_COMMAND = "bun run nightly --watch";
+export const ANSWER_PROSE = "The nightly is red; I asked for a rerun.";
+
+/**
+ * A turn that spawned a subagent, started a command that went to the
+ * background, sent a message to another agent, and then wrote its answer: the
+ * items the agent chat lifts out of its activity groups, and the prose.
+ */
+export function promotedSessionTurn(input: {
+  readonly messageId: string;
+  readonly turnId: string;
+  readonly startedAt: number;
+  readonly endedAt: number;
+  readonly costUsd: number;
+}): Extract<Message, { role: "assistant" }> {
+  return assistantTurn({
+    ...input,
+    blocks: [
+      {
+        type: "subagent",
+        blockId: `${input.messageId}:subagent`,
+        status: "completed",
+        timestamp: input.endedAt,
+        name: SUBAGENT_NAME,
+        agentType: null,
+        task: "Check the nightly logs",
+        progressUpdates: [],
+        result: "The nightly failed on lint.",
+        startedAt: input.startedAt,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+      {
+        type: "command",
+        blockId: `${input.messageId}:command`,
+        status: "completed",
+        timestamp: input.endedAt,
+        command: BACKGROUND_COMMAND,
+        cwd: null,
+        exitCode: 0,
+        backgroundTask: true,
+        stopped: false,
+      },
+      toolCallBlock({
+        blockId: `${input.messageId}:send`,
+        toolName: "mcp__traycer_a2a__traycer_send_message",
+        inputSummary: SENT_MESSAGE,
+        agentMessageSend: {
+          receiverAgentId: "agent-receiver-1234",
+          message: SENT_MESSAGE,
+          responseId: "response-1",
+          expectReply: false,
+        },
+        startedAt: input.startedAt,
+        endedAt: input.endedAt,
+      }),
+      textBlock(`${input.messageId}:text`, ANSWER_PROSE, input.endedAt),
+    ],
+  });
+}
+
 /** A turn of a bot's session as the host's `bot.turn.locate` names it. */
 export function turnRef(input: {
   readonly chatId: string;
@@ -224,7 +325,7 @@ export function turnRef(input: {
 }): BotTurnRef {
   return {
     chatId: input.chatId,
-    turnId: input.turnId,
+    turnIds: [input.turnId],
     userMessageId: input.userMessageId,
     threadId: input.threadId,
     startedAt: input.startedAt,
@@ -322,7 +423,8 @@ export function turnsAskedFor(
         request.messageIds.some((id) => turn.messageIds.includes(id)) ||
         request.requestIds.some((id) => turn.requestIds.includes(id)) ||
         request.turns.some(
-          (key) => key.chatId === turn.chatId && key.turnId === turn.turnId,
+          (key) =>
+            key.chatId === turn.chatId && turn.turnIds.includes(key.turnId),
         ),
     ),
   };

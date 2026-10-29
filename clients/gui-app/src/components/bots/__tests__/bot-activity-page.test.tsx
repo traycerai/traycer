@@ -621,7 +621,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
   function located(overrides: Partial<BotTurnRef>): BotTurnRef {
     return {
       chatId: CHECKIN_TURN.chatId,
-      turnId: CHECKIN_TURN.turnId,
+      turnIds: [CHECKIN_TURN.turnId],
       userMessageId: "prompt-checkin",
       threadId: null,
       startedAt: 100_000,
@@ -673,7 +673,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
 
   it("draws no link for a check-in with no turn or a turn the host does not name, and asks only for the turns of the check-ins shown", () => {
     const hidden: BotCheckinTurn = { chatId: TRUNK_ID, turnId: "turn-beyond" };
-    mocks.state.locatedTurns = [located({ turnId: "turn-unrelated" })];
+    mocks.state.locatedTurns = [located({ turnIds: ["turn-unrelated"] })];
     const history: BotTaskCheckinRecord[] = [
       received(NOW - 1_000, {}),
       received(NOW - 2_000, { turn: CHECKIN_TURN }),

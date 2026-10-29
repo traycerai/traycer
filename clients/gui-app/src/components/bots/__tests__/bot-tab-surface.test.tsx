@@ -256,7 +256,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-open-turn={props.openTurn?.ref.turnId ?? "none"}
+      data-open-turn={props.openTurn?.ref.turnIds[0] ?? "none"}
       data-open-turn-back={props.openTurn?.back?.anchorMessageId ?? "none"}
       data-trunk-chat-id={props.trunkChatId}
       data-teammate-name={
@@ -303,7 +303,7 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
           props.onOpenTurn({
             ref: {
               chatId: "trunk-1",
-              turnId: "turn-checkin",
+              turnIds: ["turn-checkin"],
               userMessageId: "prompt-checkin",
               threadId: null,
               startedAt: 1_000,

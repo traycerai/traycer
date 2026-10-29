@@ -27,13 +27,20 @@ import type {
 import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
+  ANSWER_PROSE,
+  BACKGROUND_COMMAND,
   BOT_ID,
   CHANNEL_ID,
   CHANNEL_REPLY_TURN,
+  COST_USD,
+  ENDED_AT,
   POST_FIRST_LINE,
   REPLY_ID,
+  REPLY_PROMPT_ID,
   REPLY_TURN_ID,
   STARTED_AT,
+  SENT_MESSAGE,
+  SUBAGENT_NAME,
   SUMMARY,
   THREAD_ID,
   THREAD_OPEN,
@@ -42,6 +49,9 @@ import {
   botReply,
   buildScene,
   hostClientLocating,
+  promotedSessionTurn,
+  sessionPrompt,
+  sessionTurn,
   turnsAskedFor,
   type Scene,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -84,6 +94,11 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   >()),
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "bot.turn.locate" ? mocks.locateSupported : true,
+}));
+// The send card's delivery line reads the host directory; the suite has no
+// host runtime.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
@@ -444,7 +459,7 @@ describe("How the bot answered, in the rail", () => {
       ...scene.knownTurns,
       {
         ...CHANNEL_REPLY_TURN,
-        turnId: "turn-reply-2",
+        turnIds: ["turn-reply-2"],
         messageIds: ["reply-2"],
       },
     ];
@@ -520,5 +535,153 @@ describe("a long press on a bot's reply on a touch screen", () => {
     await user.click(choice);
 
     expect(turnRail().getAttribute("data-turn-id")).toBe(REPLY_TURN_ID);
+  });
+});
+
+describe("the rail's turn, as the session ran it", () => {
+  // A launch's turn is first known by a provisional id; the provider then
+  // names its rows with its own. The host lists both on the turn.
+  it("draws the rows a turn ran under its provider's id when the receipt's turn was found by its launch id, not a spinner", async () => {
+    const user = userEvent.setup();
+    scene.knownTurns = [
+      { ...CHANNEL_REPLY_TURN, turnIds: ["turn-launch", "turn-provider"] },
+    ];
+    scene.trunk.setState({
+      messages: [
+        sessionPrompt(REPLY_PROMPT_ID, 90_000),
+        sessionTurn({
+          messageId: "turn-provider-record",
+          turnId: "turn-provider",
+          startedAt: STARTED_AT,
+          endedAt: ENDED_AT,
+          costUsd: COST_USD,
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    await user.click(await receiptIn(channelList()));
+
+    const rail = turnRail();
+    expect(rail.getAttribute("data-turn-id")).toBe("turn-launch");
+    expect(within(rail).getByTestId("bot-turn-activity").textContent).toBe(
+      SUMMARY,
+    );
+    expect(within(rail).getByTestId("bot-turn-meta").textContent).toContain(
+      "Claude Code · Claude Sonnet 4$0.0123",
+    );
+    expect(within(rail).queryByTestId("bot-turn-loading")).toBeNull();
+    expect(within(rail).queryByTestId("bot-turn-not-found")).toBeNull();
+  });
+
+  it("opened while the turn runs, keeps reading it from the host and settles into its summary and the duration it took when the bot's activity says it ended", async () => {
+    const user = userEvent.setup();
+    scene.knownTurns = [
+      {
+        ...CHANNEL_REPLY_TURN,
+        startedAt: Date.now() - 65_000,
+        endedAt: null,
+        summary: null,
+      },
+    ];
+    activityStore.setState({
+      activity: {
+        trunk: {
+          state: "replying",
+          startedAt: STARTED_AT,
+          step: null,
+          requestId: null,
+          reason: null,
+        },
+        threads: {},
+      },
+    });
+    mountChannel(null);
+    await user.click(await receiptIn(channelList()));
+    expect(within(turnRail()).getByTestId("bot-turn-meta").textContent).toMatch(
+      /^Working for 1m \d+s/,
+    );
+    expect(within(turnRail()).queryByTestId("bot-turn-summary")).toBeNull();
+
+    scene.knownTurns = [CHANNEL_REPLY_TURN];
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "idle",
+            startedAt: null,
+            step: null,
+            requestId: null,
+            reason: null,
+          },
+          threads: {},
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(turnRail()).getByTestId("bot-turn-summary").textContent,
+      ).toBe(SUMMARY);
+    });
+    const meta = within(turnRail()).getByTestId("bot-turn-meta").textContent;
+    expect(meta).toContain(
+      `${pickElapsedVerb(assistantRowId(REPLY_TURN_ID))} for ${TOOK}`,
+    );
+    expect(meta).not.toContain("Working for");
+  });
+
+  it("draws the subagent, the background command and the message to another agent a turn lifted out of its activity, naming the receiver without a link, and leaves the prose of its answer to the channel", async () => {
+    const user = userEvent.setup();
+    scene.trunk.setState({
+      messages: [
+        sessionPrompt(REPLY_PROMPT_ID, 90_000),
+        promotedSessionTurn({
+          messageId: "turn-reply-record",
+          turnId: REPLY_TURN_ID,
+          startedAt: STARTED_AT,
+          endedAt: ENDED_AT,
+          costUsd: COST_USD,
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    await user.click(await receiptIn(channelList()));
+
+    const activity = within(turnRail()).getByTestId("bot-turn-activity");
+    expect(activity.textContent).toContain(SUBAGENT_NAME);
+    expect(activity.textContent).toContain(BACKGROUND_COMMAND);
+    // No open epic to resolve or open the receiver in: its id, as text.
+    expect(activity.textContent).toContain("agent-re...");
+    expect(activity.textContent).toContain(SENT_MESSAGE);
+    expect(activity.querySelector('span[role="button"]')).toBeNull();
+    expect(activity.textContent).not.toContain(ANSWER_PROSE);
+  });
+
+  it("says an ended turn's steps are no longer in its session once the session has loaded without any of its rows, instead of spinning", async () => {
+    const user = userEvent.setup();
+    scene.trunk.setState({
+      messages: [
+        sessionPrompt(REPLY_PROMPT_ID, 90_000),
+        sessionTurn({
+          messageId: "turn-other-record",
+          turnId: "turn-other",
+          startedAt: STARTED_AT,
+          endedAt: ENDED_AT,
+          costUsd: COST_USD,
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    await user.click(await receiptIn(channelList()));
+
+    const rail = turnRail();
+    expect(within(rail).getByTestId("bot-turn-not-found").textContent).toBe(
+      "This answer's steps are no longer in its session.",
+    );
+    expect(within(rail).queryByTestId("bot-turn-loading")).toBeNull();
+    expect(within(rail).queryByTestId("bot-turn-activity")).toBeNull();
   });
 });

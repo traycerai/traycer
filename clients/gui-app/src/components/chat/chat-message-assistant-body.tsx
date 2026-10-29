@@ -457,26 +457,11 @@ export function AssistantMessageBody({
         }
         if (item.kind === "promoted_subagent") {
           return (
-            <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
-              <SubagentSegment
-                id={item.id}
-                cardId={item.segment.id}
-                toolImageResults={item.segment.toolImageResults}
-                name={item.segment.name}
-                agentType={item.segment.agentType}
-                task={item.segment.task}
-                progressUpdates={item.segment.progressUpdates}
-                result={item.segment.result}
-                isStreaming={item.segment.isStreaming}
-                endState={item.segment.endState}
-                stopped={item.segment.stopped}
-                startedAt={item.segment.startedAt}
-                durationMs={item.segment.durationMs}
-                workflowMeta={item.segment.workflowMeta}
-                nested={item.segment.children}
-                variant="promoted"
-              />
-            </ChatBlockNavigationAnchor>
+            <PromotedSubagentItem
+              key={key}
+              id={item.id}
+              segment={item.segment}
+            />
           );
         }
         const recovery = recoveryRoleOf(item.id, {
@@ -1498,6 +1483,41 @@ function ApprovalSegmentCard({
       headerFindUnitId={findUnitId}
       initiallyOpen={false}
     />
+  );
+}
+
+/**
+ * A subagent the timeline lifts out of the activity group onto its own card
+ * (`promoted_subagent`), as the agent chat's turn draws it. Shared with the
+ * other surfaces that draw a turn's timeline, so the card reads the same
+ * wherever the turn is shown.
+ */
+export function PromotedSubagentItem(props: {
+  readonly id: string;
+  readonly segment: Extract<MessageSegment, { kind: "subagent" }>;
+}) {
+  const { id, segment } = props;
+  return (
+    <ChatBlockNavigationAnchor blockId={segment.id}>
+      <SubagentSegment
+        id={id}
+        cardId={segment.id}
+        toolImageResults={segment.toolImageResults}
+        name={segment.name}
+        agentType={segment.agentType}
+        task={segment.task}
+        progressUpdates={segment.progressUpdates}
+        result={segment.result}
+        isStreaming={segment.isStreaming}
+        endState={segment.endState}
+        stopped={segment.stopped}
+        startedAt={segment.startedAt}
+        durationMs={segment.durationMs}
+        workflowMeta={segment.workflowMeta}
+        nested={segment.children}
+        variant="promoted"
+      />
+    </ChatBlockNavigationAnchor>
   );
 }
 

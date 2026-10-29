@@ -57,7 +57,7 @@ export function BotTaskCheckins(props: {
   });
   const refOf = (turn: BotCheckinTurn): BotTurnRef | null =>
     located.data?.turns.find(
-      (ref) => ref.chatId === turn.chatId && ref.turnId === turn.turnId,
+      (ref) => ref.chatId === turn.chatId && ref.turnIds.includes(turn.turnId),
     ) ?? null;
   if (rows.length === 0) return null;
   return (

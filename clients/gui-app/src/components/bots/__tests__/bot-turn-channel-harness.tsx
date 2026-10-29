@@ -8,7 +8,6 @@ import {
   TRUNK_ID,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import { BotChannelView } from "@/components/bots/bot-channel-view";
-import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import {
@@ -53,15 +52,16 @@ function Channel(): ReactNode {
   );
 }
 
-/** The bot's channel with the rail beside it, over providers; the rail's one slot is the real store. */
+/**
+ * The bot's channel with the rail beside it, over the providers a bot tab has:
+ * no chat open-state stores above the rail (the transcript lists bring their own), and the rail's one slot is the real store.
+ */
 export function MountedChannel(): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <Channel />
-          </ChatExpansionTestProviders>
+          <Channel />
         </TooltipProvider>
       </QueryClientProvider>
     </StrictMode>

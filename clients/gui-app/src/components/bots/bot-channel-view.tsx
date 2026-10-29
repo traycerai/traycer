@@ -708,7 +708,7 @@ function ChannelTurnPane(props: {
       testId="bot-turn-pane"
     >
       <BotTurnPanel
-        key={`${turn.ref.chatId}:${turn.ref.turnId}`}
+        key={`${turn.ref.chatId}:${turn.ref.turnIds[0]}`}
         botId={props.botId}
         hostId={props.hostId}
         botTitle={props.botTitle}
