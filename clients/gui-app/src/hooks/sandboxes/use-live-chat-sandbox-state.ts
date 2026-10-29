@@ -11,7 +11,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
-import { sandboxQueryKeys } from "@/lib/query-keys";
+import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface LifecycleActivity {
@@ -80,7 +80,7 @@ function useLifecycleRevision(
 
 /**
  * A live tile's sandbox state follows its owner's stream, not the pool's
- * reachability. A stream loss or serving change refreshes the shared list
+ * reachability. A stream loss or serving change refreshes the shared lists
  * once; the ordinary directory tick remains the only polling timer.
  */
 export function useLiveChatSandboxState(
@@ -165,6 +165,12 @@ function useSandboxLifecycleRead(
         (account.contextMetadata?.userId ?? null) !== userId
       )
         return;
+      // Host chips read the registry as well as the directory and sandbox list.
+      void queryClient.invalidateQueries({
+        queryKey: authQueryKeys.registeredHosts(auth, userId),
+        exact: true,
+        refetchType: "all",
+      });
       void directory?.refresh();
       try {
         await queryClient.fetchQuery({

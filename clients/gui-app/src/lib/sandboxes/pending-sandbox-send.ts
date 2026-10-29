@@ -442,13 +442,19 @@ export type ReturnedSandboxPick =
  * `returnPendingSandboxSend`, keeping the message on the sandbox it was sent
  * to: once it is back in its task's new-agent composer, that composer is on
  * the sandbox (`pick`), so its Send goes there again in this task, never to
- * the composer's default host.
+ * the composer's default host. A composer that already holds another
+ * sandbox the person staged keeps it, and the message is saved in Drafts.
  */
 export function returnPendingSandboxSendToSandbox(
   id: string,
   pick: ReturnedSandboxPick,
 ): ReturnedPendingSandboxSend {
-  const returned = returnPendingMessage(id, false);
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return { kind: "none" };
+  const returned = returnPendingMessage(
+    id,
+    anotherSandboxStaged(sends[id].epicId, pick),
+  );
   if (returned.kind !== "task") return returned;
   const surfaceKey = newConversationSurfaceKey(returned.epicId);
   const pins = useSurfaceHostSelectionStore.getState();
@@ -464,6 +470,28 @@ export function returnPendingSandboxSendToSandbox(
   if (pick.target.kind === "existing")
     pins.setSelection(surfaceKey, pick.target.hostId);
   return returned;
+}
+
+/**
+ * Whether the task's new-agent composer holds a stage the person picked
+ * there that is not this send's own sandbox. Only a stage counts: the
+ * composer's host pin is also recorded by every ordinary create, so it says
+ * where the last agent went, not what the person chose for the next one.
+ */
+function anotherSandboxStaged(
+  epicId: string,
+  pick: ReturnedSandboxPick,
+): boolean {
+  const stage = readStagedSandbox(newConversationSurfaceKey(epicId));
+  if (stage === null) return false;
+  const { target } = stage;
+  if (pick.kind === "host")
+    return target.kind !== "existing" || target.hostId !== pick.hostId;
+  if (pick.target.kind === "existing")
+    return (
+      target.kind !== "existing" || target.sandboxId !== pick.target.sandboxId
+    );
+  return JSON.stringify(target) !== JSON.stringify(pick.target);
 }
 
 /** A background Stop leaves an explicit saved draft for its receipt to open. */
