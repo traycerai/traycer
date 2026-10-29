@@ -215,6 +215,9 @@ interface ReaderEndCandidate {
  *  the momentum reached this one even after a chunk has moved it on. */
 interface ReaderMomentumEnd {
   readonly targetScrollTop: number;
+  /** Where the view was when this end was recorded. Momentum moves the view
+   *  toward the end; an end that came up to a still view was the list's. */
+  readonly scrollTop: number;
   /** As `ReaderEndCandidate.lastRow`: rows above that the list remeasures
    *  move the reader with them, and this end by as much. */
   readonly lastRow: ListRowTop | null;
@@ -501,6 +504,7 @@ function readerMomentumEndFor(
 ): ReaderMomentumEnd {
   return {
     targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+    scrollTop: geometry.scrollTop,
     lastRow: lastListRowTop(list),
   };
 }
@@ -1435,11 +1439,17 @@ export function useChatTimelineFollowLatch(
       }
       const list = listRef.current;
       readerMomentumEndRef.current = readerMomentumEndFor(geometry, list);
+      // Net of the list moving rows, the view must also have moved toward
+      // the end since the record: an end clamped up to a reader who has not
+      // moved since, then grown back, is not their momentum arriving.
+      const shift = listRowShift(list, momentum.lastRow);
       return (
+        geometry.scrollTop - shift >
+          momentum.scrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         geometry.scrollTop >=
-        momentum.targetScrollTop +
-          listRowShift(list, momentum.lastRow) -
-          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+          momentum.targetScrollTop +
+            shift -
+            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
     [isCorrectionSuppressed, isReattachSuppressed, listRef],

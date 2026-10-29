@@ -822,6 +822,87 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
+  // The momentum target is where a lifted finger's momentum is headed. A
+  // clamp that drops the end onto the view re-records it at the view; the
+  // end growing back must not read as the view having arrived there.
+  describe("a lifted finger's momentum target through a clamp onto the view", () => {
+    // A following reader drags a little away and lifts before any report: no
+    // fling, and the lift publishes the departure. The last row's top never
+    // moves; only its height changes.
+    function liftedAfterASmallDrag() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400);
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireTouch(node, "touchend", 400);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      return { node, listRef, onFollowIntentChange };
+    }
+
+    it("does not follow a free reader when the end clamps onto them and grows back", () => {
+      const { node, listRef, onFollowIntentChange } = liftedAfterASmallDrag();
+
+      // The last row measures smaller and the browser clamps the end up to
+      // the reader, who has not moved.
+      shim.setGeometry(node, { scrollHeight: 1450 });
+      fireResizeObservers();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      // The row grows back: the end is below the reader again.
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      fireResizeObservers();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("does not follow a free reader whom the list moved with remeasured rows above after the clamp", () => {
+      const { node, listRef, onFollowIntentChange } = liftedAfterASmallDrag();
+
+      shim.setGeometry(node, { scrollHeight: 1450 });
+      fireResizeObservers();
+      // Rows above the view remeasure: the list moves the view and the last
+      // row down together. The reader has not moved.
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 990 });
+      fireResizeObservers();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("control: a fling that a clamp interrupts still arrives when it carries on past the clamp", () => {
+      const { node, listRef, onFollowIntentChange } = flingTowardEnd();
+
+      shim.setGeometry(node, { scrollTop: 900 });
+      fireNativeScroll(node);
+      // The end drops onto the view mid-fling.
+      shim.setGeometry(node, { scrollHeight: 1400 });
+      fireResizeObservers();
+      // The end grows back and the fling moves on toward it, short of the
+      // strict bottom.
+      shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+  });
+
   it("ends a bounded correction burst without inventing reader departure", () => {
     const node = shim.makeNode({
       scrollTop: 1200,
