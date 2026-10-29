@@ -140,6 +140,7 @@ import {
   completePendingSandboxTerminal,
   canWithdrawPendingSandboxSend,
   returnPendingSandboxSend,
+  resumePendingSandboxMessageReturn,
   returnPendingSandboxMessage,
   returnPendingSandboxSendToDraft,
   returnPendingSandboxSendToSandbox,
@@ -350,11 +351,8 @@ function PendingMessageReturnDriver(props: {
   const { id, returnRequested } = props.send;
   useEffect(() => {
     if (returnRequested === undefined) return;
-    void returnPendingSandboxMessage(
-      id,
-      returnRequested.saveInDrafts,
-      true,
-    ).catch(() => undefined);
+    // As it was decided when it began, sandbox and all.
+    void resumePendingSandboxMessageReturn(id).catch(() => undefined);
   }, [id, returnRequested]);
   return null;
 }
@@ -2574,14 +2572,10 @@ function PendingMessageReturnItem(props: {
   const { send } = props;
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // As it was decided when it began, sandbox and all.
   const giveBack = useCallback(
-    () =>
-      returnPendingSandboxMessage(
-        send.id,
-        send.returnRequested?.saveInDrafts ?? false,
-        true,
-      ),
-    [send.id, send.returnRequested],
+    () => resumePendingSandboxMessageReturn(send.id),
+    [send.id],
   );
   useEffect(() => {
     let disposed = false;

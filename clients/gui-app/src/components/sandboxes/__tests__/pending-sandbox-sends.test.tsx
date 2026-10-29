@@ -3704,6 +3704,50 @@ describe("a message for an existing chat whose sandbox rests", () => {
         restoreLocks();
       }
     });
+
+    // The sandbox decision was made when the return began, by Choose another
+    // host (none) or Cancel (the sandbox): the driver finishing it after a
+    // reload keeps that decision, whatever the stage now says.
+    it.each([
+      ["no sandbox, as Choose another host decided", null],
+      [
+        "the sandbox, as Cancel decided",
+        { target: RESUME_TARGET, clientRequestId: null },
+      ],
+    ] as const)(
+      "resumes a return requested before a reload with %s on its saved draft",
+      async (_label, destination) => {
+        const restoreLocks = installImmediateExclusiveLocks();
+        try {
+          seedWaking();
+          useComposerDraftStore
+            .getState()
+            .replaceDraft("existing-chat", OCCUPIED_CHAT_DOC, null);
+          usePendingSandboxSendStore.setState((state) => ({
+            sends: {
+              ...state.sends,
+              [SEND_ID]: {
+                ...state.sends[SEND_ID],
+                returnRequested: { saveInDrafts: false, destination },
+              },
+            },
+          }));
+          await reloadPendingSandboxStores();
+          mountInChat();
+
+          await waitFor(() =>
+            expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+          );
+          const saved = useLandingDraftStore.getState().drafts;
+          expect(saved).toHaveLength(1);
+          expect(saved[0]?.returnedSandbox ?? null).toEqual(
+            destination === null ? null : expect.objectContaining(destination),
+          );
+        } finally {
+          restoreLocks();
+        }
+      },
+    );
   });
 
   describe("once its sandbox is awake", () => {

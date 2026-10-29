@@ -347,7 +347,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
 
     expect(
       usePendingSandboxSendStore.getState().sends[SEND_ID]?.returnRequested,
-    ).toEqual({ saveInDrafts: true });
+    ).toEqual({ saveInDrafts: true, destination: null });
     // Settle it: a per-id return left pending would be joined by every later
     // case that reuses this send id.
     outcome.resolve({
