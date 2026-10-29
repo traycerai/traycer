@@ -4,8 +4,11 @@ import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
 /**
  * The person's own Boot and Watch opens, from the click until the catalog
- * lists the session they produced. Each is the Mobile simulators panel's
- * pending row, keyed by the `requestId` the open was sent with.
+ * lists the session they produced. Each is kept by the `requestId` it was
+ * sent with, which is the only thing the host's own state names it by; the
+ * Mobile simulators panel's pending row is keyed by what the open NAMED
+ * instead, so a repeated click is one row over two opens (see
+ * `buildSimulatorListGroups`).
  *
  * A pending open learns its `sessionId` from the open's answer or from the
  * sessions stream's session carrying its `requestId`, whichever arrives

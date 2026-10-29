@@ -62,6 +62,7 @@ export interface SimulatorPendingRow {
   readonly name: string;
   readonly platform: SimulatorPlatform;
   readonly version: string;
+  /** The open this row stands for; a repeated click leaves more than one. */
   readonly requestId: string;
   /**
    * The open named an instance that is already running, so there is nothing
@@ -146,10 +147,22 @@ function endedRow(
   };
 }
 
+/**
+ * Keyed by what the open NAMED, never by the open: a repeated click is the
+ * person asking again for one thing, and the host answers the clicks with one
+ * session, which can retire only the row minted for the open it was stamped
+ * with. A second row keyed by the second open had nothing left to end it and
+ * said "Booting" beside the live one until the catalog was read again.
+ */
 function pendingRow(open: SimulatorPendingOpen): SimulatorPendingRow {
   return {
     kind: "pending",
-    key: JSON.stringify(["pending", open.requestId]),
+    key: JSON.stringify([
+      "pending",
+      open.hostId,
+      open.simulatorId,
+      open.instanceKey,
+    ]),
     hostId: open.hostId,
     name: open.name,
     platform: open.platform,
@@ -167,7 +180,8 @@ function pendingRow(open: SimulatorPendingOpen): SimulatorPendingRow {
  * record is its own closed row keyed by its session, so an agent's archived
  * end beside the person's live session reads as one live row and one notice.
  * A pending open stays until the catalog lists its session; a Watch of an
- * instance that already has its row shows no second one.
+ * instance that already has its row shows no second one, and two opens of one
+ * thing - a Boot clicked twice - are one placeholder, not two.
  */
 export function buildSimulatorListGroups(args: {
   readonly records: readonly SimulatorCatalogRecord[];
@@ -202,6 +216,7 @@ export function buildSimulatorListGroups(args: {
     if (record.endedReason === null) continue;
     push(record.hostId, endedRow(record, record.endedReason));
   }
+  const placeholders = new Set<string>();
   for (const open of args.pending) {
     if (
       open.sessionId !== null &&
@@ -213,7 +228,10 @@ export function buildSimulatorListGroups(args: {
       liveInstances.has(JSON.stringify([open.hostId, open.instanceKey]))
     )
       continue;
-    push(open.hostId, pendingRow(open));
+    const row = pendingRow(open);
+    if (placeholders.has(row.key)) continue;
+    placeholders.add(row.key);
+    push(open.hostId, row);
   }
   return [...rowsByHost]
     .filter(([hostId]) => args.hosts.get(hostId)?.health.state !== "removed")

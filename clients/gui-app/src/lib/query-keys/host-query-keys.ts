@@ -65,11 +65,11 @@ export const hostQueryKeys = {
    *
    * Under the `simulator.instances` METHOD scope, not the host's alone, so the
    * invalidations the simulator mutations already send reach this derived
-   * entry by prefix: the instance open's `onSettled` and the power-off /
-   * keep-running `invalidateMethods` all sweep that method, and power-off
-   * sweeps `simulator.list` - the read's other input - with it. Keyed under
-   * the host scope alone, the entry outlived every one of them for the 60 s
-   * freshness window.
+   * entry by prefix: the instance open's `onSettled`, and the power-off,
+   * shutdown, keep-running and simulators-switch `invalidateMethods` all
+   * sweep that method, with `simulator.list` - the read's other input - in
+   * the same set. Keyed under the host scope alone, the entry outlived every
+   * one of them for the 60 s freshness window.
    *
    * `simulatorVerbsV11` is the negotiated gate that DECIDED the cached shape:
    * a `@1.1` host's entry holds `simulator.instances` rows, a `@1.0` host's

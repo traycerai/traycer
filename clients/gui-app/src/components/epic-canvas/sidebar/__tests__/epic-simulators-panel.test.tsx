@@ -677,6 +677,32 @@ describe("Mobile simulators panel", () => {
       expect(useSimulatorPendingOpensStore.getState().byRequestId).toEqual({});
     });
 
+    it("shows one Booting row when Boot is clicked twice before the first answers", async () => {
+      // The default answer never arrives: the host is still booting, which
+      // is the window the person clicks again in.
+      renderPanel(vi.fn());
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+      expect(await screen.findByText("Booting")).toBeTruthy();
+      await waitFor(() => {
+        expect(host_.opens).toHaveLength(1);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+
+      await waitFor(() => {
+        expect(host_.opens).toHaveLength(2);
+      });
+      // Two opens, each still answered in its own right - and ONE
+      // placeholder for the one device they both name. The session the host
+      // makes carries one of the two requestIds, so a row keyed by the other
+      // had nothing left to retire it and sat beside the live row.
+      expect(
+        Object.keys(useSimulatorPendingOpensStore.getState().byRequestId),
+      ).toHaveLength(2);
+      expect(screen.getAllByText("Booting")).toHaveLength(1);
+    });
+
     it("takes the sessionId from the stream when the answer times out, places the tile and shows no failure", async () => {
       const place = vi.fn();
       host_.openAnswer = () =>

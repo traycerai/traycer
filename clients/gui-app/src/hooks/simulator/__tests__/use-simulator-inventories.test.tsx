@@ -51,7 +51,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { useSimulatorInventories } from "@/hooks/simulator/use-simulator-inventories";
-import { useSimulatorShutdownMutation } from "@/hooks/simulator/use-simulator-mutations";
+import {
+  useSimulatorConfigSetMutation,
+  useSimulatorShutdownMutation,
+} from "@/hooks/simulator/use-simulator-mutations";
 
 /** One booted device, so the `@1.0` branch has an instance row to mint. */
 const LIST: SimulatorListResponse = {
@@ -135,6 +138,8 @@ function buildSpine(args: { readonly reachable: () => boolean }): {
       },
       "simulator.instances": () => record("simulator.instances", INSTANCES),
       "simulator.open": () => record("simulator.open", OPENED),
+      "config.simulator.set": () =>
+        record("config.simulator.set", { enabled: false, idleMinutes: 15 }),
       "simulator.shutdown": (params) =>
         record<SimulatorShutdownResponse>("simulator.shutdown", {
           simulatorId: params.simulatorId,
@@ -208,6 +213,25 @@ function renderInventoriesWithPowerOff(spine: HostClient<HostRpcRegistry>) {
       }),
       shutdown: useSimulatorShutdownMutation(client, HOST_ID, "udid-1")
         .mutation,
+    }),
+    { wrapper: wrapper() },
+  );
+}
+
+/**
+ * The palette beside Settings' Mobile simulators switch: turning simulators
+ * off is a machine-wide write, and this inventory is the read it moves.
+ */
+function renderInventoriesWithConfigSet(spine: HostClient<HostRpcRegistry>) {
+  const client = spine.createRequester(mockLocalHostEntry);
+  return renderHook(
+    () => ({
+      inventories: useSimulatorInventories({
+        hostIds: [HOST_ID],
+        epicId: EPIC_ID,
+        enabled: true,
+      }),
+      configSet: useSimulatorConfigSetMutation(client, HOST_ID).mutation,
     }),
     { wrapper: wrapper() },
   );
@@ -371,6 +395,37 @@ describe("useSimulatorInventories", () => {
 
     // The open's own invalidation, with no refetch of its own and no clock
     // moved: a palette reopened now must not serve the pre-open inventory.
+    await waitFor(() => {
+      expect(reads()).toBe(2);
+    });
+  });
+
+  it("is asked again after the machine's simulator switch is flipped, inside the 60 s freshness window", async () => {
+    negotiateV11();
+    const { spine, methods } = buildSpine({ reachable: () => true });
+    hostBindingMock.current = { hostClient: spine };
+
+    const { result } = renderInventoriesWithConfigSet(spine);
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.status).toBe("ready");
+    });
+    const reads = (): number =>
+      methods.filter((method) => method === "simulator.list").length;
+    expect(reads()).toBe(1);
+
+    act(() => {
+      result.current.configSet.mutate({ enabled: false });
+    });
+    await waitFor(() => {
+      expect(methods).toContain("config.simulator.set");
+    });
+
+    // Turning simulators off powers every instance on the machine off and
+    // leaves no device to enumerate. The switch's own reads are the config
+    // and the pack; this inventory is host-wide, polls for nothing, and the
+    // picker's pack-following effect lives on the surface that sent the
+    // flip - so without the switch sweeping it too, the palette went on
+    // offering a machine's devices and instances for the whole window.
     await waitFor(() => {
       expect(reads()).toBe(2);
     });

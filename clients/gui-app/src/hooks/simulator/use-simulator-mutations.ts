@@ -36,6 +36,13 @@ import {
  * draws the control, and the mutation itself is never dispatched blind.
  *
  * Keys name the host: two tiles on two machines never share pending state.
+ *
+ * THE INVARIANT every verb here is held to: a simulator mutation declares
+ * exactly the reads its effect moves - the host-wide inventory pair
+ * ({@link INSTANCE_INVALIDATIONS}) for anything that boots, clones, powers
+ * off, switches the machine over or keeps an instance running, and nothing
+ * for a session-only change the sessions stream already carries - and sweeps
+ * them on SETTLE, because a lost answer still leaves a host that acted.
  */
 
 type SimulatorMutation<Method extends keyof HostRpcRegistry & string> =
@@ -54,13 +61,6 @@ export interface GatedSimulatorMutation<
   readonly supported: boolean;
 }
 
-// A switch flip moves the pack too (off, installing), so Settings' status
-// read is asked again with it.
-const CONFIG_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
-  "config.simulator.get",
-  "simulator.status",
-];
-
 const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
 
 /**
@@ -77,6 +77,23 @@ const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
 export const INSTANCE_INVALIDATIONS: ReadonlyArray<
   keyof HostRpcRegistry & string
 > = ["simulator.instances", "simulator.list"];
+
+/**
+ * A switch flip moves the pack too (off, installing), so Settings' status
+ * read is asked again with it - and the pack is what there is to enumerate,
+ * so both inventory reads move with it as well. Off powers every instance on
+ * the machine off and leaves no device to list; on, and the tools install and
+ * the devices appear; removing the tools un-enumerates them. The same write
+ * carries the idle window, which moves every instance's countdown. The
+ * picker's own pack-following effect sweeps only its `simulator.list` on the
+ * surface that sent the flip, so without this the palette's host-wide
+ * inventory served its pre-flip answer for the whole freshness window.
+ */
+const CONFIG_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
+  "config.simulator.get",
+  "simulator.status",
+  ...INSTANCE_INVALIDATIONS,
+];
 
 /** The machine-user-global switch on `hostId`. */
 export function useSimulatorConfigQuery(
@@ -113,8 +130,9 @@ export function useSimulatorConfigSetMutation(
 /**
  * Removes the downloaded simulator tools from `hostId`'s store. The host
  * refuses while simulators are on or a helper still runs, and that refusal
- * toasts like any other host error; Settings' status read is asked again
- * either way so the row shows what is left on disk.
+ * toasts like any other host error; the machine's reads are asked again
+ * either way (see {@link CONFIG_INVALIDATIONS}) so the row shows what is
+ * left on disk and nothing goes on offering devices the tools enumerated.
  */
 export function useSimulatorRemoveToolsMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -300,6 +318,12 @@ export function useSimulatorDetailQuery(
  * is not toasted: the drawer prints it beside the control that sent it. The
  * answer IS the fresh read, so it replaces the detail query's data rather
  * than asking again.
+ *
+ * A send that did NOT answer has no read to put there, and the host may well
+ * have taken the action anyway - an answer lost on the wire, a timeout - so
+ * the drawer asks for the detail again instead of leaving the control showing
+ * the value from before the send with an error beside it. One read, and it
+ * says which way the send went.
  */
 export function useSimulatorDrawerActionMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -332,6 +356,13 @@ export function useSimulatorDrawerActionMutation(
           ),
           detail,
         );
+      },
+      onSettled: (_detail, error, _variables, context) => {
+        const sentOn = context?.hostId ?? null;
+        if (error === null || sentOn === null) return;
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(sentOn, "simulator.detail"),
+        });
       },
     },
   });
