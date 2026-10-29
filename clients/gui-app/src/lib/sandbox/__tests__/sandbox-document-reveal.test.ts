@@ -551,9 +551,14 @@ describe("body overflow inside a frame", () => {
     { contain: "content" },
     { contain: "strict" },
     { contentVisibility: "auto" },
-    { contentVisibility: "hidden" },
     { containerType: "inline-size" },
     { containerType: "size" },
+    // `container-type` keeps growing, and every value it grows contains
+    // unless it is one of the two below. These are the serialisations the
+    // engine answers with, not the order a page writes.
+    { containerType: "anchored" },
+    { containerType: "inline-size scroll-state" },
+    { containerType: "scroll-state anchored" },
   ];
   const CONTAINS_NOT: Record<string, string>[] = [
     { contain: "none" },
@@ -637,6 +642,48 @@ describe("body overflow inside a frame", () => {
       { scroller: html, top: 300, left: 0, behavior: "auto" },
     ]);
   });
+
+  // `content-visibility: hidden` skips the page's contents, and the engine
+  // reveals nothing inside them. Such a page lays out no taller than its
+  // view, so the viewport it is left to has no room and the walk scrolls
+  // nothing, which is what the engine does. Were it read as the containment
+  // it is, the body would be a scroller and the walk would move it to an
+  // element the engine never moves to.
+  it.each(["html", "body"])(
+    "scrolls nothing into view when %s is skipped",
+    (skipped) => {
+      const frame = startFrame(false);
+      const doc = frame.window.document;
+      const target = doc.createElement("button");
+      doc.body.append(target);
+      const view = { height: 100, width: 100 };
+      frame.place(doc.documentElement, {
+        client: view,
+        // Skipped contents leave the root no taller than its view.
+        scroll: { height: 100, width: 100, top: 0, left: 0 },
+        style:
+          skipped === "html"
+            ? { ...VISIBLE, contentVisibility: "hidden" }
+            : VISIBLE,
+      });
+      frame.place(doc.body, {
+        client: view,
+        scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+        style: {
+          overflowX: "hidden",
+          overflowY: "visible",
+          ...(skipped === "body" ? { contentVisibility: "hidden" } : {}),
+        },
+      });
+      frame.place(target, {
+        rect: { top: 300, bottom: 340, left: 20, right: 60 },
+      });
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([]);
+    },
+  );
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {

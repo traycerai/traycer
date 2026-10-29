@@ -340,18 +340,29 @@ function bootstrapMain(config: BootstrapConfig): void {
     return root instanceof ShadowRoot ? root.host : null;
   };
   // Containment of any kind, on the root or on the body. `contain` names it;
-  // a `content-visibility` past `visible` and a sizing `container-type` apply
-  // it without naming it, and leave `contain` itself `none`. Each is read by
-  // the keywords that mean containment, so the empty string an engine answers
-  // for a property it does not know is no containment, as is
-  // `container-type: scroll-state`, which contains nothing.
+  // `container-type` and `content-visibility` apply it without naming it, and
+  // leave `contain` itself `none`.
+  //
+  // `contain` is a closed grammar, so it is read by the keywords that mean
+  // containment, and the empty string an engine answers for a property it
+  // does not know is no containment. `container-type` is an open one, grown
+  // twice already, so it is read the other way round: the values that contain
+  // nothing are named, and everything else contains.
+  //
+  // `content-visibility: hidden` contains, and is deliberately read here as
+  // though it did not. Its contents are skipped, and the engine reveals
+  // nothing inside them; left to the viewport, which such a page gives no
+  // room, the walk emits nothing and matches it. Called containment, the walk
+  // would instead scroll the body to an element the engine never moves to.
+  // `auto` is containment the engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
     if (element === null) return false;
     const style = window.getComputedStyle(element);
     return (
       /size|layout|style|paint|content|strict/.test(style.contain) ||
-      /size/.test(style.containerType) ||
-      /auto|hidden/.test(style.contentVisibility)
+      (style.containerType !== "" &&
+        !/^(?:normal|scroll-state)$/.test(style.containerType)) ||
+      /auto/.test(style.contentVisibility)
     );
   };
   // With the root's overflow `visible` and containment on neither, the body's
