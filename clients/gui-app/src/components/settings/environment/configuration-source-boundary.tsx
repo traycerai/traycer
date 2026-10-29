@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import {
@@ -11,7 +12,10 @@ import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
+import {
+  cancelEnvironmentInvitationReads,
+  useEnvironmentInvitationsQuery,
+} from "@/hooks/environment/use-environment-invitations";
 import { useHostClient } from "@/lib/host";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -263,6 +267,7 @@ function useGoneConfiguration(input: {
     environmentId,
     invitations.data?.invitations ?? [],
   );
+  const queryClient = useQueryClient();
   const { refetch: readInvitations } = invitations;
   const absent = settled && listed === null && environmentId !== null;
   const [asked, setAsked] = useState<AskedInvitations | null>(null);
@@ -277,16 +282,24 @@ function useGoneConfiguration(input: {
 
   useEffect(() => {
     if (answer?.state !== "asking") return;
+    // Whatever is in flight is cancelled before the request that answers this
+    // question is made, because a read already running would be JOINED rather
+    // than replaced, and its reply can carry a snapshot the server assembled
+    // before the membership answer — an invitation that already existed would
+    // be missing from it. What lands here is this question's own answer.
+    //
     // A reply that fails ends the asking rather than starting another, so a
     // read that keeps failing cannot turn into a stream of requests; the next
     // membership answer is a new question, and asks again.
-    void readInvitations({ cancelRefetch: true }).then((result) => {
-      setAsked({
-        listedAt,
-        state: result.isSuccess ? "answered" : "unanswered",
+    void cancelEnvironmentInvitationReads(queryClient)
+      .then(() => readInvitations({ cancelRefetch: true }))
+      .then((result) => {
+        setAsked({
+          listedAt,
+          state: result.isSuccess ? "answered" : "unanswered",
+        });
       });
-    });
-  }, [answer?.state, listedAt, readInvitations]);
+  }, [answer?.state, listedAt, queryClient, readInvitations]);
 
   // The team that is gone, where one is. Nothing is gone until the read asked
   // for this answer has answered: an invitation the page could not read is
@@ -295,10 +308,11 @@ function useGoneConfiguration(input: {
   // is about to be told they can rejoin. The page says it cannot be read
   // meanwhile, and the selection stays where the person put it.
   //
-  // What that leaves is an invitation written after this read answered: it is
-  // not in the reply, so a removal and a re-invitation that cross here read as
-  // a plain removal. The toast names the team, the selection moves to
-  // Personal, and the Accept this page would have offered is not offered. It
+  // What that leaves is an invitation the server had not written when it
+  // answered this question — one that lands after the request went out. It
+  // cannot be in the reply, so a re-invitation inside that window reads as a
+  // plain removal: the toast names the team, the selection moves to Personal,
+  // and the Accept this page would have offered is not offered. The offer
   // returns without a reload, from the environment picker, bounded by that
   // read's own staleness: neither route of the invitations read sets a
   // `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in

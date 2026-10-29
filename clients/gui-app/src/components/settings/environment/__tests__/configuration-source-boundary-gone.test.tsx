@@ -10,7 +10,7 @@ vi.mock("sonner", () => ({
   ),
 }));
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -330,22 +330,14 @@ describe("a team the environment list no longer carries", () => {
         throw new Error("down");
       },
     });
-    render(
+    const element = (
       <HeldValueHostRuntime>
         <PersonalPageFrame section="secrets">
           <Probe />
         </PersonalPageFrame>
-      </HeldValueHostRuntime>,
-      { wrapper: harness.Wrapper },
+      </HeldValueHostRuntime>
     );
-
-    // Every request has finished failing, so what follows is the settled
-    // state and not a moment inside it.
-    await waitFor(() => {
-      expect(asked).toBeGreaterThan(0);
-      expect(harness.queryClient.isFetching()).toBe(0);
-    });
-    const askedOnce = asked;
+    const view = render(element, { wrapper: harness.Wrapper });
 
     // The list says the team is gone, but a read that failed is no answer
     // about an invitation: nothing is claimed, and the selection the person
@@ -359,12 +351,90 @@ describe("a team the environment list no longer carries", () => {
       environmentId: "env-a",
     });
 
-    // A failed reply ends the asking rather than starting another, so the
-    // page holds without turning into a stream of account-wide requests.
+    // Exactly two requests, and the count is named rather than compared with
+    // itself: the page's own read on mount, and the one the gate asked for
+    // when the list came back without the team. The harness does not retry.
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+      expect(asked).toBe(2);
+    });
+
+    // A failed reply ends the asking rather than starting another, so a page
+    // left on this state does not turn into a stream of account-wide
+    // requests. Rendering again is the cheapest thing that would restart one.
+    view.rerender(element);
     await waitFor(() => {
       expect(harness.queryClient.isFetching()).toBe(0);
     });
-    expect(asked).toBe(askedOnce);
+    expect(asked).toBe(2);
+  });
+
+  it("acts on its own request, not on a read that was already in flight", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    // The read in flight took its snapshot while the person was still a
+    // member, so it carries no invitation. It is held open across the removal.
+    const inFlight = Promise.withResolvers<{
+      readonly invitations: EnvironmentInvitation[];
+    }>();
+    let asked = 0;
+    const listed = { current: [PERSONAL, team("editor")] };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: listed.current }),
+      "environment.invitations.list": () => {
+        asked += 1;
+        return asked === 1 ? inFlight.promise : { invitations: [INVITATION] };
+      },
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+    await waitFor(() => expect(asked).toBe(1));
+
+    // Removed and invited back while that first read is still out.
+    listed.current = [PERSONAL];
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      });
+    });
+
+    // The page asks its own question — the held read is cancelled rather than
+    // joined — so the invitation that existed all along is found.
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
+    ).toBeTruthy();
+    expect(asked).toBe(2);
+
+    // The held reply, released late, cannot take that back: it answered a
+    // question about a membership the person no longer has.
+    await act(async () => {
+      inFlight.resolve({ invitations: [] });
+      await inFlight.promise;
+    });
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    expect(
+      screen.getByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
+    ).toBeTruthy();
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
   });
 
   it("asks again on the membership answer after a failed read, and keeps the invited team", async () => {
@@ -376,9 +446,11 @@ describe("a team the environment list no longer carries", () => {
       pick: { kind: "team", environmentId: "env-a" },
     });
     const invitationsFail = { current: true };
+    let asked = 0;
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
       "environment.invitations.list": () => {
+        asked += 1;
         if (invitationsFail.current) throw new Error("down");
         return { invitations: [INVITATION] };
       },
@@ -395,11 +467,22 @@ describe("a team the environment list no longer carries", () => {
       await screen.findByText("These settings are no longer available."),
     ).toBeTruthy();
 
+    // The ask raised for the first membership answer has to have FAILED
+    // before the next one arrives, or this case never exercises recovery from
+    // `unanswered` — the standing line above is on screen while that request
+    // is still out. Two requests: the page's read on mount, and that ask.
+    await waitFor(() => {
+      expect(asked).toBe(2);
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+
     // The next membership answer is a new question, so the read is asked
     // again — this time it answers, and names the invitation.
     invitationsFail.current = false;
-    await harness.queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey.includes("environment.list"),
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      });
     });
 
     expect(
@@ -407,6 +490,9 @@ describe("a team the environment list no longer carries", () => {
         "You're invited to Acme. Accept to see and change its settings.",
       ),
     ).toBeTruthy();
+    // Exactly one more request than the failed round: a membership answer
+    // asks once, whether or not the one before it got an answer.
+    expect(asked).toBe(3);
     expect(hoisted.toasts).toEqual([]);
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "team",
