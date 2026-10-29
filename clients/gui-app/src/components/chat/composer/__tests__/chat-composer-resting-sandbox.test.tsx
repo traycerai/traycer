@@ -60,6 +60,10 @@ const answers = vi.hoisted(() => ({
   catalogueFetching: false,
   refetchCatalogue: vi.fn(),
   sandboxes: [] as ReadonlyArray<SandboxSummary>,
+  /** Whether the tab host answers its model lists; a resting sandbox doesn't. */
+  tabHostAnswersModels: true,
+  /** The cloud catalog's Traycer models, `undefined` while unread. */
+  cloudTraycerModels: undefined as ReadonlyArray<unknown> | undefined,
   openedTiles: [] as TileOpenIntent[],
   tabHostId: "serving-host",
   submit: null as {
@@ -99,8 +103,12 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     data: { harnesses: answers.harnesses },
   }),
   useGuiHarnessModelsQueryForClient: (_client: unknown, harnessId: string) => ({
-    data: MODELS[harnessId],
+    data: answers.tabHostAnswersModels ? MODELS[harnessId] : undefined,
   }),
+}));
+// The cloud catalog: the Traycer models every sandbox runs.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: answers.cloudTraycerModels }),
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({
@@ -360,6 +368,15 @@ function seed(harnessId: ChatRunSettings["harnessId"]): ChatRunSettings {
   };
 }
 
+// Stable, like `MODELS`: the cloud lists a model the serving host does not.
+const CLOUD_TRAYCER_MODELS: ReadonlyArray<unknown> = [
+  {
+    ...modelOption("traycer", "claude-sonnet-5.5"),
+    label: "Claude Sonnet 5.5",
+  },
+  { ...modelOption("traycer", "gpt-6.1-sol"), isDefault: false },
+];
+
 const OFFERS_TRAYCER: SandboxCatalogue = {
   providers: [],
   offeredAgents: ["traycer"],
@@ -393,6 +410,8 @@ beforeEach(() => {
   answers.catalogueFetching = false;
   answers.refetchCatalogue.mockClear();
   answers.sandboxes = [];
+  answers.tabHostAnswersModels = true;
+  answers.cloudTraycerModels = CLOUD_TRAYCER_MODELS;
   answers.openedTiles = [];
   answers.tabHostId = "serving-host";
   answers.submit = null;
@@ -725,6 +744,35 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
 
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
     expect(submitted().sendDisabled).toBe(false);
+  });
+});
+
+// A tab opened while the sandbox was awake stays bound to it, so once it rests
+// the tab's host is the resting sandbox itself, and it answers no model list.
+describe("the composer of a resting sandbox's chat, on a tab bound to that sandbox", () => {
+  beforeEach(() => {
+    answers.tabHostId = "p3-host";
+    answers.tabHostAnswersModels = false;
+  });
+
+  it("resolves a Traycer pick with no model to the cloud catalog's default, so Send is open", () => {
+    mountComposer({ ...seed("traycer"), model: "" });
+
+    const state = submitted().toolbarStore.getState();
+    expect(state.selection).toMatchObject({
+      harnessId: "traycer",
+      modelSlug: "claude-sonnet-5.5",
+    });
+    expect(submitted().sendDisabled).toBe(false);
+  });
+
+  it("keeps the chat's own Traycer model, labelled from the cloud catalog", () => {
+    mountComposer({ ...seed("traycer"), model: "gpt-6.1-sol" });
+
+    const state = submitted().toolbarStore.getState();
+    expect(state.selection.modelSlug).toBe("gpt-6.1-sol");
+    expect(state.selectedModel?.slug).toBe("gpt-6.1-sol");
+    expect(state.sandboxRunTarget).toBe("resting");
   });
 });
 

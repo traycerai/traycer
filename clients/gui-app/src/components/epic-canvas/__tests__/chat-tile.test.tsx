@@ -1558,6 +1558,7 @@ function chatTileTestTree(
 function chatTileSessionViewTestTree(
   queryClient: QueryClient,
   handle: ChatSessionStoreHandle,
+  isLiveSession: boolean,
 ) {
   return chatTileProviders(
     queryClient,
@@ -1570,7 +1571,7 @@ function chatTileSessionViewTestTree(
       currentEpicId={EPIC_ID}
       restingSandbox={RESTING_COPY_SANDBOX}
       readOnlyNotice={null}
-      isLiveSession={false}
+      isLiveSession={isLiveSession}
       preContent={null}
     />,
   );
@@ -1594,7 +1595,28 @@ function renderRestingCopy(handle: ChatSessionStoreHandle) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileSessionViewTestTree(queryClient, handle));
+  return render(chatTileSessionViewTestTree(queryClient, handle, false));
+}
+
+/**
+ * The live tile of a chat whose sandbox rests: a tab opened while the sandbox
+ * was awake stays bound to it, and the pool serves the stream at rest. The
+ * tab's host answers nothing, so its workspace reads never settle.
+ */
+function renderServedAtRest(handle: ChatSessionStoreHandle) {
+  // A sandbox task starts with no workspace folders and binds none.
+  act(() => {
+    handle.store.setState({ worktreeBinding: null, missingWorktreePaths: [] });
+  });
+  workspaceRpcTestState.methods.length = 0;
+  workspaceRpcTestState.settingsWrites.length = 0;
+  usePendingSandboxSendStore.setState({ sends: {} });
+  useStagedSandboxStore.getState().clearAll();
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(chatTileSessionViewTestTree(queryClient, handle, true));
 }
 
 function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
@@ -2370,6 +2392,51 @@ describe("<ChatTile />", () => {
       throw new Error("expected send button");
     }
     fireEvent.click(sendButton);
+
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.request).toMatchObject({
+      kind: "message",
+      chatId: CHAT_ARTIFACT.id,
+      hostId: RESTING_COPY_SANDBOX.sandbox.hostId,
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("sends from a resting chat's live tile whose host can't answer for its workspace folders", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+
+    renderServedAtRest(handle);
+
+    // A hint leaves the button focusable and marks it `aria-disabled` instead.
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-disabled")).toBeNull();
+    });
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "worktree.listBindingsForEpic",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     const sends = Object.values(usePendingSandboxSendStore.getState().sends);
     expect(sends).toHaveLength(1);
