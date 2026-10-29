@@ -46,6 +46,7 @@ function memberRowDetails(subject: MembersDetailsSubject): ReactNode {
     <MemberRowDetails
       environmentId={subject.environmentId}
       userId={subject.key}
+      roleLabel={subject.roleLabel}
     />
   );
 }

@@ -306,7 +306,9 @@ describe("MembersPage members read", () => {
     });
 
     const notice = await screen.findByTestId("members-legacy-notice");
-    expect(notice.textContent).toContain("Set a role beside each name.");
+    expect(notice.textContent).toContain(
+      "With this update every existing member can edit Acme's settings. Priya can now edit. Set a role beside each name to change that.",
+    );
     view.rerender(<MembersPage environmentId="env-a" />);
     expect(screen.getByTestId("members-legacy-notice")).toBeTruthy();
     expect(harness.paramsOf("environment.members.noticeSeen")).toHaveLength(0);
@@ -558,11 +560,14 @@ describe("MembersPage offboarding previews", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => membersPage([ADA, GRACE]),
+        // A demotion shows the preview rows only when it unlinks a plan, so a
+        // case about what those rows say names a linked plan.
         "environment.members.removePreview": () => ({
           ...PREVIEW,
           activeTurns: null,
           terminals: null,
           localHostId: null,
+          linkedPlan: "Claude Max",
         }),
       },
     );
@@ -920,6 +925,7 @@ describe("MembersPage refused writes", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members.removePreview": () => PREVIEW,
         "environment.members.setRole": () => ({ outcome: "forbidden" }),
       },
     );
@@ -932,6 +938,11 @@ describe("MembersPage refused writes", () => {
     );
     await userEvent.click(
       await screen.findByRole("option", { name: "Viewer" }),
+    );
+    // A demotion is confirmed before it is written, so the refusal answers
+    // the confirmed write.
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change to viewer" }),
     );
 
     expect((await screen.findByTestId("members-banner")).textContent).toBe(

@@ -628,11 +628,17 @@ describe("a removed secret the list has moved to removed", () => {
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
-  it("shows the empty state to a viewer who cannot see a pending removal row", async () => {
+  // NEW-154-24: a viewer saw an empty page while a removal was still under
+  // way. They see the name and its state, and none of the editor's row.
+  it("shows a viewer a removal still under way, without the editor's row", async () => {
     mountRowAs(removedHost(removal("cleanup_requested")), "viewer");
 
-    expect(await screen.findByTestId("secrets-empty")).toBeTruthy();
+    expect(await screen.findByText("STRIPE_KEY")).toBeTruthy();
+    expect(screen.getByText("Removing · no longer usable")).toBeTruthy();
     expect(screen.queryByTestId("removed-secret-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.queryByText("No secrets.")).toBeNull();
   });
 
   it("counts the hosts still holding a copy", async () => {

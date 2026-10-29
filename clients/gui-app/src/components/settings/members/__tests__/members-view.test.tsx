@@ -1,3 +1,23 @@
+import { vi as vitest } from "vitest";
+
+// The toast surface is the one external boundary these cases read; the view,
+// its dialogs and the writes beneath them stay real.
+const toasts = vitest.hoisted(() => ({
+  success: vitest.fn(),
+  info: vitest.fn(),
+}));
+vitest.mock("sonner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("sonner")>()),
+  toast: {
+    success: toasts.success,
+    info: toasts.info,
+    warning: vitest.fn(),
+    error: vitest.fn(),
+    message: vitest.fn(),
+    dismiss: vitest.fn(),
+  },
+}));
+
 import {
   act,
   cleanup,
@@ -40,6 +60,8 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  toasts.success.mockReset();
+  toasts.info.mockReset();
 });
 
 function member(
@@ -298,7 +320,7 @@ describe("MembersView", () => {
       members: [ADMIN, EDITOR],
     });
     expect(screen.getByTestId("members-legacy-notice").textContent).toContain(
-      "One person gained editing: Priya.",
+      "Priya can now edit.",
     );
     expect(onNoticeSeen).not.toHaveBeenCalled();
 
@@ -365,7 +387,7 @@ describe("MembersView demotion", () => {
     await user.click(await screen.findByRole("option", { name: "Viewer" }));
     const loss = await screen.findByTestId("members-demotion-loss");
     expect(loss.textContent).toBe(
-      "Grace can no longer invite, change roles or edit the approval policy.",
+      "Grace can no longer invite people, change roles or edit the approval policy. Grace can no longer change Acme's settings. They can still see them.",
     );
     expect(onSetRole).not.toHaveBeenCalled();
     const dialogText = screen.getByTestId(
@@ -373,6 +395,121 @@ describe("MembersView demotion", () => {
     ).textContent;
     expect(dialogText).not.toContain("within a minute");
     expect(dialogText).not.toContain("next turn");
+  });
+
+  // NEW-154-23: Editor → Viewer is a demotion too, and had no confirm at all.
+  it("confirms an editor's demotion to viewer before writing it", async () => {
+    const user = userEvent.setup();
+    const { onSetRole } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    expect(
+      await screen.findByText("Change Priya's role in Acme to viewer?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
+      "Change to viewer",
+    );
+    expect(onSetRole).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("members-demotion-confirm"));
+    await waitFor(() =>
+      expect(onSetRole).toHaveBeenCalledWith({
+        userId: "u-editor",
+        role: "viewer",
+      }),
+    );
+  });
+
+  it("writes a promotion straight through, with no confirm", async () => {
+    const user = userEvent.setup();
+    const { onSetRole } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Admin" }));
+
+    await waitFor(() =>
+      expect(onSetRole).toHaveBeenCalledWith({
+        userId: "u-editor",
+        role: "admin",
+      }),
+    );
+    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+  });
+
+  it("previews no plan unlink when the member linked none", async () => {
+    const user = userEvent.setup();
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN],
+      preview: () => ({ ...PREVIEW, linkedPlan: null }),
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
+
+    await screen.findByTestId("members-demotion-loss");
+    expect(screen.queryByTestId("members-demotion-preview-table")).toBeNull();
+    expect(
+      screen.getByTestId("members-demotion-preview").textContent,
+    ).not.toContain("stop using this plan");
+  });
+});
+
+// NEW-154-2: the removal's own tell, named as the row and the preview name them.
+describe("MembersView removal toast", () => {
+  it("says the member is no longer in the team, by name", async () => {
+    const user = userEvent.setup();
+    renderView({ ...BASE, viewerRole: "admin", members: [ADMIN, EDITOR] });
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByTestId("members-remove-confirm"));
+
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Member removed", {
+        description: "Priya is no longer in Acme.",
+      }),
+    );
+  });
+
+  it("stays silent when the removal is refused", async () => {
+    const user = userEvent.setup();
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, EDITOR],
+      removeOutcome: { outcome: "plan_required" },
+    });
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByTestId("members-remove-confirm"));
+
+    await screen.findByTestId("members-banner");
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when an invitation is revoked, which removes no member", async () => {
+    const user = userEvent.setup();
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, EDITOR, PENDING],
+    });
+    await user.click(screen.getByRole("button", { name: "Revoke" }));
+    await user.click(await screen.findByTestId("members-revoke-confirm"));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("members-revoke-dialog")).toBeNull(),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
   });
 });
 

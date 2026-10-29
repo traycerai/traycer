@@ -20,6 +20,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 
@@ -45,17 +46,14 @@ function TeamSecretsSettingsPanel(): ReactNode {
   const client = useHostClient();
   const personal = useConfigurationIsPersonal();
   const name = useConfigurationName();
-  const canEdit = useCanEditConfiguration();
   const scope = useTeamViewingHost();
   return (
+    // No Read-only tag: what the reader's role can do is said once, as the
+    // page's own standing line, not as a tag over the list.
     <SecretsListPanelShell
       client={client}
       description={personal ? SECRETS.page.description : teamSecretsText(name)}
-      headerAction={
-        canEdit ? undefined : (
-          <span className="text-ui-xs text-muted-foreground">Read-only</span>
-        )
-      }
+      headerAction={undefined}
     >
       <SecretsPage
         client={client}
@@ -71,8 +69,12 @@ function TeamSecretsSettingsPanel(): ReactNode {
 }
 
 /**
- * The shell over the secrets list. No subtitle while the list is empty: the
- * empty state says the same sentence.
+ * The shell over the secrets list. No subtitle while an editor's list is
+ * empty: that empty state says the same sentence, and a reader who cannot
+ * edit reads "No secrets." instead, so the subtitle stays here for them.
+ * The emptiness is read through the tier that serves the page's own list, so
+ * a build with a server pool does not answer the header from one read and the
+ * page from another, and print the subtitle twice.
  */
 function SecretsListPanelShell(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -80,10 +82,12 @@ function SecretsListPanelShell(props: {
   readonly headerAction: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
-  const list = useEnvironmentSecretsQuery(props.client);
+  const list = useEnvironmentSecretsQuery(usePoolTierHostClient(props.client));
+  const canEdit = useCanEditConfiguration();
   // Match the page's retained answer even if a refetch fails: the failure
   // stays beside that content rather than duplicating its empty-state copy.
   const empty =
+    canEdit &&
     list.data !== undefined &&
     list.data.secrets.length === 0 &&
     list.data.removed.every((entry) => entry.removal.outcome === "destroyed");

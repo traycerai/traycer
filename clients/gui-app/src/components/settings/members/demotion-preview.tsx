@@ -3,13 +3,13 @@ import {
   AFTERWARDS_LABEL,
   AGENTS_ON_PLAN_LABEL,
   CANCEL_LABEL,
-  CHANGE_ROLE_LABEL,
   RETRY_LABEL,
   WHAT_KEEPS_WORKING_LABEL,
   WHO_PAYS_LABEL,
-  demotionLossLine,
+  demotionConfirmBody,
+  demotionConfirmLabel,
+  demotionConfirmTitle,
   demotionPreviewFailed,
-  demotionTitle,
   planUnlinkAfterwards,
   planUnlinkLead,
   planUnlinkTurnsLineFor,
@@ -22,6 +22,7 @@ import {
 import type {
   PlanUnlinkPreviewModel,
   PreviewState,
+  TeamRole,
 } from "@/components/settings/members/types";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -59,15 +60,17 @@ function demotionRows(
 }
 
 /**
- * Demotion preview: the plan-unlink table plus the admin-powers loss line. A
- * preview that could not be read says so, offers Retry, and keeps Change role
- * off.
+ * The confirm on a demotion: the question, what the role loses, and the
+ * plan-unlink table only when this member linked a plan the demotion unlinks.
+ * A promotion never opens it. A preview that could not be read says so, offers
+ * Retry, and keeps the confirm off.
  */
 export function DemotionPreviewDialog(props: {
   readonly open: boolean;
   readonly memberName: string;
   readonly teamName: string;
-  readonly nextRoleLabel: string;
+  readonly currentRole: TeamRole;
+  readonly nextRole: TeamRole;
   readonly preview: PreviewState<PlanUnlinkPreviewModel>;
   readonly busy: boolean;
   readonly blockedReason: string | null;
@@ -76,6 +79,8 @@ export function DemotionPreviewDialog(props: {
   readonly onConfirm: () => void;
 }): ReactNode {
   const preview = props.preview;
+  const unlinksPlan =
+    preview.status === "ready" && preview.preview.planLabel.length > 0;
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -84,11 +89,17 @@ export function DemotionPreviewDialog(props: {
       >
         <DialogHeader>
           <DialogTitle>
-            {demotionTitle(props.memberName, props.teamName)}
+            {demotionConfirmTitle(
+              props.memberName,
+              props.teamName,
+              props.nextRole,
+            )}
           </DialogTitle>
-          <DialogDescription>
-            {planUnlinkLead(props.teamName)}
-          </DialogDescription>
+          {unlinksPlan ? (
+            <DialogDescription>
+              {planUnlinkLead(props.teamName)}
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
         {preview.status === "loading" ? (
           <AgentSpinningDots
@@ -114,15 +125,22 @@ export function DemotionPreviewDialog(props: {
         ) : null}
         {preview.status === "ready" ? (
           <>
-            <PreviewTable
-              testId="members-demotion-preview-table"
-              rows={demotionRows(props.teamName, preview.preview)}
-            />
+            {unlinksPlan ? (
+              <PreviewTable
+                testId="members-demotion-preview-table"
+                rows={demotionRows(props.teamName, preview.preview)}
+              />
+            ) : null}
             <p
               className="max-w-[72ch] text-ui-sm"
               data-testid="members-demotion-loss"
             >
-              {demotionLossLine(props.memberName)}
+              {demotionConfirmBody(
+                props.memberName,
+                props.teamName,
+                props.currentRole,
+                props.nextRole,
+              )}
             </p>
           </>
         ) : null}
@@ -161,10 +179,7 @@ export function DemotionPreviewDialog(props: {
                 tone="inherit"
               />
             ) : null}
-            {CHANGE_ROLE_LABEL}
-            {props.nextRoleLabel.length === 0
-              ? ""
-              : ` · ${props.nextRoleLabel}`}
+            {demotionConfirmLabel(props.nextRole)}
           </Button>
         </DialogFooter>
       </DialogContent>
