@@ -30,27 +30,51 @@ export function toolCountPhrase(count: number): string {
   return count === 1 ? "1 tool" : `${count} tools`;
 }
 
-/**
- * A skill's row on its configuration's Skills page: "Built-in" before the
- * providers for Traycer's own; the configuration's own carry no source word,
- * since the page already says whose skills these are.
- */
-export function skillPageLine(
-  origin: "bundled" | "room",
-  providers: string,
-): string {
-  return origin === "bundled" ? `Built-in · ${providers}` : providers;
+/** What a skill's source line needs of it: where it came from, and its name. */
+export interface SkillSource {
+  readonly name: string;
+  readonly origin: "bundled" | "room";
+  /** Whether the configuration's own files stand in for the bundled ones. */
+  readonly edited: boolean;
 }
 
 /**
- * A skill's source beside a provider's switch, where sources mix: "Built-in"
- * for Traycer's own, else the configuration's name (`name`).
+ * A skill's row on its configuration's Skills page: the source before the
+ * providers, except for the configuration's own skill, which carries no
+ * source word since the page already says whose skills these are.
  */
-export function skillSourcePhrase(
-  origin: "bundled" | "room",
+export function skillPageLine(
+  skill: SkillSource,
   name: string,
+  providers: string,
 ): string {
-  return origin === "bundled" ? "Built-in" : name;
+  return skill.origin === "room"
+    ? providers
+    : `${skillSourceLine(skill, name)} · ${providers}`;
+}
+
+/**
+ * A skill's source as a WORD, for the places that label a skill with one: a
+ * badge beside its name, or a provider's switch where sources mix. "Built-in"
+ * for one Traycer ships, the configuration's name (`name`) for its own.
+ *
+ * Deliberately not the replacement clause below: a badge is a word's worth of
+ * room, and the clause names the skill the badge already sits beside.
+ */
+export function skillSourcePhrase(skill: SkillSource, name: string): string {
+  return skill.origin === "room" ? name : "Built-in";
+}
+
+/**
+ * A skill's source as a LINE, where there is room to say what the source
+ * means: for a built-in whose files the configuration replaced, the
+ * configuration's name and the built-in it stands in for.
+ */
+export function skillSourceLine(skill: SkillSource, name: string): string {
+  if (skill.origin === "room") return name;
+  return skill.edited
+    ? `${name} · used instead of the built-in ${skill.name}`
+    : "Built-in";
 }
 
 export function serverSwitchLabel(enabled: boolean): string {
@@ -74,9 +98,22 @@ export function skillsPageSubtitle(personal: boolean, name: string): string {
     : `Instructions agents follow for a kind of task. ${name}'s skills reach every provider on every host running ${name}.`;
 }
 
-/** A built-in skill's line beside its per-provider switches. */
+/** Said once above a list that holds a built-in skill, never per row. */
 export const BUILT_IN_SKILL_LINE =
-  "Comes with Traycer and can't be removed. Switch it off for any provider that shouldn't use it.";
+  "Built-in skills come with Traycer and can't be removed. Switch one off for any provider that shouldn't use it.";
+
+/** The Skills page while the configuration's skills are being read. */
+export function skillsReading(name: string): string {
+  return `Reading ${name}'s skills…`;
+}
+
+/** The Skills page with nothing in the configuration's skills. */
+export function noSkillsLine(name: string): string {
+  return `No skills added to ${name}.`;
+}
+
+/** A skill's row while its removal is under way. */
+export const REMOVING_SKILL_LINE = "Removing…";
 
 export function addServerTitle(name: string): string {
   return `Add an MCP server to ${name}`;
@@ -165,7 +202,7 @@ export function addToConfigurationLabel(name: string): string {
 }
 
 export function emptyServersTabLine(name: string): string {
-  return `${name} has no servers yet.`;
+  return `${name} has no servers.`;
 }
 
 export function removeTitle(entry: string): string {

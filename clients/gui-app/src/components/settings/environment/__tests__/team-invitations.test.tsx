@@ -255,6 +255,9 @@ describe("the invited rows of the Environment dropdown", () => {
     const row = await screen.findByTestId("environment-invitation-env-beta");
     expect(row.textContent).toContain("Beta");
     expect(row.textContent).toContain("invited");
+    // The verb continues the row's own line, so the row keeps no gutter for a
+    // check it can never show.
+    expect(row.className).not.toContain("pr-8");
     await userEvent.click(
       screen.getByTestId("environment-invitation-review-env-beta"),
     );

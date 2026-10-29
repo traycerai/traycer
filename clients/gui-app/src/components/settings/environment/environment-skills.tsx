@@ -36,15 +36,19 @@ import { useConfigurationName } from "./mcp-servers-model";
 import {
   BUILT_IN_SKILL_LINE,
   REMOVE_SKILL_LABEL,
+  REMOVING_SKILL_LINE,
   SKILL_SWITCHES_UNAVAILABLE,
+  noSkillsLine,
   providersPhrase,
   removeSkillReach,
   removeTitle,
   skillPageLine,
+  skillSourceLine,
   skillSourcePhrase,
   skillsCardHeading,
   skillsPageSubtitle,
   skillsReadFailed,
+  skillsReading,
 } from "./mcp-skills-copy";
 import { OnHostOnlySkills } from "./on-host-only-entries";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
@@ -52,7 +56,10 @@ import { TeamReadFailed } from "./team-read-failed";
 import { TeamSkillUpload } from "./team-skill-upload";
 import { TeamSkills } from "./team-skills";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
-import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import {
+  TeamViewingHostPicker,
+  TeamViewingHostSwitch,
+} from "./team-viewing-host-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import { typedWriteIssue } from "./configuration-write-issue";
 
@@ -148,21 +155,34 @@ function EnvironmentSkills(props: {
   const canEdit = useCanEditConfiguration();
   const canRemove = canEdit && served.removable;
   const [picking, setPicking] = useState(false);
-  const noHost = (
-    <TeamContentNeedsHost
-      content="skills"
-      teamName={name}
-      onPickHost={() => setPicking(true)}
-    />
-  );
+  // An upload the host refused as not-served is the one moment the listed
+  // page needs a host of its own: a switch mounts beside the upload from then
+  // on, and not before, so the room-read list carries no host line. It is the
+  // switch alone - `as reported by <host>` was never true of a list the room
+  // served - and it owns its own open state, so it and a card's picker can
+  // never be two controls opening as one.
+  const [uploadNeedsHost, setUploadNeedsHost] = useState(false);
+  const [uploadPicking, setUploadPicking] = useState(false);
   const picker = (
     <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
   );
+  const noHost = (
+    <>
+      <TeamContentNeedsHost
+        content="skills"
+        teamName={name}
+        onPickHost={() => setPicking(true)}
+      />
+      {picker}
+    </>
+  );
   // Listing and the writes go through the room; Preview and Edit read the
-  // skill's files where a picked host projects them.
+  // skill's files where a picked host projects them. The page names no host
+  // for a list that came from the room, so the picker is drawn only where a
+  // host is what the page is missing.
   const hosted =
     served.scope.client !== null && served.scope.viewingHost !== null;
-  if (served.listVersion === null) return <MutedAgentSpinner />;
+  if (served.listVersion === null) return <SkillsReading name={name} />;
   if (served.listVersion === false)
     return hosted ? (
       <TeamSkills providerId={props.providerId} />
@@ -173,7 +193,7 @@ function EnvironmentSkills(props: {
       />
     );
   const { query } = served;
-  if (query.isPending) return <MutedAgentSpinner />;
+  if (query.isPending) return <SkillsReading name={name} />;
   if (query.isError)
     return (
       <TeamReadFailed
@@ -182,12 +202,7 @@ function EnvironmentSkills(props: {
       />
     );
   if (query.data.outcome === "not_served")
-    return (
-      <section className="flex flex-col gap-3">
-        {picker}
-        {noHost}
-      </section>
-    );
+    return <section className="flex flex-col gap-3">{noHost}</section>;
   const { skills, revision } = query.data;
   const list =
     props.providerId === null ? (
@@ -210,7 +225,6 @@ function EnvironmentSkills(props: {
     );
   return (
     <section className="flex flex-col gap-3">
-      {picker}
       {hosted ? (
         <TeamViewingHostBinding unavailable={noHost}>
           {list}
@@ -219,9 +233,35 @@ function EnvironmentSkills(props: {
         list
       )}
       {props.providerId === null && canEdit && served.uploadable ? (
-        <TeamSkillUpload onNotServed={() => setPicking(true)} />
+        <>
+          <TeamSkillUpload
+            onNotServed={() => {
+              setUploadNeedsHost(true);
+              setUploadPicking(true);
+            }}
+          />
+          {uploadNeedsHost ? (
+            <TeamViewingHostSwitch
+              open={uploadPicking}
+              onOpenChange={setUploadPicking}
+            />
+          ) : null}
+        </>
       ) : null}
     </section>
+  );
+}
+
+/** The page's own words while the configuration's skills are being read. */
+function SkillsReading(props: { readonly name: string }): ReactNode {
+  return (
+    <p
+      role="status"
+      className="flex items-center gap-2 text-ui-sm text-muted-foreground"
+    >
+      <MutedAgentSpinner />
+      {skillsReading(props.name)}
+    </p>
   );
 }
 
@@ -234,18 +274,26 @@ function SkillsPageList(props: {
 }): ReactNode {
   const providers = useSkillProviders();
   const source = useConfigurationSource();
+  const name = useConfigurationName();
   const { remove } = useEnvironmentSkillMutations(useConfigurationReadClient());
   const [open, setOpen] = useState<EnvironmentSkill | null>(null);
   const [removing, setRemoving] = useState<EnvironmentSkill | null>(null);
+  // Every name a removal was sent for. A removal's own answer comes back
+  // before the list is read again, so each row says it is going until the list
+  // no longer holds it, rather than offering its verbs again in between — and
+  // one name per row, because a second removal must not release the first.
+  const [leaving, setLeaving] = useState<readonly string[]>([]);
+  const stillListed = leaving.filter((entry) =>
+    props.skills.some((skill) => skill.name === entry),
+  );
+  if (stillListed.length !== leaving.length) setLeaving(stillListed);
   const removeIssue =
     remove.data === undefined
       ? null
       : typedWriteIssue(remove.data, "Couldn't remove this skill.");
   if (props.skills.length === 0)
     return (
-      <p className="text-ui-sm text-muted-foreground">
-        Skills give agents instructions for a kind of task.
-      </p>
+      <p className="text-ui-sm text-muted-foreground">{noSkillsLine(name)}</p>
     );
   return (
     <>
@@ -270,40 +318,47 @@ function SkillsPageList(props: {
                   </div>
                 )}
                 <div className="text-ui-xs text-muted-foreground">
-                  {skillPageLine(
-                    skill.origin,
-                    providersPhrase(
-                      using.map((id) => providerDisplayName(id)),
-                      providers.length,
-                    ),
-                  )}
+                  {leaving.includes(skill.name)
+                    ? REMOVING_SKILL_LINE
+                    : skillPageLine(
+                        skill,
+                        name,
+                        providersPhrase(
+                          using.map((id) => providerDisplayName(id)),
+                          providers.length,
+                        ),
+                      )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {props.hosted ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setOpen(skill)}
-                  >
-                    {skill.origin === "room" && props.canEdit
-                      ? "Edit"
-                      : "Preview"}
-                  </Button>
-                ) : null}
-                {/* A built-in can't be removed, only switched off per provider. */}
-                {props.canEdit && skill.origin === "room" ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={remove.isPending}
-                    onClick={() => setRemoving(skill)}
-                  >
-                    Remove
-                  </Button>
-                ) : null}
+                {leaving.includes(skill.name) ? null : (
+                  <>
+                    {props.hosted ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setOpen(skill)}
+                      >
+                        {skill.origin === "room" && props.canEdit
+                          ? "Edit"
+                          : "Preview"}
+                      </Button>
+                    ) : null}
+                    {/* A built-in can't be removed, only switched off per provider. */}
+                    {props.canEdit && skill.origin === "room" ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={remove.isPending}
+                        onClick={() => setRemoving(skill)}
+                      >
+                        Remove
+                      </Button>
+                    ) : null}
+                  </>
+                )}
               </div>
             </li>
           );
@@ -317,9 +372,21 @@ function SkillsPageList(props: {
           onClose={() => setRemoving(null)}
           onConfirm={() => {
             if (source.kind !== "pool") return;
+            const sent = removing.name;
+            setLeaving((names) => [...names, sent]);
+            // A removal that was refused releases its own row, and only its
+            // own: another row's accepted removal is still under way.
+            const release = (): void =>
+              setLeaving((names) => names.filter((entry) => entry !== sent));
             remove.mutate(
-              { environmentId: source.environmentId, name: removing.name },
-              { onSettled: () => setRemoving(null) },
+              { environmentId: source.environmentId, name: sent },
+              {
+                onError: release,
+                onSuccess: (answer) => {
+                  if (answer.outcome !== "removed") release();
+                },
+                onSettled: () => setRemoving(null),
+              },
             );
           }}
         />
@@ -413,7 +480,7 @@ function EnvironmentSkillDetail(props: {
       skill={row}
       // The provider lists the configuration's skills as its managed ones;
       // the badge names the source as this page does.
-      sourceLabel={skillSourcePhrase(props.skill.origin, name)}
+      sourceLabel={skillSourcePhrase(props.skill, name)}
       removal={{ kind: "hidden" }}
       removePending={false}
       // The flag disables Edit too, and Remove is not offered here.
@@ -556,6 +623,12 @@ function ProviderSkillsList(props: {
             {SKILL_SWITCHES_UNAVAILABLE}
           </p>
         )}
+        {/* Said once for the list, not under every built-in row. */}
+        {props.skills.some((skill) => skill.origin === "bundled") ? (
+          <p className="text-ui-xs text-muted-foreground">
+            {BUILT_IN_SKILL_LINE}
+          </p>
+        ) : null}
         <ul className="flex flex-col gap-2">
           {props.skills.map((skill) => {
             const offFor =
@@ -569,13 +642,8 @@ function ProviderSkillsList(props: {
                 <div className="min-w-0">
                   <div className="truncate text-ui-sm">{skill.name}</div>
                   <div className="text-ui-xs text-muted-foreground">
-                    {skillSourcePhrase(skill.origin, name)}
+                    {skillSourceLine(skill, name)}
                   </div>
-                  {skill.origin === "bundled" ? (
-                    <div className="text-ui-xs text-muted-foreground">
-                      {BUILT_IN_SKILL_LINE}
-                    </div>
-                  ) : null}
                 </div>
                 <Switch
                   aria-label={`${skill.name} for ${label}`}

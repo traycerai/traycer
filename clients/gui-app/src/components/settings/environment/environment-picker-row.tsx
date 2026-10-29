@@ -17,6 +17,18 @@ export interface EnvironmentPickerRowVerb {
 }
 
 /**
+ * A radio item keeps a right gutter for the check it may show. A row that is
+ * disabled can never be the current pick, so on one that carries a verb the
+ * gutter would only push that verb away from the line it continues.
+ */
+function rowClassName(hasVerb: boolean, disabled: boolean): string {
+  if (!hasVerb) return "min-w-0 flex-1 flex-col items-start gap-0.5";
+  return disabled
+    ? "min-w-0 flex-col items-start gap-0.5 pr-1.5"
+    : "min-w-0 flex-col items-start gap-0.5";
+}
+
+/**
  * One row of the Environment dropdown: a name, an optional badge, the line
  * under it, and an optional verb that continues that line. Shared by the picker's own rows
  * and the rows its slots fill (P1's team rows), so every row reads the same.
@@ -44,11 +56,7 @@ export function EnvironmentPickerRow(props: {
       data-testid={props.testId}
       disabled={props.disabled}
       onSelect={props.onSelect}
-      className={
-        props.verb === null
-          ? "min-w-0 flex-1 flex-col items-start gap-0.5"
-          : "min-w-0 flex-col items-start gap-0.5"
-      }
+      className={rowClassName(props.verb !== null, props.disabled)}
     >
       <span className="flex min-w-0 items-center gap-1.5 font-medium">
         <span className="truncate">{props.label}</span>

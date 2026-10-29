@@ -126,7 +126,10 @@ describe("The Skills page on a build with a server pool and no host running the 
 
     expect(await screen.findByText("review")).toBeTruthy();
     expect(screen.queryByText(/Skills need a host/)).toBeNull();
-    expect(screen.getByRole("combobox").textContent).toContain("Pick a host");
+    // The list came from the pool, so the page names no host and offers no
+    // pick: there is none to make.
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText("Pick a host")).toBeNull();
     expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     // The pool did not advertise the writes: an older pool keeps the page read-only.
