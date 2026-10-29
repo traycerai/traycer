@@ -1,3 +1,4 @@
+import { withLock } from "@traycer-clients/shared/host-lock/cross-process-lock";
 import {
   hostDoctorResponseSchema,
   type HostDoctorIssue,
@@ -13,6 +14,7 @@ import {
 } from "../internal/host-rpc";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
+import { hostDoctorLeasePath } from "../store/paths";
 
 /**
  * The report this command emits: `DoctorResult`'s shape, with an issue code
@@ -37,7 +39,8 @@ const LOCAL_ONLY_NOTICE =
 //
 // Any failure to get that list - no host running, not signed in, a refused or
 // unreachable host, a host too old for the method, a host whose own run of
-// this command failed - reports the local verdict with one line saying so.
+// this command failed, another run already asking - reports the local
+// verdict with one line saying so.
 // A diagnostic must never fail because the host is broken.
 //
 // Exit code is 0 on info-only / warning-only reports and non-zero when at
@@ -82,6 +85,14 @@ export const hostDoctorCommand: CommandFn = async (
  * work. A shell the host runs a command through can `exec` it and so pass the
  * same check; that run reports the local verdict, as this command did before
  * it asked the host.
+ *
+ * The lease is the second, independent limit, for a spawn the parent check
+ * misses (a shell that does not `exec`, a launcher, any future intermediary).
+ * It is held only around the call, and taken without waiting: the host's
+ * spawn is this slot's CLI, so it finds the lease held by the run that asked
+ * and reports locally, which ends the chain at one extra hop whatever sits
+ * between host and CLI. A lease left by a run that died is taken over. The
+ * cost is that of two runs at the same moment, the second reports locally.
  */
 async function readRunningHostIssues(): Promise<
   readonly HostDoctorIssue[] | null
@@ -89,16 +100,27 @@ async function readRunningHostIssues(): Promise<
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata !== null && metadata.pid === process.ppid) return null;
   try {
+    const leased = await withLock(
+      {
+        lockPath: hostDoctorLeasePath(config.environment),
+        reason: "host-doctor",
+        waitMs: 0,
+        pollIntervalMs: 0,
+      },
+      () =>
+        // Fail fast: one attempt within the transport's dial and response
+        // deadlines, so a wedged host costs one wait before the local verdict.
+        callHostRpcWithDispatch(
+          "host.doctor",
+          {},
+          { ...PLAIN_DISPATCH, failFast: true },
+        ),
+    );
+    if (leased.kind === "busy") return null;
     const response = parseCanonicalHostResponse(
       "host.doctor",
       hostDoctorResponseSchema,
-      // Fail fast: one attempt within the transport's dial and response
-      // deadlines, so a wedged host costs one wait before the local verdict.
-      await callHostRpcWithDispatch(
-        "host.doctor",
-        {},
-        { ...PLAIN_DISPATCH, failFast: true },
-      ),
+      leased.result,
     );
     // `triviallyGreenIssueCodes` is a vantage hint for a remote viewer; this
     // command reads the host it shares a machine with and prints every issue.

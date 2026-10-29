@@ -1,4 +1,9 @@
-import { rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  acquireLock,
+  type LockHandle,
+} from "@traycer-clients/shared/host-lock/cross-process-lock";
 import {
   afterAll,
   beforeAll,
@@ -16,7 +21,8 @@ import { noopLogger } from "../../logger";
 import type { DoctorIssueCode, DoctorResult } from "../../doctor";
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance";
 import type { HostLifecycleSnapshot } from "../../host/lifecycle-snapshot";
-import { hostHomeDir } from "../../store/paths";
+import { config } from "../../config";
+import { hostDoctorLeasePath, hostHomeDir } from "../../store/paths";
 
 // `hostDoctorCommand` (`../host-doctor.ts`) is a thin wrapper: it calls
 // `runDoctor` and renders `DoctorResult` (issues + the lifecycle facts) as
@@ -151,6 +157,8 @@ beforeEach(() => {
   mocks.runDoctorMock.mockResolvedValue(doctorResult({}));
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.callHostRpcMock.mockRejectedValue(new Error("no host"));
+  mkdirSync(hostHomeDir(config.environment), { recursive: true });
+  rmSync(hostDoctorLeasePath(config.environment), { force: true });
 });
 
 describe("hostDoctorCommand human output", () => {
@@ -453,5 +461,95 @@ describe("hostDoctorCommand asks the running host", () => {
     });
     expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe("hostDoctorCommand lease", () => {
+  const leasePath = (): string => hostDoctorLeasePath(config.environment);
+
+  beforeEach(() => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(hostMetadata(otherHostPid));
+    mocks.callHostRpcMock.mockResolvedValue(hostOk([]));
+  });
+
+  async function leaseIsFree(): Promise<boolean> {
+    const outcome = await acquireLock({
+      lockPath: leasePath(),
+      reason: "probe",
+      waitMs: 0,
+      pollIntervalMs: 0,
+    });
+    if (outcome.kind === "busy") return false;
+    await outcome.handle.release();
+    return true;
+  }
+
+  it("does not dial while a live run holds the lease", async () => {
+    const outcome = await acquireLock({
+      lockPath: leasePath(),
+      reason: "another-host-doctor",
+      waitMs: 0,
+      pollIntervalMs: 0,
+    });
+    if (outcome.kind === "busy") throw new Error("lease was not free");
+    const held: LockHandle = outcome.handle;
+    const localIssue = issue("HOST_NOT_INSTALLED", "error");
+    mocks.runDoctorMock.mockResolvedValue(
+      doctorResult({ issues: [localIssue] }),
+    );
+    try {
+      const result = await hostDoctorCommand(makeCtx());
+
+      expect(mocks.callHostRpcMock).not.toHaveBeenCalled();
+      expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
+      expect(result.data).toEqual({
+        issues: [localIssue],
+        lifecycle: quietLifecycleSnapshot,
+      });
+    } finally {
+      await held.release();
+    }
+  });
+
+  it("takes over a lease left by a dead run and asks the host", async () => {
+    const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    const deadPid = child.pid;
+    if (deadPid === undefined) throw new Error("child did not start");
+    await new Promise((resolve) => child.once("exit", resolve));
+    writeFileSync(
+      leasePath(),
+      JSON.stringify({
+        pid: deadPid,
+        reason: "host-doctor",
+        startedAt: new Date().toISOString(),
+        token: "dead-owner-token",
+      }),
+    );
+    const hostReported = hostIssue("HOST_CREDENTIAL_MISSING", "warning");
+    mocks.callHostRpcMock.mockResolvedValue(hostOk([hostReported]));
+
+    const result = await hostDoctorCommand(makeCtx());
+
+    expect(mocks.callHostRpcMock).toHaveBeenCalledTimes(1);
+    expect(result.data).toMatchObject({ issues: [hostReported] });
+    expect(result.human).not.toContain(LOCAL_ONLY_NOTICE);
+  });
+
+  it("releases the lease after a successful call", async () => {
+    await hostDoctorCommand(makeCtx());
+
+    expect(mocks.callHostRpcMock).toHaveBeenCalledTimes(1);
+    expect(existsSync(leasePath())).toBe(false);
+    await expect(leaseIsFree()).resolves.toBe(true);
+  });
+
+  it("releases the lease after a failed call", async () => {
+    mocks.callHostRpcMock.mockRejectedValue(new Error("timed out"));
+
+    const result = await hostDoctorCommand(makeCtx());
+
+    expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
+    expect(existsSync(leasePath())).toBe(false);
+    await expect(leaseIsFree()).resolves.toBe(true);
   });
 });
