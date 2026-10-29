@@ -64,6 +64,12 @@ import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-bud
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
+  parseReturnedSandbox,
+  returnedSandboxToJson,
+  sameReturnedSandbox,
+  type ReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
+import {
   landingPlacementHostId,
   notifyDraftLocalDelete,
   notifyDraftLocalEdit,
@@ -122,6 +128,12 @@ export interface LandingDraftTab {
    * draft/v1 portable payload (`closed`), not from a host SQLite column.
    */
   readonly closed: boolean;
+  /**
+   * The sandbox the message given back into this draft was going to. Local
+   * to this device: the landing composer stages it again while it holds no
+   * pick of its own, so the draft's Send goes there even after a reload.
+   */
+  readonly returnedSandbox: ReturnedSandbox | null;
 }
 
 export type LandingDraftAdoption =
@@ -253,6 +265,14 @@ interface LandingDraftStoreState {
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
+  /**
+   * Records or forgets where the draft's given-back message was going. Not an
+   * edit: nothing is published, and the draft's place in the LRU stays.
+   */
+  setDraftReturnedSandbox: (
+    id: string,
+    returned: ReturnedSandbox | null,
+  ) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   addDraftResolvedFolders: (
@@ -401,6 +421,7 @@ function readProjectedDrafts(
         workspace: parseLandingDraftWorkspaceSnapshot(draft.workspace),
         ...mirrorFieldsFromExisting(draft.id),
         closed: draft.closed === true,
+        returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
       },
     ];
   });
@@ -491,6 +512,7 @@ function parsePersistedLandingDrafts(
           workspace: parseLandingDraftWorkspaceSnapshot(raw.workspace),
           ...parseLandingMirrorFields(raw),
           closed: raw.closed === true,
+          returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
         },
       ];
     }),
@@ -689,6 +711,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // ancestor's cloud row, and the ancestor's own host tombstones
           // (or re-mints) its local row from there.
           supersedes: sourceId,
+          returnedSandbox: source.returnedSandbox,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -934,6 +957,17 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         notifyDraftLocalEdit(id);
       },
 
+      setDraftReturnedSandbox: (id, returned) => {
+        const draft = get().drafts.find((d) => d.id === id);
+        if (!draft || sameReturnedSandbox(draft.returnedSandbox, returned))
+          return;
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id ? { ...d, returnedSandbox: returned } : d,
+          ),
+        }));
+      },
+
       restoreDraftWorkspaceForHost: (id, hostId) => {
         set((state) =>
           updateDraftWorkspace(state, id, () =>
@@ -1121,6 +1155,13 @@ function areLandingDraftsEqual(
       return false;
     }
     if (left[index].closed !== right[index].closed) return false;
+    if (
+      !sameReturnedSandbox(
+        left[index].returnedSandbox,
+        right[index].returnedSandbox,
+      )
+    )
+      return false;
   }
   return true;
 }
@@ -1187,6 +1228,9 @@ function projectLandingDraftForDesktop(
     composerMode: draft.composerMode,
     workspace: landingDraftWorkspaceToDesktopValue(draft.workspace),
     closed: draft.closed,
+    ...(draft.returnedSandbox === null
+      ? {}
+      : { returnedSandbox: returnedSandboxToJson(draft.returnedSandbox) }),
   };
 }
 
@@ -1637,6 +1681,7 @@ export function freshLandingMirrorState(): Pick<
   | "publication"
   | "confirmedHostBlobHashes"
   | "closed"
+  | "returnedSandbox"
 > {
   return {
     adoption: UNADOPTED_LANDING_DRAFT,
@@ -1649,6 +1694,7 @@ export function freshLandingMirrorState(): Pick<
     publication: null,
     confirmedHostBlobHashes: [],
     closed: false,
+    returnedSandbox: null,
   };
 }
 
@@ -1915,6 +1961,16 @@ function incomingClosedState(
 }
 
 /**
+ * A host document never carries where the draft's given-back message was
+ * going: that is this device's own record, kept across the host's writes.
+ */
+function keptReturnedSandbox(
+  existing: LandingDraftTab | undefined,
+): ReturnedSandbox | null {
+  return existing?.returnedSandbox ?? null;
+}
+
+/**
  * Applies a landing document to the store. Returns whether the row was
  * mutated by it: a retired id, or an older document from the row's current
  * owner, is rejected without touching the row.
@@ -1983,6 +2039,7 @@ export function applyLandingHostDocument(
       document.portable.closed,
       existing,
     ),
+    returnedSandbox: keptReturnedSandbox(existing),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

@@ -30,7 +30,10 @@ import {
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  LANDING_DRAFT_PERSIST_KEY,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -55,6 +58,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
@@ -376,6 +380,15 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
   }
 
+  /** A reload: the composer's stage is gone with the window, drafts are read back. */
+  async function reloadWindow(): Promise<void> {
+    const saved = localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+    useStagedSandboxStore.getState().clear(SURFACE);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    if (saved !== null) localStorage.setItem(LANDING_DRAFT_PERSIST_KEY, saved);
+    await useLandingDraftStore.persist.rehydrate();
+  }
+
   function onlyPendingSend() {
     const sends = Object.values(usePendingSandboxSendStore.getState().sends);
     expect(sends).toHaveLength(1);
@@ -602,6 +615,16 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       });
       const returnedDraft = useLandingDraftStore.getState().drafts[0];
       const requestId = readStagedSandbox(SURFACE)?.clientRequestId;
+      // A reload before the second Send: the draft puts its sandbox back on
+      // the composer, create key and all.
+      await reloadWindow();
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+      renderHook(() => useLandingReturnedSandbox(SURFACE, returnedDraft.id));
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        target,
+        phase: "staged",
+        clientRequestId: requestId,
+      });
       expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual(
         ["epic.create", "epic.attachEnvironment"],
       );
