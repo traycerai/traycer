@@ -80,6 +80,20 @@ import { hostQueryKeys } from "@/lib/query-keys";
 export const CLI_FLOOR_RECHECK_MS = 30_000;
 
 /**
+ * The one condition under which the page asks for a catalog, shared by the
+ * query, by Check now and by the picker's disabled state: `refetch` runs on a
+ * disabled query too, so a click before the page's gate opened (the host has
+ * not yet said who owns its version) would fetch the list the gate exists to
+ * withhold. Out of the hook body for the complexity ceiling.
+ */
+function catalogCheckOpen(input: {
+  readonly enabled: boolean;
+  readonly checkDegrade: OverviewDegradeReason | null;
+}): boolean {
+  return input.enabled && input.checkDegrade === null;
+}
+
+/**
  * The version the catalog is compared against: the install record's under
  * activation debt, the process's otherwise. Kept out of the hook body so the
  * hook stays under the complexity ceiling.
@@ -247,9 +261,10 @@ export function useHostOverviewUpdates(input: {
     null,
   );
 
+  const checkEnabled = catalogCheckOpen(input);
   const checkQuery = useHostUpdateCheckQuery({
     client,
-    enabled: input.enabled && input.checkDegrade === null,
+    enabled: checkEnabled,
     includePreReleases: includePreReleasesOverride,
   });
   const installMutation = useHostUpdateInstall(client, input.incarnation);
@@ -306,6 +321,7 @@ export function useHostOverviewUpdates(input: {
   });
 
   const runCheck = (): void => {
+    if (!checkEnabled) return;
     storeFloor.clear();
     setForceRefusal(null);
     void checkQuery.refetch();
@@ -646,7 +662,9 @@ export function useHostOverviewUpdates(input: {
         installedVersion,
       ),
       installingVersion,
-      disabled: input.busy,
+      // Check now greys out with the rest while the gate is closed, so the
+      // button never offers a click `runCheck` would drop.
+      disabled: input.busy || !checkEnabled,
       foregroundUpdateLine: input.foregroundUpdateLine,
       onInstall: (version, acceptStoreFormatLoss) =>
         install(version, false, acceptStoreFormatLoss, null),
