@@ -90,8 +90,9 @@ describe("Replace value's custody sentence", () => {
 
   it("keeps Personal's own sentence in host mode, with no cloud configuration source", () => {
     // The source passed here is unused: harness.Wrapper (which supplies the
-    // ConfigurationSourceContext) is deliberately skipped, so Custody() falls
-    // back to the context's default host source.
+    // ConfigurationSourceContext) is deliberately skipped, so
+    // ReplaceSecretValueDialog falls back to the context's default host
+    // source.
     const harness = mountTeamPage(poolSource("editor"), HANDLERS);
     render(
       <QueryClientProvider client={harness.queryClient}>
