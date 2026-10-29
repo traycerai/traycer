@@ -143,6 +143,7 @@ import {
   returnPendingSandboxMessage,
   returnPendingSandboxSendToDraft,
   returnPendingSandboxSendToSandbox,
+  returnPendingSandboxSendOnItsSandbox,
   pendingSandboxRecoveryDraftId,
   requestedAgentReadiness,
   type ReturnedPendingSandboxSend,
@@ -179,6 +180,7 @@ import {
   type HandoffOwnerWatch,
   type StagedSandbox,
   type StagedSandboxFailure,
+  type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -451,7 +453,7 @@ function usePendingSendRecovery(
       plan.effects.includes("return-message") ||
       plan.effects.includes("remove")
     )
-      returnPendingSandboxSend(id);
+      returnPendingSandboxSendOnItsSandbox(id);
     if (plan.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
   }, [id, send, stage]);
@@ -1218,23 +1220,20 @@ function returnedSandboxPick(
         ? null
         : stage.clientRequestId,
     };
-  if (state === "awake") return { kind: "host", hostId: createdHostId };
-  return {
-    kind: "stage",
-    target: {
-      kind: "existing",
-      hostId: createdHostId,
-      sandboxId: createdSandboxId,
-      name:
-        target.name.length > 0
-          ? target.name
-          : stagedSandboxFallbackName(send.text),
-      configuration: target.configuration,
-      // Still on its way up: waking it joins that.
-      verb: restingVerb(state) ?? "resume",
-    },
-    clientRequestId: null,
+  const created: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+    kind: "existing",
+    hostId: createdHostId,
+    sandboxId: createdSandboxId,
+    name:
+      target.name.length > 0
+        ? target.name
+        : stagedSandboxFallbackName(send.text),
+    configuration: target.configuration,
+    // Still on its way up, or awake: waking it joins that, or finds it up.
+    verb: restingVerb(state) ?? "resume",
   };
+  if (state === "awake") return { kind: "host", target: created };
+  return { kind: "stage", target: created, clientRequestId: null };
 }
 
 /** Persist the kernel's live blocker in the setup line's existing representation. */

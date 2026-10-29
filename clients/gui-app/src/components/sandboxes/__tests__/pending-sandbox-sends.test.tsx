@@ -85,6 +85,7 @@ import {
   handPendingSandboxSend,
   returnPendingSandboxSend,
   returnPendingSandboxSendToSandbox,
+  recoverPendingSandboxSendsAfterTaskLoss,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { useNewConversationReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
@@ -2913,6 +2914,7 @@ describe("a send whose task may not exist yet", () => {
         phase: "creating",
         created: false,
       });
+      const key = readStagedSandbox(SURFACE)?.clientRequestId;
       mocks.createSandbox.mockResolvedValue(CREDITS_REFUSED);
       mount();
 
@@ -2925,8 +2927,15 @@ describe("a send whose task may not exist yet", () => {
       expect(createChatCalls()).toEqual([]);
       // Its only copy is not dropped: the message is a draft again, put away
       // in the Drafts list, with the composer left where it was.
+      // It keeps its sandbox, and the create's key: that create may have
+      // been accepted, and the draft's Send must name it again.
       expect(useLandingDraftStore.getState().drafts).toMatchObject([
-        { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+        {
+          content: MESSAGE_CONTENT,
+          settings: PICKED_SETTINGS,
+          closed: true,
+          returnedSandbox: { target: NEW_TARGET, clientRequestId: key },
+        },
       ]);
       expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
     } finally {
@@ -5090,6 +5099,71 @@ describe("cancelling a send whose sandbox was never created, with the same sandb
   });
 });
 
+describe("a message whose sandbox may still be created, put in a draft", () => {
+  it("keeps the create's key on the draft when Cancel finds the task's composer holding another message", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({ ...SEEDED, phase: "creating", created: false });
+      const key = readStagedSandbox(SURFACE)?.clientRequestId;
+      const creation = deferred<SandboxCreateFetchResult>();
+      mocks.createSandbox.mockReturnValue(creation.promise);
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+      mount();
+      act(() => {
+        useStagedSandboxStore.getState().report(SURFACE, {
+          failure: { kind: "timed-out", step: "creating" },
+        });
+      });
+      const cancel = await screen.findByRole("button", {
+        name: "Cancel the message",
+      });
+      await waitFor(() => expect(cancel).not.toHaveProperty("disabled", true));
+
+      fireEvent.click(cancel);
+
+      await waitFor(() =>
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+      );
+      expect(useLandingDraftStore.getState().drafts).toMatchObject([
+        {
+          content: MESSAGE_CONTENT,
+          returnedSandbox: { target: NEW_TARGET, clientRequestId: key },
+        },
+      ]);
+      await act(async () => {
+        creation.resolve(CREDITS_REFUSED);
+        await creation.promise;
+      });
+    } finally {
+      restoreLocks();
+    }
+  });
+
+  it("keeps the sandbox and the create's key on the draft when its task is deleted", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({ ...SEEDED, phase: "creating", created: false });
+      const key = readStagedSandbox(SURFACE)?.clientRequestId;
+
+      recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-1");
+
+      await waitFor(() =>
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+      );
+      expect(useLandingDraftStore.getState().drafts).toMatchObject([
+        {
+          content: MESSAGE_CONTENT,
+          returnedSandbox: { target: NEW_TARGET, clientRequestId: key },
+        },
+      ]);
+    } finally {
+      restoreLocks();
+    }
+  });
+});
+
 describe("a send that named no model, ready on its sandbox", () => {
   it("reads the host's default model with a live subscription and sends with it, once", async () => {
     seed({
@@ -5794,6 +5868,66 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(line.textContent).toContain(
       "Your message wasn't sent; it's saved in your drafts.",
     );
+  });
+
+  it("keeps the resting sandbox on the message's draft when the task's composer holds another message", async () => {
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    });
+    await mountHeld();
+
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      {
+        content: MESSAGE_CONTENT,
+        closed: true,
+        returnedSandbox: {
+          target: {
+            kind: "existing",
+            hostId: SANDBOX_HOST,
+            sandboxId: SANDBOX_ID,
+            name: "api-refactor",
+            verb: "resume",
+          },
+          clientRequestId: null,
+        },
+      },
+    ]);
+  });
+
+  it("keeps the awake sandbox on a cancelled message's draft when the task's composer holds another message", async () => {
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    });
+    await mountHeld();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel the message" }));
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      {
+        content: MESSAGE_CONTENT,
+        returnedSandbox: {
+          target: {
+            kind: "existing",
+            hostId: SANDBOX_HOST,
+            sandboxId: SANDBOX_ID,
+            name: "api-refactor",
+          },
+          clientRequestId: null,
+        },
+      },
+    ]);
   });
 
   it("puts a cancelled message back in this task's composer on the awake sandbox", async () => {
