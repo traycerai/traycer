@@ -425,7 +425,9 @@ describe("SimulatorCreatePicker", () => {
       expect(
         screen.queryByTestId("simulator-picker-running-udid-cold"),
       ).toBeTruthy();
-      expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+      expect(
+        screen.queryByTestId("simulator-picker-cold-udid-cold"),
+      ).toBeNull();
     });
   });
 
@@ -468,7 +470,9 @@ describe("SimulatorCreatePicker", () => {
       expect(
         screen.queryByTestId("simulator-picker-running-udid-cold"),
       ).toBeTruthy();
-      expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+      expect(
+        screen.queryByTestId("simulator-picker-cold-udid-cold"),
+      ).toBeNull();
     });
   });
 
