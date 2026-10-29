@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { JSX, ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -18,6 +18,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
+import type { SimulatorPlatformAvailability } from "@traycer/protocol/host/simulator/schemas";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
 
@@ -89,8 +90,25 @@ vi.mock("@/lib/host", () => ({
 }));
 
 import { useSimulatorPanelAvailability } from "@/components/epic-canvas/sidebar/use-simulator-panel-availability";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useSimulatorRecheck } from "@/hooks/simulator/use-simulator-recheck";
 
-function buildSpine(): MockHostMessenger<HostRpcRegistry> {
+/** What a desk Mac with Xcode and no Android SDK finds. */
+const IOS_ONLY: readonly SimulatorPlatformAvailability[] = [
+  { platform: "ios", available: true, reason: null },
+  { platform: "android", available: false, reason: "No Android SDK." },
+];
+
+/** What the same Mac finds before Xcode is installed. */
+const NEITHER: readonly SimulatorPlatformAvailability[] = [
+  { platform: "ios", available: false, reason: "Xcode is not installed." },
+  { platform: "android", available: false, reason: "No Android SDK." },
+];
+
+/** `platforms` is read on every `simulator.status`, as the host probes on every read. */
+function buildSpine(
+  platforms: () => readonly SimulatorPlatformAvailability[],
+): MockHostMessenger<HostRpcRegistry> {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "simulator-status-req",
@@ -98,10 +116,7 @@ function buildSpine(): MockHostMessenger<HostRpcRegistry> {
       // Both machines can run iOS, so "it answered true" proves nothing on its
       // own - only the endpoint the answer came from does.
       "simulator.status": () => ({
-        platforms: [
-          { platform: "ios", available: true, reason: null },
-          { platform: "android", available: false, reason: "No Android SDK." },
-        ],
+        platforms: [...platforms()],
         packState: { kind: "ready", reason: null, progress: null },
         packVersion: "0.15.3-0.21.25.22.23.3",
         installed: {
@@ -169,7 +184,7 @@ afterEach(() => {
 
 describe("useSimulatorPanelAvailability", () => {
   it("asks this machine's host, never the one the window follows", async () => {
-    const messenger = buildSpine();
+    const messenger = buildSpine(() => IOS_ONLY);
     localHostIdRef.value = LOCAL_HOST.hostId;
 
     const { result } = renderHook(() => useSimulatorPanelAvailability(), {
@@ -185,7 +200,7 @@ describe("useSimulatorPanelAvailability", () => {
   });
 
   it("asks nothing on a shell with no local machine, and answers once one exists", async () => {
-    const messenger = buildSpine();
+    const messenger = buildSpine(() => IOS_ONLY);
 
     const { result, rerender } = renderHook(
       () => useSimulatorPanelAvailability(),
@@ -208,5 +223,41 @@ describe("useSimulatorPanelAvailability", () => {
     });
 
     expect(askedHostIds(messenger)).not.toContain(FOLLOWED_HOST.hostId);
+  });
+
+  it("appears once another surface asks the shared status read again and the host now finds a platform", async () => {
+    let found = NEITHER;
+    const messenger = buildSpine(() => found);
+    localHostIdRef.value = LOCAL_HOST.hostId;
+    // One cache, two trees: the sidebar's hook, and Settings' Check again.
+    const sharedWrapper = wrapper();
+
+    const panel = renderHook(() => useSimulatorPanelAvailability(), {
+      wrapper: sharedWrapper,
+    });
+    await waitFor(() => {
+      expect(askedHostIds(messenger)).toHaveLength(1);
+    });
+    expect(panel.result.current.localHostRunsSimulators).toBe(false);
+    const settings = renderHook(
+      () =>
+        useSimulatorRecheck(
+          useHostClientForHostId(LOCAL_HOST.hostId),
+          LOCAL_HOST.hostId,
+        ),
+      { wrapper: sharedWrapper },
+    );
+
+    found = IOS_ONLY;
+    act(() => {
+      settings.result.current.recheck();
+    });
+
+    await waitFor(() => {
+      expect(panel.result.current.localHostRunsSimulators).toBe(true);
+    });
+    expect(new Set(askedHostIds(messenger))).toEqual(
+      new Set([LOCAL_HOST.hostId]),
+    );
   });
 });

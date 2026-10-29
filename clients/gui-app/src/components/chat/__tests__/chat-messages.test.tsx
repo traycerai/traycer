@@ -1546,6 +1546,47 @@ describe("ChatMessages scroll policy", () => {
       expect(scrollNode.scrollTop).toBe(maxScrollTopFor(scrollNode));
     });
 
+    // The list pads its content end for a frame when the DOM lags the size it
+    // laid out; an End inside that padding paints an empty viewport.
+    it("takes End to the list's content end while it holds padding past it", async () => {
+      const PAD_PX = 80;
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "kbd-end-inside-pad",
+      });
+      await settleLegendList();
+      const scrollNode = getScrollNode();
+      const domEnd = maxScrollTopFor(scrollNode);
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const state = list.getState();
+      vi.spyOn(list, "getState").mockImplementation(() => ({
+        ...state,
+        contentLength: domEnd - PAD_PX + scrollNode.clientHeight,
+      }));
+      const content = scrollNode.querySelector<HTMLElement>(
+        ":scope > .legend-list-content-container",
+      );
+      if (content === null) throw new Error("content container is missing");
+      content.style.paddingBottom = `${PAD_PX}px`;
+      act(() => {
+        scrollNode.scrollTop = 0;
+      });
+
+      const end = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(end);
+      });
+
+      expect(end.defaultPrevented).toBe(true);
+      expect(scrollNode.scrollTop).toBe(domEnd - PAD_PX);
+    });
+
     it("leaves a macOS command-arrow chord to a custom keybinding", async () => {
       useKeybindingStore.setState({
         bindings: {
@@ -4123,6 +4164,82 @@ describe("ChatMessages scroll policy", () => {
         fireEvent.wheel(getScrollNode(), { deltaY: -40 });
 
         expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
+
+      // The end pad's reset clamps a departed reader onto the new end while
+      // the turn runs, which holds them there; the turn ending releases them,
+      // since nothing will grow past them now.
+      const TURN_END_PAD_PX = 56;
+      async function heldAtNewEndWhileTurnRuns() {
+        installLegendListTestClock();
+        const messages = makeCompletedTranscript(20);
+        const lastIndex = messages.length - 1;
+        const streaming = messages.map((message, index) =>
+          index === lastIndex
+            ? { ...message, completedAt: null, runState: "running" as const }
+            : message,
+        );
+        const baseHeight = LEGEND_LIST_HEADER_PX + messages.length * 90 + 40;
+        setLegendListScrollContainerScrollHeightOverride(
+          baseHeight + TURN_END_PAD_PX,
+        );
+        const view = renderChatMessages({
+          messages: streaming,
+          scrollStateKey: `t5-turn-rest-${Math.random().toString(36).slice(2)}`,
+        });
+        await settleLegendList();
+        const scrollNode = getScrollNode();
+        const paddedEnd = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = paddedEnd;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+
+        fireEvent.wheel(scrollNode, { deltaY: -40 });
+        act(() => {
+          scrollNode.scrollTop = paddedEnd - 40;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+        // The pad resets and the browser clamps them onto the new end.
+        setLegendListScrollContainerScrollHeightOverride(baseHeight);
+        const end = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = end;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        return { view, scrollNode, end, messages };
+      }
+
+      it("follows again once the turn ends under a reader the end pad's reset clamped onto the end", async () => {
+        const { view, scrollNode, messages } =
+          await heldAtNewEndWhileTurnRuns();
+
+        view.rerenderMessages(messages);
+        await advanceLegendListFrames(2);
+
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+        view.unmount();
+      });
+
+      it("control: leaves a held reader who is away from the strict bottom when the turn ends", async () => {
+        const { view, scrollNode, end, messages } =
+          await heldAtNewEndWhileTurnRuns();
+        act(() => {
+          scrollNode.scrollTop = end - 40;
+        });
+
+        view.rerenderMessages(messages);
+        await advanceLegendListFrames(2);
+
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
         view.unmount();
       });
 
