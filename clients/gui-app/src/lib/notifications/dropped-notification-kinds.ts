@@ -20,6 +20,16 @@ const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
 );
 
 /**
+ * Kinds the center holds and shows, and that announce themselves nowhere: no
+ * toast, no chime. `team.role.changed` is the one — a member is told their own
+ * role moved the way a task's collaborators are, and that tell has never had a
+ * live surface or a push either. Mirrored by the server's own push set, which
+ * keeps the same kind out of the phone push.
+ */
+const NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
+  new Set(["team.role.changed"]);
+
+/**
  * The `host.operation.finished` operations no agent produces: a session
  * import, a worktree deletion or automatic cleanup, a provider-pack update.
  * Their results stay where the operation shows them. The kind itself still
@@ -50,6 +60,10 @@ function isDroppedHostOperation(payload: unknown): boolean {
  * push entry for a sandbox is keyed `sandbox-<kind>:<sandboxId>:<stage>`
  * whatever its row kind, so its `entryId` drops it too; host rows have no
  * such key and pass `null`.
+ *
+ * The read policy. {@link isLiveAnnouncedNotification} is the narrower one the
+ * live surfaces take: a row this answers `true` for is announced nowhere, and
+ * neither is a kind in {@link NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS}.
  */
 export function isDroppedNotification(
   entry: { readonly kind: HostNotificationKind; readonly payload: unknown },
@@ -60,6 +74,21 @@ export function isDroppedNotification(
     (entry.kind === "host.operation.finished" &&
       isDroppedHostOperation(entry.payload)) ||
     (cloudEntryId?.startsWith("sandbox-") ?? false)
+  );
+}
+
+/**
+ * Whether a feed row may announce itself as it arrives — a native toast and a
+ * chime. The read policy above, and then the kinds the center shows without
+ * announcing. The only live-display gate.
+ */
+export function isLiveAnnouncedNotification(
+  entry: { readonly kind: HostNotificationKind; readonly payload: unknown },
+  cloudEntryId: string | null,
+): boolean {
+  return (
+    !isDroppedNotification(entry, cloudEntryId) &&
+    !NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS.has(entry.kind)
   );
 }
 
