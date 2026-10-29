@@ -539,9 +539,11 @@ describe("body overflow inside a frame", () => {
     return { html: doc.documentElement, body: doc.body, target };
   }
 
-  // Each element is contained by one of these, and by none of the next ones.
-  // `contain` names the containment; `content-visibility` and a sizing
-  // `container-type` apply it with `contain` itself left `none`.
+  // The walk reads an element as contained by one of these, and by none of
+  // the next ones. `contain` names the containment; `container-type` and
+  // `content-visibility` apply it with `contain` itself left `none`.
+  // `content-visibility: hidden` is in neither list: it contains, and the
+  // walk reads it as the viewport's anyway, which the last test here covers.
   const CONTAINS: Record<string, string>[] = [
     { contain: "paint" },
     { contain: "layout" },
@@ -555,10 +557,14 @@ describe("body overflow inside a frame", () => {
     { containerType: "size" },
     // `container-type` keeps growing, and every value it grows contains
     // unless it is one of the two below. These are the serialisations the
-    // engine answers with, not the order a page writes.
+    // engine answers with, not the order a page writes: one per containing
+    // keyword, and each paired with a keyword that contains nothing, so no
+    // combination can be mistaken for one of the two.
     { containerType: "anchored" },
     { containerType: "inline-size scroll-state" },
     { containerType: "scroll-state anchored" },
+    { containerType: "size scroll-state" },
+    { containerType: "inline-size anchored" },
   ];
   const CONTAINS_NOT: Record<string, string>[] = [
     { contain: "none" },

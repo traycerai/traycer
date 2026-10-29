@@ -350,11 +350,18 @@ function bootstrapMain(config: BootstrapConfig): void {
   // nothing are named, and everything else contains.
   //
   // `content-visibility: hidden` contains, and is deliberately read here as
-  // though it did not. Its contents are skipped, and the engine reveals
-  // nothing inside them; left to the viewport, which such a page gives no
-  // room, the walk emits nothing and matches it. Called containment, the walk
-  // would instead scroll the body to an element the engine never moves to.
-  // `auto` is containment the engine does reveal into, and counts.
+  // though it did not. Its contents are skipped and the engine reveals
+  // nothing inside them, while a target in there still has a client rect, so
+  // the walk cannot tell from the target alone that there is nothing to
+  // reveal. Read as containment, the body becomes a scroller and the walk
+  // moves it to that target; read as the viewport's, a page that sizes
+  // itself to its skipped contents leaves the viewport no room and the walk
+  // moves nothing, as the engine does. A page that gives itself an explicit
+  // height is the shape this does not cover: the viewport has room, and the
+  // walk scrolls it where the engine scrolls nothing. Reading `hidden` as
+  // containment does not cover it either, so it is left as it is rather than
+  // taken as a reason to call the page contained. `auto` is containment the
+  // engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
     if (element === null) return false;
     const style = window.getComputedStyle(element);
