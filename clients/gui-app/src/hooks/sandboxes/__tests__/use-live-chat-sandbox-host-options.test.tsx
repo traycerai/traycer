@@ -60,6 +60,8 @@ import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEndedSandboxHostsStore } from "@/stores/sandboxes/ended-sandbox-hosts-store";
+import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
+import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 
 function registry(state: "awake" | "stopped"): HostListResponse {
   return {
@@ -133,6 +135,54 @@ function ChatHostStatus(): ReactNode {
   );
 }
 
+function setup() {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: VIEWER, username: "Viewer" },
+  });
+  sources.serving = { ownerHostId: HOST, state: "live", catchingUp: null };
+  const fake = createFakeSandboxBinding();
+  const fetchRegisteredHosts =
+    vi.fn<(era: AuthEra) => Promise<HostListResponse | null>>();
+  const binding = {
+    ...fake,
+    auth: {
+      ...fake.auth,
+      currentAuthEra: (): AuthEra => ({
+        identity: VIEWER,
+        credentialGeneration: 1,
+      }),
+      fetchRegisteredHosts,
+    },
+    directory: { ...fake.directory, getLocalEntry: () => null },
+  };
+  sources.binding = binding;
+  binding.auth.listSandboxes.mockResolvedValue(listed("awake"));
+  const runner = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://auth.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: false,
+    traycerCli: null,
+    hostManagement: null,
+  });
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { staleTime: Infinity, retry: false, gcTime: 0 },
+    },
+  });
+  const tree = () => (
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostContext value={runner}>
+        <ChatHostStatus />
+      </RunnerHostContext>
+    </QueryClientProvider>
+  );
+  return { binding, fetchRegisteredHosts, queryClient, tree };
+}
+
 afterEach(() => {
   cleanup();
   sources.binding = null;
@@ -143,51 +193,8 @@ afterEach(() => {
 
 describe("a live chat's host chip after another client stops its sandbox", () => {
   it("refreshes the cached awake registry so the real chip agrees with the stopped footer", async () => {
-    useAuthStore.setState({
-      status: "signed-in",
-      contextMetadata: { userId: VIEWER, username: "Viewer" },
-    });
-    sources.serving = { ownerHostId: HOST, state: "live", catchingUp: null };
-    const fake = createFakeSandboxBinding();
-    const fetchRegisteredHosts =
-      vi.fn<(era: AuthEra) => Promise<HostListResponse | null>>();
+    const { binding, fetchRegisteredHosts, tree } = setup();
     fetchRegisteredHosts.mockResolvedValue(registry("awake"));
-    const binding = {
-      ...fake,
-      auth: {
-        ...fake.auth,
-        currentAuthEra: (): AuthEra => ({
-          identity: VIEWER,
-          credentialGeneration: 1,
-        }),
-        fetchRegisteredHosts,
-      },
-      directory: { ...fake.directory, getLocalEntry: () => null },
-    };
-    sources.binding = binding;
-    binding.auth.listSandboxes.mockResolvedValue(listed("awake"));
-    const runner = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.invalid/sign-in",
-      authnBaseUrl: "https://auth.traycer.invalid",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: false,
-      traycerCli: null,
-      hostManagement: null,
-    });
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { staleTime: Infinity, retry: false, gcTime: 0 },
-      },
-    });
-    const tree = () => (
-      <QueryClientProvider client={queryClient}>
-        <RunnerHostContext value={runner}>
-          <ChatHostStatus />
-        </RunnerHostContext>
-      </QueryClientProvider>
-    );
     const chat = render(tree());
     await waitFor(() =>
       expect(
@@ -208,6 +215,60 @@ describe("a live chat's host chip after another client stops its sandbox", () =>
       expect(
         screen.getByTestId("settings-host-switcher-status").textContent,
       ).toBe("stopped");
+    });
+    expect(fetchRegisteredHosts).toHaveBeenCalledTimes(2);
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards an initial in-flight awake registry answer after the lifecycle edge", async () => {
+    const { binding, fetchRegisteredHosts, queryClient, tree } = setup();
+    let finishInitial: (answer: HostListResponse) => void = () => {
+      throw new Error("initial registry read has not started");
+    };
+    const initialAnswer = new Promise<HostListResponse>((resolve) => {
+      finishInitial = resolve;
+    });
+    fetchRegisteredHosts
+      .mockReturnValueOnce(initialAnswer)
+      .mockResolvedValue(registry("stopped"));
+    const chat = render(tree());
+    await waitFor(() => {
+      expect(fetchRegisteredHosts).toHaveBeenCalledTimes(1);
+      expect(
+        queryClient.getQueryData<SandboxListResponse>(
+          sandboxQueryKeys.list(binding.auth, VIEWER),
+        )?.sandboxes[0].state,
+      ).toBe("awake");
+    });
+    const registryKey = authQueryKeys.registeredHosts(binding.auth, VIEWER);
+    const initialRead = queryClient.getQueryCache().find({
+      queryKey: registryKey,
+      exact: true,
+    })?.promise;
+    if (initialRead === undefined) throw new Error("expected initial read");
+    // A canceled query rejects; the transport's old answer can still arrive.
+    const initialSettled = initialRead.catch(() => undefined);
+
+    binding.auth.listSandboxes.mockResolvedValueOnce(listed("stopped"));
+    sources.serving = { ownerHostId: HOST, state: "at-rest", catchingUp: null };
+    act(() => chat.rerender(tree()));
+    await screen.findByText(
+      /test-box is stopped · your next message starts it/,
+    );
+    await act(async () => {
+      finishInitial(registry("awake"));
+      await initialAnswer;
+      await initialSettled;
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("settings-host-switcher-status").textContent,
+      ).toBe("stopped");
+      // Do not pass on a chip whose registry notification is still queued.
+      expect(queryClient.getQueryData(registryKey)).toEqual(
+        registry("stopped"),
+      );
     });
     expect(fetchRegisteredHosts).toHaveBeenCalledTimes(2);
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
