@@ -348,6 +348,7 @@ async function runStashConversion(
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: true,
+      returnedSandbox: null,
     });
     // `installLandingDraft` only reaches the store. On desktop the row is
     // persisted by the per-window projection, which debounces 100ms and is

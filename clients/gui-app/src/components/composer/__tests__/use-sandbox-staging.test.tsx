@@ -816,6 +816,7 @@ describe("a returned sandbox on the open landing draft", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
     });
     useLandingDraftStore.getState().setDraftReturnedSandbox(DRAFT_ID, RETURNED);
   });
@@ -876,6 +877,7 @@ describe("a returned sandbox on the open landing draft", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
     });
     drafts.setDraftReturnedSandbox("draft-other", otherDraft);
     function ShownDraft(props: { readonly draftId: string }): null {
@@ -918,6 +920,7 @@ describe("a returned sandbox on the open landing draft", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
     });
     function ShownDraft(props: { readonly draftId: string }): null {
       useLandingReturnedSandbox(SURFACE, props.draftId, true);

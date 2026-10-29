@@ -39,6 +39,7 @@ function snapshot(
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
+    returnedSandbox: null,
     ...overrides,
   };
 }

@@ -237,8 +237,7 @@ export function deleteLandingDraftRow(
  */
 function restoreLandingDraft(draft: LandingDraftTab): void {
   const id = mintDraftId();
-  const store = useLandingDraftStore.getState();
-  store.installLandingDraft({
+  useLandingDraftStore.getState().installLandingDraft({
     id,
     content: draft.content,
     selection: draft.selection,
@@ -247,8 +246,9 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
     composerMode: draft.composerMode,
     workspace: draft.workspace,
     closed: draft.closed,
+    // Stored: it keeps the account it was returned under.
+    returnedSandbox: draft.returnedSandbox,
   });
-  store.setDraftReturnedSandbox(id, draft.returnedSandbox);
 }
 
 /**

@@ -792,6 +792,8 @@ async function returnBoundMessage(
   if (toDraft) {
     const recoveryId = pendingSandboxRecoveryDraftId(id);
     const target = draftImageByteTargetForHost(boundMessageHostId(send));
+    // The draft is created on the sandbox: it is listed in Drafts before its
+    // image reads settle.
     const outcome = await buildUnrecordedPromptHandoff({
       recovery: { draftId: recoveryId, settings: send.settings },
       content: send.content,
@@ -799,15 +801,12 @@ async function returnBoundMessage(
       reason,
       readHashImage: (hash) => resolveDraftImageBytes(hash, target),
       stillCurrent: () => boundReturnCurrent(send),
+      returnedSandbox: destination,
     });
+    // The pending copy and its image roots stay until the reads settle.
     await outcome.readsSettled;
     if (outcome.draftId === null || !boundReturnCurrent(send))
       return { kind: "none" };
-    // Stamped before the pending copy ends: the draft is where it goes now.
-    if (destination !== null)
-      useLandingDraftStore
-        .getState()
-        .setDraftReturnedSandbox(outcome.draftId, destination);
     returned = { kind: "landing-draft", draftId: outcome.draftId };
   } else {
     const qualified =
@@ -857,8 +856,7 @@ function installReturnedLandingDraft(
   send: PendingSandboxSend,
   destination: ReturnedSandbox | null,
 ): void {
-  const drafts = useLandingDraftStore.getState();
-  drafts.installLandingDraft({
+  useLandingDraftStore.getState().installLandingDraft({
     id: draftId,
     content: send.content,
     selection: null,
@@ -868,9 +866,8 @@ function installReturnedLandingDraft(
     // The task's sandbox started empty: the message named no folder here.
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
+    returnedSandbox: destination,
   });
-  if (destination !== null)
-    drafts.setDraftReturnedSandbox(draftId, destination);
 }
 
 /** Preserves an occupied task draft by putting this message in its own closed draft. */

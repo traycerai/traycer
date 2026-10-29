@@ -270,7 +270,11 @@ interface StagedSandboxStoreState {
     userId: string | null,
     action: PendingStageRetryAction,
   ) => Promise<string | null>;
-  /** Drops every stage: the account changed. */
+  /**
+   * The account changed: drops every composer's stage. A send's stage stays:
+   * it may name a create the server accepted, and is that send's only record
+   * of it. Only its own account's driver reads it again.
+   */
   readonly clearAll: () => void;
 }
 
@@ -426,7 +430,10 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
         return id;
       },
       clearAll: () =>
-        set((state) => ({ bySurface: {}, teardowns: state.teardowns + 1 })),
+        set((state) => ({
+          bySurface: persistedStages(state.bySurface),
+          teardowns: state.teardowns + 1,
+        })),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.stagedSandboxSend)),
