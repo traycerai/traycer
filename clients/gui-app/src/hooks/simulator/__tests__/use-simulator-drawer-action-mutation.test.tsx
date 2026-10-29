@@ -84,8 +84,7 @@ function buildRequester(): {
     messenger,
     invalidator: { invalidateHostScope: () => undefined },
     schedulingPolicy: hostRpcSchedulingPolicy,
-    findHostById: (hostId) =>
-      hostId === HOST_ID ? mockLocalHostEntry : null,
+    findHostById: (hostId) => (hostId === HOST_ID ? mockLocalHostEntry : null),
   });
   spine.setRequestContext(
     createRequestContextFixture({

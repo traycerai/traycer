@@ -87,24 +87,24 @@ const agentHolds = { on: true };
 /** The same device on the `@1.1` branch, where an agent drives its instance. */
 function instancesNow(): SimulatorInstancesResponse {
   return {
-  instances: [
-    {
-      instanceKey: "udid-1",
-      simulatorId: "udid-1",
-      platform: "ios",
-      name: "iPhone 17",
-      version: "26.0",
-      booted: true,
-      cloneOf: null,
-      cloneOfName: null,
-      drivenByAgent: agentHolds.on,
-      keepRunning: false,
-      bootedByTraycer: true,
-      idleUntil: null,
-      tasks: agentHolds.on ? [{ epicId: EPIC_ID }] : [],
-      otherTaskCount: 0,
-    },
-  ],
+    instances: [
+      {
+        instanceKey: "udid-1",
+        simulatorId: "udid-1",
+        platform: "ios",
+        name: "iPhone 17",
+        version: "26.0",
+        booted: true,
+        cloneOf: null,
+        cloneOfName: null,
+        drivenByAgent: agentHolds.on,
+        keepRunning: false,
+        bootedByTraycer: true,
+        idleUntil: null,
+        tasks: agentHolds.on ? [{ epicId: EPIC_ID }] : [],
+        otherTaskCount: 0,
+      },
+    ],
   };
 }
 
@@ -145,7 +145,8 @@ function buildSpine(args: { readonly reachable: () => boolean }): {
         if (!args.reachable()) throw new Error("dial refused");
         return LIST;
       },
-      "simulator.instances": () => record("simulator.instances", instancesNow()),
+      "simulator.instances": () =>
+        record("simulator.instances", instancesNow()),
       "simulator.close": () => {
         // The host ends the session; no agent holds the instance after it.
         agentHolds.on = false;

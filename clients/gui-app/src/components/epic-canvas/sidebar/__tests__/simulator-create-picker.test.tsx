@@ -647,12 +647,8 @@ describe("SimulatorCreatePicker", () => {
     instancesFail.on = true;
     await tickInstancePoll();
 
-    expect(
-      await screen.findByText("Couldn't reach Studio Mac."),
-    ).toBeTruthy();
-    expect(
-      screen.queryByTestId("simulator-picker-running-udid-1"),
-    ).toBeNull();
+    expect(await screen.findByText("Couldn't reach Studio Mac.")).toBeTruthy();
+    expect(screen.queryByTestId("simulator-picker-running-udid-1")).toBeNull();
     await user.keyboard("{Escape}");
   });
 
