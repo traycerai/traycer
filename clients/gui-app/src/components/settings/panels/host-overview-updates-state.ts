@@ -557,7 +557,7 @@ export function useHostOverviewUpdates(input: {
   });
   return {
     degrade,
-    awaitingFirstAnswer: checkQuery.isPending,
+    awaitingAnswer: catalogAnswerOutstanding(checkQuery),
     cliFloor,
     cliFloorForVersion: (version) =>
       readCliFloorForVersion(actionableManifest, input.platformKey, version),
@@ -657,6 +657,18 @@ export function useHostOverviewUpdates(input: {
       failureDescription,
     },
   };
+}
+
+/**
+ * `isPending` alone misses a re-ask: with `keepPreviousData` a filter change
+ * or a poll keeps the retained answer, so the query is "settled" while the
+ * answer that matters is still in flight.
+ */
+function catalogAnswerOutstanding(query: {
+  readonly isPending: boolean;
+  readonly isFetching: boolean;
+}): boolean {
+  return query.isPending || query.isFetching;
 }
 
 interface RetainedHostInstallRefusal {
@@ -1049,17 +1061,18 @@ export interface BoundDispatchInput {
 export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
   /**
-   * The catalog has not answered yet, one way or the other: its first fetch
-   * is outstanding, or the page's gate has not let it start. A failed answer
-   * clears this as a successful one does.
+   * A catalog answer is outstanding: the first fetch has not landed (or the
+   * page's gate has not let it start), or a re-ask is in flight over a
+   * retained answer (the release-candidate filter changed, a poll). A failed
+   * answer clears this as a successful one does.
    *
    * The activation auto-open waits on it (H1): a region that is un-retired
-   * only because it has not asked yet looks exactly like a healthy one, and
-   * a shot fired then is spent on a dialog the first `cli-unavailable` answer
-   * closes. The check is a CLI spawn on the host, so it always lands after
-   * the status read that put the park on screen.
+   * only because its answer has not arrived looks exactly like a healthy
+   * one, and a shot fired then is spent on a dialog a `cli-unavailable`
+   * answer closes. The check is a CLI spawn on the host, so it always lands
+   * after the status read that put the park on screen.
    */
-  readonly awaitingFirstAnswer: boolean;
+  readonly awaitingAnswer: boolean;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
   /**
