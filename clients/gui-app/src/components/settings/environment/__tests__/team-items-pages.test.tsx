@@ -273,7 +273,7 @@ describe("TeamVariablesAndShells", () => {
 
     const row = await screen.findByRole("region", { name: "API_URL · macOS" });
     expect(within(row).getByText("macOS")).toBeTruthy();
-    expect(screen.queryByText("No variables yet.")).toBeNull();
+    expect(screen.queryByText("No variables.")).toBeNull();
     const field = within(row).getByLabelText("API_URL · macOS value");
     expect(field).toHaveProperty("value", "mac-value");
 
@@ -295,7 +295,7 @@ describe("TeamVariablesAndShells", () => {
     );
     await user.click(await screen.findByRole("option", { name: "Linux" }));
     expect(screen.queryByRole("region", { name: /API_URL/ })).toBeNull();
-    expect(screen.getByText("No variables yet.")).toBeTruthy();
+    expect(screen.getByText("No variables.")).toBeTruthy();
   });
 
   it("says live values need a host while the team has none", async () => {
@@ -381,6 +381,15 @@ describe("TeamMcpServers", () => {
         revision: 5,
       },
     ]);
+  });
+
+  it("says the team has no MCP servers when the read lists none", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+    });
+    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("No MCP servers.")).toBeTruthy();
   });
 
   it("shows a viewer On/Off with no switches", async () => {

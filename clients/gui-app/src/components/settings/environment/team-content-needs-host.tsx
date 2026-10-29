@@ -21,9 +21,16 @@ const NEED_OPENING: Readonly<Record<TeamHostNeed, string>> = {
 };
 
 /**
- * A card that only a host running the picked configuration can fill, with
- * no such host picked. `Pick one.` only while a host can be picked; on a
- * team with none, the remedy is a sandbox of the team's.
+ * A card that only a host running the picked configuration can fill, with no
+ * such host picked. Three states, each with its own remedy:
+ *
+ * - a host can be picked: `Pick one.`, which opens the picker;
+ * - the configuration runs somewhere, but nothing there can be reached right
+ *   now: that, and Retry, which reads the host list again;
+ * - nothing runs it at all: a sandbox of the configuration's.
+ *
+ * `Pick one.` is never offered where the picker would open with nothing in
+ * it: a verb that leads nowhere is no remedy.
  */
 export function TeamContentNeedsHost(props: {
   readonly content: TeamHostNeed;
@@ -40,22 +47,42 @@ export function TeamContentNeedsHost(props: {
       role="status"
       className="flex flex-wrap items-center gap-1 text-ui-sm text-muted-foreground"
     >
-      <span>
-        {NEED_OPENING[props.content]} a host running {props.teamName}.
-      </span>
-      {pickable || personal ? (
-        <Button
-          type="button"
-          variant="link"
-          size="sm"
-          onClick={props.onPickHost}
-        >
-          Pick one.
-        </Button>
+      {!pickable && hosts.length > 0 ? (
+        <>
+          <span>
+            No {personal ? "computer" : "host"} running {props.teamName} can be
+            reached.
+          </span>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            onClick={() => void scope.hosts.refetch()}
+          >
+            Retry
+          </Button>
+        </>
       ) : (
-        <span>
-          Start {withIndefiniteArticle(props.teamName)} sandbox to see {object}.
-        </span>
+        <>
+          <span>
+            {NEED_OPENING[props.content]} a host running {props.teamName}.
+          </span>
+          {pickable ? (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              onClick={props.onPickHost}
+            >
+              Pick one.
+            </Button>
+          ) : (
+            <span>
+              Start {withIndefiniteArticle(props.teamName)} sandbox to see{" "}
+              {object}.
+            </span>
+          )}
+        </>
       )}
     </p>
   );

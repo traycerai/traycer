@@ -5,7 +5,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  SelectLabel,
   SelectGroup,
 } from "@/components/ui/select";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
@@ -15,6 +14,11 @@ import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
  * Every team live-fact card selects the same viewing host, and names it the
  * same way: `as reported by <host> · Use another host`, the verb only while
  * another selectable host exists to switch to.
+ *
+ * A host is viewed whenever one can be selected, so no viewed host means
+ * there is nothing to pick: the card's own line is the whole remedy then, and
+ * no picker is drawn. The host list polls, so a picker appears as soon as a
+ * selectable host does.
  */
 export function TeamViewingHostPicker(props: {
   readonly open: boolean;
@@ -22,41 +26,8 @@ export function TeamViewingHostPicker(props: {
 }): ReactNode {
   const scope = useTeamViewingHost();
   const hosts = scope.hosts.isError ? [] : (scope.hosts.data?.hosts ?? []);
-  let emptyLabel = "No hosts yet";
-  if (scope.hosts.isError) emptyLabel = "Couldn't read hosts.";
-  else if (scope.hosts.isPending) emptyLabel = "Loading hosts";
   const viewing = scope.viewingHost;
-  const picker = (
-    <Select
-      open={props.open}
-      onOpenChange={(open) => {
-        if (open && scope.hosts.isError) void scope.hosts.refetch();
-        props.onOpenChange(open);
-      }}
-      value={scope.viewingHost?.hostId ?? ""}
-      onValueChange={scope.selectHost}
-    >
-      <SelectTrigger size="sm" className="max-w-full">
-        <SelectValue placeholder="Pick a host">Use another host</SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          {hosts.length === 0 ? <SelectLabel>{emptyLabel}</SelectLabel> : null}
-          {hosts.map((host) => (
-            <SelectItem
-              key={host.hostId}
-              value={host.hostId}
-              disabled={!scope.canSelectHost(host.hostId)}
-            >
-              {hostNameFromLabel(host.hostLabel, host.hostId)}
-              {scope.canSelectHost(host.hostId) ? "" : " · offline"}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
-  );
-  if (viewing === null) return picker;
+  if (viewing === null) return null;
   const canSwitch = hosts.some(
     (host) =>
       host.hostId !== viewing.hostId && scope.canSelectHost(host.hostId),
@@ -69,7 +40,30 @@ export function TeamViewingHostPicker(props: {
       {canSwitch ? (
         <>
           <span aria-hidden>·</span>
-          {picker}
+          <Select
+            open={props.open}
+            onOpenChange={props.onOpenChange}
+            value={viewing.hostId}
+            onValueChange={scope.selectHost}
+          >
+            <SelectTrigger size="sm" className="max-w-full">
+              <SelectValue>Use another host</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {hosts.map((host) => (
+                  <SelectItem
+                    key={host.hostId}
+                    value={host.hostId}
+                    disabled={!scope.canSelectHost(host.hostId)}
+                  >
+                    {hostNameFromLabel(host.hostLabel, host.hostId)}
+                    {scope.canSelectHost(host.hostId) ? "" : " · offline"}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </>
       ) : null}
     </div>

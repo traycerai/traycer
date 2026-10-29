@@ -251,7 +251,7 @@ function TeamPageChip(props: {
       section={props.section}
       environmentId={props.environmentId}
       hosts={chips}
-      emptyText="No hosts yet"
+      emptyText="Not on any host"
     />
   );
 }

@@ -33,7 +33,7 @@ const FAILED_STATES = new Set(["failed", "not_applied"]);
 export function secretsHostSummary(
   hosts: readonly DetailsHostStatus[],
 ): string {
-  if (hosts.length === 0) return "No hosts yet";
+  if (hosts.length === 0) return "Not on any host";
   const failing = hosts.filter((host) => FAILED_STATES.has(host.state));
   if (failing.length === 1) return `Not applied on ${failing[0].name}`;
   if (failing.length > 1) return `Not applied on ${failing.length} hosts`;
@@ -69,6 +69,20 @@ export function pendingRemovalSummary(
     return `${label} · waiting for ${waiting.length} hosts`;
   if (waiting.length === 0) return label;
   return `${label} · waiting for ${nameOf(waiting[0])}`;
+}
+
+/**
+ * How far a removal has got, counted in hosts: the broker's own slots are
+ * copies of the secret the person never sees, and counting them made a
+ * removal look further behind than it was.
+ */
+function hostsRemovedLine(removal: EnvironmentSecretRemovalV12): string {
+  const removed = removal.targets.filter(
+    (target) => target.target === "host" && target.state === "confirmed",
+  ).length;
+  return removed === 1
+    ? "Removed from 1 host"
+    : `Removed from ${removed} hosts`;
 }
 
 function secretInventory(
@@ -179,10 +193,7 @@ async function singleSecretDetails(
       summary: singleSecretSummary(removal, status.hosts),
       retryable: removal !== null && removal.outcome !== "destroyed",
       currentVersion: current === undefined ? null : String(current.ordinal),
-      reason:
-        removal === null
-          ? null
-          : `${removal.targets.filter((target) => target.state === "confirmed").length} of ${removal.targets.length} copies removed`,
+      reason: removal === null ? null : hostsRemovedLine(removal),
     },
   };
 }

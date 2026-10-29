@@ -159,7 +159,9 @@ describe("TeamPlans", () => {
     expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(screen.queryByText(/add a profile/i)).toBeNull();
-    expect(screen.getByText("Admins link a plan: Ada.")).toBeTruthy();
+    expect(
+      screen.getByText("Only an admin can link a plan: ask Ada."),
+    ).toBeTruthy();
   });
 
   it("holds Unlink until its preview resolves, then unlinks the picked profile in this team", async () => {

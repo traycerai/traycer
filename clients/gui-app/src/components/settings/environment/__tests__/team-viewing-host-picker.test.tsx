@@ -9,14 +9,15 @@ const scope = vi.hoisted(
     hosts: Array<{ hostId: string; hostLabel: string | null }>;
     viewing: { hostId: string; hostLabel: string | null } | null;
     selectable: Set<string>;
-  } => ({ hosts: [], viewing: null, selectable: new Set() }),
+    pending: boolean;
+  } => ({ hosts: [], viewing: null, selectable: new Set(), pending: false }),
 );
 vi.mock("@/hooks/environment/team/use-team-viewing-host", () => ({
   useTeamViewingHost: () => ({
     hosts: {
       isError: false,
-      isPending: false,
-      data: { hosts: scope.hosts },
+      isPending: scope.pending,
+      data: scope.pending ? undefined : { hosts: scope.hosts },
       refetch: vi.fn(),
     },
     viewingHost: scope.viewing,
@@ -37,6 +38,7 @@ beforeEach(() => {
   scope.hosts = [];
   scope.viewing = null;
   scope.selectable = new Set();
+  scope.pending = false;
 });
 
 afterEach(cleanup);
@@ -73,11 +75,20 @@ describe("<TeamViewingHostPicker />", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("asks to pick a host when none is being viewed", () => {
-    scope.hosts = [STUDIO];
+  it("offers no picker when no listed host is selectable", () => {
+    scope.hosts = [STUDIO, LAPTOP];
     renderPicker();
 
-    expect(screen.getByRole("combobox").textContent).toBe("Pick a host");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText("Pick a host")).toBeNull();
     expect(screen.queryByText(/as reported by/)).toBeNull();
+  });
+
+  it("offers no picker while the host list has not answered", () => {
+    scope.pending = true;
+    renderPicker();
+
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText("Pick a host")).toBeNull();
   });
 });

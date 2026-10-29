@@ -560,7 +560,7 @@ describe("the Secrets header's Details", () => {
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
 
     // No host has reported yet, so the page's Now says so.
-    expect(await screen.findByText("No hosts yet")).toBeTruthy();
+    expect(await screen.findByText("Not on any host")).toBeTruthy();
     const items = screen.getAllByRole("listitem").map((row) => row.textContent);
     expect(items).toEqual([
       expect.stringContaining("STRIPE_KEY"),
@@ -638,7 +638,7 @@ describe("the Secrets header's Details", () => {
 
     expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
     expect(screen.getByText("Version 2")).toBeTruthy();
-    expect(screen.getByText("1 of 2 copies removed")).toBeTruthy();
+    expect(screen.getByText("Removed from 1 host")).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([
       { environmentId: "env-a", secretId: "sec-cleanup" },
     ]);

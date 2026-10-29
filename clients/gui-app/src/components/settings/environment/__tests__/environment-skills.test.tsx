@@ -540,6 +540,45 @@ describe("The Skills page", () => {
     });
   });
 
+  it.each([
+    {
+      source: personalPoolSource(),
+      line: "No computer running Personal can be reached.Retry",
+      picked: "Skills need a host running Personal.Pick one.",
+    },
+    {
+      source: poolSource("editor"),
+      line: "No host running Acme can be reached.Retry",
+      picked: "Skills need a host running Acme.Pick one.",
+    },
+  ])(
+    "says no host can be reached, with Retry and no dead Pick one, while the configuration's hosts do not answer: $line",
+    async ({ source, line, picked }) => {
+      negotiateMethods(BASE_METHODS);
+      const world = { reachable: false };
+      const harness = mountTeamPage(source, {
+        ...handlers({ list: { outcome: "not_served" }, hostSkills: [] }),
+        "environment.host.list": () => ({
+          hosts: [{ ...reachableHost, reachable: world.reachable }],
+        }),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(line);
+      });
+      expect(screen.queryByRole("button", { name: "Pick one." })).toBeNull();
+
+      // Retry reads the host list again, and the remedy follows the answer.
+      world.reachable = true;
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(picked);
+      });
+    },
+  );
+
   it("names Personal on Personal's page and lists for Personal's environment", async () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
@@ -559,10 +598,114 @@ describe("The Skills page", () => {
       );
     });
     expect(
-      await screen.findByText(
-        "Skills give agents instructions for a kind of task.",
-      ),
+      await screen.findByText("No skills added to Personal."),
     ).toBeTruthy();
+  });
+
+  it("names no host, and offers no host picker, for a list that came from the room", async () => {
+    negotiateMethods(BASE_METHODS);
+    const harness = mountTeamPage(
+      personalPoolSource(),
+      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("review")).toBeTruthy();
+    expect(screen.queryByText(/as reported by/)).toBeNull();
+    expect(screen.queryByText("Use another host")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("reads the page's own line on the first paint, not a bare spinner", async () => {
+    // No negotiated manifest: the list method's version is unknown, which is
+    // the state the page opens in.
+    const harness = mountTeamPage(
+      personalPoolSource(),
+      handlers({ list: listed([REVIEW]), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Reading Personal's skills…")).toBeTruthy();
+  });
+
+  it("says no skills are added, naming the team, when the list is empty", async () => {
+    negotiateMethods(BASE_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({ list: listed([]), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("No skills added to Acme.")).toBeTruthy();
+    expect(
+      screen.queryByText("Skills give agents instructions for a kind of task."),
+    ).toBeNull();
+  });
+
+  it("marks the row being removed until the list no longer holds it", async () => {
+    negotiateMethods(BASE_METHODS);
+    let listedSkills: readonly EnvironmentSkill[] = [REVIEW];
+    let release: () => void = () => undefined;
+    const removal = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      "environment.configuration.skills.list": () => listed(listedSkills),
+      "environment.configuration.skills.remove": async () => {
+        await removal;
+        return { outcome: "removed" as const, reason: null };
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Remove skill",
+      }),
+    );
+
+    const row = async (): Promise<HTMLElement> => {
+      const found = (await screen.findByText("review")).closest("li");
+      if (found === null) throw new Error("no row for review");
+      return found;
+    };
+    // In flight.
+    await waitFor(async () => {
+      expect(within(await row()).getByText("Removing…")).toBeTruthy();
+    });
+    expect(
+      within(await row()).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
+    expect(
+      within(await row()).queryByRole("button", { name: "Edit" }),
+    ).toBeNull();
+
+    // Accepted, and the read that follows still lists the skill: the row must
+    // keep saying so rather than offering its verbs again.
+    await act(async () => {
+      release();
+      await removal;
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.isMutating()).toBe(0);
+    });
+    expect(within(await row()).getByText("Removing…")).toBeTruthy();
+
+    listedSkills = [];
+    await act(async () => {
+      await harness.queryClient.refetchQueries({
+        predicate: (query) =>
+          query.queryKey.includes("environment.configuration.skills.list"),
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("review")).toBeNull();
+    });
   });
 
   it("says the read failed, naming the configuration, and Retry reads again", async () => {
@@ -745,28 +888,65 @@ describe("A provider's Skills tab on Personal or a team", () => {
     },
   );
 
-  it("says a built-in skill can't be removed on the provider's tab, and says nothing on a written one", async () => {
+  it("says once above the list that a built-in can't be removed, and marks each built-in row", async () => {
     negotiateMethods(SWITCHES);
     const harness = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW, BUILT_IN]), hostSkills: [] }),
+      handlers({
+        list: listed([REVIEW, BUILT_IN, { ...BUILT_IN, name: "second-built" }]),
+        hostSkills: [],
+      }),
     );
     render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
-    const builtIn = (await screen.findByText("find-skills")).closest("li");
+    expect(
+      await screen.findByText(
+        "Built-in skills come with Traycer and can't be removed. Switch one off for any provider that shouldn't use it.",
+      ),
+    ).toBeTruthy();
+    const builtIn = screen.getByText("find-skills").closest("li");
     const written = screen.getByText("review").closest("li");
     expect(builtIn).not.toBeNull();
     expect(written).not.toBeNull();
     if (builtIn === null || written === null) return;
-    expect(
-      within(builtIn).getByText(
-        "Comes with Traycer and can't be removed. Switch it off for any provider that shouldn't use it.",
-      ),
-    ).toBeTruthy();
+    expect(within(builtIn).getByText("Built-in")).toBeTruthy();
+    expect(within(builtIn).queryByText(/can't be removed/)).toBeNull();
     expect(within(written).queryByText(/can't be removed/)).toBeNull();
+    expect(screen.getAllByText(/can't be removed/)).toHaveLength(1);
   });
+
+  it.each([
+    { source: personalPoolSource(), word: "Personal" },
+    { source: poolSource("editor"), word: "Acme" },
+  ])(
+    "says a built-in the configuration replaced is used instead of it, on $word",
+    async ({ source, word }) => {
+      negotiateMethods(SWITCHES);
+      const replaced: EnvironmentSkill = {
+        ...BUILT_IN,
+        name: "traycer-epic-brief",
+        edited: true,
+      };
+      const harness = mountTeamPage(
+        source,
+        handlers({ list: listed([replaced]), hostSkills: [] }),
+      );
+      render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const row = (await screen.findByText("traycer-epic-brief")).closest("li");
+      expect(row).not.toBeNull();
+      if (row === null) return;
+      expect(
+        within(row).getByText(
+          `${word} · used instead of the built-in traycer-epic-brief`,
+        ),
+      ).toBeTruthy();
+    },
+  );
 
   it.each([
     { source: personalPoolSource(), word: "Personal" },

@@ -91,7 +91,7 @@ export function detailsNowSummary(hosts: readonly DetailsHostStatus[]): string {
   const applying = usedHosts.find((host) => host.state !== "applied");
   if (applying !== undefined) return `Applying on ${applying.name}…`;
   const count = new Set(usedHosts.map((host) => host.hostId)).size;
-  if (count === 0) return "No hosts yet";
+  if (count === 0) return "Not on any host";
   return count === 1 ? "Applied on 1 host" : `Applied on ${count} hosts`;
 }
 
