@@ -22,7 +22,11 @@ import {
 } from "@/hooks/host/use-host-supports-method";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
-import { queryKeys, simulatorMutationKeys } from "@/lib/query-keys";
+import {
+  hostQueryKeys,
+  queryKeys,
+  simulatorMutationKeys,
+} from "@/lib/query-keys";
 
 /**
  * The simulator domain's unary verbs, each bound to an EXPLICIT client (the
@@ -58,6 +62,16 @@ const CONFIG_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
 ];
 
 const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
+
+/**
+ * The reads a boot or a power off moves host-wide: the instances themselves,
+ * and the DEVICES, whose `booted` flag is what the + picker's Not running
+ * section lists and what stands in for an instance on a `@1.0` host.
+ */
+const INSTANCE_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
+  "simulator.instances",
+  "simulator.list",
+];
 
 /** The machine-user-global switch on `hostId`. */
 export function useSimulatorConfigQuery(
@@ -121,12 +135,19 @@ export function useSimulatorRemoveToolsMutation(
  * only the permission for that budget; passing the constant here is what
  * applies it. A real error - the host's own boot deadline included - still
  * surfaces as a toast.
+ *
+ * It sweeps the same reads a power off does, on the MUTATION's own
+ * `onSettled`: this open is sent from the tile's inventory gate, which unmounts
+ * the moment the session reaches the tile, and TanStack skips the per-`mutate`
+ * callbacks of an observer with no listeners. Settled rather than succeeded
+ * because a lost answer still leaves a host that booted the device.
  */
 export function useSimulatorOpenMutation(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
 ): GatedSimulatorMutation<"simulator.open"> {
   const supported = useHostSupportsMethod(hostId, "simulator.open");
+  const queryClient = useQueryClient();
   const mutation = useHostMutationWithResponseTimeout<
     HostRpcRegistry,
     "simulator.open",
@@ -145,6 +166,15 @@ export function useSimulatorOpenMutation(
       }),
       onError: (error) => {
         toastFromHostError(error, "Couldn't open the simulator.");
+      },
+      onSettled: (_data, _error, _variables, context) => {
+        const sentOn = context?.hostId ?? null;
+        if (sentOn === null) return;
+        for (const method of INSTANCE_INVALIDATIONS) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(sentOn, method),
+          });
+        }
       },
     },
   });
@@ -361,11 +391,6 @@ export function useSimulatorListQuery(
     options: null,
   });
 }
-
-const INSTANCE_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
-  "simulator.instances",
-  "simulator.list",
-];
 
 /**
  * Powers one instance off host-wide. The answer may be `confirm-required`

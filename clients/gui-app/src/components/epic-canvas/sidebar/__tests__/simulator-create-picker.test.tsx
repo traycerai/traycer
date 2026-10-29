@@ -109,6 +109,7 @@ vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: world.toastError } }));
 
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
+import { useSimulatorOpenMutation } from "@/hooks/simulator/use-simulator-mutations";
 import { SimulatorCreatePicker } from "../simulator-create-picker";
 
 const DEVICES: SimulatorState["simulators"] = [
@@ -281,6 +282,31 @@ async function openPicker() {
   return user;
 }
 
+/**
+ * Stands in for the tile the picker PLACES on a `@1.0` host, where the open is
+ * the tile's own: the picker sends nothing there, so the device list it reads
+ * moves only if that mutation sweeps it.
+ */
+function PlacedTile() {
+  const { mutation } = useSimulatorOpenMutation(world.client, HOST);
+  const { mutate } = mutation;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        mutate({
+          epicId: EPIC,
+          simulatorId: "udid-cold",
+          platform: "ios",
+          boot: true,
+        })
+      }
+    >
+      Tile open
+    </button>
+  );
+}
+
 describe("SimulatorCreatePicker", () => {
   beforeEach(() => {
     resetSimulatorPendingOpensForTests();
@@ -395,6 +421,49 @@ describe("SimulatorCreatePicker", () => {
     await user.click(screen.getByTestId("add"));
     await screen.findByTestId("simulator-create-picker");
 
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("simulator-picker-running-udid-cold"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+    });
+  });
+
+  it("lists it once after the @1.0 path's boot too, where the tile sends the open", async () => {
+    world.negotiated = { major: 1, minor: 0 };
+    queryClient = createAppQueryClient();
+    const user = userEvent.setup();
+    render(
+      wrap(
+        <>
+          <SimulatorCreatePicker
+            epicId={EPIC}
+            tabId="tab-1"
+            onOpened={null}
+            testId="add"
+          />
+          <PlacedTile />
+        </>,
+      ),
+    );
+    await user.click(screen.getByTestId("add"));
+    await screen.findByTestId("simulator-create-picker");
+    const cold = await screen.findByTestId("simulator-picker-cold-udid-cold");
+
+    await user.click(within(cold).getByRole("button", { name: "Boot" }));
+    // A `@1.0` host ignores `instance`, so the picker places a tile and leaves
+    // the open to it.
+    expect(opens).toEqual([]);
+    expect(world.openTile).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Tile open" }));
+    await waitFor(() => expect(opens).toHaveLength(1));
+
+    await user.click(screen.getByTestId("add"));
+    await screen.findByTestId("simulator-create-picker");
+
+    // A `@1.0` host has no instances: its booted devices ARE the Running
+    // section, so the one read has to move for the device to leave Not running.
     await waitFor(() => {
       expect(
         screen.queryByTestId("simulator-picker-running-udid-cold"),
