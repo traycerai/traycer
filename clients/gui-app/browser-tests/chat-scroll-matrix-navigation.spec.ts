@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 import {
   expectAtRest,
   intentOf,
@@ -334,13 +334,20 @@ async function streamFor(page: Page, ms: number): Promise<void> {
   await stopStream(page);
 }
 
+/** Wheels by `dy` in 600px notches two frames apart, and returns once the
+ *  page has received them all. */
 async function wheel(page: Page, dy: number): Promise<void> {
   await page.mouse.move(195, 350);
   const step = Math.sign(dy) * 600;
-  for (let moved = 0; Math.abs(moved) < Math.abs(dy); moved += step) {
-    await page.mouse.wheel(0, step);
-    await nextFrames(page, 2);
-  }
+  await wheelsDelivered(
+    page,
+    Array.from({ length: Math.ceil(Math.abs(dy) / 600) }, () => ({
+      deltaX: 0,
+      deltaY: step,
+    })),
+    2,
+  );
+  await nextFrames(page, 2);
 }
 
 /** Wheels up from the tail until mid-transcript and returns the reader's

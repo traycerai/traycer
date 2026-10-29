@@ -535,4 +535,249 @@ describe("LegendList estimate recovery", () => {
       expect(effectiveSizeAt(40)).toBeLessThan(measuredSize * 2);
     });
   });
+
+  /**
+   * A reader parked near the end of a long list has many never-measured rows
+   * above them, each holding a cached estimate. When the type average then
+   * jumps, a scroll-driven pass maintains no visible content position, so
+   * replacing those estimates would move every row below them - the reader
+   * included - with nothing to compensate. That pass has to keep the cached
+   * estimates; the next pass that does maintain the position refreshes them.
+   */
+  describe("a scroll-driven pass after the type average jumps", () => {
+    it("keeps the reader's row where it was instead of re-estimating the rows above", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      act(() => {
+        void list.scrollToIndex({ animated: false, index: 65 });
+      });
+      await settleLegendList();
+
+      const measuredSize = list.getState().getAverageItemSizes()
+        .assistant.average;
+
+      // row-69 sits at the edge of the window and is not re-measured here, so
+      // the average keeps whatever it is told.
+      act(() => {
+        list.setItemSize("row-69", {
+          height: measuredSize * 1_000,
+          width: 800,
+        });
+      });
+      await settleLegendList();
+      expect(
+        list.getState().getAverageItemSizes().assistant.average,
+      ).toBeGreaterThan(measuredSize * 10);
+
+      // A one-pixel change to a row far above the window records the lowest
+      // changed index without running a pass, so the next pass recomputes
+      // every position from the top - the shape a real timeline reaches
+      // whenever an earlier row remeasures.
+      act(() => {
+        list.setItemSize("row-0", { height: measuredSize + 1, width: 800 });
+      });
+      await settleLegendList();
+      const anchorKey = "row-65";
+      const offsetOf = (): number => {
+        const state = list.getState();
+        const position = state.positionByKey(anchorKey);
+        if (position === undefined) {
+          throw new Error(`${anchorKey} left the list`);
+        }
+        return position - state.scroll;
+      };
+      const before = offsetOf();
+      const scrollBefore = list.getState().scroll;
+
+      // Far enough to leave the range the list already calculated, or the
+      // scroll event would not run a position pass at all.
+      const SCROLL_STEP = -1500;
+      const scrollNode = list.getScrollableNode();
+      act(() => {
+        scrollNode.scrollTop = scrollBefore + SCROLL_STEP;
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+      await settleLegendList();
+
+      const scrolled = list.getState().scroll - scrollBefore;
+      expect(scrolled).toBe(SCROLL_STEP);
+      // Within a few px: only the scroll and row-0's pixel may move the row,
+      // not a re-estimate of the unmeasured rows above it.
+      expect(offsetOf()).toBeCloseTo(before - scrolled, -1);
+    });
+  });
+
+  /**
+   * The transcript mounts end-aligned (`initialScrollAtEnd`), and rows
+   * appended while it is still at the end re-arm that bootstrap. A reader who
+   * wheels up in that window gets a pass the library runs with
+   * `doMVCP: true`, but no anchor is prepared while the bootstrap is active,
+   * so the position pass must not treat itself as anchored: re-estimating the
+   * unmeasured rows above the reader there moves every row below them with
+   * nothing to compensate.
+   */
+  describe("a pass during a re-armed initial-scroll bootstrap", () => {
+    it("keeps the reader's row where it was instead of re-estimating the rows above", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      const endAlignedList = (count: number) => (
+        <LegendList
+          ref={listRef}
+          data={rows(count)}
+          estimatedItemSize={90}
+          getItemType={() => "assistant"}
+          initialScrollAtEnd
+          keyExtractor={(item) => item.id}
+          maintainScrollAtEndThreshold={0}
+          maintainVisibleContentPosition={{ data: true, size: true }}
+          recycleItems={false}
+          renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+        />
+      );
+      const { rerender } = render(endAlignedList(70));
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const measuredSize = list.getState().getAverageItemSizes()
+        .assistant.average;
+
+      // Appending while end-aligned re-arms the bootstrap. The new rows are
+      // never measured here, so it stays active through the steps below.
+      rerender(endAlignedList(72));
+
+      // The reader wheels up from the end.
+      const scrollNode = list.getScrollableNode();
+      act(() => {
+        scrollNode.scrollTop = list.getState().scroll - 1_500;
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+
+      // The average jumps through a measured row at the end, below the reader.
+      act(() => {
+        list.setItemSize("row-69", {
+          height: measuredSize * 1_000,
+          width: 800,
+        });
+      });
+      expect(
+        list.getState().getAverageItemSizes().assistant.average,
+      ).toBeGreaterThan(measuredSize * 10);
+
+      // A one-pixel change to a row far above the window records the lowest
+      // changed index without running a pass, so the next pass recomputes
+      // every position from the top.
+      act(() => {
+        list.setItemSize("row-0", { height: measuredSize + 1, width: 800 });
+      });
+
+      const anchorKey = "row-47";
+      const positionBefore = list.getState().positionByKey(anchorKey);
+      if (positionBefore === undefined) {
+        throw new Error("The anchor row is not in the list");
+      }
+
+      // A row in the window remeasures: the pass the library runs with
+      // `doMVCP: true`, while the bootstrap is still active.
+      act(() => {
+        list.setItemSize("row-70", { height: measuredSize + 1, width: 800 });
+      });
+      await advanceLegendListFrames(1);
+
+      const positionAfter = list.getState().positionByKey(anchorKey);
+      if (positionAfter === undefined) {
+        throw new Error("The anchor row is not in the list");
+      }
+      // Only row-0's pixel may move the row, not a re-estimate of the rows
+      // above it.
+      expect(Math.abs(positionAfter - positionBefore)).toBeLessThan(5);
+    });
+  });
+
+  /**
+   * While an animated scroll is in flight, MVCP adjustments are held instead
+   * of moving the scroller. The reader's wheel ends that command, and the
+   * held adjust then lands as an absolute write. The wheel has already moved
+   * the scroller by then, but its scroll event has not reached the list, so
+   * the write has to start from the scroller's offset: from the list's
+   * lagging `state.scroll` it would put the reader back where they were
+   * before the wheel.
+   */
+  describe("a held MVCP adjust landed by the reader's wheel", () => {
+    it("keeps the wheel's scroll the list has not seen yet", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      act(() => {
+        void list.scrollToIndex({ animated: false, index: 22 });
+      });
+      await settleLegendList();
+
+      const measuredSize = list.getState().getAverageItemSizes()
+        .assistant.average;
+      // A smooth scroll that has not moved the scroller yet: the harness's
+      // `scrollTo` would land the target at once and end the command.
+      const scrollNode = list.getScrollableNode();
+      const smoothScrollTo = vi
+        .spyOn(scrollNode, "scrollTo")
+        .mockImplementation(() => undefined);
+      act(() => {
+        void list.scrollToIndex({ animated: true, index: 20 });
+      });
+      await advanceLegendListFrames(3);
+
+      // A row above the reader grows while the command is in flight. The
+      // list holds that growth back as the anchor shift for the scroller.
+      const sizeBefore = list.getState().sizeAtIndex(19);
+      act(() => {
+        list.setItemSize("row-19", { height: measuredSize * 3, width: 800 });
+      });
+      const growth = list.getState().sizeAtIndex(19) - sizeBefore;
+      expect(growth).toBeGreaterThan(0);
+
+      // The reader's wheel moves the scroller; its scroll event has not
+      // reached the list.
+      const WHEEL_STEP = -100;
+      const wheeledTo = scrollNode.scrollTop + WHEEL_STEP;
+      scrollNode.scrollTop = wheeledTo;
+
+      // From here the scroller takes the list's writes, as the harness does.
+      smoothScrollTo.mockImplementation(
+        (options: ScrollToOptions | number | undefined) => {
+          if (typeof options === "object" && options.top !== undefined) {
+            scrollNode.scrollTop = options.top;
+          }
+        },
+      );
+      let cancelled = false;
+      act(() => {
+        cancelled = list.cancelPendingScroll();
+      });
+      expect(cancelled).toBe(true);
+      await advanceLegendListFrames(1);
+
+      expect(scrollNode.scrollTop).toBeCloseTo(wheeledTo + growth, 0);
+    });
+  });
 });

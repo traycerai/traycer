@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures.ts";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures.ts";
 
 // P5: a free reader reaches the strict bottom while the structural commit of a
 // new reply row is still unsettled (the reply streams in bursts, so the
@@ -76,10 +76,11 @@ async function mark(page: Page, step: string): Promise<void> {
   }, step);
 }
 
-/** Wheel down, one notch per frame, until the strict bottom or the cap. */
+/** Wheel down, one notch a frame after the last one lands, until the strict
+ *  bottom or the cap. */
 async function wheelToBottom(page: Page): Promise<void> {
   for (let i = 0; i < 20; i += 1) {
-    await page.mouse.wheel(0, 120);
+    await wheelsDelivered(page, [{ deltaX: 0, deltaY: 120 }], 0);
     await nextFrames(page, 1);
     if ((await probe(page)).distance <= 0.5) return;
   }
@@ -171,7 +172,7 @@ for (const { variant, runs } of RUNS) {
       const box = await page.getByTestId("chat-messages-scroll").boundingBox();
       if (box === null) throw new Error("no scroller box");
       await page.mouse.move(box.x + box.width / 2, box.y + 150);
-      await page.mouse.wheel(0, -300);
+      await wheelsDelivered(page, [{ deltaX: 0, deltaY: -300 }], 0);
       await nextFrames(page, 30);
       const parked = await probe(page);
       expect(parked.mode, "the reader is free before the reply").toBe(

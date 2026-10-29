@@ -7,7 +7,7 @@ import {
   startTimeline,
   type ReaderIntent,
 } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * STREAM + READER-SCROLL family of the scroll scenario matrix: a reply grows
@@ -25,7 +25,25 @@ declare global {
     __fromEndMonitorStop?: () => number;
     /** Written by `watchModeFlips`. */
     __modeFlipsStop?: () => string[];
+    /** Written by `installReaderView`. */
+    __readerView?: (pin: boolean) => ReaderView;
+    /** The element the reader saw at the viewport's top as a wheel landed,
+     *  pinned by `__readerView`. */
+    __wheelReference?: { readonly element: HTMLElement; readonly id: string };
+    /** The reader's view as the first wheel of a burst landed, written by
+     *  `armWheelPin`. */
+    __preWheel?: ReaderView;
   }
+}
+
+interface ReaderView {
+  readonly scrollTop: number;
+  readonly row: string | null;
+  readonly offset: number | null;
+  readonly mode: string | null;
+  /** Where the element at the viewport's top as the wheel landed is now,
+   *  from the viewport's top; null when it is no longer drawn. */
+  readonly refTop: number | null;
 }
 
 const TIMELINE_TAIL_LINES = 60;
@@ -73,10 +91,16 @@ async function scrollBox(
   return box;
 }
 
-async function wheel(page: Page, deltaY: number): Promise<void> {
+/** Wheels over the transcript by each of `deltaYs`, back to back, and
+ *  returns once the page has received them all. */
+async function wheel(page: Page, deltaYs: readonly number[]): Promise<void> {
   const box = await scrollBox(page);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.wheel(0, deltaY);
+  await wheelsDelivered(
+    page,
+    deltaYs.map((deltaY) => ({ deltaX: 0, deltaY })),
+    0,
+  );
 }
 
 const stopStream = (page: Page): Promise<void> =>
@@ -231,7 +255,7 @@ const TAIL: ReaderIntent = { kind: "tail" };
 
 /** The reader wheels up from where they are and rests there; no stream. */
 async function detach(page: Page, deltaY: number): Promise<ReaderIntent> {
-  await wheel(page, deltaY);
+  await wheel(page, [deltaY]);
   const view = await settle(page, 12);
   expect(view.mode, "detached by the wheel").toBe("free-scrolling");
   return intentOf(view);
@@ -297,10 +321,12 @@ for (const line of ["legacy", "windowed"] as const) {
           }
           const box = await scrollBox(page);
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          for (let i = 0; i < 4; i += 1) {
-            await page.mouse.wheel(0, -120);
-            await nextFrames(page, 2);
-          }
+          await wheelsDelivered(
+            page,
+            Array.from({ length: 4 }, () => ({ deltaX: 0, deltaY: -120 })),
+            2,
+          );
+          await nextFrames(page, 2);
           const intent = intentOf(await readView(page));
           expect(intent.kind, "the wheel left the tail").toBe("at");
           await page.waitForTimeout(1500);
@@ -317,7 +343,7 @@ for (const line of ["legacy", "windowed"] as const) {
       await withTimeline(page, async () => {
         const intent = await detach(page, -1500);
         await expectAtRest(page, intent, "detached");
-        await wheel(page, 20000);
+        await wheel(page, [20000]);
         await expectAtRest(page, TAIL, "wheeled back to the bottom");
         await page.evaluate(() => window.__chatScrollProbe.startStream(40));
         await page.waitForTimeout(2000);
@@ -371,7 +397,7 @@ for (const line of ["legacy", "windowed"] as const) {
       await withTimeline(page, async () => {
         await page.evaluate(() => window.__chatScrollProbe.startStream(40));
         await page.waitForTimeout(500);
-        await wheel(page, -100);
+        await wheel(page, [-100]);
         await nextFrames(page, 2);
         const intent = intentOf(await readView(page));
         expect(intent.kind, "the notch left the tail").toBe("at");
@@ -533,34 +559,102 @@ for (const line of ["legacy", "windowed"] as const) {
 
     // ---- F2: wheel superseding a pending end correction while streaming ----
 
-    interface Sample {
+    interface Sample extends ReaderView {
       readonly t: number;
-      readonly scrollTop: number;
-      readonly row: string | null;
-      readonly offset: number | null;
-      readonly mode: string | null;
+    }
+
+    /**
+     * Installs `__readerView`. With `pin` it first pins the element under the
+     * viewport's top edge - the one `readingRow` reports - and every view
+     * reports where that same element is now. The element, not the row id: a
+     * long turn is drawn as several list items under one id, and a lookup by
+     * id answers with whichever part comes first in the DOM.
+     */
+    async function installReaderView(page: Page): Promise<void> {
+      await page.evaluate((scroll) => {
+        window.__readerView = (pin) => {
+          const probe = window.__chatScrollProbe;
+          const row = probe.readingRow();
+          const node = document.querySelector<HTMLElement>(scroll);
+          const topOf = (element: HTMLElement): number | null =>
+            node === null
+              ? null
+              : element.getBoundingClientRect().top -
+                node.getBoundingClientRect().top;
+          const pinTop = (id: string, offset: number): void => {
+            if (node === null) return;
+            const element = Array.from(
+              node.querySelectorAll<HTMLElement>(
+                '[data-message-id], [data-testid="chat-transcript-placeholder-row"]',
+              ),
+            ).find(
+              (candidate) =>
+                (candidate.dataset.messageId ?? id) === id &&
+                Math.abs((topOf(candidate) ?? Number.NaN) - offset) < 0.5,
+            );
+            if (element !== undefined)
+              window.__wheelReference = { element, id };
+          };
+          if (pin) {
+            window.__wheelReference = undefined;
+            if (row !== null && row.messageId !== null)
+              pinTop(row.messageId, row.offset);
+          }
+          const reference = window.__wheelReference;
+          const drawn =
+            reference?.element.isConnected === true &&
+            (reference.element.dataset.messageId ?? reference.id) ===
+              reference.id;
+          return {
+            scrollTop: probe.geometry()?.scrollTop ?? Number.NaN,
+            row: row?.messageId ?? null,
+            offset: row?.offset ?? null,
+            mode: probe.mode(),
+            refTop: drawn ? topOf(reference.element) : null,
+          };
+        };
+      }, SCROLL);
+    }
+
+    /**
+     * Takes the reader's pre-wheel view, pinning its reference, as the next
+     * wheel event lands - not when the test sends it. On a loaded runner the
+     * wheel lands a few frames after it is sent, and in those frames a reader
+     * still following the end is legitimately moved to the new end: the view
+     * the wheel scrolls away from is the one it lands on. A passive listener
+     * runs before the wheel's scroll is applied and does not delay it.
+     */
+    async function armWheelPin(page: Page): Promise<void> {
+      await page.evaluate(() => {
+        window.__wheelReference = undefined;
+        window.__preWheel = undefined;
+        window.addEventListener(
+          "wheel",
+          () => {
+            window.__preWheel = window.__readerView?.(true);
+          },
+          { capture: true, passive: true, once: true },
+        );
+      });
     }
 
     async function sample(page: Page, startedAt: number): Promise<Sample> {
       const taken = await page.evaluate(() => {
-        const probe = window.__chatScrollProbe;
-        const row = probe.readingRow();
-        return {
-          scrollTop: probe.geometry()?.scrollTop ?? Number.NaN,
-          row: row?.messageId ?? null,
-          offset: row?.offset ?? null,
-          mode: probe.mode(),
-        };
+        const view = window.__readerView?.(false);
+        if (view === undefined) throw new Error("no reader view installed");
+        return view;
       });
       return { t: (Date.now() - startedAt) / 1000, ...taken };
     }
 
     function describeTimeline(
       samples: readonly Sample[],
+      preWheel: ReaderView,
       reader: Sample,
     ): string {
       const lines: string[] = [
-        `reader: scrollTop=${reader.scrollTop} row=${reader.row} offset=${reader.offset} mode=${reader.mode}`,
+        `pre-wheel: scrollTop=${preWheel.scrollTop} row=${preWheel.row} offset=${preWheel.offset} mode=${preWheel.mode}`,
+        `reader: scrollTop=${reader.scrollTop} row=${reader.row} offset=${reader.offset} mode=${reader.mode} pre-wheel top element at ${reader.refTop}`,
       ];
       let previous = reader;
       for (const s of samples) {
@@ -569,10 +663,11 @@ for (const line of ["legacy", "windowed"] as const) {
           moved ||
           s.mode !== previous.mode ||
           s.row !== previous.row ||
-          Math.abs((s.offset ?? 0) - (previous.offset ?? 0)) > 2;
+          Math.abs((s.offset ?? 0) - (previous.offset ?? 0)) > 2 ||
+          s.refTop !== previous.refTop;
         if (flagged) {
           lines.push(
-            `t=${s.t.toFixed(2)}s scrollTop ${previous.scrollTop} → ${s.scrollTop}, row ${s.row} offset ${s.offset}, mode ${s.mode}`,
+            `t=${s.t.toFixed(2)}s scrollTop ${previous.scrollTop} → ${s.scrollTop}, row ${s.row} offset ${s.offset}, mode ${s.mode}, pre-wheel top element at ${s.refTop}`,
           );
         }
         previous = s;
@@ -594,6 +689,7 @@ for (const line of ["legacy", "windowed"] as const) {
       { streamMs, ticks, gapFrames, delta, afterAppendMs }: Scenario,
     ): Promise<void> {
       await open(page);
+      await installReaderView(page);
 
       await page.evaluate(
         (ms) => window.__chatScrollProbe.startStream(ms),
@@ -611,7 +707,7 @@ for (const line of ["legacy", "windowed"] as const) {
         await page.evaluate(() => window.__chatScrollProbe.appendTurn());
         if (afterAppendMs > 0) await page.waitForTimeout(afterAppendMs);
       }
-      const preWheel = await sample(page, Date.now());
+      await armWheelPin(page);
       for (let i = 0; i < ticks; i += 1) {
         await page.mouse.wheel(0, -delta);
         if (gapFrames > 0) await nextFrames(page, gapFrames);
@@ -619,11 +715,13 @@ for (const line of ["legacy", "windowed"] as const) {
       await nextFrames(page, 2);
       const startedAt = Date.now();
       const reader = await sample(page, startedAt);
+      const preWheel = await page.evaluate(() => window.__preWheel ?? null);
       if (
+        preWheel === null ||
+        preWheel.refTop === null ||
         reader.row === null ||
         reader.offset === null ||
-        Number.isNaN(reader.scrollTop) ||
-        Number.isNaN(preWheel.scrollTop)
+        Number.isNaN(reader.scrollTop)
       )
         throw new Error(
           `no reading row or geometry to hold the reader to: ${JSON.stringify({ preWheel, reader })}`,
@@ -636,13 +734,24 @@ for (const line of ["legacy", "windowed"] as const) {
       }
       await page.evaluate(() => window.__chatScrollProbe.stopStream());
 
-      const timeline = describeTimeline(samples, reader);
-      // The reader's own position, or anything back toward the pre-wheel one.
+      const timeline = describeTimeline(samples, preWheel, reader);
+      // Measured against rows, not raw scrollTop: rows above the reader are
+      // placeholders whose estimates the list may revise at any moment, and a
+      // revision the list anchors correctly moves scrollTop by the revision
+      // while the reader sees the same rows. The wheel is honoured when what
+      // the reader saw as it landed has moved down the viewport by what the
+      // wheel asked for: at least half a tick (a chase undoing the wheel leaves
+      // it where it was), and at most the whole burst and half a tick more (an
+      // unanchored revision throws the reader far up the transcript, away from
+      // it). The reader then stays on the row and offset the wheel left them
+      // at.
+      const preWheelTop = preWheel.refTop;
       const violations = samples.filter(
         (s) =>
           Number.isNaN(s.scrollTop) ||
-          s.scrollTop > preWheel.scrollTop - delta / 2 ||
-          Math.abs(s.scrollTop - reader.scrollTop) > 2 ||
+          s.refTop === null ||
+          s.refTop - preWheelTop < delta / 2 ||
+          s.refTop - preWheelTop > ticks * delta + delta / 2 ||
           s.row !== reader.row ||
           Math.abs((s.offset ?? 0) - (reader.offset ?? 0)) > 2,
       );
