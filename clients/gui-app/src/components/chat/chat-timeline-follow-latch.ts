@@ -218,11 +218,11 @@ interface ReaderMomentumEnd {
   /** As `ReaderEndCandidate.lastRow`: rows above that the list remeasures
    *  move the reader with them, and this end by as much. */
   readonly lastRow: ListRowTop | null;
-  /** Where the view was when the finger lifted, with the row the list moves
-   *  it by. The end moves on while the momentum runs; the lift it started
-   *  from does not, so this is what says whether the view has travelled. */
+  /** Where the view was when the finger lifted, carried by every row move
+   *  the list has made since, so it stays an offset this view can be read
+   *  against. Momentum travels from the lift toward the end; a view still
+   *  standing at the lift has not travelled, however the end moved. */
   readonly liftScrollTop: number;
-  readonly liftLastRow: ListRowTop | null;
 }
 
 type ArmedReaderDeparture =
@@ -504,26 +504,28 @@ function readerMomentumEndFor(
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
 ): ReaderMomentumEnd {
-  const lastRow = lastListRowTop(list);
   return {
     targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
-    lastRow,
+    lastRow: lastListRowTop(list),
     liftScrollTop: geometry.scrollTop,
-    liftLastRow: lastRow,
   };
 }
 
-/** The same momentum, headed for the end this observation sees. Only the end
- *  moves on; the lift the momentum started from stays as it was recorded. */
+/** The same momentum, read in the frame this observation sees: the end moves
+ *  on to the one it measures, and the lift moves by what the list moved the
+ *  rows since the last observation, which is `shift`. Both are recorded
+ *  against the row this observation sees last, so a row that leaves the list
+ *  costs one observation's netting and the next one is whole again. */
 function readerMomentumEndMovedOn(
   momentum: ReaderMomentumEnd,
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
+  shift: number,
 ): ReaderMomentumEnd {
   return {
-    ...momentum,
     targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
     lastRow: lastListRowTop(list),
+    liftScrollTop: momentum.liftScrollTop + shift,
   };
 }
 
@@ -1456,22 +1458,27 @@ export function useChatTimelineFollowLatch(
         return false;
       }
       const list = listRef.current;
+      const shift = listRowShift(list, momentum.lastRow);
       readerMomentumEndRef.current = readerMomentumEndMovedOn(
         momentum,
         geometry,
         list,
+        shift,
       );
-      // Net of the list moving rows, the view must also have travelled
-      // toward the end since the lift: an end clamped up to a reader who
-      // has not moved, then grown back, is not their momentum arriving.
-      // Measured from the lift, not from the last observation, so a fling
-      // whose closing step is a pixel is still a view that travelled.
+      // The view must also have travelled toward the end since the lift,
+      // which the list moving rows carries along with it: an end clamped up
+      // to a reader who has not moved, then grown back, is not their
+      // momentum arriving. Travel is read from the lift and not from the
+      // last observation, so a fling whose closing step is a pixel is still
+      // a view that travelled.
       return (
-        geometry.scrollTop - listRowShift(list, momentum.liftLastRow) >
-          momentum.liftScrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
+        geometry.scrollTop >
+          momentum.liftScrollTop +
+            shift +
+            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         geometry.scrollTop >=
           momentum.targetScrollTop +
-            listRowShift(list, momentum.lastRow) -
+            shift -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },

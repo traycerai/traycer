@@ -875,9 +875,35 @@ describe("useChatTimelineFollowLatch", () => {
 
       shim.setGeometry(node, { scrollHeight: 1450 });
       fireResizeObservers();
-      // Rows above the view remeasure: the list moves the view and the last
-      // row down together. The reader has not moved.
+      // Rows above the view remeasure, twice: each time the list moves the
+      // view and the last row down together, and the end stays clamped on
+      // the view. The reader has not moved through any of it, so neither
+      // move is travel - nor are the two of them together.
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 20);
+      shim.setGeometry(node, { scrollHeight: 1470, scrollTop: 970 });
+      fireResizeObservers();
       listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 990 });
+      fireResizeObservers();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("does not follow a free reader after the row the lift measured leaves the list", () => {
+      const { node, listRef, onFollowIntentChange } = liftedAfterASmallDrag();
+
+      shim.setGeometry(node, { scrollHeight: 1450 });
+      fireResizeObservers();
+      // The turn the lift measured is replaced: the list no longer knows
+      // that row, and another is last at the same place.
+      listRef.removeRow(FAKE_LAST_ROW_KEY);
+      listRef.setRowTop("replacement-last-row", FAKE_LAST_ROW_TOP_PX);
+      fireResizeObservers();
+      // Rows above the view remeasure, as in the clamp case: the list moves
+      // the view and the new last row down together, and the reader still
+      // has not moved.
+      listRef.setRowTop("replacement-last-row", FAKE_LAST_ROW_TOP_PX + 40);
       shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 990 });
       fireResizeObservers();
 
@@ -890,8 +916,9 @@ describe("useChatTimelineFollowLatch", () => {
 
       shim.setGeometry(node, { scrollHeight: 1450 });
       fireResizeObservers();
-      // The clamp leaves the view a fraction of a pixel further down, as a
-      // fractional device pixel ratio does. The reader did not travel.
+      // The row grows back, and the view settles a fraction of a pixel
+      // further down, as a fractional device pixel ratio makes it. The
+      // reader did not travel.
       shim.setGeometry(node, { scrollHeight: 1500, scrollTop: 950.5 });
       fireResizeObservers();
 
