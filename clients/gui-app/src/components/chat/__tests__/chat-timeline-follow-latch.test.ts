@@ -593,13 +593,21 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   /** A phone reader drags away from the tail, lifts, touches again and
-   *  flings toward it. The fling's frames are bare scroll reports. */
-  function flingTowardEnd(): {
+   *  flings toward it. The fling's frames are bare scroll reports. The
+   *  suppressions are the transcript's recovery and restore holds, which the
+   *  test flips. */
+  interface SuppressibleFling {
     readonly node: HTMLDivElement;
     readonly listRef: FakeListRef;
     readonly result: { readonly current: ChatTimelineFollowLatch };
     readonly onFollowIntentChange: Mock<(isFollowing: boolean) => void>;
-  } {
+    readonly suppress: (holds: {
+      readonly reattach: boolean;
+      readonly correction: boolean;
+    }) => void;
+  }
+
+  function flingTowardEndSuppressible(): SuppressibleFling {
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
@@ -607,10 +615,13 @@ describe("useChatTimelineFollowLatch", () => {
     });
     const listRef = makeFakeListRef(node);
     const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+    const holds = { reattach: false, correction: false };
     const { result } = renderHook(() =>
       useChatTimelineFollowLatch(listRef, true, true, {
         ...DEFAULT_FOLLOW_LATCH_OPTIONS,
         onFollowIntentChange,
+        isReattachSuppressed: () => holds.reattach,
+        isCorrectionSuppressed: () => holds.correction,
       }),
     );
 
@@ -628,6 +639,21 @@ describe("useChatTimelineFollowLatch", () => {
     fireTouch(node, "touchend", 300);
     flushAnimationFrame();
     flushAnimationFrame();
+    return {
+      node,
+      listRef,
+      result,
+      onFollowIntentChange,
+      suppress: (next) => {
+        holds.reattach = next.reattach;
+        holds.correction = next.correction;
+      },
+    };
+  }
+
+  function flingTowardEnd() {
+    const { node, listRef, result, onFollowIntentChange } =
+      flingTowardEndSuppressible();
     return { node, listRef, result, onFollowIntentChange };
   }
 
@@ -675,6 +701,107 @@ describe("useChatTimelineFollowLatch", () => {
 
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  // A recovery clamp's temporary end is the list's, not where the reader's
+  // momentum is headed: recorded as the target, it would be met by the
+  // restored content's unchanged offset and drag the reader to the end.
+  describe("a lifted finger's momentum target through a recovery", () => {
+    const RECOVERING = { reattach: true, correction: false };
+    const RESTORING = { reattach: false, correction: true };
+    const NONE = { reattach: false, correction: false };
+
+    function clampThenRestore(
+      mounted: SuppressibleFling,
+      holds: { readonly reattach: boolean; readonly correction: boolean },
+    ): void {
+      const { node, suppress, result } = mounted;
+      suppress(holds);
+      // The recovery shrinks the content and the browser clamps the reader's
+      // offset to the temporary end.
+      shim.setGeometry(node, { scrollHeight: 800, scrollTop: 300 });
+      fireNativeScroll(node);
+      // The content comes back; the offset has not moved.
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      fireResizeObservers();
+      result.current.followEndIfPermitted();
+    }
+
+    it("a clamp's temporary end is not a target the restored content meets", () => {
+      const mounted = flingTowardEndSuppressible();
+      clampThenRestore(mounted, RECOVERING);
+
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+
+      // The hold lifts and the content grows: no stale target is left.
+      mounted.suppress(NONE);
+      shim.setGeometry(mounted.node, { scrollHeight: 1600 });
+      mounted.result.current.followEndIfPermitted();
+      fireNativeScroll(mounted.node);
+
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("a lift on a clamped view records no target", () => {
+      const mounted = flingTowardEndSuppressible();
+      const { node } = mounted;
+      mounted.suppress(RECOVERING);
+      shim.setGeometry(node, { scrollHeight: 800, scrollTop: 300 });
+      fireTouch(node, "touchstart", 400);
+      fireTouch(node, "touchmove", 300);
+      fireTouch(node, "touchend", 300);
+      flushAnimationFrame();
+      flushAnimationFrame();
+
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      mounted.suppress(NONE);
+      fireResizeObservers();
+      mounted.result.current.followEndIfPermitted();
+
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    // The restore holds the reader at its snapshot's end; the content comes
+    // back and the hold lifts in one step, so the first observation after it
+    // meets the unchanged offset.
+    it("a restore's snapshot end is not a target either", () => {
+      const { node, listRef, onFollowIntentChange, suppress, result } =
+        flingTowardEndSuppressible();
+
+      suppress(RESTORING);
+      shim.setGeometry(node, { scrollHeight: 800, scrollTop: 300 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      suppress(NONE);
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    // Control: the target the lift recorded survives a hold that clamps
+    // nothing, so the momentum still arrives at it.
+    it("control: a fling that reaches the end follows after a hold that clamped nothing", () => {
+      const { node, listRef, onFollowIntentChange, suppress } =
+        flingTowardEndSuppressible();
+
+      suppress(RECOVERING);
+      shim.setGeometry(node, { scrollTop: 800 });
+      fireNativeScroll(node);
+      suppress(NONE);
+      shim.setGeometry(node, { scrollTop: 900 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      shim.setGeometry(node, { scrollHeight: 1540 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
   });
 
   it("ends a bounded correction burst without inventing reader departure", () => {

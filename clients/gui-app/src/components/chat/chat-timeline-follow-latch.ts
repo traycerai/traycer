@@ -955,10 +955,20 @@ export function useChatTimelineFollowLatch(
   // end this observation sees for the next. A chunk can grow the last row
   // after the momentum reaches the end and before its scroll report, so no
   // report reads the strict bottom: this is the reader arriving all the same.
+  // A recovering or restoring transcript's geometry is the list's, not where
+  // the momentum is headed: while it holds reattachment or correction off, an
+  // observation neither arrives nor records its end, so a temporary end it
+  // clamps to cannot become a target its restored content later meets.
   const noteReaderMomentum = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       const momentum = readerMomentumEndRef.current;
       if (momentum === null) return false;
+      if (
+        isReattachSuppressed?.() === true ||
+        isCorrectionSuppressed?.() === true
+      ) {
+        return false;
+      }
       const list = listRef.current;
       readerMomentumEndRef.current = readerMomentumEndFor(geometry, list);
       return (
@@ -968,8 +978,22 @@ export function useChatTimelineFollowLatch(
           CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
-    [listRef],
+    [isCorrectionSuppressed, isReattachSuppressed, listRef],
   );
+
+  // The end a lifted finger's momentum heads for: the one the lift sees,
+  // unless a recovering or restoring transcript holds it (`noteReaderMomentum`).
+  const noteReaderLift = useCallback((): void => {
+    const node = listRef.current?.getScrollableNode();
+    const geometry = node ? readScrollGeometry(node) : null;
+    readerMomentumEndRef.current =
+      geometry !== null &&
+      isChatTimelineGeometryMeasurable(geometry) &&
+      isReattachSuppressed?.() !== true &&
+      isCorrectionSuppressed?.() !== true
+        ? readerMomentumEndFor(geometry, listRef.current)
+        : null;
+  }, [isCorrectionSuppressed, isReattachSuppressed, listRef]);
 
   // A detached reader whose momentum arrived follows, as a reader end
   // candidate reached does (`tryReattachReader`).
@@ -1334,12 +1358,7 @@ export function useChatTimelineFollowLatch(
       followEndIfPermitted();
       // Momentum may carry the reader on from here, reported only by bare
       // scroll reports.
-      const endNode = listRef.current?.getScrollableNode();
-      const endGeometry = endNode ? readScrollGeometry(endNode) : null;
-      readerMomentumEndRef.current =
-        endGeometry !== null && isChatTimelineGeometryMeasurable(endGeometry)
-          ? readerMomentumEndFor(endGeometry, listRef.current)
-          : null;
+      noteReaderLift();
     };
     const completePointerPreflight = (): void => {
       const armedDeparture = armedReaderDepartureRef.current;
@@ -1447,6 +1466,7 @@ export function useChatTimelineFollowLatch(
     followEndIfPermitted,
     listRef,
     noteReaderGesture,
+    noteReaderLift,
     observeLiveGeometry,
     supersedePendingEndCorrection,
   ]);
