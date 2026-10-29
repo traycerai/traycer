@@ -12,3 +12,6 @@ export interface ChatStateLine {
  * viewer alike. `null` leaves the composer as it is.
  */
 export const ChatStateLineContext = createContext<ChatStateLine | null>(null);
+
+/** A sandbox's slot or footer already explains this chat's availability. */
+export const ChatSandboxLineContext = createContext(false);

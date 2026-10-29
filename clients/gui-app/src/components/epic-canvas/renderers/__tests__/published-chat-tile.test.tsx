@@ -181,6 +181,10 @@ vi.mock(
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: environments.list }),
 }));
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ signInUrl: "https://example.test" }),
+  useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
+}));
 // The REAL host client over a recording messenger, so the owner recovery read
 // travels through the real `useHostQuery`, readiness gate and named requester.
 const runtime = vi.hoisted(
@@ -2370,7 +2374,7 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
         failureCode: "boot-timeout",
         lastTransitionAt: FAILED_AT,
       },
-      `e2e-sbx-p1 failed to start (SBX-0414) at ${FAILED_TIME} · Nothing is billed for a sandbox that never woke · support reference in DetailsDetails`,
+      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414 · nothing was chargedRetry`,
     ],
     [
       "released",

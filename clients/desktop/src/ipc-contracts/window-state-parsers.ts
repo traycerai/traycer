@@ -118,6 +118,7 @@ export function parseLandingDraft(
   ) {
     return null;
   }
+  const returnedSandbox = parseJsonValue(obj.returnedSandbox) ?? null;
   return {
     id: obj.id,
     content,
@@ -132,6 +133,7 @@ export function parseLandingDraft(
       typeof obj.composerMode === "string" ? obj.composerMode : null,
     workspace: parseJsonValue(obj.workspace) ?? null,
     closed: typeof obj.closed === "boolean" ? obj.closed : null,
+    ...(returnedSandbox === null ? {} : { returnedSandbox }),
   };
 }
 

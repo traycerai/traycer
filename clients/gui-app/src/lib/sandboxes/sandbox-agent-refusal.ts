@@ -52,7 +52,7 @@ export interface SandboxAgentRemedies {
   ) => void;
   readonly onOpenTerminalInstead?: () => void;
   readonly onChooseAnotherHost?: () => void;
-  /** Withdraws the refused message: nothing is sent, kept or saved. */
+  /** Closes the refusal: nothing is sent, and the text stays in the composer. */
   readonly onCancelMessage?: () => void;
   /** The sandbox's details, for a chat bound to one. */
   readonly onDetails?: () => void;

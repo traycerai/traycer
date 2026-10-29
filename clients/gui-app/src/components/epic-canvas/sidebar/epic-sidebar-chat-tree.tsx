@@ -167,6 +167,7 @@ import {
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
+  useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
@@ -884,24 +885,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       tree,
     );
   }, [baseArchiveHiddenIds, revealRequest, tree]);
-
-  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
-  // the interface/ownership filter result and feeds the "no matches" empty
-  // state and forced expansion; `rootIds` additionally drops archived roots
-  // and is what actually renders. Collapsing them would make an all-archived
-  // tree show the filter-empty state instead of the archived one, blaming a
-  // filter that is not hiding anything.
-  const rootIds = useMemo(
-    () =>
-      archiveHiddenIds.size === 0
-        ? filterRootIds
-        : filterRootIds.filter((id) => !archiveHiddenIds.has(id)),
-    [filterRootIds, archiveHiddenIds],
-  );
-  const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(revealVisibleIds, archiveHiddenIds, tree),
-    [revealVisibleIds, archiveHiddenIds, tree],
-  );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
@@ -1003,6 +986,38 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     revealRequest,
     unfoldedCloudChats,
   ]);
+  // A team host's chat is held as its creator's untitled stand-in until it
+  // first publishes, while the environment arm already serves it, titled, as
+  // a cloud row. Once that row is among the cloud rows this list renders it
+  // is the chat's one row - the list this tree shows anyway once the stand-in
+  // retires - so the stand-in is left out beside the archive-hidden rows
+  // rather than drawn as a second agent. Until then the stand-in stays.
+  const armStandInIds = useEpicChatIdsNamedByCloudRows(visibleCloudChats);
+  const hiddenIds = useMemo(
+    () =>
+      armStandInIds.length === 0
+        ? archiveHiddenIds
+        : new Set([...archiveHiddenIds, ...armStandInIds]),
+    [archiveHiddenIds, armStandInIds],
+  );
+
+  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
+  // the interface/ownership filter result and feeds the "no matches" empty
+  // state and forced expansion; `rootIds` additionally drops archived roots
+  // and is what actually renders. Collapsing them would make an all-archived
+  // tree show the filter-empty state instead of the archived one, blaming a
+  // filter that is not hiding anything.
+  const rootIds = useMemo(
+    () =>
+      hiddenIds.size === 0
+        ? filterRootIds
+        : filterRootIds.filter((id) => !hiddenIds.has(id)),
+    [filterRootIds, hiddenIds],
+  );
+  const visibleIds = useMemo(
+    () => combineSidebarVisibleIds(revealVisibleIds, hiddenIds, tree),
+    [revealVisibleIds, hiddenIds, tree],
+  );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -1251,10 +1266,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     if (narrowedMatchIds === null) return 0;
     let localMatches = 0;
     for (const id of narrowedMatchIds) {
-      if (!archiveHiddenIds.has(id)) localMatches += 1;
+      if (!hiddenIds.has(id)) localMatches += 1;
     }
     return localMatches + visibleCloudChats.length;
-  }, [narrowedMatchIds, archiveHiddenIds, visibleCloudChats]);
+  }, [narrowedMatchIds, hiddenIds, visibleCloudChats]);
   // "No agents yet" is now a statement about the TASK rather than this device,
   // so a task whose only agents live on an unreachable host is not empty - it
   // is a list of locked rows. That is the whole restoration.

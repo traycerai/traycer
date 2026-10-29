@@ -45,6 +45,11 @@ const dialogMocks = vi.hoisted(() => ({
   directoryHosts: [] as HostDirectoryEntry[],
 }));
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => ({
   useTeamSandboxHarnessBlocked: (input: BlockedInput): boolean => {
     dialogMocks.blockedInputs.push({
