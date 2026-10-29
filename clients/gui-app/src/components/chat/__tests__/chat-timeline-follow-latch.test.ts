@@ -4125,6 +4125,41 @@ describe("useChatTimelineFollowLatch", () => {
       expectNotDeparted(mounted);
     });
 
+    // A drag toward the end announces itself (`touchmove`), which retires the
+    // ledger until a report; the contact may lift before any report comes.
+    function followingThroughAnAnnouncedDragThenLift() {
+      const mounted = followingWithLiveLedger();
+      fireTouch(mounted.node, "touchstart", 400);
+      fireTouch(mounted.node, "touchmove", 380);
+      fireTouch(mounted.node, "touchend", 380);
+      mounted.onReaderGesture.mockClear();
+      mounted.onFollowIntentChange.mockClear();
+      return mounted;
+    }
+
+    it("departs a pan that follows the lift of a contact that produced no report", () => {
+      const mounted = followingThroughAnAnnouncedDragThenLift();
+
+      // No touch or pointer event: the view just moves away from the end.
+      shim.setGeometry(mounted.node, { scrollTop: 970 });
+      fireNativeScroll(mounted.node);
+
+      expectDeparted(mounted);
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("keeps following when the lifted contact's momentum reports move toward the end", () => {
+      const mounted = followingThroughAnAnnouncedDragThenLift();
+
+      // The content grows after the lift, so the end is 200 below the view and
+      // momentum carries it toward that end, short of the strict bottom.
+      shim.setGeometry(mounted.node, { scrollHeight: 1700 });
+      shim.setGeometry(mounted.node, { scrollTop: 1100 });
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
     it("publishes a detached reader's further pan once, not again", () => {
       const mounted = followingWithLiveLedger();
       shim.setGeometry(mounted.node, { scrollTop: 970 });

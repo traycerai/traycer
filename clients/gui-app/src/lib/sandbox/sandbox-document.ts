@@ -304,6 +304,8 @@ function bootstrapMain(config: BootstrapConfig): void {
     [near, far]: readonly [number, number],
     [portNear, portFar]: readonly [number, number],
   ): number => {
+    // Covering the port: already as far in view as it can be.
+    if (near < portNear && far > portFar) return 0;
     const size = far - near;
     const port = portFar - portNear;
     if ((near < portNear && size < port) || (far > portFar && size > port))
@@ -351,6 +353,11 @@ function bootstrapMain(config: BootstrapConfig): void {
     let left = rect.left - pixels(margin.scrollMarginLeft);
     let right = rect.right + pixels(margin.scrollMarginRight);
     const viewport = document.scrollingElement;
+    // With the root's overflow `visible`, the body's overflow is the
+    // viewport's, and the body is no scroller of its own.
+    const rootStyle = window.getComputedStyle(document.documentElement);
+    const bodyPropagates =
+      rootStyle.overflowX === "visible" && rootStyle.overflowY === "visible";
     for (
       let scroller = parentOf(target);
       scroller !== null;
@@ -359,7 +366,8 @@ function bootstrapMain(config: BootstrapConfig): void {
       const style = window.getComputedStyle(scroller);
       if (
         scroller !== viewport &&
-        !/auto|scroll|hidden|overlay/.test(style.overflowX + style.overflowY)
+        ((scroller === document.body && bodyPropagates) ||
+          !/auto|scroll|hidden|overlay/.test(style.overflowX + style.overflowY))
       ) {
         continue;
       }
@@ -405,7 +413,8 @@ function bootstrapMain(config: BootstrapConfig): void {
       right -= toX - fromX;
     }
   };
-  // Looks native to feature detection: same name, length and descriptor.
+  // Same name, length and descriptor as the native; only its source text
+  // (`Function.prototype.toString`) tells them apart.
   const replace = (
     owner: object,
     name: string,
@@ -466,7 +475,16 @@ function bootstrapMain(config: BootstrapConfig): void {
         },
     );
     // A focus the caller lets scroll is revealed as the browser reveals it
-    // (centred when out of view), inside the frame only.
+    // (centred when out of view), inside the frame only. Focus is read from
+    // the active element: `:focus` matches only while the frame itself has
+    // focus, and the reader may be typing in the app around it.
+    const isFocused = (element: Element): boolean => {
+      let active = document.activeElement;
+      while (active !== null && active !== element) {
+        active = active.shadowRoot?.activeElement ?? null;
+      }
+      return active === element;
+    };
     const focusables: { readonly prototype: Element }[] = [
       HTMLElement,
       SVGElement,
@@ -485,11 +503,11 @@ function bootstrapMain(config: BootstrapConfig): void {
             ) {
               return native.apply(this, args);
             }
-            const wasFocused = this.matches(":focus");
+            const wasFocused = isFocused(this);
             native.apply(this, [
               { ...(isObject(options) ? options : {}), preventScroll: true },
             ]);
-            if (!wasFocused && this.matches(":focus")) {
+            if (!wasFocused && isFocused(this)) {
               reveal(this, "center-if-needed", "center-if-needed", "auto");
             }
             return undefined;

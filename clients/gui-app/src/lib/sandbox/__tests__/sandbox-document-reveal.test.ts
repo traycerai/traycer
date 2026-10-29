@@ -184,6 +184,10 @@ function startFrame(canvas: boolean): Frame {
     htmlFocus: valueOf(window.HTMLElement.prototype, "focus"),
     svgFocus: valueOf(window.SVGElement.prototype, "focus"),
   };
+  Object.defineProperty(window.document, "scrollingElement", {
+    configurable: true,
+    get: () => window.document.documentElement,
+  });
   window.eval(between(composed, "<script>", "</script>"));
   return {
     window,
@@ -456,6 +460,106 @@ describe("scrollIntoView inside a frame", () => {
     expect(frame.scrolls).toEqual([
       { scroller: inner, top: 300, left: 0, behavior: "auto" },
       { scroller: outer, top: 100, left: 0, behavior: "auto" },
+    ]);
+  });
+});
+
+describe("nearest on a target that covers the port", () => {
+  // The target starts before the port and ends after it: no edge is nearer.
+  // The scroller sits mid-range so a stray move in either direction would
+  // show, not clamp away at the start.
+  function scrolledScroller(frame: Frame) {
+    return configuredScroller(
+      frame,
+      { top: 0, left: 0 },
+      { scrollTop: 100, scrollLeft: 100 },
+    );
+  }
+
+  it("does not scroll the block axis", () => {
+    const frame = startFrame(false);
+    const { target } = scrolledScroller(frame);
+    frame.place(target, {
+      rect: { top: -50, bottom: 150, left: 20, right: 60 },
+    });
+
+    scrollIntoView(target, { block: "nearest" });
+
+    expect(frame.scrolls).toEqual([]);
+  });
+
+  it("does not scroll the inline axis", () => {
+    const frame = startFrame(false);
+    const { target } = scrolledScroller(frame);
+    frame.place(target, {
+      rect: { top: 10, bottom: 50, left: -50, right: 150 },
+    });
+
+    scrollIntoView(target, { block: "nearest", inline: "nearest" });
+
+    expect(frame.scrolls).toEqual([]);
+  });
+
+  it("does not scroll for scrollIntoViewIfNeeded, which falls back to nearest", () => {
+    const frame = startFrame(false);
+    const { target } = scrolledScroller(frame);
+    frame.place(target, {
+      rect: { top: -50, bottom: 150, left: -50, right: 150 },
+    });
+
+    scrollIntoViewIfNeeded(target);
+
+    expect(frame.scrolls).toEqual([]);
+  });
+});
+
+describe("body overflow inside a frame", () => {
+  const VISIBLE = { overflowX: "visible", overflowY: "visible" };
+
+  function pageWithBody(
+    frame: Frame,
+    htmlStyle: Record<string, string>,
+  ): { html: HTMLElement; body: HTMLElement; target: HTMLElement } {
+    const doc = frame.window.document;
+    const target = doc.createElement("button");
+    doc.body.append(target);
+    const page = {
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+    };
+    frame.place(doc.documentElement, { ...page, style: htmlStyle });
+    frame.place(doc.body, {
+      ...page,
+      style: { overflowX: "hidden", overflowY: "visible" },
+    });
+    frame.place(target, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+    });
+    return { html: doc.documentElement, body: doc.body, target };
+  }
+
+  it("moves the viewport, not body, when html's overflow is visible", () => {
+    const frame = startFrame(false);
+    const { html, target } = pageWithBody(frame, VISIBLE);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  it("treats body as a scroller when html's overflow is not visible", () => {
+    const frame = startFrame(false);
+    const { body, target } = pageWithBody(frame, {
+      overflowX: "visible",
+      overflowY: "auto",
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: body, top: 300, left: 0, behavior: "auto" },
     ]);
   });
 });

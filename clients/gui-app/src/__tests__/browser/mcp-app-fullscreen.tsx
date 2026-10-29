@@ -60,7 +60,9 @@ import "@/index.css";
  * names a call (`scroll-into-view`, `scroll-into-view-if-needed`, `focus`)
  * on an element at the bottom of its page, taller than the row's cap, then
  * reports it on `body[data-did]` with its own scroll offset on
- * `body[data-app-scroll-y]`. `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
+ * `body[data-app-scroll-y]`. `body-overflow` and `covering-nearest` first
+ * shape the page into a case the native reveal is compared on.
+ * `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
 <script>
@@ -141,6 +143,28 @@ setInterval(async () => {
   if (command === "scroll-into-view") last.scrollIntoView({ block: "nearest" });
   if (command === "scroll-into-view-if-needed") last.scrollIntoViewIfNeeded();
   if (command === "focus") last.focus();
+  if (command === "body-overflow") {
+    // The body's overflow is the viewport's: the body scrolls nothing.
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
+    document.body.style.overflowX = "hidden";
+    // Within the page's reach, so a short scroll cannot clamp to the same end.
+    const mid = document.createElement("p");
+    mid.id = "mid";
+    mid.style.marginTop = "560px";
+    document.querySelector("main").append(mid);
+    scrollTo(0, 0);
+    mid.scrollIntoView({ block: "start" });
+  }
+  if (command === "covering-nearest") {
+    // Taller than the frame's view, and covering it from 800.
+    const cover = document.createElement("div");
+    cover.id = "cover";
+    cover.style.height = "9000px";
+    document.querySelector("main").prepend(cover);
+    scrollTo(0, 800);
+    cover.scrollIntoView({ block: "nearest" });
+  }
   void ask("resources/read", {
     uri: "ui://did/" + command + "/" + Math.round(scrollY),
   });

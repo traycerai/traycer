@@ -751,8 +751,8 @@ export function useChatTimelineFollowLatch(
   // reports: a report above this is that pan. The app and the list announce
   // every write they make (`CHAT_TIMELINE_SCROLLER_MOVED_EVENT`), and the
   // browser moves the view only by clamping it onto a lower end, which
-  // leaves it on the end. Null until the next report while the movement up
-  // to it is announced reader input's, and before the first.
+  // leaves it on the end. Null while the movement is announced reader
+  // input's, until the next report or the touch's lift, and before the first.
   const expectedScrollTopRef = useRef<number | null>(null);
   const lastTouchClientYRef = useRef<number | null>(null);
   // Whether an owned free navigation still owns the view: from its begin
@@ -1739,10 +1739,19 @@ export function useChatTimelineFollowLatch(
     };
     const clearTouch = (): void => {
       lastTouchClientYRef.current = null;
-      const armedDeparture = armedReaderDepartureRef.current;
-      if (armedDeparture?.source !== "touch") return;
       const liveNode = listRef.current?.getScrollableNode();
       const liveGeometry = liveNode ? readScrollGeometry(liveNode) : null;
+      // Everything up to the lift was the reader's movement, so the ledger
+      // resumes from the view as it stands rather than waiting on a report
+      // the contact may never have produced.
+      if (
+        liveGeometry !== null &&
+        isChatTimelineGeometryMeasurable(liveGeometry)
+      ) {
+        expectedScrollTopRef.current = restingScrollTop(liveGeometry);
+      }
+      const armedDeparture = armedReaderDepartureRef.current;
+      if (armedDeparture?.source !== "touch") return;
       if (
         permissionRef.current &&
         liveGeometry !== null &&

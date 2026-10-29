@@ -66,3 +66,81 @@ test("a wheel the app cannot use still scrolls the transcript", async ({
 
   await expect.poll(() => outerScrollTop(page)).toBeGreaterThan(before);
 });
+
+test("the app's focus while the window is in the background scrolls its own page and not the transcript", async ({
+  page,
+  context,
+}) => {
+  await openSelfScrollingApp(page);
+  // With the window unfocused, `:focus` matches nothing in the frame even
+  // once the element is the frame's active element.
+  const devtools = await context.newCDPSession(page);
+  await devtools.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  await (await context.newPage()).bringToFront();
+  await page.getByTestId("outer-scroller").evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  const before = await outerScrollTop(page);
+  await page.evaluate(() => {
+    document.body.dataset.command = "focus";
+  });
+  await page.waitForFunction(() => document.body.dataset.did === "focus");
+
+  expect(await outerScrollTop(page)).toBe(before);
+  const appScrollY = await page.evaluate(() =>
+    Number(document.body.dataset.appScrollY),
+  );
+  expect(appScrollY).toBeGreaterThan(0);
+});
+
+// The native reveal's result, not a computed one: the frame's document as
+// the app left it, reloaded in a page of the frame's size with no bootstrap,
+// and revealed natively from the same offset.
+for (const reveal of [
+  { command: "body-overflow", target: "#mid", from: 0, block: "start" },
+  {
+    command: "covering-nearest",
+    target: "#cover",
+    from: 800,
+    block: "nearest",
+  },
+] as const) {
+  test(`the app's reveal lands where the native one does: ${reveal.command}`, async ({
+    page,
+    browser,
+  }) => {
+    await openSelfScrollingApp(page);
+    await page.evaluate((name) => {
+      document.body.dataset.command = name;
+    }, reveal.command);
+    await page.waitForFunction(
+      (name) => document.body.dataset.did === name,
+      reveal.command,
+    );
+    const contained = await page.evaluate(() =>
+      Number(document.body.dataset.appScrollY),
+    );
+    const frame = page
+      .frames()
+      .find((candidate) => candidate !== page.mainFrame());
+    if (frame === undefined) throw new Error("no app frame");
+    const size = await frame.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    const html = (await frame.content())
+      .replace(/<script[\s\S]*?<\/script>/g, "")
+      .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/g, "");
+
+    const plain = await browser.newPage({ viewport: size });
+    await plain.setContent(html);
+    const native = await plain.evaluate(({ target, from, block }) => {
+      window.scrollTo(0, from);
+      document.querySelector(target)?.scrollIntoView({ block });
+      return Math.round(window.scrollY);
+    }, reveal);
+    await plain.close();
+
+    expect(contained).toBe(native);
+  });
+}
