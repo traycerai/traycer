@@ -1050,4 +1050,110 @@ describe("LegendList estimate recovery", () => {
       expect(settled).toBe(true);
     });
   });
+
+  /**
+   * An end-aligned command keeps its landing correct as its target row grows:
+   * the growth reaches the scroller as an adjust, which is how the transcript
+   * stays pinned to a streaming reply. A loaded machine still holds that
+   * command behind its layout when the reader presses Home, and the command
+   * then no longer owns the view - the growth is far below where the reader
+   * put themselves, and carrying them by it takes them off the top they asked
+   * for. The two cases differ only in whether the reader moved.
+   */
+  describe("an end command whose target row grows", () => {
+    /** The list at the end, with a `scrollToEnd` still held for its layout,
+     *  as the transcript's follow correction issues on every growth. Its own
+     *  write is mocked away; the returned `land` lets later writes through,
+     *  which is how a scroll adjust reaches the scroller. */
+    async function heldEndCommandAtTheEnd(): Promise<{
+      readonly scrollNode: HTMLElement;
+      readonly endBefore: number;
+      readonly land: () => void;
+      readonly growTail: () => number;
+    }> {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await settleLegendList();
+      const scrollNode = list.getScrollableNode();
+      const endBefore = scrollNode.scrollTop;
+      expect(endBefore).toBeGreaterThan(0);
+
+      const held = vi
+        .spyOn(scrollNode, "scrollTo")
+        .mockImplementation(() => undefined);
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await advanceLegendListFrames(1);
+
+      let tailSize = list.getState().sizeAtIndex(69);
+      return {
+        endBefore,
+        land: () => {
+          held.mockImplementation(
+            (options: ScrollToOptions | number | undefined) => {
+              if (typeof options === "object" && options.top !== undefined) {
+                scrollNode.scrollTop = options.top;
+              }
+            },
+          );
+        },
+        growTail: () => {
+          const before = tailSize;
+          act(() => {
+            list.setItemSize("row-69", { height: before + 28, width: 800 });
+          });
+          tailSize = list.getState().sizeAtIndex(69);
+          return tailSize - before;
+        },
+        scrollNode,
+      };
+    }
+
+    it("leaves the reader at the top they wrote, which the command did not", async () => {
+      const { scrollNode, land, growTail } = await heldEndCommandAtTheEnd();
+
+      // The reader presses Home: an absolute write to the scroller, reported.
+      scrollNode.scrollTop = 0;
+      act(() => {
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+      land();
+
+      expect(growTail()).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+
+      expect(scrollNode.scrollTop).toBe(0);
+    });
+
+    it("pins the view to the new end while that command still holds it", async () => {
+      const { scrollNode, endBefore, land, growTail } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      // Nobody else moved the view, so the command still owns it: every
+      // growth of its target row carries the view to the end that growth
+      // made. The second one needs the command's own target to have come
+      // along with the first, or it reads the view as somebody else's.
+      const first = growTail();
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + first);
+
+      const second = growTail();
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + first + second);
+    });
+  });
 });
