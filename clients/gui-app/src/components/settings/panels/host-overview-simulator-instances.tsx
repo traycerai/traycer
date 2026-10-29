@@ -340,8 +340,7 @@ export function SimulatorIdleWindowRow(props: {
     if (
       !Number.isInteger(minutes) ||
       minutes < SIMULATOR_IDLE_MINUTES_MIN ||
-      minutes > SIMULATOR_IDLE_MINUTES_MAX ||
-      minutes === props.idleMinutes
+      minutes > SIMULATOR_IDLE_MINUTES_MAX
     )
       return;
     props.write(minutes);
