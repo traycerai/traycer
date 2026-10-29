@@ -2,10 +2,15 @@ import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { EnvironmentSecretRemoval } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { DetailsItemRetry } from "@/components/settings/details/details-drawer";
 import type { HostRpcRegistry } from "@/lib/host";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
@@ -15,6 +20,7 @@ import {
   settingsDetailsQueryKeys,
 } from "@/lib/query-keys/settings-details-query-keys";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
+import { removalWithFailures } from "@/components/settings/secrets/secret-removal-lines";
 import type { DetailsSubject } from "@/lib/settings-details-entry";
 
 const VERSION_1_1 = { major: 1, minor: 1 } as const;
@@ -34,6 +40,44 @@ function waitingHosts(
     }
   }
   return hosts;
+}
+
+/** The versions contract omits failures; keep the same environment list's evidence. */
+function hasKnownCleanupFailure(
+  queryClient: QueryClient,
+  hostId: string | null,
+  subject: DetailsSubject,
+  removal: EnvironmentSecretRemoval,
+): boolean {
+  const lists = queryClient.getQueriesData<
+    ResponseOfMethod<HostRpcRegistry, "environment.secrets.list">
+  >({
+    queryKey: hostQueryKeys.method(
+      hostRpcServingTierHostId(
+        "environment.secrets.list",
+        hostId,
+        readProcessHostRpcTierPlan(),
+        null,
+      ),
+      "environment.secrets.list",
+      { environmentId: subject.environmentId },
+    ),
+  });
+  for (const [, list] of lists) {
+    const listed =
+      list?.removed.find((secret) => secret.id === subject.key)?.removal ??
+      null;
+    if (
+      removalWithFailures(removal, listed).targets.some(
+        (target) =>
+          target.target === "host" &&
+          target.state === "requested" &&
+          target.failedAt !== null,
+      )
+    )
+      return true;
+  }
+  return false;
 }
 
 /**
@@ -83,6 +127,7 @@ export function useSecretRemovalRetry(
             "That didn't go through.",
         );
       }
+      if (before.size === 0) return null;
       // The destroy succeeded. A failed confirmation read must still
       // invalidate the list, without reporting that the destroy failed.
       const after = await client
@@ -98,6 +143,8 @@ export function useSecretRemovalRetry(
         after.removal === null ||
         after.removal.outcome === "destroyed"
       )
+        return null;
+      if (hasKnownCleanupFailure(queryClient, hostId, subject, after.removal))
         return null;
       const waiting = waitingHosts(after.removal);
       if (
