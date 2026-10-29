@@ -61,7 +61,10 @@ const mocks = vi.hoisted(() => ({
   deleteMutate: vi.fn(),
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: (hostId: string) => ({
     status: mocks.reachability.value,
     hostLabel: `host ${hostId}`,

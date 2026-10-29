@@ -1691,6 +1691,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // `bot.subscribe` snapshot moves `conversationsRevision` on every row
   // written there, and the subscription reads the listing again then.
   "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
+  // A bot's turns behind the replies, posts and check-ins a view shows
+  // (T86): read when those rows change, and again when the bot's activity
+  // says a turn settled.
+  "bot.turn.locate": { ...LATEST_SCHEDULING, poll: null },
   // A team's onboarding (T48): the read is refetched when its card mounts or
   // a choice or completion lands; the two writes persist, so they queue.
   "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: null },

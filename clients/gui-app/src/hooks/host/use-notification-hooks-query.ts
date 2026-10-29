@@ -6,10 +6,9 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { filterConsumedHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 
@@ -37,24 +36,12 @@ export function useNotificationHooksStatus(): NotificationHooksStatusQuery {
 export function useNotificationHooksStatusForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): NotificationHooksStatusQuery {
-  return useHostQueryWithResponseMap<
-    HostRpcRegistry,
-    "host.notificationHooks.status",
-    ResponseOfMethod<HostRpcRegistry, "host.notificationHooks.status">,
-    string | null
-  >({
+  return useHostQuery<HostRpcRegistry, "host.notificationHooks.status">({
     cacheKeyIdentity: undefined,
     client,
     method: "host.notificationHooks.status",
     params: {},
     options: null,
-    captureRequestContext: () => client?.getActiveHostId() ?? null,
-    mapResponse: ({ response, queryClient, requestContext }) =>
-      filterConsumedHookRemovalNotices(
-        response,
-        queryClient,
-        requestContext ?? null,
-      ),
   });
 }
 

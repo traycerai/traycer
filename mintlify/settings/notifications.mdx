@@ -17,7 +17,7 @@ Each severity has a switch:
 | **Needs action** | Approvals and interviews, and browser steps only you can complete, such as a sign-in. | On |
 | **Failure** | Errored turns, stalls, crashes, and rate limits. | On |
 | **Done** | Completed or intentionally stopped turns. | On |
-| **Info** | Background host operations, including worktree cleanup. | Off |
+| **Info** | Updates that need nothing from you. | Off |
 
 Turning a severity off stops the host creating that kind of notification at all. It no longer appears in the notification center, lights a tab indicator, alerts you, or runs a hook.
 
@@ -116,7 +116,7 @@ Scripts and URLs receive the same JSON:
 | `agent.stopped` | An agent finished, was stopped, or ended with an error. |
 | `agent.stalled` | An agent stopped making progress. |
 | `workspace.operation.failed` | A workspace operation for an agent failed. |
-| `host.operation.finished` | A host operation finished, such as a worktree cleanup. |
+| `host.operation.finished` | A host operation for an agent finished, such as command output waiting for its chat. |
 
 A test event has `"test": true`, `"event": "agent.stopped"`, `"severity": "info"`, the title "Test notification", the message "Sent from Traycer", and `null` Task and agent IDs.
 

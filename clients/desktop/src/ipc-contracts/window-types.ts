@@ -96,6 +96,11 @@ export interface PerWindowLandingDraft {
    * without dropping their image-hash roots.
    */
   readonly closed: boolean | null;
+  /**
+   * The sandbox a given-back message was going to, as opaque JSON the
+   * renderer parses. Present only while the draft has one.
+   */
+  readonly returnedSandbox?: JsonValue;
 }
 
 export interface PerWindowSnapshot {

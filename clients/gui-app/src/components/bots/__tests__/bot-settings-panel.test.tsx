@@ -73,6 +73,10 @@ const mocks = vi.hoisted(() => ({
   // Whether the reply-mode write is in flight.
   replyModePending: false,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
+  // Whether the tab's host advertises `host.usage.summary`.
+  usageSupported: false,
+  // The host each read of that support asked about.
+  usageSupportHosts: [] as Array<string | null>,
   // What each write's mutation reports as its error; `null` = no refusal.
   refusal: {
     title: null as string | null,
@@ -103,6 +107,19 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
       ? mocks.replyModeSupport
       : mocks.setMainBotSupport;
   },
+}));
+vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
+  useUsageSummarySupported: (hostId: string | null) => {
+    mocks.usageSupportHosts.push(hostId);
+    return mocks.usageSupported;
+  },
+}));
+// The usage dialog has its own suite; here it only shows which epic it reads.
+vi.mock("@/components/epic-canvas/panels/epic-usage-dialog", () => ({
+  EpicUsageDialog: (props: { epicId: string; open: boolean }) =>
+    props.open ? (
+      <div data-testid="stub-usage-dialog" data-epic-id={props.epicId} />
+    ) : null,
 }));
 vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
   useEnvironmentSetMainBotMutation: () => ({
@@ -276,6 +293,8 @@ beforeEach(() => {
   mocks.replyModeSupport = true;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
+  mocks.usageSupported = false;
+  mocks.usageSupportHosts.length = 0;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
   mocks.notificationReadError = null;
@@ -747,7 +766,6 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       botId: BOT.botId,
       title: BOT.title,
       owner: input.owner,
-      openActivity: null,
     };
     render(
       <BotIdentityContext value={identity}>
@@ -813,6 +831,30 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
     expect(screen.getByTestId("bot-settings-model")).toBeTruthy();
     expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
+  });
+
+  it("opens the bot's usage from View usage, as the bot's own epic, where the host can read it", async () => {
+    const user = userEvent.setup();
+    mocks.usageSupported = true;
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    expect(groupTitles()).toContain("Usage");
+    // Whether the host can read usage is asked of the tab's own host.
+    expect(new Set(mocks.usageSupportHosts)).toEqual(new Set(["host-1"]));
+    expect(screen.queryByTestId("stub-usage-dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "View usage" }));
+
+    expect(
+      screen.getByTestId("stub-usage-dialog").getAttribute("data-epic-id"),
+    ).toBe(BOT.botId);
+  });
+
+  it("offers no usage on a host that cannot read it", () => {
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    expect(groupTitles()).not.toContain("Usage");
+    expect(screen.queryByRole("button", { name: "View usage" })).toBeNull();
+    expect(new Set(mocks.usageSupportHosts)).toEqual(new Set(["host-1"]));
   });
 
   it("groups a personal bot's channel with its reply mode, and no members or bots", () => {

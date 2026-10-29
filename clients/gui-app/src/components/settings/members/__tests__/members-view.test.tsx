@@ -132,7 +132,6 @@ function renderView(options: {
           environmentId="env-1"
           teamName="Acme"
           teamHandle="acme"
-          teamHostCount={1}
           currentUserId={options.currentUserId}
           viewerRole={options.viewerRole}
           membersRead="ready"
@@ -515,7 +514,6 @@ describe("MembersView pending writes", () => {
             environmentId="env-1"
             teamName="Acme"
             teamHandle="acme"
-            teamHostCount={1}
             currentUserId="u-admin"
             viewerRole="admin"
             membersRead="ready"

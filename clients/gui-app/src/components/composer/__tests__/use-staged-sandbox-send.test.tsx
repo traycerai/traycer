@@ -642,6 +642,30 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 
   describe("Stop while a start or resume is under way", () => {
+    it("says awake whenever setup offers Stop, through settings and delivery", () => {
+      stageCreated("booting", null);
+      listCreatedAwake();
+      mount(vi.fn());
+      expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+      expect(
+        screen.getByTestId("sandbox-setup-line-toggle").textContent,
+      ).toContain("Starting sandbox");
+
+      for (const step of ["applying", "delivering"] as const) {
+        act(() => {
+          useStagedSandboxStore.getState().report(SURFACE, {
+            step,
+            // The awake title also survives the taking-longer threshold.
+            startedAt: Date.now() - 300_000,
+          });
+        });
+        expect(screen.getByTestId("sandbox-setup-stop")).toBeDefined();
+        const title = screen.getByTestId("sandbox-setup-line-toggle");
+        expect(title.textContent).toContain("Sandbox awake");
+        expect(title.textContent).not.toContain("Starting");
+      }
+    });
+
     it.each(["start", "resume"] as const)(
       "offers Stop again once a list answer newer than a pending %s reads the row awake",
       async (verb) => {
@@ -669,6 +693,9 @@ describe("useStagedSandboxSend's setup line", () => {
         await waitFor(() => {
           expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
         });
+        expect(
+          screen.getByTestId("sandbox-setup-line-toggle").textContent,
+        ).toContain("Starting sandbox");
 
         // The verb's reply is still out; a list answer after it reads awake.
         mocks.sandboxesAt = Date.now();
@@ -678,6 +705,9 @@ describe("useStagedSandboxSend's setup line", () => {
           </QueryClientProvider>,
         );
         expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+        expect(
+          screen.getByTestId("sandbox-setup-line-toggle").textContent,
+        ).toContain("Sandbox awake");
 
         await act(async () => {
           answer.resolve();

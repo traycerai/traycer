@@ -1,10 +1,189 @@
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useState } from "react";
 import { useHostOverviewStatusQuery } from "@/components/settings/panels/host-overview-rpc";
 import { liveBusySessionCount } from "@/components/settings/panels/my-hosts-model";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
+  useSandboxOperation,
+  type SandboxRowOperation,
+} from "@/hooks/sandboxes/use-sandbox-operation";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  sandboxPublicState,
   sandboxSessionKinds,
   type SandboxSessionReport,
 } from "@/lib/sandboxes/sandbox-row-lines";
+
+interface SandboxSessionObservation {
+  readonly report: SandboxSessionReport;
+  /** The status read failed while the control plane says awake. */
+  readonly failed: boolean;
+  /** A host answer exists in this query's lifecycle, even without sessions. */
+  readonly hasReported: boolean;
+}
+
+interface ObservedResume {
+  readonly identity: readonly ["sandbox-wake", "mutation" | "list", number];
+  readonly operationAt: number | null;
+  /** A sent Resume can precede the list's observation of its operation. */
+  readonly awaitingOperation: boolean;
+  /** Once a reply arrived, evicting its query must not rearm the Resume. */
+  readonly hasReported: boolean;
+}
+
+interface ResumeObservationFence {
+  readonly sandboxId: string;
+  readonly userId: string | null;
+  /** A lifecycle change can clear the observation without rearming this ask. */
+  readonly consumedMutationAt: number | null;
+  readonly resume: ObservedResume | null;
+}
+
+/** Only a Resume this client saw start waits for its first host answer. */
+export function useSandboxRowSessionReport(summary: SandboxSummary): {
+  readonly report: SandboxSessionReport;
+  readonly failed: boolean;
+  readonly resumePending: boolean;
+} {
+  const operation = useSandboxOperation(summary.id);
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const [observed, setObserved] = useState<ResumeObservationFence>({
+    sandboxId: summary.id,
+    userId,
+    consumedMutationAt: null,
+    resume: null,
+  });
+  let fence = observeResumeFence(summary, operation, userId, observed);
+  let resume = fence.resume;
+  const awake = sandboxPublicState(summary) === "awake";
+  const observation = useSessionObservation(
+    summary.hostId,
+    awake,
+    resume?.identity,
+  );
+  if (resume !== null && !resume.hasReported && observation.hasReported) {
+    resume = { ...resume, hasReported: true };
+    fence = { ...fence, resume };
+  }
+  if (fence !== observed) setObserved(fence);
+  return {
+    report: observation.report,
+    failed: observation.failed,
+    resumePending:
+      resume !== null &&
+      awake &&
+      summary.guestConfigured !== false &&
+      (summary.state === "resuming" || !resume.hasReported),
+  };
+}
+
+function observeResumeFence(
+  summary: SandboxSummary,
+  operation: SandboxRowOperation | null,
+  userId: string | null,
+  previous: ResumeObservationFence,
+): ResumeObservationFence {
+  const current =
+    previous.sandboxId === summary.id && previous.userId === userId
+      ? previous
+      : {
+          sandboxId: summary.id,
+          userId,
+          consumedMutationAt: null,
+          resume: null,
+        };
+  const resume = observeResume(
+    summary,
+    operation,
+    current.resume,
+    current.consumedMutationAt,
+  );
+  const consumedMutationAt =
+    resume?.identity[1] === "mutation"
+      ? resume.identity[2]
+      : current.consumedMutationAt;
+  if (
+    resume === current.resume &&
+    consumedMutationAt === current.consumedMutationAt
+  )
+    return current;
+  return { ...current, consumedMutationAt, resume };
+}
+
+function observeResume(
+  summary: SandboxSummary,
+  operation: SandboxRowOperation | null,
+  observed: ObservedResume | null,
+  consumedMutationAt: number | null,
+): ObservedResume | null {
+  if (summary.kind === "automation" || summary.frozen) return null;
+  if (operation?.kind === "pending") {
+    if (operation.verb !== "resume") return null;
+    if (consumedMutationAt !== operation.submittedAt) {
+      return {
+        identity: ["sandbox-wake", "mutation", operation.submittedAt],
+        operationAt: summary.operation?.at ?? null,
+        awaitingOperation: true,
+        hasReported: false,
+      };
+    }
+  }
+  if (
+    observed?.identity[1] === "mutation" &&
+    operation?.kind === "failed" &&
+    operation.verb === "resume"
+  )
+    return null;
+  return observeListedResume(summary, observed);
+}
+
+function observeListedResume(
+  summary: SandboxSummary,
+  observed: ObservedResume | null,
+): ObservedResume | null {
+  const operationAt = summary.operation?.at ?? null;
+  if (summary.state === "resuming") {
+    return observeResumingRow(summary, observed);
+  }
+  if (observed === null) return null;
+  if (operationAt !== null && observed.operationAt !== operationAt) {
+    const operation = summary.operation;
+    if (
+      observed.awaitingOperation &&
+      operation?.cause === "wake" &&
+      operation.fromState === "suspended" &&
+      operation.outcomeCause !== "failure"
+    )
+      return { ...observed, operationAt, awaitingOperation: false };
+    return null;
+  }
+  if (
+    summary.state !== "awake" &&
+    (!observed.awaitingOperation || observed.hasReported)
+  )
+    return null;
+  return observed;
+}
+
+/** A listed resuming state starts a wake, or acknowledges the Resume we sent. */
+function observeResumingRow(
+  summary: SandboxSummary,
+  observed: ObservedResume | null,
+): ObservedResume {
+  const at = summary.operation?.at ?? summary.lastTransitionAt;
+  if (observed?.awaitingOperation) {
+    return { ...observed, operationAt: at, awaitingOperation: false };
+  }
+  if (observed === null || observed.operationAt !== at) {
+    return {
+      identity: ["sandbox-wake", "list", at],
+      operationAt: at,
+      awaitingOperation: false,
+      hasReported: false,
+    };
+  }
+  return observed;
+}
 
 /**
  * What a sandbox host last reported about its running sessions, for the
@@ -22,18 +201,24 @@ import {
 export function useSandboxSessionReport(
   hostId: string,
   enabled: boolean,
-): {
-  readonly report: SandboxSessionReport;
-  /** The status read failed while the control plane says awake. */
-  readonly failed: boolean;
-} {
+): SandboxSessionObservation {
+  return useSessionObservation(hostId, enabled, undefined);
+}
+
+function useSessionObservation(
+  hostId: string,
+  enabled: boolean,
+  cacheKeyIdentity: ReadonlyArray<unknown> | undefined,
+): SandboxSessionObservation {
   const client = useHostClientForHostId(hostId);
   const status = useHostOverviewStatusQuery({
     client,
     enabled: enabled && client !== null,
     hostId,
+    cacheKeyIdentity,
   });
   const data = status.data ?? null;
+  const hasReported = data !== null && !status.isPlaceholderData;
   const sessions = data?.sessions ?? null;
   const kinds = sandboxSessionKinds(sessions);
   const count = kinds === null ? null : kinds.agents + kinds.terminals;
@@ -48,6 +233,7 @@ export function useSandboxSessionReport(
     return {
       report: { kind: "live", count: live, busy: data.busy, kinds, sessions },
       failed: false,
+      hasReported,
     };
   }
   // A read that never answered has no time; its count is not "as of" one.
@@ -55,7 +241,8 @@ export function useSandboxSessionReport(
     return {
       report: { kind: "stale", count, at: status.dataUpdatedAt },
       failed: status.isError,
+      hasReported,
     };
   }
-  return { report: { kind: "unknown" }, failed: status.isError };
+  return { report: { kind: "unknown" }, failed: status.isError, hasReported };
 }

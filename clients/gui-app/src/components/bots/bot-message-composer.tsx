@@ -41,7 +41,15 @@ const MESSAGE_MAX = 100_000;
  *
  * Edit on a message the bot failed to answer (`edit`) puts its text in the
  * box; what the person sends then is a new message that replaces the failed
- * one (`supersedes`), which stays where it is.
+ * one (`supersedes`), which stays where it is. A `seed` puts its text in the
+ * box as a draft of a new message, unsent: the answer a member had for a
+ * question someone else settled first, taken to its discussion. A box whose
+ * draft is kept outside it (`keptDraft`) reports what it holds, so the draft
+ * outlives the box, and spends that draft once it is sent - even when the
+ * send lands after the box is gone.
+ *
+ * A send that lands clears the box only while the box still holds the
+ * draft it sent: an edit or a seed loaded since is a newer draft, and stays.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -50,6 +58,11 @@ export function BotMessageComposer(props: {
   readonly threadId: string | null;
   /** The question or proposal the reply answers, opening its thread; `null` otherwise. */
   readonly announcementId: string | null;
+  /**
+   * Whether the box may send: `false` while what it holds would go where the
+   * bot's host takes nothing now, the draft kept until it does.
+   */
+  readonly sendable: boolean;
   /** "Message name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
@@ -60,6 +73,14 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
+  /**
+   * A draft to put in the box, unsent; each new one (by its `id`) replaces
+   * what the box holds. `null` for none; a draft kept outside the box that
+   * goes away empties it, unless it is editing a failed message.
+   */
+  readonly seed: BotComposerSeed | null;
+  /** Where the box's draft is kept outside it, while it is not editing a failed message; `null` where none is. */
+  readonly keptDraft: BotKeptDraft | null;
   /**
    * The host accepted `text`, what the box held, and the box was cleared.
    * Answers whether the owner says the send's delivery itself, where the
@@ -75,44 +96,91 @@ export function BotMessageComposer(props: {
     conversationId,
     threadId,
     announcementId,
+    sendable,
     placeholder,
     label,
     testId,
     failure,
     edit,
     onEditEnd,
+    seed,
+    keptDraft,
     onSent,
   } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
+  // Which draft the box holds: each edit or seed loaded is a new one, and a
+  // send owns the one it started with.
+  const [generation, setGeneration] = useState(0);
   // A new edit replaces what the box holds with the message's text.
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
-    if (edit !== null) setText(edit.text);
+    if (edit !== null) {
+      setText(edit.text);
+      setGeneration((current) => current + 1);
+    }
+  }
+  // As does a new seed. A kept draft that goes away was what the box showed,
+  // as the box keeps what it holds there while it edits nothing: a send of
+  // it spent it, from this box closed and opened again since, so the box
+  // empties rather than offer it again.
+  const seedId = seed?.id ?? null;
+  const [loadedSeedId, setLoadedSeedId] = useState<number | null>(null);
+  if (seedId !== loadedSeedId) {
+    setLoadedSeedId(seedId);
+    if (seed !== null) {
+      setText(seed.text);
+      setGeneration((current) => current + 1);
+    } else if (edit === null) {
+      setText("");
+    }
   }
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // The edit the box holds now, for a send that lands after the person moved
-  // on to another.
-  const currentEditRef = useRef<BotComposerEdit | null>(edit);
+  // The draft the box holds now, for a send that lands after the person
+  // moved on to another; and whether the box is still there to say anything.
+  const generationRef = useRef(generation);
+  const mountedRef = useRef(false);
   useEffect(() => {
-    currentEditRef.current = edit;
+    generationRef.current = generation;
+  }, [generation]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
     if (edit !== null) inputRef.current?.focus();
   }, [edit]);
+  useEffect(() => {
+    if (seedId !== null) inputRef.current?.focus();
+  }, [seedId]);
+  useEffect(() => {
+    if (edit === null) keptDraft?.keep(text);
+  }, [edit, keptDraft, text]);
   const [lastDelivery, setLastDelivery] =
     useState<BotConversationSendDelivery | null>(null);
   const inputId = useId();
   const trimmed = text.trim();
   const canSend =
-    trimmed.length > 0 && trimmed.length <= MESSAGE_MAX && !send.isPending;
+    sendable &&
+    trimmed.length > 0 &&
+    trimmed.length <= MESSAGE_MAX &&
+    !send.isPending;
 
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
     const supersedes = edit?.requestId ?? null;
-    send.mutate(
-      {
+    const started = generation;
+    const held = keptDraft?.revision() ?? null;
+    // Settled through the promise, not `mutate`'s callbacks, which do not
+    // run once the box is gone: a kept draft that was sent is spent whether
+    // or not the box is still there.
+    send
+      .mutateAsync({
         botId,
         conversationId,
         text: trimmed,
@@ -120,24 +188,24 @@ export function BotMessageComposer(props: {
         announcementId,
         redeliver: null,
         supersedes,
-      },
-      {
-        onSuccess: (response) => {
+        answer: null,
+      })
+      .then(
+        (response) => {
           // The box is cleared, the edit ended, the send's delivery said and
-          // the send reported, only while it still holds what was sent: an
-          // edit the person opened since keeps its draft, with nothing said
+          // the send reported, only while it still holds the draft it sent:
+          // an edit or a seed loaded since keeps its draft, with nothing said
           // under it.
-          if ((currentEditRef.current?.requestId ?? null) !== supersedes) {
-            return;
-          }
+          if (generationRef.current !== started) return;
+          if (supersedes === null && held !== null) keptDraft?.spend(held);
+          if (!mountedRef.current) return;
           setText("");
           if (supersedes !== null) onEditEnd();
           const deliverySaid = onSent(response, trimmed);
           setLastDelivery(deliverySaid ? null : response.delivery);
         },
-        onError: failure.fail,
-      },
-    );
+        () => failure.fail(),
+      );
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (
@@ -245,6 +313,23 @@ function ComposerStatus(props: {
   if (!props.queued) return null;
   return <BotQueuedNotice testId={`${props.testId}-queued`} />;
 }
+
+/** A draft put in the box to be sent as a new message, once the person sends it. */
+export type BotComposerSeed = {
+  /** Which draft it is: the box loads each id once. */
+  readonly id: number;
+  readonly text: string;
+};
+
+/** Where a box's unsent draft is kept, outside the box. */
+export type BotKeptDraft = {
+  /** What the box holds now, as the person types it; empty keeps nothing. */
+  readonly keep: (text: string) => void;
+  /** Which revision of the draft is kept now; `null` while none is. */
+  readonly revision: () => number | null;
+  /** The draft at `revision` was sent: spent, unless a newer draft took its place. */
+  readonly spend: (revision: number) => void;
+};
 
 /** A failed message loaded into the box to be edited and sent again. */
 export type BotComposerEdit = {

@@ -45,7 +45,10 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: mocks.openTile }),
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: (hostId: string) => mocks.reachability(hostId),
 }));
 

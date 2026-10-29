@@ -24,6 +24,11 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type {
+  ChatSessionState,
+  ChatStreamClientHandle,
+} from "@/stores/chats/chat-session-store";
 
 // `useChatSessionHandle`'s own module state (the process-wide registry) is
 // exercised for real below - only its collaborators are mocked, so the
@@ -897,4 +902,130 @@ describe("useChatSessionHandle retryFromUser silence gate", () => {
     handle.store.getState().retryFromUser();
     expect(reconnectAll).not.toHaveBeenCalled();
   });
+});
+
+/**
+ * The production `streamClientFactory` wraps the real `ChatStreamClient` in a
+ * hand-written handle. A probe it forgets to forward reads as absent in the
+ * store (the optional ones collapse to `false`/`null`), and a double that
+ * implements the probe itself can never see that.
+ */
+type HandleProbe = Extract<keyof ChatStreamClientHandle, `${string}Supported`>;
+
+const PROBE_NAMES = [
+  "sameTurnSteeringProtocolSupported",
+  "draftBlobBridgeSupported",
+  "interviewSettlementActionsProtocolSupported",
+  "autoPermissionModeProtocolSupported",
+  "queuePauseReasonProtocolSupported",
+  "queuedSteerRestartConfirmationSupported",
+] as const satisfies readonly HandleProbe[];
+
+// A `...Supported` member the handle gains and this list lacks resolves the
+// type to `never`, so the assignment stops compiling.
+type EveryHandleProbe<T extends readonly HandleProbe[]> = [
+  Exclude<HandleProbe, T[number]>,
+] extends [never]
+  ? T
+  : never;
+const FORWARDED_PROBES: EveryHandleProbe<typeof PROBE_NAMES> = PROBE_NAMES;
+
+/** What the store derives from each probe once the connection opens. */
+const STORE_READS: Record<
+  (typeof FORWARDED_PROBES)[number],
+  (state: ChatSessionState) => unknown
+> = {
+  sameTurnSteeringProtocolSupported: (s) => s.steerProtocolSupported,
+  draftBlobBridgeSupported: (s) => s.draftBlobBridgeSupported,
+  interviewSettlementActionsProtocolSupported: (s) =>
+    s.interviewDeliveryRetryProtocolSupported,
+  autoPermissionModeProtocolSupported: (s) =>
+    s.autoPermissionModeProtocolSupported,
+  queuePauseReasonProtocolSupported: (s) => s.queuePauseReasonProtocolSupported,
+  queuedSteerRestartConfirmationSupported: (s) =>
+    s.queuedSteerRestartConfirmationSupported(),
+};
+
+describe("the production chat stream client factory forwards every probe", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  async function openChat(chatId: string, fake: FakeStreamClient) {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    openTransportRef.fn = () => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+    });
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+    const { result } = renderHook(
+      () => useChatSessionHandle(chatId, REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) {
+      throw new Error("expected a chat session handle");
+    }
+    return handle;
+  }
+
+  it.each(FORWARDED_PROBES)(
+    "%s reaches the store from the real ChatStreamClient",
+    async (probe) => {
+      // A fresh, never-negotiated session answers `false`/`null` on its own,
+      // so a `true` in the store can only have come through the spy.
+      const spy = vi
+        .spyOn(ChatStreamClient.prototype, probe)
+        .mockReturnValue(true);
+      const fake = new FakeStreamClient(true);
+      const handle = await openChat(`chat-probe-${probe}`, fake);
+
+      await waitFor(() => {
+        expect(handle.store.getState().connectionStatus).toBe("open");
+      });
+      expect(STORE_READS[probe](handle.store.getState())).toBe(true);
+      expect(spy).toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [40, true],
+    [39, false],
+  ] as const)(
+    "chat.subscribe 1.%i answers queuedSteerRestartConfirmationSupported with %s through the store",
+    async (minor, expected) => {
+      const fake = new FakeStreamClient(false);
+      const handle = await openChat(`chat-steer-confirm-${minor}`, fake);
+      const session = fake.sessions[0];
+      session.negotiatedSchemaVersion = { major: 1, minor };
+      session.emitStatus("open");
+
+      await waitFor(() => {
+        expect(handle.store.getState().connectionStatus).toBe("open");
+      });
+      expect(
+        handle.store.getState().queuedSteerRestartConfirmationSupported(),
+      ).toBe(expected);
+    },
+  );
 });

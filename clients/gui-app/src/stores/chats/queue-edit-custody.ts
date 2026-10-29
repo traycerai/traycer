@@ -28,12 +28,24 @@ export type QueueEditIntent = "save" | "steer";
  * later SEEN to hold can account for it. The two are kept apart because they
  * are owed different things - a pending frame is owed patience, an unconfirmed
  * one is owed evidence.
+ *
+ * `confirming` is a steer the host refused until the person confirms ending
+ * the running turn: the confirm dialog asks about it, so nothing about it is
+ * told here, applied or not. The record stays in custody until the dialog is
+ * answered ({@link answerQueueEditAwaitingConfirmation}): until then the
+ * settings it asked for ride on nothing the host has seen.
+ *
+ * `answered` is that steer once the dialog is answered with no frame sent in
+ * its place (a Cancel with no settings to save). Like `confirming` it tells
+ * nothing, but a text still unanswered keeps the record.
  */
 export type QueueEditFrameOutcome =
   | "pending"
   | "accepted"
   | "rejected"
-  | "unconfirmed";
+  | "unconfirmed"
+  | "confirming"
+  | "answered";
 
 /**
  * An edited queued prompt, held from the moment the composer is cleared until
@@ -359,7 +371,9 @@ function settleQueueEditRecord(
       requestedChanges: next.requestedChanges,
     });
   }
-  const landedWhole = next.edit === "accepted" && next.followUp === "accepted";
+  const landedWhole =
+    next.edit === "accepted" &&
+    (next.followUp === "accepted" || next.followUp === "answered");
   const refusedAndAnswered =
     next.edit === "rejected" && next.followUp !== "pending";
   return {
@@ -417,6 +431,79 @@ export function foldQueueEditAck(
         : withQueueEditRecord(records, next),
     settlements,
   };
+}
+
+/**
+ * Fold a steer the host refused until the person confirms ending the turn.
+ * Unchanged for an action id that is no record's steer.
+ */
+export function foldQueueEditSteerAwaitingConfirmation(
+  records: QueueEditRecords,
+  clientActionId: string,
+): QueueEditFold {
+  const record = queueEditRecordForAction(records, clientActionId);
+  if (record === null || record.followUpActionId !== clientActionId) {
+    return { records, settlements: NO_SETTLEMENTS };
+  }
+  const { record: next, settlements } = settleQueueEditRecord(
+    { ...record, followUp: "confirming" },
+    { cause: "refused", hostReason: null },
+  );
+  return {
+    records:
+      next === null
+        ? withoutQueueEditRecord(records, record.editActionId)
+        : withQueueEditRecord(records, next),
+    settlements,
+  };
+}
+
+/**
+ * The frame a confirm dialog's answer sent in place of the steer it asked
+ * about: Restart's confirmed steer, or Cancel's save of the edit's settings.
+ */
+export interface QueueEditFollowUpReplacement {
+  readonly clientActionId: string;
+  readonly intent: QueueEditIntent;
+}
+
+/**
+ * Settle the steer the confirm dialog has just answered.
+ *
+ * With a replacement frame, the record follows it as its second frame, pending
+ * until that frame's own ack or a reconnect accounts for it: what the
+ * submission asked for now rides on that frame alone. With none (a Cancel with
+ * no settings to save), the steer is `answered`; a record whose text is
+ * already saved is retired, and one whose text is still unanswered stays in
+ * custody, since the refusal can arrive first and a later refusal of the text
+ * must still hand it back. Unchanged for an action id that is no record's
+ * refused steer.
+ */
+export function answerQueueEditAwaitingConfirmation(
+  records: QueueEditRecords,
+  followUpActionId: string,
+  replacement: QueueEditFollowUpReplacement | null,
+): QueueEditRecords {
+  const record = queueEditRecordForAction(records, followUpActionId);
+  if (
+    record === null ||
+    record.followUpActionId !== followUpActionId ||
+    record.followUp !== "confirming"
+  ) {
+    return records;
+  }
+  if (replacement !== null) {
+    return withQueueEditRecord(records, {
+      ...record,
+      intent: replacement.intent,
+      followUpActionId: replacement.clientActionId,
+      followUp: "pending",
+      followUpReason: null,
+    });
+  }
+  return record.edit === "accepted"
+    ? withoutQueueEditRecord(records, record.editActionId)
+    : withQueueEditRecord(records, { ...record, followUp: "answered" });
 }
 
 /** An image node reduced to the one attribute that survives the host. */

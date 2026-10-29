@@ -106,6 +106,12 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
 }));
 
+// The banner's host name reads the account's environment lists, a query this
+// provider-less suite has no client for; no fixture here is a chat tab.
+vi.mock("@/components/epic-canvas/renderers/use-chat-tile-host-label", () => ({
+  useChatTileHostLabel: () => null,
+}));
+
 // A bound Epic session, so the published wake has something real to reach.
 const epicHandleMock = vi.hoisted(() => ({
   hostId: "host-A",

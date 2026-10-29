@@ -510,6 +510,7 @@ export const OPEN_TERMINAL = "Open terminal";
 
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
+export const SANDBOX_AWAKE = "Sandbox awake";
 export const SANDBOX_READY = "Sandbox ready";
 /** The setup line names the sandbox; a row's button passes `null`. */
 export function stoppingSandboxLine(name: string | null): string {

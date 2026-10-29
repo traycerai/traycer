@@ -50,6 +50,7 @@ import {
   readySecondsLabel,
   idleRuleLine,
   SANDBOX_READY,
+  SANDBOX_AWAKE,
   agentNotOfferedOnSandboxesLine,
   agentsCantRunOnSandboxLine,
   traycerOffOnSandboxLine,
@@ -521,6 +522,7 @@ function SandboxProgressLine(props: {
     configuration,
     takingLonger,
     sandboxAwake: props.facts.sandboxAwake,
+    sandboxStoppable: props.facts.sandboxStoppable,
   };
   return (
     <SandboxSetupLineFrame
@@ -560,6 +562,7 @@ interface ProgressView {
   readonly configuration: string;
   readonly takingLonger: boolean;
   readonly sandboxAwake: boolean | null;
+  readonly sandboxStoppable: boolean;
 }
 
 function isTakingLonger(
@@ -586,6 +589,7 @@ function progressTitle(view: ProgressView, name: string): string {
       ? settingsDidntApplyOnLine(view.configuration, name, reference)
       : sandboxSettingsFailureLine(name, view.configuration, reference);
   }
+  if (view.sandboxStoppable) return SANDBOX_AWAKE;
   if (view.takingLonger) {
     return resuming ? RESUMING_TAKING_LONGER : STARTING_TAKING_LONGER;
   }

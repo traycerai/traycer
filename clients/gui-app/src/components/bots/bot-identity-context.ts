@@ -21,15 +21,13 @@ export type BotOwner =
 
 /**
  * The bot a surface draws, for its picture and its name's popover: its id
- * (what its colour is hashed from), its current title, its owner (`null`
- * until the environment list names it), and how to open what it is doing
- * under the hood (`null` where nothing can).
+ * (what its colour is hashed from), its current title, and its owner (`null`
+ * until the environment list names it).
  */
 export interface BotIdentity {
   readonly botId: string;
   readonly title: string;
   readonly owner: BotOwner | null;
-  readonly openActivity: (() => void) | null;
 }
 
 export const BotIdentityContext = createContext<BotIdentity | null>(null);

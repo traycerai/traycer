@@ -1,9 +1,3 @@
-import { hostQueryKeys } from "@/lib/query-keys";
-import {
-  ConnectedHookRemovalObservers,
-  HookRemovalObserver,
-} from "@/components/notifications/hook-removal-observer";
-import { consumePendingHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
 import {
   useCallback,
   useEffect,
@@ -12,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   NotificationsStreamClient,
   type NotificationsStreamCallbacks,
@@ -618,7 +612,6 @@ function NotificationsSessionBody(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (servingHostId !== hostId) return;
-      syncHookRemovalNoticesFromFrame(queryClient, hostId, frame);
       // `partitionSnapshot` is a `snapshot` for every purpose here: `@1.3`
       // defines it by extending the frozen `@1.2` snapshot, so it carries the
       // same `attention` / `recent` pages and only narrows WHICH rows they
@@ -1300,18 +1293,6 @@ function NotificationsSessionBody(
                 version: accepted.version,
               });
             }
-            for (const row of rows) {
-              if (
-                row.entry.kind === "notification.hooks.removed" &&
-                row.entry.readAt !== null
-              ) {
-                void consumePendingHookRemovalNotices(
-                  queryClient,
-                  row.originHostId,
-                  { ids: [row.entry.id] },
-                );
-              }
-            }
             recordCompletions(
               rows.map((row) => ({
                 entry: row.entry,
@@ -1397,7 +1378,6 @@ function NotificationsSessionBody(
       }
     },
     [
-      queryClient,
       servingStreamClient,
       cloudFeedStreamClient,
       recordCompletions,
@@ -1658,52 +1638,9 @@ function NotificationsSessionBody(
 
   return (
     <NotificationConsumptionContext.Provider value={consumeFocusedEntity}>
-      <HookRemovalObserver
-        client={servingHostClient}
-        navigate={props.navigate}
-      />
-      <ConnectedHookRemovalObservers
-        servingHostId={servingHostId}
-        navigate={props.navigate}
-      />
       {props.children}
     </NotificationConsumptionContext.Provider>
   );
-}
-
-/** Reconcile receipt announcements with authoritative notification read/clear
- * frames, and fetch newly committed receipts when their published row arrives. */
-function syncHookRemovalNoticesFromFrame(
-  queryClient: QueryClient,
-  hostId: string,
-  frame: HostNotificationsFeedFrame,
-): void {
-  let consumedIds: readonly string[];
-  if (frame.kind === "snapshot" || frame.kind === "partitionSnapshot") {
-    consumedIds = [...frame.attention.entries, ...frame.recent.entries]
-      .filter((entry) => entry.readAt !== null)
-      .map((entry) => entry.id);
-  } else if (frame.kind === "readStateChanged" && frame.readAt !== null) {
-    consumedIds = [...frame.ids, ...frame.removedIds];
-  } else {
-    consumedIds = frame.removedIds;
-  }
-  if (consumedIds.length > 0) {
-    void consumePendingHookRemovalNotices(queryClient, hostId, {
-      ids: consumedIds,
-    });
-  }
-  if (
-    frame.kind === "upserted" &&
-    frame.entry.kind === "notification.hooks.removed"
-  ) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(
-        hostId,
-        "host.notificationHooks.status",
-      ),
-    });
-  }
 }
 
 /**

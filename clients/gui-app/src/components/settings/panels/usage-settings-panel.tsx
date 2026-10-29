@@ -109,7 +109,7 @@ export function UsageSettingsPanel(): ReactNode {
         client={client}
         hostNames={hostNames}
         activeHostId={activeHostId}
-        activeHostLabel={scope.activeHost?.name ?? activeHostId ?? "this host"}
+        activeHostLabel={scope.activeHost?.name ?? "this host"}
         hostsResolving={scope.isLoading}
       />
     </SettingsPanelShell>

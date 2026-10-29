@@ -9,7 +9,10 @@ import {
   type ReactNode,
 } from "react";
 import { Lock } from "lucide-react";
-import { ChatStateLineContext } from "./chat-state-line";
+import {
+  ChatSandboxLineContext,
+  ChatStateLineContext,
+} from "./chat-state-line";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -200,6 +203,7 @@ export interface ChatLowerTurnState {
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /** Own live stream's draft-blob bridge capability. */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   /** Reads the live turn lifecycle, including ID-less activation boundaries. */
@@ -388,6 +392,8 @@ export function ChatLowerInteractionSurfaces(
     props.turn.autoPermissionModeProtocolSupported;
   const turnGetDraftBlobBridgeSupported =
     props.turn.getDraftBlobBridgeSupported;
+  const turnGetQueuedSteerRestartConfirmationSupported =
+    props.turn.getQueuedSteerRestartConfirmationSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
   const turnGetStopConfirmationTarget = props.turn.getStopConfirmationTarget;
 
@@ -438,6 +444,8 @@ export function ChatLowerInteractionSurfaces(
       autoPermissionModeProtocolSupported:
         turnAutoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported:
+        turnGetQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
       getStopConfirmationTarget: turnGetStopConfirmationTarget,
       stopDisabled: turnStopDisabled,
@@ -449,6 +457,7 @@ export function ChatLowerInteractionSurfaces(
       turnSteerProtocolSupported,
       turnAutoPermissionModeProtocolSupported,
       turnGetDraftBlobBridgeSupported,
+      turnGetQueuedSteerRestartConfirmationSupported,
       turnGetActiveTurnForSteer,
       turnGetStopConfirmationTarget,
       turnStopDisabled,
@@ -898,6 +907,7 @@ function ViewerComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
+  const sandboxSays = useContext(ChatSandboxLineContext);
   if (model.subagentView !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -910,10 +920,12 @@ function ViewerComposerSurface(props: {
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
-        <ReadOnlyComposerNotice
-          notice={model.access.readOnlyNotice}
-          actions={null}
-        />
+        {sandboxSays ? null : (
+          <ReadOnlyComposerNotice
+            notice={model.access.readOnlyNotice}
+            actions={null}
+          />
+        )}
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
@@ -931,6 +943,7 @@ function LiveChatComposer(props: {
 }) {
   const { model } = props;
   const tabHostId = useTabHostId();
+  const sandboxSays = useContext(ChatSandboxLineContext);
   const restingMessage =
     model.access.restingSandbox !== undefined &&
     model.queue.editingItem === null;
@@ -961,6 +974,9 @@ function LiveChatComposer(props: {
         model.turn.autoPermissionModeProtocolSupported
       }
       getDraftBlobBridgeSupported={model.turn.getDraftBlobBridgeSupported}
+      getQueuedSteerRestartConfirmationSupported={
+        model.turn.getQueuedSteerRestartConfirmationSupported
+      }
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
@@ -982,7 +998,7 @@ function LiveChatComposer(props: {
             tabHostId={tabHostId}
             onContinue={model.composer.onContinueOnTeamHosts}
           />
-          <ChatComposerDeliveryStatus />
+          <ChatComposerDeliveryStatus hideReconnecting={sandboxSays} />
           <ChatComposerOpencodeLineHeld />
         </>
       }

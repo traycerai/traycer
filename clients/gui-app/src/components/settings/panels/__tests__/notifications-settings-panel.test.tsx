@@ -165,9 +165,7 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
       within(policy).getByTestId("notifications-severity-done"),
     ).toBeTruthy();
     expect(
-      within(policy).getByText(
-        "Background host operations, including worktree cleanup.",
-      ),
+      within(policy).getByText("Updates that need nothing from you."),
     ).toBeTruthy();
     expect(within(policy).getByText("Approvals and interviews.")).toBeTruthy();
     expect(

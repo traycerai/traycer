@@ -1,7 +1,15 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  hostLabelAtSentenceStart,
+  quotedHostReference,
+  resolvedHostLabel,
+  UNNAMED_HOST_LABEL,
+  useHostReachability,
+  type HostReachability,
+} from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 interface ListState {
   readonly data: readonly HostDirectoryEntry[] | undefined;
@@ -28,8 +36,12 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   };
 }
 
+function verdictFor(hostId: string): HostReachability {
+  return renderHook(() => useHostReachability(hostId)).result.current;
+}
+
 function statusFor(hostId: string): string {
-  return renderHook(() => useHostReachability(hostId)).result.current.status;
+  return verdictFor(hostId).status;
 }
 
 describe("useHostReachability", () => {
@@ -144,5 +156,125 @@ describe("useHostReachability", () => {
   it("falls through to reachable when no directory source exists at all", () => {
     list.value = { data: undefined, fetchStatus: "idle" };
     expect(statusFor("host-a")).toBe("reachable");
+  });
+});
+
+/**
+ * Every arm that has no name for the host says "the host", never its id: the
+ * id names nothing a person can act on, and a consumer that prints the label
+ * would print it.
+ */
+describe("useHostReachability's label for a host it cannot name", () => {
+  const OTHER = entry({ hostId: "other", label: "Other Mac", kind: "remote" });
+
+  it.each<{
+    readonly name: string;
+    readonly hostId: string;
+    readonly data: readonly HostDirectoryEntry[] | undefined;
+    readonly fetchStatus: string;
+    readonly status: string;
+  }>([
+    {
+      name: "no directory source",
+      hostId: "host-a",
+      data: undefined,
+      fetchStatus: "idle",
+      status: "reachable",
+    },
+    {
+      name: "a directory still in flight",
+      hostId: "host-a",
+      data: undefined,
+      fetchStatus: "fetching",
+      status: "checking",
+    },
+    {
+      name: "the unknown-host placeholder",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      data: [OTHER],
+      fetchStatus: "idle",
+      status: "reachable",
+    },
+    {
+      name: "an empty directory",
+      hostId: "host-a",
+      data: [],
+      fetchStatus: "idle",
+      status: "host-starting",
+    },
+    {
+      name: "a host the directory does not list",
+      hostId: "host-a",
+      data: [OTHER],
+      fetchStatus: "idle",
+      status: "unreachable",
+    },
+    {
+      name: "this machine's unnamed, not-yet-dialable local row",
+      hostId: "host-a",
+      data: [
+        entry({
+          label: "",
+          websocketUrl: null,
+          transportDialability: "not-dialable",
+        }),
+      ],
+      fetchStatus: "idle",
+      status: "host-starting",
+    },
+    {
+      name: "a listed host with an empty label",
+      hostId: "host-a",
+      data: [entry({ label: "" })],
+      fetchStatus: "idle",
+      status: "reachable",
+    },
+    {
+      name: "a listed host whose label is only whitespace",
+      hostId: "host-a",
+      data: [entry({ label: "   " })],
+      fetchStatus: "idle",
+      status: "reachable",
+    },
+    {
+      // The registry lists a host it has no display name for under its id.
+      name: "a listed host labelled with its own id",
+      hostId: "host-a",
+      data: [entry({ label: "host-a" })],
+      fetchStatus: "idle",
+      status: "reachable",
+    },
+  ])(
+    "is the host, never the id, for $name",
+    ({ hostId, data, fetchStatus, status }) => {
+      list.value = { data, fetchStatus };
+      const verdict = verdictFor(hostId);
+      expect(verdict.status).toBe(status);
+      expect(verdict.hostLabel).toBe(UNNAMED_HOST_LABEL);
+      expect(resolvedHostLabel(verdict)).toBeNull();
+    },
+  );
+
+  it("keeps a listed host's own name", () => {
+    list.value = { data: [entry({})], fetchStatus: "idle" };
+    const verdict = verdictFor("host-a");
+    expect(verdict.hostLabel).toBe("This Mac");
+    expect(resolvedHostLabel(verdict)).toBe("This Mac");
+  });
+});
+
+describe("host labels in copy", () => {
+  it('opens a sentence with "The host" for an unnamed host, and leaves a real name as it is', () => {
+    expect(`${hostLabelAtSentenceStart(UNNAMED_HOST_LABEL)} is offline`).toBe(
+      "The host is offline",
+    );
+    expect(hostLabelAtSentenceStart("ada's mac")).toBe("ada's mac");
+  });
+
+  it("quotes a real name and never quotes the unnamed host", () => {
+    expect(quotedHostReference("Ada's Mac", true)).toBe('Host "Ada\'s Mac"');
+    expect(quotedHostReference("Ada's Mac", false)).toBe('host "Ada\'s Mac"');
+    expect(quotedHostReference(UNNAMED_HOST_LABEL, true)).toBe("The host");
+    expect(quotedHostReference(UNNAMED_HOST_LABEL, false)).toBe("the host");
   });
 });

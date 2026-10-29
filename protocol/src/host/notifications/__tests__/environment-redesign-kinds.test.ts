@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/versioned-rpc";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
+  ALL_HOST_NOTIFICATION_KINDS,
+  RELEASED_HOST_NOTIFICATION_KINDS,
+  RETIRED_HOST_NOTIFICATION_KINDS,
   V23_HOST_NOTIFICATION_KINDS,
   V24_HOST_NOTIFICATION_KINDS,
   formatHostNotificationPresentation,
@@ -141,22 +144,55 @@ describe("visibility of the five environments-redesign kinds", () => {
     ["feed 1.7", FEED, { major: 1, minor: 7 }],
     ["cloudFeed 1.4", CLOUD_FEED, { major: 1, minor: 4 }],
     ["cloudFeed 1.5", CLOUD_FEED, { major: 1, minor: 5 }],
-  ])("shows all five at %s", (_label, surface, version) => {
-    const visible = visibleHostNotificationKinds(surface, version);
-    const hidden = hiddenHostNotificationKinds(surface, version);
-    for (const kind of NEW_KINDS) {
-      expect(visible).toContain(kind);
-      expect(hidden).not.toContain(kind);
-    }
-    // `sandbox.notice` is cloud-feed only and `notification.hooks.removed` is
-    // origin-store only from list @2.5 / feed @1.7; the five are not what
-    // either hides.
-    expect(
-      hidden.filter(
-        (kind) =>
-          kind !== "sandbox.notice" && kind !== "notification.hooks.removed",
+  ])(
+    "carries all five at %s, and hides the retired ones",
+    (_label, surface, version) => {
+      const visible = visibleHostNotificationKinds(surface, version);
+      const hidden = hiddenHostNotificationKinds(surface, version);
+      for (const kind of NEW_KINDS) {
+        expect(visible).toContain(kind);
+        // Retired kinds are visible to the wire but hidden from every read.
+        expect(hidden.includes(kind)).toBe(
+          RETIRED_HOST_NOTIFICATION_KINDS.includes(kind),
+        );
+      }
+      // `notification.hooks.removed` is origin-store only from list @2.5 /
+      // feed @1.7; past the retired kinds, nothing else is hidden.
+      expect(
+        hidden.filter(
+          (kind) =>
+            !RETIRED_HOST_NOTIFICATION_KINDS.includes(kind) &&
+            kind !== "notification.hooks.removed",
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["list 2.5", LIST, { major: 2, minor: 5 }],
+    ["feed 1.7", FEED, { major: 1, minor: 7 }],
+    ["cloudFeed 1.6", CLOUD_FEED, { major: 1, minor: 6 }],
+    [
+      "subscribe 1.0",
+      { method: "host.notifications.subscribe" } as const,
+      { major: 1, minor: 0 },
+    ],
+  ] as const)(
+    "hides every retired kind at the newest version of %s",
+    (_label, surface, version) => {
+      expect(hiddenHostNotificationKinds(surface, version)).toEqual(
+        expect.arrayContaining([...RETIRED_HOST_NOTIFICATION_KINDS]),
+      );
+    },
+  );
+
+  it("keeps the released feed.subscribe 1.0 exclusion as it was", () => {
+    const hidden = hiddenHostNotificationKinds(FEED, { major: 1, minor: 0 });
+    expect(hidden).toEqual(
+      ALL_HOST_NOTIFICATION_KINDS.filter(
+        (kind) => !RELEASED_HOST_NOTIFICATION_KINDS.includes(kind),
       ),
-    ).toEqual([]);
+    );
   });
 
   it("freezes V23_HOST_NOTIFICATION_KINDS as what list 2.3, feed 1.4-1.5 and cloudFeed 1.3 carry", () => {

@@ -17,6 +17,7 @@ import type {
   CreateChatForkSourceV11,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import {
@@ -139,8 +140,16 @@ export interface PendingSandboxSend {
   readonly epicConfirmed: boolean;
   /** `null` until acceptance is confirmed, including an uncertain host response. */
   readonly delivery: PendingSandboxSendDelivery | null;
-  /** A durable withdrawal: its copy and roots remain until recovery settles. */
-  readonly returnRequested?: { readonly saveInDrafts: boolean };
+  /**
+   * A durable withdrawal: its copy and roots remain until recovery settles.
+   * `destination` is the sandbox a draft it lands in keeps, decided when the
+   * withdrawal began: whoever finishes it keeps that decision. Absent on
+   * legacy records, which keep no sandbox.
+   */
+  readonly returnRequested?: {
+    readonly saveInDrafts: boolean;
+    readonly destination?: ReturnedSandbox | null;
+  };
   /** Absent on legacy records; once claimed, only the original request may retry. */
   readonly dispatch?: PendingSandboxSendDispatch | null;
   /** An authoritative sandbox or task loss permits recovery of its pending message. */
@@ -164,7 +173,15 @@ interface PendingSandboxSendStoreState {
   readonly sends: Readonly<Record<string, PendingSandboxSend>>;
   readonly add: (send: PendingSandboxSend) => void;
   readonly holdStop: (id: string) => boolean;
-  readonly beginReturn: (id: string, saveInDrafts: boolean) => boolean;
+  /**
+   * Records a withdrawal. Its `destination` is decided once: a later begin,
+   * even one that saves to Drafts, keeps the recorded one.
+   */
+  readonly beginReturn: (
+    id: string,
+    saveInDrafts: boolean,
+    destination: ReturnedSandbox | null,
+  ) => boolean;
   readonly holdObservation: (
     id: string,
     plan: PendingSendTransition,
@@ -732,7 +749,7 @@ export const usePendingSandboxSendStore =
               sends: { ...state.sends, [id]: { ...send, epicConfirmed: true } },
             };
           }),
-        beginReturn: (id, saveInDrafts) => {
+        beginReturn: (id, saveInDrafts, destination) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return false;
           const send = sends[id];
@@ -749,7 +766,13 @@ export const usePendingSandboxSendStore =
             (send.returnRequested.saveInDrafts || !saveInDrafts)
           )
             return true;
-          const requested = { saveInDrafts };
+          const requested = {
+            saveInDrafts,
+            destination:
+              send.returnRequested === undefined
+                ? destination
+                : (send.returnRequested.destination ?? null),
+          };
           try {
             set({
               sends: {

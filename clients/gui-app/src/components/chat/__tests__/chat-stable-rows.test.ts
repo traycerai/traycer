@@ -450,6 +450,53 @@ describe("computeStableChatTimelineRows", () => {
     const afterOther = computeStableChatTimelineRows([otherPost], afterSame);
     expect(afterOther.result[0]).toBe(otherPost);
   });
+
+  // A question's settlement lands on the bot's row as a new question, the
+  // row's text and options as they were: the card must draw it.
+  it("treats a settlement landing on a bot's question as a real change, and the same question as no change at all", () => {
+    const open: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      question: {
+        requestId: "req-q",
+        questions: [
+          {
+            text: "Ship it?",
+            options: ["Yes", "No"],
+            allowFreeText: false,
+            settlement: null,
+          },
+        ],
+      },
+    };
+    const state = computeStableChatTimelineRows(
+      [open],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    const afterSame = computeStableChatTimelineRows([{ ...open }], state);
+    expect(afterSame).toBe(state);
+
+    const settled: ChatMessage = {
+      ...open,
+      question: {
+        requestId: "req-q",
+        questions: [
+          {
+            text: "Ship it?",
+            options: ["Yes", "No"],
+            allowFreeText: false,
+            settlement: {
+              answer: "Yes",
+              skipped: false,
+              by: { kind: "bot" },
+              at: 2,
+            },
+          },
+        ],
+      },
+    };
+    const afterSettled = computeStableChatTimelineRows([settled], afterSame);
+    expect(afterSettled.result[0]).toBe(settled);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {

@@ -150,6 +150,8 @@ function loadedOriginRow(
       ...(post.announcement === undefined
         ? {}
         : { announcement: post.announcement }),
+      // A question's thread opens on its card, settled as the channel shows it.
+      ...(post.question === undefined ? {} : { question: post.question }),
     };
   }
   const userId = post.sender.type === "user" ? post.sender.userId : null;

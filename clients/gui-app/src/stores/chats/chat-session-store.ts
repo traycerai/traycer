@@ -81,14 +81,17 @@ import {
   UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS,
   accountForQueueEdits,
   foldQueueEditAck,
+  foldQueueEditSteerAwaitingConfirmation,
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
+  answerQueueEditAwaitingConfirmation,
   withoutReturnedQueueEditsForRow,
   withQueueEditRecord,
   withoutQueueEditRecord,
   type QueueEditEvidence,
   type QueueEditFold,
+  type QueueEditFollowUpReplacement,
   type QueueEditIntent,
   type QueueEditRecord,
   type QueueEditRecords,
@@ -254,12 +257,14 @@ import type {
   OpenChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
+  ChatQueueSteerRestartReason,
   ChatSubscribeClientFrame,
   LastFailedAttempt,
   LastFallbackOutcome,
   PendingFallback,
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { QUEUE_STEER_RESTART_UNCONFIRMED_CODE } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   WorktreeBinding,
   WorktreeIntent,
@@ -331,6 +336,7 @@ export type ChatStreamClientHandle = Pick<
   Partial<
     Pick<
       ChatStreamClient,
+      | "queuedSteerRestartConfirmationSupported"
       | "interviewSettlementActionsProtocolSupported"
       // Optional for the same reason as its neighbour, and its ABSENCE is
       // read as `null` ("this handle cannot say") rather than `false`. A
@@ -611,6 +617,48 @@ export interface SubmitQueueEditInput {
   readonly restore: ChatSendRestore;
   readonly settings: ChatRunSettings;
   readonly intent: QueueEditIntent;
+  /**
+   * The person already confirmed ending the running turn for this steer (the
+   * composer's dialog for a settings change). Unconfirmed, a host that would
+   * have to end the turn refuses the steer and the queue's dialog asks.
+   */
+  readonly steerRestartConfirmed: boolean;
+  /** The tile submitting the edit: a refusal of its steer opens its dialog. */
+  readonly steerInitiatorId: string;
+}
+
+/** Who sent a queued steer, and what a queue edit asked for with it. */
+export interface QueuedSteerOrigin {
+  /** The tile that sent it: a refusal opens that tile's dialog. */
+  readonly initiatorId: string;
+  /** See {@link SteerRestartRefusal.editSettings}. */
+  readonly editSettings: ChatRunSettings | null;
+}
+
+/** A queued steer the host refused until the person confirms ending the turn. */
+export interface SteerRestartRefusal {
+  readonly clientActionId: string;
+  readonly queueItemId: string;
+  /** The settings the refused steer carried, sent again on confirm. */
+  readonly newSettings: ChatRunSettings | null;
+  readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
+  /**
+   * The tile answering the steer. Only its dialog asks while it is live;
+   * `null` after it closes lets a surviving or newly opened tile claim it.
+   */
+  readonly initiatorId: string | null;
+  /**
+   * The turn running when the host refused. Confirming ends only that turn:
+   * once another has started, the steer goes again unconfirmed and the host
+   * asks about the turn now running.
+   */
+  readonly turnId: string | null;
+  /**
+   * The settings a queue edit asked for, which rode only on this steer: the
+   * dialog saves them when the person declines the steer. `null` for a row's
+   * own Steer, which changes no settings by itself.
+   */
+  readonly editSettings: ChatRunSettings | null;
 }
 
 export interface PendingUserMessage {
@@ -1340,6 +1388,8 @@ export interface ChatSessionState {
   readonly steerProtocolSupported: boolean;
   /** Own stream's draft-blob bridge capability; false until open and on disconnect. */
   readonly draftBlobBridgeSupported: boolean;
+  /** Read the live session before deferring queued-steer consent to the host. */
+  readonly queuedSteerRestartConfirmationSupported: () => boolean;
   /** `chat.subscribe@1.7` support for detached interview delivery retries. */
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   /**
@@ -1876,6 +1926,16 @@ export interface ChatSessionState {
    */
   readonly queueEditRecords: QueueEditRecords;
   /**
+   * Each queued steer the host refused because it would end the running turn
+   * and the person had not confirmed that, from a row's Steer button or a
+   * queue edit's Cmd/Ctrl+Enter, oldest first. Two rows steered within one
+   * round trip are both refused, so each waits here until its owning tile's
+   * confirm dialog takes it ({@link ChatSessionState.takeSteerRestartRefusal}),
+   * asks, and sends it again confirmed; the host's notice for a refusal is not
+   * shown. A closing tile releases its ownership for another tile to claim.
+   */
+  readonly steerRestartRefusals: ReadonlyArray<SteerRestartRefusal>;
+  /**
    * Sends that have gone {@link UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS} on an
    * open stream without an ack. A DISPLAY fact and nothing else: the pending
    * action is untouched, so a late ack or a later snapshot settles the send
@@ -2133,7 +2193,26 @@ export interface ChatSessionState {
   queueSteerNow: (
     queueItemId: string,
     newSettings: ChatRunSettings | null,
+    restartConfirmed: boolean,
+    origin: QueuedSteerOrigin,
   ) => string | null;
+  /**
+   * Removes and returns the steer refusal named, or `null` when it is no
+   * longer held. Its tile calls it once the person answers the dialog, after
+   * dispatching the frame the answer sent in the steer's place (`null` when it
+   * sent none), and the queue edit the steer belonged to follows that frame.
+   */
+  takeSteerRestartRefusal: (
+    clientActionId: string,
+    replacement: QueueEditFollowUpReplacement | null,
+  ) => SteerRestartRefusal | null;
+  /** Release a closed tile's pending and held steers without dropping their payloads. */
+  releaseSteerRestartInitiator: (initiatorId: string) => void;
+  /** Claim an orphan only if it is still unowned and this tile has no question yet. */
+  claimSteerRestartRefusal: (
+    clientActionId: string,
+    initiatorId: string,
+  ) => void;
   queueAbortSteer: (queueItemId: string) => string | null;
   queueSettingsUpdate: (
     queueItemId: string,
@@ -2940,7 +3019,10 @@ function rejectionSurfaces(input: {
     // settings or the steer left out. The generic notice here would say "the
     // queued prompt is no longer pending" once per frame and neither.
     queueEditRecordForAction(state.queueEditRecords, frame.clientActionId) !==
-      null
+      null ||
+    // A steer refused for want of confirmation is asked about by the queue's
+    // confirm dialog (`steerRestartRefusals`), not reported as a failure.
+    frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
   ) {
     return {
       failedSendRestoration: state.failedSendRestoration,
@@ -3718,6 +3800,10 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly queueItemId: string;
     readonly settings: ChatRunSettings;
     readonly intent: QueueEditIntent;
+    readonly steerRestartConfirmed: boolean;
+    readonly steerInitiatorId: string;
+    /** The settings to save if the person declines the steer; `null` when the row already has them. */
+    readonly steerEditSettings: ChatRunSettings | null;
   }): string | null =>
     input.intent === "steer"
       ? sendQueueSteerNowFrame({
@@ -3726,6 +3812,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           clientActionId: input.clientActionId,
           queueItemId: input.queueItemId,
           newSettings: input.settings,
+          restartConfirmed: input.steerRestartConfirmed,
+          initiatorId: input.steerInitiatorId,
+          editSettings: input.steerEditSettings,
         })
       : sendQueueSettingsUpdateFrame({
           set: input.set,
@@ -3866,12 +3955,30 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessage: null,
     });
   };
+  // Each queued steer's settings and owning tile: a steer the host refuses
+  // unconfirmed is asked about in that tile and sent again confirmed with the
+  // same tuple. Closing the tile releases its ownership without losing the
+  // payload. Held from before the frame goes out, since its ack can arrive
+  // synchronously, until the steer can no longer get one: its ack, a dispatch
+  // the store refused, the reconnect sweep that drops it with its connection,
+  // or disposal.
+  const steersAwaitingAck = new Map<
+    string,
+    {
+      readonly newSettings: ChatRunSettings | null;
+      readonly initiatorId: string | null;
+      readonly editSettings: ChatRunSettings | null;
+    }
+  >();
   const sendQueueSteerNowFrame = (input: {
     readonly set: SendActionInput["set"];
     readonly get: SendActionInput["get"];
     readonly clientActionId: string;
     readonly queueItemId: string;
     readonly newSettings: ChatRunSettings | null;
+    readonly restartConfirmed: boolean;
+    readonly initiatorId: string;
+    readonly editSettings: ChatRunSettings | null;
   }): string | null => {
     const frame: ChatOwnerActionFrame = {
       kind: "queueSteerNow",
@@ -3881,8 +3988,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       clientActionId: input.clientActionId,
       queueItemId: input.queueItemId,
       newSettings: input.newSettings,
+      restartConfirmed: input.restartConfirmed,
     };
-    return sendAction({
+    steersAwaitingAck.set(input.clientActionId, {
+      newSettings: input.newSettings,
+      initiatorId: input.initiatorId,
+      editSettings: input.editSettings,
+    });
+    const clientActionId = sendAction({
       set: input.set,
       get: input.get,
       frame,
@@ -3892,6 +4005,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       pendingUserMessage: null,
     });
+    if (clientActionId === null) steersAwaitingAck.delete(input.clientActionId);
+    return clientActionId;
   };
   const sendQueueSettingsUpdateFrame = (input: {
     readonly set: SendActionInput["set"];
@@ -4598,6 +4713,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         get().pendingActions,
         connectionEpoch,
       );
+      // A swept steer will never get its ack, the only reader of its entry.
+      for (const sweptId of sweep.sweptActionIds) {
+        steersAwaitingAck.delete(sweptId);
+      }
       // Every swept id came from this same `pendingActions` snapshot, so the
       // lookup is always present. DEFERRED past the reconcile rather than
       // applied here: the slot holds one pick, and a swept edit is not the
@@ -7196,6 +7315,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               hash,
               draftImageByteTargetForHost(options.hostId),
             ),
+          returnedSandbox: null,
+          // The session is torn down: a row only memory holds is still the
+          // last copy the person can read.
+          durability: "in-memory",
         })
           // SECOND chance, text-only. The handoff's own fallback covers a
           // document whose IMAGES it cannot resolve; this covers an install
@@ -7215,6 +7338,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               reason: source.reason,
               cause: "capacity",
               stillCurrent,
+              returnedSandbox: null,
+              durability: "in-memory",
             }),
           )
           // The roots outlive the INSTALL, not just the call: see
@@ -7845,6 +7970,50 @@ export function createChatSessionStoreWithNotificationDependencies(
       }
       // The queue slice moved here too.
       commitWholeSetSliceBudget();
+    };
+
+    /**
+     * Hold a steer the host refused because it would end the running turn and
+     * was sent unconfirmed. The queue's confirm dialog asks the person
+     * (`steerRestartRefusals`), so the refusal is not an error to show.
+     *
+     * A named function rather than an inline branch because `onActionAck` is
+     * already at this workspace's complexity ceiling.
+     */
+    const holdSteerRestartRefusal = (frame: ChatActionAckFrame): void => {
+      const steer = steersAwaitingAck.get(frame.clientActionId);
+      steersAwaitingAck.delete(frame.clientActionId);
+      if (
+        frame.status !== "rejected" ||
+        frame.action !== "queueSteerNow" ||
+        frame.code !== QUEUE_STEER_RESTART_UNCONFIRMED_CODE
+      ) {
+        return;
+      }
+      const refusedSteer = pendingActionForId(
+        get().pendingActions,
+        frame.clientActionId,
+      );
+      if (
+        steer === undefined ||
+        refusedSteer === null ||
+        refusedSteer.queueItemId === null
+      ) {
+        return;
+      }
+      suppressNoticeAfterDispatch(frame.clientActionId);
+      const refusal: SteerRestartRefusal = {
+        clientActionId: frame.clientActionId,
+        queueItemId: refusedSteer.queueItemId,
+        newSettings: steer.newSettings,
+        reasons: frame.steerRestartReasons ?? [],
+        initiatorId: steer.initiatorId,
+        turnId: get().activeTurn?.turnId ?? null,
+        editSettings: steer.editSettings,
+      };
+      set((state) => ({
+        steerRestartRefusals: [...state.steerRestartRefusals, refusal],
+      }));
     };
 
     /**
@@ -8791,6 +8960,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           suppressNoticeAfterDispatch(frame.clientActionId);
         }
+        holdSteerRestartRefusal(frame);
         const rejectedPending =
           frame.status === "rejected"
             ? pendingActionForId(get().pendingActions, frame.clientActionId)
@@ -10368,6 +10538,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       turnLifecycleRevision: 0,
       steerProtocolSupported: false,
       draftBlobBridgeSupported: false,
+      queuedSteerRestartConfirmationSupported: () =>
+        !disposed &&
+        get().connectionStatus === "open" &&
+        streamClient?.queuedSteerRestartConfirmationSupported?.() === true,
       interviewDeliveryRetryProtocolSupported: false,
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
@@ -10428,6 +10602,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingCancelRestorations: {},
       failedSendRestoration: null,
       queueEditRecords: {},
+      steerRestartRefusals: [],
       unconfirmedSendActionIds: EMPTY_UNCONFIRMED_SEND_ACTION_IDS,
       hashOnlyRecoveries: {},
       currentComposerSettings: null,
@@ -11492,6 +11667,14 @@ export function createChatSessionStoreWithNotificationDependencies(
                 queueItemId: input.queueItemId,
                 settings: input.settings,
                 intent: input.intent,
+                steerRestartConfirmed: input.steerRestartConfirmed,
+                steerInitiatorId: input.steerInitiatorId,
+                steerEditSettings: chatRunSettingsEqual(
+                  row.settings,
+                  input.settings,
+                )
+                  ? null
+                  : input.settings,
               });
         if (editSent === null || followUpSent === null) {
           // The submission did not go out whole, so the composer is not
@@ -11556,14 +11739,66 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
       },
-      queueSteerNow: (queueItemId, newSettings) =>
+      queueSteerNow: (queueItemId, newSettings, restartConfirmed, origin) =>
         sendQueueSteerNowFrame({
           set,
           get,
           clientActionId: uuidv4(),
           queueItemId,
           newSettings,
+          restartConfirmed,
+          initiatorId: origin.initiatorId,
+          editSettings: origin.editSettings,
         }),
+      takeSteerRestartRefusal: (clientActionId, replacement) => {
+        const refusals = get().steerRestartRefusals;
+        const refusal =
+          refusals.find((held) => held.clientActionId === clientActionId) ??
+          null;
+        if (refusal === null) return null;
+        set((state) => ({
+          steerRestartRefusals: refusals.filter((held) => held !== refusal),
+          queueEditRecords: answerQueueEditAwaitingConfirmation(
+            state.queueEditRecords,
+            clientActionId,
+            replacement,
+          ),
+        }));
+        return refusal;
+      },
+      releaseSteerRestartInitiator: (initiatorId) => {
+        if (disposed) return;
+        for (const [actionId, steer] of steersAwaitingAck) {
+          if (steer.initiatorId === initiatorId) {
+            steersAwaitingAck.set(actionId, { ...steer, initiatorId: null });
+          }
+        }
+        const refusals = get().steerRestartRefusals;
+        if (!refusals.some((held) => held.initiatorId === initiatorId)) return;
+        set({
+          steerRestartRefusals: refusals.map((held) =>
+            held.initiatorId === initiatorId
+              ? { ...held, initiatorId: null }
+              : held,
+          ),
+        });
+      },
+      claimSteerRestartRefusal: (clientActionId, initiatorId) => {
+        if (disposed) return;
+        const refusals = get().steerRestartRefusals;
+        if (refusals.some((held) => held.initiatorId === initiatorId)) return;
+        const refusal = refusals.find(
+          (held) => held.clientActionId === clientActionId,
+        );
+        // Re-read ownership here: another pane can claim between rendering
+        // the orphan and running its effect. Only the first claimant asks.
+        if (refusal === undefined || refusal.initiatorId !== null) return;
+        set({
+          steerRestartRefusals: refusals.map((held) =>
+            held === refusal ? { ...held, initiatorId } : held,
+          ),
+        });
+      },
       queueAbortSteer: (queueItemId) => {
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
@@ -12210,6 +12445,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearSuppressedNotices();
         unsubscribeSweptObserver();
         stickySweptByAction.clear();
+        steersAwaitingAck.clear();
         disposed = true;
         liveChatSessionStores.delete(store);
         unsubscribeLiveCompletionAcknowledgements();
@@ -12894,11 +13130,21 @@ function queueEditSurfacesForAck(
   frame: ChatActionAckFrame,
   surfaces: HandBackSurfaces,
 ): HandBackSurfaces & Pick<ChatSessionState, "queueEditRecords"> {
-  const fold = foldQueueEditAck(state.queueEditRecords, {
-    clientActionId: frame.clientActionId,
-    status: frame.status,
-    reason: frame.reason ?? null,
-  });
+  // A steer refused for want of confirmation is not a failed submission: the
+  // confirm dialog takes it over and sends it again, so the edit says nothing
+  // about it - neither "not applied" nor that it went ahead.
+  const fold =
+    frame.status === "rejected" &&
+    frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
+      ? foldQueueEditSteerAwaitingConfirmation(
+          state.queueEditRecords,
+          frame.clientActionId,
+        )
+      : foldQueueEditAck(state.queueEditRecords, {
+          clientActionId: frame.clientActionId,
+          status: frame.status,
+          reason: frame.reason ?? null,
+        });
   return {
     queueEditRecords: fold.records,
     ...withQueueEditSettlements(

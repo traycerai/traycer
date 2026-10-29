@@ -37,7 +37,10 @@ import {
   useLastBrowserPeekFrame,
 } from "@/lib/browser-view/sessions/peek-frame-cache";
 import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  hostLabelAtSentenceStart,
+  useHostReachability,
+} from "@/hooks/agent/use-host-reachability";
 
 /**
  * The shared browser tab tile: the binding wait, the wake window and its
@@ -622,7 +625,9 @@ function BrowserTabDormantPlaceholder(props: {
         />
       )}
       <div className="relative z-10 max-w-md text-ui-sm text-muted-foreground">
-        <div className="font-medium text-foreground">{props.hostLabel}</div>
+        <div className="font-medium text-foreground">
+          {hostLabelAtSentenceStart(props.hostLabel)}
+        </div>
         <div>Host is unreachable. This tile will reconnect on its own.</div>
       </div>
     </div>

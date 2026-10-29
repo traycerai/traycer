@@ -1558,6 +1558,7 @@ function chatTileTestTree(
 function chatTileSessionViewTestTree(
   queryClient: QueryClient,
   handle: ChatSessionStoreHandle,
+  isLiveSession: boolean,
 ) {
   return chatTileProviders(
     queryClient,
@@ -1570,7 +1571,7 @@ function chatTileSessionViewTestTree(
       currentEpicId={EPIC_ID}
       restingSandbox={RESTING_COPY_SANDBOX}
       readOnlyNotice={null}
-      isLiveSession={false}
+      isLiveSession={isLiveSession}
       preContent={null}
     />,
   );
@@ -1594,7 +1595,28 @@ function renderRestingCopy(handle: ChatSessionStoreHandle) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileSessionViewTestTree(queryClient, handle));
+  return render(chatTileSessionViewTestTree(queryClient, handle, false));
+}
+
+/**
+ * The live tile of a chat whose sandbox rests: a tab opened while the sandbox
+ * was awake stays bound to it, and the pool serves the stream at rest. The
+ * tab's host answers nothing, so its workspace reads never settle.
+ */
+function renderServedAtRest(handle: ChatSessionStoreHandle) {
+  // A sandbox task starts with no workspace folders and binds none.
+  act(() => {
+    handle.store.setState({ worktreeBinding: null, missingWorktreePaths: [] });
+  });
+  workspaceRpcTestState.methods.length = 0;
+  workspaceRpcTestState.settingsWrites.length = 0;
+  usePendingSandboxSendStore.setState({ sends: {} });
+  useStagedSandboxStore.getState().clearAll();
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(chatTileSessionViewTestTree(queryClient, handle, true));
 }
 
 function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
@@ -2370,6 +2392,214 @@ describe("<ChatTile />", () => {
       throw new Error("expected send button");
     }
     fireEvent.click(sendButton);
+
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.request).toMatchObject({
+      kind: "message",
+      chatId: CHAT_ARTIFACT.id,
+      hostId: RESTING_COPY_SANDBOX.sandbox.hostId,
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
+  });
+
+  it.each(["owner", "viewer"] as const)(
+    "keeps a suspended live tile's footer as its only availability line for the %s before copy substitution",
+    async (role) => {
+      chatHarness.teardown();
+      chatHarness.install(role, []);
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+      ];
+      sandboxCatalogueTestState.catalogue = {
+        providers: [],
+        offeredAgents: ["codex"],
+      };
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      taskSandboxTestState.sandboxes = [
+        sandboxSummaryFixture({
+          hostId: HOST_ID,
+          displayName: "resting-box",
+          state: "suspended",
+        }),
+      ];
+      act(() => {
+        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getAllByText(
+            /resting-box is suspended · your next message resumes it/,
+          ),
+        ).toHaveLength(1);
+      });
+      expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "No sandbox is running this agent",
+      );
+      expect(document.body.textContent).not.toContain("Read-only viewer");
+      expect(document.body.textContent).not.toContain("is offline");
+      if (role === "owner") {
+        const send = screen.getByRole("button", { name: "Send" });
+        if (!(send instanceof HTMLButtonElement)) {
+          throw new Error("expected send button");
+        }
+        expect(send.disabled).toBe(false);
+      }
+    },
+  );
+
+  it("keeps an unconfirmed send and its delivery check beside a resting sandbox footer", async () => {
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+    ];
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+    renderChatTile();
+    await waitForChatTileLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) throw new Error("expected the live chat handle");
+    // The deadline's local fact belongs to a real dispatched, unanswered send.
+    act(() =>
+      handle.store.setState({
+        unconfirmedSendActionIds: new Set([frame.clientActionId]),
+      }),
+    );
+
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        state: "suspended",
+      }),
+    ];
+    act(() =>
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(
+          /resting-box is suspended · your next message resumes it/,
+        ),
+      ).toHaveLength(1),
+    );
+    expect(
+      screen.getByTestId("chat-composer-delivery-unconfirmed").textContent,
+    ).toContain("Delivery not confirmed");
+    expect(screen.getByRole("button", { name: "Check delivery" })).toBeTruthy();
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+  });
+
+  it("lets a sandbox state explain a dead lease before the first snapshot, even while the directory says reachable", async () => {
+    directoryListTestState.entries = [
+      {
+        hostId: HOST_ID,
+        label: "stopping-box",
+        kind: "remote",
+        websocketUrl: "wss://sbx.example.com/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
+      },
+    ];
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "stopping-box" }),
+    ];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+    chatHarness.teardown();
+    chatHarness.installDeferred();
+    renderChatTile();
+    await advanceLegendListTime(0);
+
+    expect(
+      screen.getAllByText("stopping-box is running, but Traycer can’t connect"),
+    ).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("is offline");
+    expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
+
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "stopping-box",
+        state: "stopped",
+      }),
+    ];
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+    });
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /stopping-box is stopped · your next message starts it/,
+        ),
+      ).toHaveLength(1);
+    });
+    expect(document.body.textContent).not.toContain("is offline");
+    expect(screen.queryByText(/isn't available/)).toBeNull();
+  });
+
+  it("keeps an ordinary host's reconnect status when the sandbox carrier is absent", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+    });
+    expect(
+      screen.getByTestId("chat-composer-reconnecting").textContent,
+    ).toContain("Reconnecting to the host — sending is paused");
+  });
+
+  it("sends from a resting chat's live tile whose host can't answer for its workspace folders", async () => {
+    useSettingsStore.setState({ defaultPermission: "full_access" });
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+
+    renderServedAtRest(handle);
+
+    // A hint leaves the button focusable and marks it `aria-disabled` instead.
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-disabled")).toBeNull();
+    });
+    expect(workspaceRpcTestState.methods).not.toContain(
+      "worktree.listBindingsForEpic",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     const sends = Object.values(usePendingSandboxSendStore.getState().sends);
     expect(sends).toHaveLength(1);
@@ -4530,6 +4760,141 @@ describe("<ChatTile />", () => {
       throw new Error("expected queueSteerNow frame");
     }
     expect(frame.newSettings?.permissionMode).toBe("auto_accept_edits");
+  });
+
+  it("asks before a queued steer the host would restart the turn for, and sends it confirmed", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // Matches `AUTO_SESSION_SETTINGS` on every field `decideSteerSettings`
+    // compares, so the decision is `silent_inject` and the send fires on one
+    // click - `permissionMode` is deliberately excluded from that comparison
+    // (it applies live, no restart needed), which is exactly why an
+    // unclamped `"auto"` on this frame would be the queue-steer regression.
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: AUTO_SESSION_SETTINGS.reasoningEffort,
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    // Sent unconfirmed: nothing here says the turn must end.
+    const first = chatHarness.sent.at(-1);
+    if (first === undefined || first.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(first.restartConfirmed).toBe(false);
+    expect(screen.queryByTestId("steer-settings-conflict-dialog")).toBeNull();
+
+    // The host refuses it: steering would end the turn, for the images.
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: first.clientActionId,
+        action: "queueSteerNow",
+        status: "rejected",
+        reason: "Steering this message now would end the current turn.",
+        code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+        backgroundStopTaskIds: [],
+        token: null,
+        steerRestartReasons: ["images"],
+      });
+    });
+
+    const dialog = await screen.findByTestId("steer-settings-conflict-dialog");
+    expect(dialog.textContent).toContain(
+      "This agent can't take images while its turn is running.",
+    );
+    expect(chatHarness.sent.at(-1)).toBe(first);
+
+    fireEvent.click(screen.getByTestId("steer-settings-conflict-confirm"));
+
+    const confirmed = chatHarness.sent.at(-1);
+    if (confirmed === undefined || confirmed.kind !== "queueSteerNow") {
+      throw new Error("expected a confirmed queueSteerNow frame");
+    }
+    expect(confirmed.clientActionId).not.toBe(first.clientActionId);
+    expect(confirmed.queueItemId).toBe(first.queueItemId);
+    expect(confirmed.newSettings).toEqual(first.newSettings);
+    expect(confirmed.restartConfirmed).toBe(true);
+    await waitFor(() => {
+      expect(screen.queryByTestId("steer-settings-conflict-dialog")).toBeNull();
+    });
   });
 
   it("passes auto through a queued steer-now send when the harness row lists it", async () => {

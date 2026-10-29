@@ -92,7 +92,6 @@ import {
   type ComposerHostNoticeState,
 } from "@/components/home/composer/composer-host-notice";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
-import { ChatSecretExportNotices } from "./chat-secret-export-notices";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "./profile-disabled-banner";
 import {
@@ -105,7 +104,6 @@ import {
   promptSuggestionAllowed,
 } from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
-import { clearChatComposerDraft } from "./clear-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
@@ -133,6 +131,10 @@ import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-regi
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
 import { FirstTaskChatGuide } from "@/components/onboarding/first-task-guide";
+
+// The composer's Cmd/Ctrl+Enter steer confirms only a settings change; the
+// host turns every other cause into a labeled next-turn send.
+const SETTINGS_RESTART_REASONS = ["settings"] as const;
 
 // Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
 // handlers imports them from one place.
@@ -233,6 +235,7 @@ interface ChatComposerProps {
    * read, so the flag is the chat's own, never an app-wide one.
    */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
   /**
    * Reads the live active turn at submit time (not a reactive prop) so the
    * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
@@ -270,9 +273,10 @@ interface ChatComposerProps {
   readonly suggestedPrompt: string | undefined;
   /**
    * The sandbox this chat is bound to, while it rests and the next message
-   * wakes it; `null` otherwise. Such a chat is drawn by its published copy,
-   * bound to the host SERVING that copy, so the tab's host is not where the
-   * send runs: the run gates and the toolbar's pick answer for the sandbox.
+   * wakes it; `null` otherwise. The tab's host is not where that send runs: it
+   * serves the chat's published copy, or - a tab opened while the sandbox was
+   * awake - it is the resting sandbox itself, which answers nothing. So the
+   * run gates and the toolbar's pick answer for the sandbox.
    */
   readonly restingSandbox: RestingChatSandbox | null;
 }
@@ -288,6 +292,12 @@ export interface ChatComposerSubmitInput {
    * that left with the send.
    */
   readonly restore: ChatSendRestore;
+  /**
+   * True only when the person confirmed ending the running turn in the
+   * composer's settings dialog. A queue edit's steer passes it on as its
+   * restart confirmation; a settings difference alone never stands for one.
+   */
+  readonly restartConfirmed: boolean;
 }
 
 /** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
@@ -426,6 +436,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
     getDraftBlobBridgeSupported,
+    getQueuedSteerRestartConfirmationSupported,
     suggestedPrompt,
     restingSandbox,
   } = props;
@@ -556,7 +567,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // and their catalog subscriptions. Visible split partners retain their body.
   // The catalog is the TAB host's (`hostClient`), like every other read in
   // this composer - a tab bound to another host offers that host's harnesses
-  // and models, never the app-wide default's.
+  // and models, never the app-wide default's. A resting chat's Traycer models
+  // are the cloud catalog's instead (`sendsToRestingSandbox`).
   const toolbarStore = useComposerToolbarStore(
     focused ? "chat-tile" : null,
     seedSource,
@@ -652,13 +664,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
-  // "Cancel the message": withdrawn, not sent - the composer clears as a send
-  // clears it, and the refusal it answered closes.
+  // "Cancel the message": not sent - the refusal it answered closes, and the
+  // text stays in the composer, unsent.
   const [cancelledMessages, setCancelledMessages] = useState(0);
   const cancelMessage = useCallback((): void => {
-    clearChatComposerDraft({ taskId, pickerStore, editorRef });
     setCancelledMessages((count) => count + 1);
-  }, [pickerStore, taskId]);
+  }, []);
   const boundSandboxRemedies = useBoundSandboxRemedies({
     chatId: taskId,
     epicId: currentEpicId,
@@ -852,6 +863,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       onSubmitMessage: submitWithGuide,
       onSideChat,
       targetHostId: tabHostId,
@@ -1025,7 +1037,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
             eligibility={profileEligibility}
             onChooseProfile={toggleActiveModelPicker}
           />
-          <ChatSecretExportNotices chatId={taskId} />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -1142,6 +1153,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         open={steerConflict.open}
         onOpenChange={steerConflict.onOpenChange}
         onRestart={steerConflict.onRestart}
+        reasons={SETTINGS_RESTART_REASONS}
         changed={steerConflict.changed}
       />
     </>

@@ -79,6 +79,11 @@ const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
 const registeredComposerHostClients: Array<HostClient<HostRpcRegistry> | null> =
   [];
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 // `data` is returned regardless of `enabled`, because that is what TanStack
 // does: `enabled:false` stops FETCHING, it does not evict the cache, and a
 // focused split partner observing the same key keeps it warm. Modelling it as

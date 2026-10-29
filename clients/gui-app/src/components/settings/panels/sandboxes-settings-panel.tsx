@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
@@ -42,14 +42,11 @@ import {
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
-import {
-  useApplyRequestedSandboxesConfiguration,
-  useSettlePendingSandboxReveal,
-} from "@/hooks/sandboxes/use-open-sandboxes-page";
+import { useApplyRequestedSandboxesConfiguration } from "@/hooks/sandboxes/use-apply-requested-sandboxes-configuration";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
-import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import {
   sandboxSettingsFailed,
@@ -109,13 +106,8 @@ import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
 import { useConfigurationSandboxDefaults } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-defaults-section";
-import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  clearSandboxReveal,
-  useSandboxesPageStore,
-} from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 /**
@@ -131,13 +123,6 @@ export function SandboxesSettingsPanel(): ReactNode {
   // the page on one moves that pick.
   const pick = useEnvironmentPick();
   useApplyRequestedSandboxesConfiguration();
-  useSettlePendingSandboxReveal();
-  // A held reveal waits for its configuration, or the wrong page consumes it.
-  const revealSandboxId = useSandboxesPageStore((s) =>
-    s.revealConfigurationPending || s.requestedConfiguration !== null
-      ? null
-      : s.revealSandboxId,
-  );
   const configuration = configurationForPick(configurations, pick);
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
@@ -187,7 +172,6 @@ export function SandboxesSettingsPanel(): ReactNode {
         configuration={configuration}
         teamEnvironmentIds={teamEnvironmentIds}
         teamsComplete={complete}
-        revealSandboxId={revealSandboxId}
       />
     </SettingsPanelShell>
   );
@@ -306,60 +290,6 @@ function todayFigures(input: {
 }
 
 /**
- * Scrolls the revealed row into view when it first shows, and on each later
- * reveal (`reveals` counts them), not again on each refetch while the reader
- * scrolls elsewhere.
- */
-function useScrollRevealedRow(
-  highlighted: string | null,
-  shown: readonly SandboxSummary[],
-  reveals: number,
-): void {
-  const highlightedShown =
-    highlighted !== null && shown.some((row) => row.id === highlighted);
-  useEffect(() => {
-    if (highlighted === null || !highlightedShown) return;
-    const row = document.querySelector(
-      `[data-sandbox-row="${CSS.escape(highlighted)}"]`,
-    );
-    row?.scrollIntoView({ block: "center" });
-  }, [highlighted, highlightedShown, reveals]);
-}
-
-/**
- * The list's filter and highlighted row. A notification's row is revealed
- * despite any filter: the filter clears, the row scrolls into view and is
- * highlighted. Adjusted while rendering (not in an effect), then the request
- * is consumed so the same row can be asked for again. `reveals` counts them:
- * one scroll per reveal, even of the row revealed last time.
- */
-function useRevealedSandboxFilter(reveal: string | null): {
-  readonly filter: SandboxRowFilter;
-  readonly setFilter: (filter: SandboxRowFilter) => void;
-  readonly highlighted: string | null;
-  readonly reveals: number;
-} {
-  const [filter, setFilter] = useState<SandboxRowFilter>(
-    SANDBOX_ROW_FILTER_NONE,
-  );
-  const [highlighted, setHighlighted] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState<string | null>(null);
-  const [reveals, setReveals] = useState(0);
-  if (reveal !== revealed) {
-    setRevealed(reveal);
-    if (reveal !== null) {
-      setFilter(SANDBOX_ROW_FILTER_NONE);
-      setHighlighted(reveal);
-      setReveals((count) => count + 1);
-    }
-  }
-  useEffect(() => {
-    if (reveal !== null) clearSandboxReveal();
-  }, [reveal]);
-  return { filter, setFilter, highlighted, reveals };
-}
-
-/**
  * Whether the configuration's Automations host is listed before its first
  * shell creates it: offered, with no sandbox or pod yet, and no Automations
  * row among the configuration's own.
@@ -419,7 +349,6 @@ interface SandboxListSectionProps {
   readonly configuration: SandboxPageConfiguration;
   readonly teamEnvironmentIds: ReadonlySet<string>;
   readonly teamsComplete: boolean;
-  readonly revealSandboxId: string | null;
 }
 
 function SandboxListSection(props: SandboxListSectionProps): ReactNode {
@@ -429,8 +358,8 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   const costs = useSandboxCosts();
   const unavailable = useSandboxControlUnavailableReason();
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  const { filter, setFilter, highlighted, reveals } = useRevealedSandboxFilter(
-    props.revealSandboxId,
+  const [filter, setFilter] = useState<SandboxRowFilter>(
+    SANDBOX_ROW_FILTER_NONE,
   );
   const [destroyAllTargets, setDestroyAllTargets] = useState<
     readonly SandboxSummary[] | null
@@ -463,7 +392,6 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   });
   const unstartedShown =
     unstartedAutomations && unstartedAutomationsMatches(filter);
-  useScrollRevealedRow(highlighted, shown, reveals);
   const personalTodayMc = useMemo(() => {
     const data = costs.data ?? null;
     if (allRows === null || data === null) return 0;
@@ -581,7 +509,6 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
               null
             }
             viewerUserId={viewerUserId}
-            highlighted={row.id === highlighted}
           />
         ))}
         {unstartedShown ? (
@@ -989,14 +916,14 @@ function SandboxListRow(props: {
   readonly configuration: SandboxPageConfiguration;
   readonly cost: SandboxCost | null;
   readonly viewerUserId: string | null;
-  readonly highlighted: boolean;
 }): ReactNode {
   const { summary, configuration, viewerUserId } = props;
   const settings = useSandboxSettingsStatus(summary);
-  const settingsFailed = sandboxSettingsFailed(settings.data?.items ?? []);
+  const settingsItems = settings.data?.items ?? [];
+  const settingsFailed = sandboxSettingsFailed(settingsItems);
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
-  const sessions = useSandboxSessionReport(summary.hostId, awake);
+  const sessions = useSandboxRowSessionReport(summary);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
   const unreachable = useSandboxRowUnreachable(
@@ -1004,6 +931,8 @@ function SandboxListRow(props: {
     sessions.failed && sessions.report.kind !== "live",
     props.list,
   );
+  const resumePending =
+    sessions.resumePending && !settingsFailed && !unreachable;
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
@@ -1015,10 +944,7 @@ function SandboxListRow(props: {
       data-sandbox-row={summary.id}
       data-state={state}
       data-testid="sandboxes-row"
-      className={cn(
-        "flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
-        props.highlighted && "bg-info/10",
-      )}
+      className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
       <div className="flex min-w-0 gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
@@ -1062,6 +988,7 @@ function SandboxListRow(props: {
                 wakeString: wake,
                 viewerUserId,
                 reachability,
+                resumePending,
                 now,
               })}
             </span>
@@ -1072,14 +999,14 @@ function SandboxListRow(props: {
               <p>
                 {sandboxSettingsStepsLine(
                   sandboxSettingsEvidence(
-                    settings.data?.items ?? [],
+                    settingsItems,
                     props.summary.guestConfigured,
                   ),
                 )}
               </p>
             </div>
           ) : null}
-          {awake && !unreachable ? (
+          {awake && !unreachable && !resumePending ? (
             <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>

@@ -48,7 +48,6 @@ function activation(feedId: string): MergedNotificationRow {
     resolvedAt: null,
     sourceRef: null,
     originHostId: null,
-    providerPackAttribution: null,
     category: "task",
   };
 }

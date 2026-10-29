@@ -8,9 +8,8 @@ import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 /**
  * Everything an ACCEPTED submit does to the composer, shared by the send and
- * side-chat paths and by a message withdrawn instead of sent (a sandbox
- * refusal's "Cancel the message"). The draft is retired, not kept: cleared
- * here and deleted from its host, so it never lands in Drafts.
+ * side-chat paths. The draft is retired, not kept: cleared here and deleted
+ * from its host, so it never lands in Drafts.
  */
 export function clearChatComposerDraft(input: {
   readonly taskId: string;

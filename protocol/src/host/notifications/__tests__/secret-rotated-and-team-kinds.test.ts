@@ -3,6 +3,7 @@ import { RPC_ERROR_CODES } from "@traycer/protocol/framework/versioned-rpc-types
 import {
   formatHostNotificationPresentation,
   hiddenHostNotificationKinds,
+  RETIRED_HOST_NOTIFICATION_KINDS,
   hostNotificationEntrySchemaV22,
   hostNotificationEntrySchemaV23,
   hostNotificationSecretGrantRequestPayloadSchema,
@@ -215,14 +216,20 @@ describe("visibility of secret.rotated and the team kinds", () => {
     ["list 2.3", LIST, { major: 2, minor: 3 }],
     ["feed 1.4", FEED, { major: 1, minor: 4 }],
     ["cloudFeed 1.3", CLOUD_FEED, { major: 1, minor: 3 }],
-  ])("shows all eight kinds at %s", (_label, surface, version) => {
-    const visible = visibleHostNotificationKinds(surface, version);
-    const hidden = hiddenHostNotificationKinds(surface, version);
-    for (const kind of NEW_KINDS) {
-      expect(visible).toContain(kind);
-      expect(hidden).not.toContain(kind);
-    }
-  });
+  ])(
+    "carries all eight kinds at %s, and hides the retired ones",
+    (_label, surface, version) => {
+      const visible = visibleHostNotificationKinds(surface, version);
+      const hidden = hiddenHostNotificationKinds(surface, version);
+      for (const kind of NEW_KINDS) {
+        expect(visible).toContain(kind);
+        // Retired kinds are visible to the wire but hidden from every read.
+        expect(hidden.includes(kind)).toBe(
+          RETIRED_HOST_NOTIFICATION_KINDS.includes(kind),
+        );
+      }
+    },
+  );
 });
 
 describe("entry schemas for secret.rotated and the team kinds", () => {

@@ -426,12 +426,13 @@ describe("the removal notice on each negotiated version", () => {
     ["list @2.5", LIST, { major: 2, minor: 5 }],
     ["feed @1.7", FEED, { major: 1, minor: 7 }],
     ["cloudFeed @1.6", CLOUD, { major: 1, minor: 6 }],
-  ])("serves it at %s", (_label, surface, version) => {
-    expect(visibleHostNotificationKinds(surface, version)).toContain(REMOVED);
-    expect(hiddenHostNotificationKinds(surface, version)).not.toContain(
-      REMOVED,
-    );
-  });
+  ])(
+    "carries it at %s but hides it from reads, as a retired kind",
+    (_label, surface, version) => {
+      expect(visibleHostNotificationKinds(surface, version)).toContain(REMOVED);
+      expect(hiddenHostNotificationKinds(surface, version)).toContain(REMOVED);
+    },
+  );
 
   it("keeps sandbox notices on the cloud feed only", () => {
     const sandboxFrame = cloudSnapshot(SANDBOX_ENTRY);
