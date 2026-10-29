@@ -62,14 +62,12 @@ const creditOfferSchema = lazySchema(() =>
 export const listCreditOffersResponseSchema: z.ZodType<ListCreditOffersResponse> =
   lazySchema(() =>
     z.object({
-      campaigns: z
-        .array(z.unknown())
-        .transform((cards) =>
-          cards.flatMap((card) => {
-            const parsed = creditOfferSchema.safeParse(card);
-            return parsed.success ? [parsed.data] : [];
-          }),
-        ),
+      campaigns: z.array(z.unknown()).transform((cards) =>
+        cards.flatMap((card) => {
+          const parsed = creditOfferSchema.safeParse(card);
+          return parsed.success ? [parsed.data] : [];
+        }),
+      ),
     }),
   );
 

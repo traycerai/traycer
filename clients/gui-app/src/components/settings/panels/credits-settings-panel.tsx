@@ -55,7 +55,10 @@ const NO_OFFER_ROWS: ReadonlyArray<OfferRow> = [];
  * to claim (or every seat of which is taken).
  */
 type OfferRow =
-  | { readonly kind: "claimed"; readonly offer: AuthenticatedUserCampaignCredit }
+  | {
+      readonly kind: "claimed";
+      readonly offer: AuthenticatedUserCampaignCredit;
+    }
   | { readonly kind: "claimable"; readonly offer: CreditOffer };
 
 /**
