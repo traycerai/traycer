@@ -1298,20 +1298,21 @@ export function useMaybeEpicArchivedNodeIds(): readonly string[] {
 }
 
 /**
- * The held chats an environment arm row already stands for (see
+ * The held chats one of `cloudRows` already stands for (see
  * {@link armRowNamesHeldChat}): a team host's chat, held as its creator's
- * untitled stand-in until it first publishes. The sidebar draws the arm row
- * in the stand-in's place, so one chat reads as one row with its title.
- * Sorted, for the reason {@link useEpicChatIds} gives.
+ * untitled stand-in until it first publishes, whose environment arm row is
+ * among the rows given. The sidebar draws that row in the stand-in's place,
+ * so one chat reads as one row with its title. Sorted, for the reason
+ * {@link useEpicChatIds} gives.
  */
-export function useEpicChatIdsNamedByArmRows(
-  armRows: readonly CloudChatSummary[],
+export function useEpicChatIdsNamedByCloudRows(
+  cloudRows: readonly CloudChatSummary[],
 ): ReadonlyArray<string> {
   return useEpicStore(
     useShallow((s): ReadonlyArray<string> => {
-      if (armRows.length === 0) return EMPTY_TREE_ID_ARRAY;
+      if (cloudRows.length === 0) return EMPTY_TREE_ID_ARRAY;
       const ids: string[] = [];
-      for (const row of armRows) {
+      for (const row of cloudRows) {
         const { chatId } = row.identity;
         if (!Object.hasOwn(s.chats.byId, chatId)) continue;
         if (armRowNamesHeldChat(row, s.chats.byId[chatId])) ids.push(chatId);
@@ -2018,20 +2019,28 @@ const ARM_TITLE_HELD_ABSENT: ArmTitleHeld = { kind: "absent" };
  *
  * Only an ARM row is read, never a viewer-list row: a record's own untitled
  * answer is not overridden by its own cloud row, and a collaborator's row is
- * not taken (see {@link useCloudChatTitleForAbsentRecord}). An absent record
- * matches the row by `(chatId, bound host)`, the pair a host mints; a held
- * stand-in matches through {@link armRowNamesHeldChat}.
+ * not taken (see {@link useCloudChatTitleForAbsentRecord}). Every match is on
+ * the tab's bound host: an absent record, or one held on another host, matches
+ * the row by `(chatId, bound host)`, the pair a host mints; a held stand-in
+ * matches through {@link armRowNamesHeldChat}.
  */
 function useArmChatTitle(
   epicId: string,
   chatId: string | null,
   boundHostId: string | null,
 ): string | null {
+  const hostId = boundHostId === UNKNOWN_HOST_PLACEHOLDER ? null : boundHostId;
   const held = useEpicStore(
     useShallow((s): ArmTitleHeld => {
       if (chatId === null) return ARM_TITLE_HELD_TITLED;
       if (!Object.hasOwn(s.chats.byId, chatId)) return ARM_TITLE_HELD_ABSENT;
       const chat = s.chats.byId[chatId];
+      // A record on another host than the tab's is another chat with the same
+      // host-minted id (the isolation `tabMatchesProjectedHost` keeps), so for
+      // this tab the projection holds nothing.
+      if (hostId !== null && chat.hostId !== null && chat.hostId !== hostId) {
+        return ARM_TITLE_HELD_ABSENT;
+      }
       if (chat.title.length > 0) return ARM_TITLE_HELD_TITLED;
       return { kind: "untitled", hostId: chat.hostId, userId: chat.userId };
     }),
@@ -2040,12 +2049,11 @@ function useArmChatTitle(
     chatId === null || held.kind === "titled" ? "" : epicId,
   );
   if (chatId === null || held.kind === "titled") return null;
-  const hostId = boundHostId === UNKNOWN_HOST_PLACEHOLDER ? null : boundHostId;
   const row = armChats.find((candidate) => {
     if (held.kind === "untitled") {
       return armRowNamesHeldChat(candidate, {
         id: chatId,
-        hostId: held.hostId,
+        hostId: hostId ?? held.hostId,
         userId: held.userId,
       });
     }

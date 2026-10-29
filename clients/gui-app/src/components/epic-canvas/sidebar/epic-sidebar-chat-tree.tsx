@@ -167,7 +167,7 @@ import {
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
-  useEpicChatIdsNamedByArmRows,
+  useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
@@ -180,7 +180,6 @@ import {
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import {
   isCloudChatListSettled,
   useCloudChatList,
@@ -886,38 +885,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       tree,
     );
   }, [baseArchiveHiddenIds, revealRequest, tree]);
-  // A team host's chat is held as its creator's untitled stand-in until it
-  // first publishes, while the environment arm already serves it, titled, as
-  // a cloud row. The arm row is the one row from its first frame - the list
-  // this tree shows anyway once the stand-in retires - so the stand-in is left
-  // out beside the archive-hidden rows rather than drawn as a second agent.
-  const armChats = useEnvironmentArmChats(epicId);
-  const armStandInIds = useEpicChatIdsNamedByArmRows(armChats);
-  const hiddenIds = useMemo(
-    () =>
-      armStandInIds.length === 0
-        ? archiveHiddenIds
-        : new Set([...archiveHiddenIds, ...armStandInIds]),
-    [archiveHiddenIds, armStandInIds],
-  );
-
-  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
-  // the interface/ownership filter result and feeds the "no matches" empty
-  // state and forced expansion; `rootIds` additionally drops archived roots
-  // and is what actually renders. Collapsing them would make an all-archived
-  // tree show the filter-empty state instead of the archived one, blaming a
-  // filter that is not hiding anything.
-  const rootIds = useMemo(
-    () =>
-      hiddenIds.size === 0
-        ? filterRootIds
-        : filterRootIds.filter((id) => !hiddenIds.has(id)),
-    [filterRootIds, hiddenIds],
-  );
-  const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(revealVisibleIds, hiddenIds, tree),
-    [revealVisibleIds, hiddenIds, tree],
-  );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
@@ -1019,6 +986,38 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     revealRequest,
     unfoldedCloudChats,
   ]);
+  // A team host's chat is held as its creator's untitled stand-in until it
+  // first publishes, while the environment arm already serves it, titled, as
+  // a cloud row. Once that row is among the cloud rows this list renders it
+  // is the chat's one row - the list this tree shows anyway once the stand-in
+  // retires - so the stand-in is left out beside the archive-hidden rows
+  // rather than drawn as a second agent. Until then the stand-in stays.
+  const armStandInIds = useEpicChatIdsNamedByCloudRows(visibleCloudChats);
+  const hiddenIds = useMemo(
+    () =>
+      armStandInIds.length === 0
+        ? archiveHiddenIds
+        : new Set([...archiveHiddenIds, ...armStandInIds]),
+    [archiveHiddenIds, armStandInIds],
+  );
+
+  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
+  // the interface/ownership filter result and feeds the "no matches" empty
+  // state and forced expansion; `rootIds` additionally drops archived roots
+  // and is what actually renders. Collapsing them would make an all-archived
+  // tree show the filter-empty state instead of the archived one, blaming a
+  // filter that is not hiding anything.
+  const rootIds = useMemo(
+    () =>
+      hiddenIds.size === 0
+        ? filterRootIds
+        : filterRootIds.filter((id) => !hiddenIds.has(id)),
+    [filterRootIds, hiddenIds],
+  );
+  const visibleIds = useMemo(
+    () => combineSidebarVisibleIds(revealVisibleIds, hiddenIds, tree),
+    [revealVisibleIds, hiddenIds, tree],
+  );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();

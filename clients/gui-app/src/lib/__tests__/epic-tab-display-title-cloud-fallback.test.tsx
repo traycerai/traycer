@@ -90,9 +90,9 @@ function cloudRow(
 
 // The team environment's row for the chat: filed under the environment, on
 // the host the creator sent it to.
-function armRow(title: string): CloudChatSummary {
+function armRow(ownerHostId: string, title: string): CloudChatSummary {
   return {
-    ...cloudRow(false, mockLocalHostEntry.hostId, title),
+    ...cloudRow(false, ownerHostId, title),
     identity: { taskId: EPIC_ID, chatId: CHAT_ID, ownerUserId: ENVIRONMENT_ID },
   };
 }
@@ -276,7 +276,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
   it("a team host's chat, held as the creator's untitled stand-in, takes the arm row's title", () => {
     const fixture = createFixture([]);
     fixtures.push(fixture);
-    armRows.value = [armRow(ARM_TITLE)];
+    armRows.value = [armRow(mockLocalHostEntry.hostId, ARM_TITLE)];
     // The creator's stand-in: filed under the viewer, untitled, on the host
     // the create went to - the only record a team host's chat ever gets here.
     fixture.handle.store.setState({
@@ -290,8 +290,32 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
   it("after the stand-in retires, the tab keeps the arm row's title", () => {
     const fixture = createFixture([]);
     fixtures.push(fixture);
-    armRows.value = [armRow(ARM_TITLE)];
+    armRows.value = [armRow(mockLocalHostEntry.hostId, ARM_TITLE)];
     const rendered = renderTitle(fixture);
+
+    expect(rendered.result.current).toBe(ARM_TITLE);
+  });
+  it("a tab bound to one host never takes the title of a same-id chat held on another", () => {
+    const fixture = createFixture([]);
+    fixtures.push(fixture);
+    // Host A's chat is held, untitled, and A's arm row has a title; the tab is
+    // bound to a different chat that host B minted under the same id.
+    armRows.value = [
+      armRow(mockLocalHostEntry.hostId, "Host A's chat"),
+      armRow(mockRemoteHostEntry.hostId, ARM_TITLE),
+    ];
+    fixture.handle.store.setState({
+      chats: { allIds: [CHAT_ID], byId: { [CHAT_ID]: projectedChat("") } },
+    });
+    const rendered = renderHook(
+      () =>
+        useEpicTabDisplayTitle(
+          { ...tile, hostId: mockRemoteHostEntry.hostId },
+          EPIC_ID,
+          null,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
 
     expect(rendered.result.current).toBe(ARM_TITLE);
   });

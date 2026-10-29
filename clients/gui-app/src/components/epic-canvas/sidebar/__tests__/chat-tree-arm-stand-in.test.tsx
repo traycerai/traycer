@@ -183,9 +183,10 @@ function createSession(): OpenedStoreForTest {
   return handle;
 }
 
-/** A real `HostClient` whose viewer cloud list holds nothing of the task. */
+/** A real `HostClient` whose viewer cloud list answers with `listCloudChats`. */
 function createHostClient(
   queryClient: QueryClient,
+  listCloudChats: () => Promise<{ chats: CloudChatSummary[] }>,
 ): HostClient<HostRpcRegistry> {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -196,7 +197,7 @@ function createHostClient(
       registry: hostRpcRegistry,
       requestId: () => "arm-stand-in",
       handlers: {
-        "epic.listCloudChats": () => Promise.resolve({ chats: [] }),
+        "epic.listCloudChats": listCloudChats,
       },
     }),
   });
@@ -246,7 +247,9 @@ describe("the Agents tree over a sent team-host chat", () => {
 
   it("lists it once, under the arm row's title, before its first publication", async () => {
     const queryClient = createAppQueryClient();
-    const client = createHostClient(queryClient);
+    const client = createHostClient(queryClient, () =>
+      Promise.resolve({ chats: [] }),
+    );
     const session = createSession();
     opened.push(session);
     armRows.value = [armRow()];
@@ -289,5 +292,51 @@ describe("the Agents tree over a sent team-host chat", () => {
     expect(screen.queryByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeNull();
     expect(screen.getAllByText(ARM_TITLE)).toHaveLength(1);
     expect(screen.queryByText("Untitled agent")).toBeNull();
+  });
+  it("keeps the stand-in while the list that would draw the arm row has not answered", async () => {
+    const queryClient = createAppQueryClient();
+    // The viewer's first list request is still in flight, so the rendered
+    // list has no rows yet, the arm's included.
+    const client = createHostClient(
+      queryClient,
+      () => new Promise<{ chats: CloudChatSummary[] }>(() => undefined),
+    );
+    const session = createSession();
+    opened.push(session);
+    armRows.value = [armRow()];
+    session.store.getState().beginPendingChatCreation({
+      chatId: CHAT_ID,
+      hostId: SANDBOX_HOST_ID,
+      parentChatId: null,
+      title: "",
+      ownerUserId: USER_ID,
+    });
+    await vi.waitFor(() => {
+      expect(Object.hasOwn(session.store.getState().chats.byId, CHAT_ID)).toBe(
+        true,
+      );
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <EpicSessionContext.Provider value={session}>
+            <EpicSessionHostClientContext.Provider value={client}>
+              <ChatTreePanelBody
+                epicId={EPIC_ID}
+                tabId={TAB_ID}
+                messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+              />
+            </EpicSessionHostClientContext.Provider>
+          </EpicSessionContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await vi.waitFor(() => {
+      expect(screen.getByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeTruthy();
+    });
+    expect(
+      screen.queryByTestId(`epic-sidebar-cloud-item-${CHAT_ID}`),
+    ).toBeNull();
   });
 });
