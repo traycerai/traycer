@@ -518,6 +518,7 @@ function PendingSendDelivery(
     surfaceKey,
     send,
   );
+  const { rowState } = sandbox;
   const { client, requested, model, environment } = usePendingDeliveryReadiness(
     send,
     stage,
@@ -546,7 +547,12 @@ function PendingSendDelivery(
     });
   }, [polling, refetchAgent, refetchSandboxes]);
   useEffect(() => {
-    const resolved = pendingStageObservation(send.id, stage, environment);
+    const resolved = pendingStageObservation(
+      send.id,
+      stage,
+      environment,
+      rowState,
+    );
     if (resolved === null || executePendingStageDecision(resolved, runner))
       return;
     executePendingReadiness({
@@ -569,6 +575,7 @@ function PendingSendDelivery(
     runner,
     requested.profiles,
     requested.readiness,
+    rowState,
     send,
     stage,
     surfaceKey,
@@ -582,6 +589,8 @@ interface PendingStageObservation {
   readonly action: PendingStageRetryAction;
   readonly manualRetry: boolean;
   readonly decision: PendingSendTransition;
+  /** The row the decision observed; a withdrawal keeps a resting sandbox. */
+  readonly rowState: HostSandboxState | null;
 }
 
 /** Resolve and acknowledge the current mailbox before executing any accepted intent. */
@@ -589,6 +598,7 @@ function pendingStageObservation(
   id: string,
   captured: StagedSandbox,
   environment: PendingSendFacts,
+  rowState: HostSandboxState | null,
 ): PendingStageObservation | null {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return null;
@@ -620,7 +630,14 @@ function pendingStageObservation(
   );
   if (!acknowledgePendingStageRetry(surfaceKey, retry?.id, decision))
     return null;
-  return { send, stage, action, manualRetry: requestedRetry, decision };
+  return {
+    send,
+    stage,
+    action,
+    manualRetry: requestedRetry,
+    decision,
+    rowState,
+  };
 }
 
 /** A failed acknowledgement may hold an accepted action, never a refused observation. */
@@ -649,7 +666,7 @@ function executePendingStageDecision(
   plan: PendingStageObservation,
   runner: StagedSandboxRunner,
 ): boolean {
-  const { send, stage, action, manualRetry, decision } = plan;
+  const { send, stage, action, manualRetry, decision, rowState } = plan;
   if (
     decision.effects.includes("retry") &&
     usePendingSandboxSendStore.getState().holdObservation(send.id, decision) ===
@@ -671,7 +688,7 @@ function executePendingStageDecision(
     decision.effects.includes("return-message") ||
     decision.effects.includes("remove")
   ) {
-    returnPendingSandboxSend(send.id);
+    returnWatchedSend(send, stage, rowState);
     return true;
   }
   return false;
@@ -1094,6 +1111,7 @@ function useWatchedSandboxRow(
   readonly ready: boolean;
   readonly refetch: () => Promise<unknown>;
   readonly environment: PendingSendFacts;
+  readonly rowState: HostSandboxState | null;
 } {
   const stage = readStagedSandbox(surfaceKey) ?? send?.stopStage ?? null;
   const row = usePendingSandboxRowFacts(
@@ -1159,6 +1177,7 @@ function useWatchedSandboxRow(
     ready: row.ready,
     refetch: row.refetch,
     environment,
+    rowState,
   };
 }
 
@@ -2649,6 +2668,7 @@ function usePendingStagedSendRetry(
           action,
           manualRetry: true,
           decision: plan,
+          rowState: null,
         },
         runner,
       );
