@@ -324,7 +324,7 @@ import {
   bindComposerDraftHost,
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
-import { contentIsSubmittable } from "@/lib/composer/composer-content";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   installHostDirectoryRows,
   resetHostDirectoryRows,
@@ -614,32 +614,25 @@ describe("the composer of a resting sandbox's chat, served by another host", () 
     });
   });
 
-  it("cancels the message: the draft is retired, nothing is sent, and the refusal closes", () => {
+  it("cancels the message: the refusal closes, nothing is sent, and the text stays in the composer", () => {
     const sent = vi.fn(() => true);
     // What the composer's draft hook does on mount: the chat's draft row is
-    // the tab host's, so retiring it deletes it there rather than leaving it
-    // for Drafts.
+    // the tab host's, where a retired draft would be deleted.
     bindComposerDraftHost("chat-p3", "serving-host");
     onTestFinished(resetDraftMirrorCoordinatorForTests);
-    useComposerDraftStore.getState().replaceDraft(
-      "chat-p3",
-      {
-        type: "doc",
-        content: [
-          { type: "paragraph", content: [{ type: "text", text: "go" }] },
-        ],
-      },
-      null,
-    );
+    const typed: JsonContent = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "go" }] }],
+    };
+    useComposerDraftStore.getState().replaceDraft("chat-p3", typed, null);
     mountComposerWith(seed("codex"), sent);
 
     clickNoticeButton("Cancel the message");
 
-    const draft = readComposerDraftSnapshot("chat-p3");
-    expect(contentIsSubmittable(draft.content)).toBe(false);
-    expect(draft.draftId).toBeNull();
+    expect(readComposerDraftSnapshot("chat-p3").content).toEqual(typed);
     expect(sent).not.toHaveBeenCalled();
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+    // Still refused: the text waits for a pick the sandbox runs.
     expect(submitted().sendDisabled).toBe(true);
   });
 
