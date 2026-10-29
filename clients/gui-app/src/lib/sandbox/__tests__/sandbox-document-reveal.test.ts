@@ -519,7 +519,7 @@ describe("body overflow inside a frame", () => {
   function pageWithBody(
     frame: Frame,
     htmlStyle: Record<string, string>,
-    bodyContain: string,
+    bodyStyle: Record<string, string>,
   ): { html: HTMLElement; body: HTMLElement; target: HTMLElement } {
     const doc = frame.window.document;
     const target = doc.createElement("button");
@@ -531,11 +531,7 @@ describe("body overflow inside a frame", () => {
     frame.place(doc.documentElement, { ...page, style: htmlStyle });
     frame.place(doc.body, {
       ...page,
-      style: {
-        overflowX: "hidden",
-        overflowY: "visible",
-        contain: bodyContain,
-      },
+      style: { overflowX: "hidden", overflowY: "visible", ...bodyStyle },
     });
     frame.place(target, {
       rect: { top: 300, bottom: 340, left: 20, right: 60 },
@@ -543,9 +539,34 @@ describe("body overflow inside a frame", () => {
     return { html: doc.documentElement, body: doc.body, target };
   }
 
+  // Each element is contained by one of these, and by none of the next ones.
+  // `contain` names the containment; `content-visibility` and a sizing
+  // `container-type` apply it with `contain` itself left `none`.
+  const CONTAINS: Record<string, string>[] = [
+    { contain: "paint" },
+    { contain: "layout" },
+    { contain: "style" },
+    { contain: "size" },
+    { contain: "inline-size" },
+    { contain: "content" },
+    { contain: "strict" },
+    { contentVisibility: "auto" },
+    { contentVisibility: "hidden" },
+    { containerType: "inline-size" },
+    { containerType: "size" },
+  ];
+  const CONTAINS_NOT: Record<string, string>[] = [
+    { contain: "none" },
+    { contentVisibility: "visible" },
+    { containerType: "normal" },
+    { containerType: "scroll-state" },
+  ];
+
+  // The page an engine that knows none of these properties describes: every
+  // one of them reads back empty, and the body's overflow is the viewport's.
   it("moves the viewport, not body, when html's overflow is visible", () => {
     const frame = startFrame(false);
-    const { html, target } = pageWithBody(frame, VISIBLE, "none");
+    const { html, target } = pageWithBody(frame, VISIBLE, {});
 
     scrollIntoView(target, { block: "start" });
 
@@ -559,7 +580,7 @@ describe("body overflow inside a frame", () => {
     const { body, target } = pageWithBody(
       frame,
       { overflowX: "visible", overflowY: "auto" },
-      "none",
+      {},
     );
 
     scrollIntoView(target, { block: "start" });
@@ -569,39 +590,53 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // Layout or paint containment on either element keeps the body's overflow
-  // its own, whatever the root's overflow says.
-  it.each(["paint", "layout", "content", "strict"])(
-    "keeps body a scroller when html has contain: %s",
-    (contain) => {
-      const frame = startFrame(false);
-      const { body, target } = pageWithBody(
-        frame,
-        { ...VISIBLE, contain },
-        "none",
-      );
+  // Containment on either element keeps the body's overflow its own, whatever
+  // the root's overflow says.
+  it.each(CONTAINS)("keeps body a scroller when html has %o", (style) => {
+    const frame = startFrame(false);
+    const { body, target } = pageWithBody(frame, { ...VISIBLE, ...style }, {});
 
-      scrollIntoView(target, { block: "start" });
+    scrollIntoView(target, { block: "start" });
 
-      expect(frame.scrolls).toEqual([
-        { scroller: body, top: 300, left: 0, behavior: "auto" },
-      ]);
-    },
-  );
+    expect(frame.scrolls).toEqual([
+      { scroller: body, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
 
-  it.each(["paint", "layout", "content", "strict"])(
-    "keeps body a scroller when body has contain: %s",
-    (contain) => {
-      const frame = startFrame(false);
-      const { body, target } = pageWithBody(frame, VISIBLE, contain);
+  it.each(CONTAINS)("keeps body a scroller when body has %o", (style) => {
+    const frame = startFrame(false);
+    const { body, target } = pageWithBody(frame, VISIBLE, style);
 
-      scrollIntoView(target, { block: "start" });
+    scrollIntoView(target, { block: "start" });
 
-      expect(frame.scrolls).toEqual([
-        { scroller: body, top: 300, left: 0, behavior: "auto" },
-      ]);
-    },
-  );
+    expect(frame.scrolls).toEqual([
+      { scroller: body, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // None of these contains anything, so the body's overflow stays the
+  // viewport's and the viewport is what moves.
+  it.each(CONTAINS_NOT)("moves the viewport when html has %o", (style) => {
+    const frame = startFrame(false);
+    const { html, target } = pageWithBody(frame, { ...VISIBLE, ...style }, {});
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  it.each(CONTAINS_NOT)("moves the viewport when body has %o", (style) => {
+    const frame = startFrame(false);
+    const { html, target } = pageWithBody(frame, VISIBLE, style);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {

@@ -62,8 +62,9 @@ import "@/index.css";
  * reports it on `body[data-did]` with its own scroll offset on
  * `body[data-app-scroll-y]` (its body's on `body[data-app-body-scroll-top]`).
  * `closed-shadow-focus` focuses a field in a closed shadow root at the
- * bottom. `body-overflow`, `contained-body-overflow` and `covering-nearest`
- * first shape the page into a case the native reveal is compared on.
+ * bottom. `body-overflow`, `contained-body-overflow`,
+ * `container-body-overflow` and `covering-nearest` first shape the page into
+ * a case the native reveal is compared on.
  * `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
@@ -154,11 +155,19 @@ setInterval(async () => {
     );
     field.focus();
   }
-  if (command === "body-overflow" || command === "contained-body-overflow") {
-    // The body's overflow is the viewport's, unless containment on the root
-    // keeps it the body's.
+  if (
+    command === "body-overflow" ||
+    command === "contained-body-overflow" ||
+    command === "container-body-overflow"
+  ) {
+    // The body's overflow is the viewport's, unless containment keeps it the
+    // body's: named by contain on the root, or applied by a sizing
+    // container-type on the body, which leaves contain itself none.
     if (command === "contained-body-overflow") {
       document.documentElement.style.contain = "paint";
+    }
+    if (command === "container-body-overflow") {
+      document.body.style.containerType = "inline-size";
     }
     document.documentElement.style.height = "100%";
     document.body.style.height = "100%";

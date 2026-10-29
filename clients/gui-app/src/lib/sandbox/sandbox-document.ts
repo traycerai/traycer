@@ -339,20 +339,35 @@ function bootstrapMain(config: BootstrapConfig): void {
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
-  // With the root's overflow `visible`, the body's overflow is the
-  // viewport's, and the body is no scroller of its own, unless layout or
-  // paint containment on either keeps it the body's.
-  const contains = (style: CSSStyleDeclaration): boolean =>
-    /layout|paint|content|strict/.test(style.contain);
+  // Containment of any kind, on the root or on the body. `contain` names it;
+  // a `content-visibility` past `visible` and a sizing `container-type` apply
+  // it without naming it, and leave `contain` itself `none`. Each is read by
+  // the keywords that mean containment, so the empty string an engine answers
+  // for a property it does not know is no containment, as is
+  // `container-type: scroll-state`, which contains nothing.
+  const contains = (element: Element | null): boolean => {
+    if (element === null) return false;
+    const style = window.getComputedStyle(element);
+    return (
+      /size|layout|style|paint|content|strict/.test(style.contain) ||
+      /size/.test(style.containerType) ||
+      /auto|hidden/.test(style.contentVisibility)
+    );
+  };
+  // With the root's overflow `visible` and containment on neither, the body's
+  // overflow is the viewport's and the body is no scroller of its own. Any
+  // containment on either keeps that overflow the body's.
   const bodyOverflowIsViewports = (): boolean => {
     const rootStyle = window.getComputedStyle(document.documentElement);
-    // `document.body` is typed non-null but is absent in a frameset.
-    const body = document.querySelector("body");
     return (
       rootStyle.overflowX === "visible" &&
       rootStyle.overflowY === "visible" &&
-      !contains(rootStyle) &&
-      (body === null || !contains(window.getComputedStyle(body)))
+      !contains(document.documentElement) &&
+      // The body or the frameset, whichever opens the document: the element
+      // the engine reads this overflow and containment from. `document.body`
+      // is typed non-null but is null before it parses and once it is
+      // removed.
+      !contains(document.body)
     );
   };
   const scrollsItself = (

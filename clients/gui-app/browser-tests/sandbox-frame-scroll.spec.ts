@@ -106,6 +106,12 @@ for (const reveal of [
     block: "start",
   },
   {
+    command: "container-body-overflow",
+    target: "#mid",
+    from: 0,
+    block: "start",
+  },
+  {
     command: "covering-nearest",
     target: "#cover",
     from: 800,
