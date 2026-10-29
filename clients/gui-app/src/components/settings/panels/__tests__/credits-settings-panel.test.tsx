@@ -2,7 +2,13 @@ import type {
   AuthenticatedUser,
   AuthenticatedUserCampaignCredit,
 } from "@traycer/protocol/auth";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   teamSubscription,
@@ -238,6 +244,26 @@ describe("CreditsSettingsPanel credit offers", () => {
       expect(screen.queryByTestId("credits-offers")).toBeNull();
     },
   );
+
+  it("removes an offer that ends while the panel stays open", () => {
+    vi.useFakeTimers();
+    try {
+      mocks.data = userWithOffers([
+        offer({ endsAt: new Date(Date.now() + 60_000).toISOString() }),
+      ]);
+
+      render(<CreditsSettingsPanel />);
+      expect(screen.getByTestId("credits-offer-row")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(2 * 60_000);
+      });
+
+      expect(screen.queryByTestId("credits-offers")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("leaves out an offer that has already ended, and the section with it", () => {
     mocks.data = userWithOffers([
