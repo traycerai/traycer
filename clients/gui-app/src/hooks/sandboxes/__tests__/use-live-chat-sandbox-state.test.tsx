@@ -127,8 +127,7 @@ function setup(response: SandboxListResponse) {
           ownedByViewer: true,
           environmentOwned: false,
         }),
-        // The chip observes this same query; reconciliation must update it,
-        // rather than keeping a private lifecycle override in the chat.
+        // A second list observer must receive the shared lifecycle answer.
         listedState: useSandboxList().data?.sandboxes[0]?.state,
       };
     },
