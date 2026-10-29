@@ -1,14 +1,32 @@
 import type {
   AuthenticatedUser,
   AuthenticatedUserCampaignCredit,
+  TraycerTeamSubscription,
 } from "@traycer/protocol/auth";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import type { CreditOffer } from "@traycer/protocol/auth/credit-offers";
+import type {
+  ClaimCreditOfferFetchResult,
+  ListCreditOffersFetchResult,
+} from "@traycer-clients/shared/auth/credit-offers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  teamSubscription,
   userSubscription,
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { CREDITS_PAGE } from "../credits-settings.definitions";
 
 const mocks = vi.hoisted(() => ({
   data: null as AuthenticatedUser | null,
@@ -17,6 +35,22 @@ const mocks = vi.hoisted(() => ({
   isFetching: false,
   refetch: vi.fn(() => Promise.resolve({})),
   openLink: vi.fn(() => Promise.resolve()),
+  auth: {
+    listCreditOffers:
+      vi.fn<(signal: AbortSignal) => Promise<ListCreditOffersFetchResult>>(),
+    claimCreditOffer:
+      vi.fn<(campaignId: string) => Promise<ClaimCreditOfferFetchResult>>(),
+  },
+  toastFromAuthError: vi.fn<(error: unknown, fallback: string) => void>(),
+}));
+
+vi.mock("@/lib/host", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/host")>()),
+  useAuthService: () => mocks.auth,
+}));
+
+vi.mock("@/lib/auth-error-toast", () => ({
+  toastFromAuthError: mocks.toastFromAuthError,
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -47,6 +81,41 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 import { CreditsSettingsPanel } from "../credits-settings-panel";
 
+let queryClient: QueryClient;
+
+function renderPanel(): void {
+  render(
+    <QueryClientProvider client={queryClient}>
+      <CreditsSettingsPanel />
+    </QueryClientProvider>,
+  );
+}
+
+beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  mocks.auth.listCreditOffers.mockReset();
+  mocks.auth.listCreditOffers.mockResolvedValue({ kind: "ok", offers: [] });
+  mocks.auth.claimCreditOffer.mockReset();
+  mocks.toastFromAuthError.mockReset();
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "u1", userName: "Ada", email: "ada@example.com" },
+      { userId: "u1", username: "ada" },
+      [],
+    );
+  useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+});
+
+afterEach(() => {
+  queryClient.clear();
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+  useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+});
+
 describe("CreditsSettingsPanel", () => {
   beforeEach(() => {
     mocks.data = null;
@@ -75,7 +144,7 @@ describe("CreditsSettingsPanel", () => {
       [],
     );
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     expect(screen.getByTestId("credits-ready").textContent).toBe(
       "$0.00 leftAdd credits",
@@ -98,7 +167,7 @@ describe("CreditsSettingsPanel", () => {
       [],
     );
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     expect(screen.getByTestId("credits-remaining").textContent).toMatch(
       /^[\d,.]+ credits left$/,
@@ -109,7 +178,7 @@ describe("CreditsSettingsPanel", () => {
   it("says the read failed, with Retry and the report link", () => {
     mocks.isError = true;
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     const failure = screen.getByTestId("credits-error");
     expect(failure.textContent).toContain("Couldn't read your credits.");
@@ -129,7 +198,7 @@ describe("CreditsSettingsPanel", () => {
       [],
     );
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     expect(screen.getByTestId("credits-ready").textContent).toBe(
       "$70.00 leftAdd credits",
@@ -148,7 +217,7 @@ describe("CreditsSettingsPanel", () => {
       [],
     );
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /Add credits/ }));
 
     expect(mocks.openLink).toHaveBeenCalledWith(
@@ -214,7 +283,7 @@ describe("CreditsSettingsPanel credit offers", () => {
     (campaignCredits) => {
       mocks.data = userWithOffers(campaignCredits);
 
-      render(<CreditsSettingsPanel />);
+      renderPanel();
 
       expect(screen.getByTestId("credits-ready")).toBeTruthy();
       expect(screen.queryByTestId("credits-offers")).toBeNull();
@@ -233,7 +302,7 @@ describe("CreditsSettingsPanel credit offers", () => {
       }),
     ]);
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     const rows = screen.getAllByTestId("credits-offer-row");
     expect(rows).toHaveLength(2);
@@ -257,7 +326,7 @@ describe("CreditsSettingsPanel credit offers", () => {
     setMobileApp(true);
     mocks.data = userWithOffers([offer({})]);
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     expect(screen.getByTestId("credits-offer-remaining").textContent).toBe(
       "12.50 credits",
@@ -270,7 +339,7 @@ describe("CreditsSettingsPanel credit offers", () => {
   it("keeps offer credit out of the balance", () => {
     mocks.data = userWithOffers([offer({ remainingCredits: 12.5 })]);
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
 
     expect(screen.getByTestId("credits-remaining").textContent).toBe(
       "$70.00 left",
@@ -283,7 +352,7 @@ describe("CreditsSettingsPanel credit offers", () => {
   it("explains the terms from the About credit offers button", () => {
     mocks.data = userWithOffers([offer({})]);
 
-    render(<CreditsSettingsPanel />);
+    renderPanel();
     fireEvent.click(
       screen.getByRole("button", { name: "About credit offers" }),
     );
@@ -293,5 +362,229 @@ describe("CreditsSettingsPanel credit offers", () => {
         "Separate from your total credits, and only for each offer's models. Unused credit expires when the offer ends.",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("CreditsSettingsPanel claiming offers", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const GRANT = 25;
+
+  function listed(overrides: Partial<CreditOffer>): CreditOffer {
+    return {
+      id: "c1",
+      name: "Launch offer",
+      description: null,
+      grantCredits: GRANT,
+      startsAt: new Date(Date.now() - DAY_MS).toISOString(),
+      endsAt: new Date(Date.now() + 5 * DAY_MS).toISOString(),
+      claim: "none",
+      remainingCredits: null,
+      ...overrides,
+    };
+  }
+
+  function claimed(offer: CreditOffer): CreditOffer {
+    return { ...offer, claim: "active", remainingCredits: offer.grantCredits };
+  }
+
+  function userRecord(
+    campaignCredits: AuthenticatedUserCampaignCredit[],
+    teams: TraycerTeamSubscription[],
+  ): AuthenticatedUser {
+    return {
+      ...userWith(
+        userSubscription({
+          totalPlanCredits: 100,
+          consumedFromPlan: 30,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        teams,
+      ),
+      campaignCredits,
+    };
+  }
+
+  function rowNamed(name: string): HTMLElement {
+    const row = screen
+      .getAllByTestId("credits-offer-row")
+      .find((candidate) => within(candidate).queryByText(name) !== null);
+    if (row === undefined) {
+      throw new Error(`No offer row named ${name}`);
+    }
+    return row;
+  }
+
+  beforeEach(() => {
+    mocks.data = userRecord([], []);
+    mocks.isPending = false;
+    mocks.isError = false;
+    mocks.isFetching = false;
+    setMobileApp(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
+
+  it("offers Claim on an unclaimed offer, a disabled Sold out on a full one, and hides a revoked one", async () => {
+    mocks.auth.listCreditOffers.mockResolvedValue({
+      kind: "ok",
+      offers: [
+        listed({ id: "open", name: "Open offer" }),
+        listed({ id: "full", name: "Full offer", claim: "sold_out" }),
+        listed({ id: "gone", name: "Revoked offer", claim: "revoked" }),
+      ],
+    });
+
+    renderPanel();
+
+    await screen.findByText("Open offer");
+    expect(
+      within(rowNamed("Open offer")).getByRole("button", {
+        name: CREDITS_PAGE.offerClaim,
+      }),
+    ).toHaveProperty("disabled", false);
+    expect(
+      within(rowNamed("Full offer")).getByRole("button", {
+        name: CREDITS_PAGE.offerSoldOut,
+      }),
+    ).toHaveProperty("disabled", true);
+    expect(screen.queryByText("Revoked offer")).toBeNull();
+  });
+
+  it("lists an offer the user record already carries once", async () => {
+    mocks.data = userRecord(
+      [
+        {
+          campaignId: "c1",
+          name: "Launch offer",
+          description: null,
+          grantCredits: GRANT,
+          remainingCredits: 12.5,
+          endsAt: new Date(Date.now() + 5 * DAY_MS).toISOString(),
+        },
+      ],
+      [],
+    );
+    mocks.auth.listCreditOffers.mockResolvedValue({
+      kind: "ok",
+      offers: [
+        listed({ id: "c1", name: "Launch offer" }),
+        listed({ id: "c2", name: "Second offer" }),
+      ],
+    });
+
+    renderPanel();
+
+    // The second offer only appears once the list has landed.
+    await screen.findByText("Second offer");
+    expect(screen.getAllByText("Launch offer")).toHaveLength(1);
+    expect(screen.getAllByTestId("credits-offer-row")).toHaveLength(2);
+  });
+
+  it("claims an offer: the button waits while pending, then the row reads as claimed and the list is refetched", async () => {
+    const offer = listed({});
+    let current = offer;
+    let finishClaim: (result: ClaimCreditOfferFetchResult) => void = () => {};
+    mocks.auth.listCreditOffers.mockImplementation(() =>
+      Promise.resolve({ kind: "ok", offers: [current] }),
+    );
+    mocks.auth.claimCreditOffer.mockImplementation(
+      () =>
+        new Promise<ClaimCreditOfferFetchResult>((resolve) => {
+          finishClaim = resolve;
+        }),
+    );
+
+    renderPanel();
+    const claimButton = await screen.findByRole("button", {
+      name: CREDITS_PAGE.offerClaim,
+    });
+    expect(mocks.auth.listCreditOffers).toHaveBeenCalledTimes(1);
+    fireEvent.click(claimButton);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: CREDITS_PAGE.offerClaim }),
+      ).toHaveProperty("disabled", true);
+    });
+    expect(mocks.auth.claimCreditOffer).toHaveBeenCalledWith("c1");
+
+    current = claimed(offer);
+    finishClaim({ kind: "ok", offer: current });
+
+    expect(await screen.findByTestId("credits-offer-grant")).toHaveProperty(
+      "textContent",
+      CREDITS_PAGE.offerGrant("$25.00"),
+    );
+    expect(
+      screen.queryByRole("button", { name: CREDITS_PAGE.offerClaim }),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(mocks.auth.listCreditOffers).toHaveBeenCalledTimes(2);
+    });
+    expect(mocks.toastFromAuthError).not.toHaveBeenCalled();
+  });
+
+  it("treats an already-claimed answer as no failure and refetches the list", async () => {
+    mocks.auth.listCreditOffers.mockResolvedValue({
+      kind: "ok",
+      offers: [listed({})],
+    });
+    mocks.auth.claimCreditOffer.mockResolvedValue({ kind: "conflict" });
+
+    renderPanel();
+    fireEvent.click(
+      await screen.findByRole("button", { name: CREDITS_PAGE.offerClaim }),
+    );
+
+    await waitFor(() => {
+      expect(mocks.auth.listCreditOffers).toHaveBeenCalledTimes(2);
+    });
+    expect(mocks.toastFromAuthError).not.toHaveBeenCalled();
+  });
+
+  it("toasts why an unavailable offer cannot be claimed", async () => {
+    mocks.auth.listCreditOffers.mockResolvedValue({
+      kind: "ok",
+      offers: [listed({})],
+    });
+    mocks.auth.claimCreditOffer.mockResolvedValue({
+      kind: "unavailable",
+      reason: "sold-out",
+    });
+
+    renderPanel();
+    fireEvent.click(
+      await screen.findByRole("button", { name: CREDITS_PAGE.offerClaim }),
+    );
+
+    await waitFor(() => {
+      expect(mocks.toastFromAuthError).toHaveBeenCalledTimes(1);
+    });
+    const [error, fallback] = mocks.toastFromAuthError.mock.calls[0];
+    expect(error).toBeInstanceOf(Error);
+    expect(error instanceof Error ? error.message : null).toBe(
+      CREDITS_PAGE.claimSoldOut,
+    );
+    expect(fallback).toBe(CREDITS_PAGE.claimFailed);
+  });
+
+  it("never asks for offers in a team context", async () => {
+    mocks.data = userRecord([], [teamSubscription(100)]);
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+
+    renderPanel();
+
+    await screen.findByTestId("credits-ready");
+    expect(mocks.auth.listCreditOffers).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: CREDITS_PAGE.offerClaim }),
+    ).toBeNull();
   });
 });

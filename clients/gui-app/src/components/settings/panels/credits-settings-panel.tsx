@@ -2,9 +2,12 @@
  * Account ▸ Credits. E4 mounts this under the `credits` row. The balance is
  * the signed-in user's remaining credits, $0.00 included (a user with no
  * subscription has none); `Add credits ↗` opens the dashboard billing page.
- * Claimed credit offers are listed under it, never added into it.
+ * Credit offers are listed under it, never added into it: the claimed ones
+ * the user record carries, and in the personal account context the ones still
+ * open to claim.
  */
 import type { AuthenticatedUserCampaignCredit } from "@traycer/protocol/auth";
+import type { CreditOffer } from "@traycer/protocol/auth/credit-offers";
 import { formatDistanceStrict } from "date-fns";
 import { ExternalLink, Info, Timer } from "lucide-react";
 import { useId, type ReactNode } from "react";
@@ -21,6 +24,8 @@ import {
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useAuthClaimCreditOffer } from "@/hooks/auth/use-claim-credit-offer-mutation";
+import { useAuthListCreditOffers } from "@/hooks/auth/use-credit-offers-query";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useRefreshCreditsOnTraycerTurn } from "@/hooks/auth/use-refresh-credits-on-traycer-turn";
 import {
@@ -29,14 +34,61 @@ import {
 } from "@/lib/auth/traycer-subscription-content";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useOpenLink, type OpenLink } from "@/lib/links/open-link";
+import { cn } from "@/lib/utils";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useSampledNow } from "@/lib/relative-time";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
+import {
+  resolveAccountContext,
+  useAccountContextStore,
+} from "@/stores/auth/account-context-store";
 
 const MC_PER_CREDIT = 1000;
 
 const NO_OFFERS: ReadonlyArray<AuthenticatedUserCampaignCredit> = [];
+const NO_LISTED_OFFERS: ReadonlyArray<CreditOffer> = [];
+
+/**
+ * One row of the offers section: an offer the user holds, or one still open
+ * to claim (or every seat of which is taken).
+ */
+type OfferRow =
+  | { readonly kind: "claimed"; readonly offer: AuthenticatedUserCampaignCredit }
+  | { readonly kind: "claimable"; readonly offer: CreditOffer };
+
+/**
+ * The user record's claimed offers, then each listed offer the record does
+ * not already carry. A listed `active` offer is one the record has not caught
+ * up with yet (a claim just made, or one credit-service has not applied), so
+ * it shows as claimed rather than back as "Claim". A revoked one never shows.
+ */
+function offerRows(
+  claimed: ReadonlyArray<AuthenticatedUserCampaignCredit>,
+  listed: ReadonlyArray<CreditOffer>,
+): ReadonlyArray<OfferRow> {
+  const claimedIds = new Set(claimed.map((offer) => offer.campaignId));
+  const rows: OfferRow[] = claimed.map((offer) => ({ kind: "claimed", offer }));
+  for (const offer of listed) {
+    if (claimedIds.has(offer.id)) continue;
+    if (offer.claim === "active") {
+      rows.push({
+        kind: "claimed",
+        offer: {
+          campaignId: offer.id,
+          name: offer.name,
+          description: offer.description,
+          grantCredits: offer.grantCredits,
+          remainingCredits: offer.remainingCredits ?? offer.grantCredits,
+          endsAt: offer.endsAt,
+        },
+      });
+    } else if (offer.claim === "none" || offer.claim === "sold_out") {
+      rows.push({ kind: "claimable", offer });
+    }
+  }
+  return rows;
+}
 
 // An offer's exact end, in the viewer's own time zone, for the hover on "left".
 const offerEndFormat = new Intl.DateTimeFormat(undefined, {
@@ -61,6 +113,24 @@ export function CreditsSettingsPanel(): ReactNode {
   const user = query.data ?? null;
   const remainingMc = sandboxBalanceMc(user);
 
+  // Offers belong to the personal account, so a team context never asks for
+  // them. Resolved against the loaded user's teams, as the subscription card
+  // resolves it, so a stale stored team cannot read as personal before then.
+  const storedContext = useAccountContextStore((s) => s.accountContext);
+  const personal =
+    user !== null &&
+    resolveAccountContext(
+      storedContext,
+      new Set(user.teamSubscriptions.map((t) => t.team.id)),
+    ).type === "PERSONAL";
+  const offersQuery = useAuthListCreditOffers(personal);
+  const claim = useAuthClaimCreditOffer();
+  // A failed read keeps the last list cached; the claimable rows hide instead.
+  const listed =
+    personal && !offersQuery.isError
+      ? (offersQuery.data ?? NO_LISTED_OFFERS)
+      : NO_LISTED_OFFERS;
+
   return (
     <SettingsPanelShell
       title={CREDITS_PAGE.label}
@@ -69,10 +139,13 @@ export function CreditsSettingsPanel(): ReactNode {
       headerAction={
         <RefreshIconButton
           onRefresh={async () => {
-            await query.refetch();
+            await Promise.all([
+              query.refetch(),
+              personal ? offersQuery.refetch() : null,
+            ]);
           }}
           label="Refresh credits"
-          refreshing={query.isFetching}
+          refreshing={query.isFetching || (personal && offersQuery.isFetching)}
         />
       }
     >
@@ -81,7 +154,9 @@ export function CreditsSettingsPanel(): ReactNode {
         error={query.isError}
         onRetry={() => void query.refetch()}
         remainingMc={remainingMc}
-        offers={user?.campaignCredits ?? NO_OFFERS}
+        offers={offerRows(user?.campaignCredits ?? NO_OFFERS, listed)}
+        claimingId={claim.isPending ? claim.variables : null}
+        onClaim={(campaignId) => claim.mutate(campaignId)}
         installedApp={installedApp}
         billingUrl={billingUrl}
         openLink={openLink}
@@ -95,7 +170,10 @@ function CreditsBody(props: {
   readonly error: boolean;
   readonly onRetry: () => void;
   readonly remainingMc: number | null;
-  readonly offers: ReadonlyArray<AuthenticatedUserCampaignCredit>;
+  readonly offers: ReadonlyArray<OfferRow>;
+  /** The offer a claim is in flight for; every Claim waits on it. */
+  readonly claimingId: string | null;
+  readonly onClaim: (campaignId: string) => void;
   readonly installedApp: boolean;
   readonly billingUrl: string;
   readonly openLink: OpenLink;
@@ -163,19 +241,26 @@ function CreditsBody(props: {
         )}
       </div>
       {props.offers.length === 0 ? null : (
-        <CreditOffers offers={props.offers} installedApp={props.installedApp} />
+        <CreditOffers
+          offers={props.offers}
+          claimingId={props.claimingId}
+          onClaim={props.onClaim}
+          installedApp={props.installedApp}
+        />
       )}
     </div>
   );
 }
 
 /**
- * The claimed offers that have not ended, each spendable only on its own
- * models, so none of them is part of the balance above. The server sends only
- * claimed ones, so a row has no Claim action and no status badge.
+ * Offers that have not ended, each spendable only on its own models, so none
+ * of them is part of the balance above: the claimed ones with what is left,
+ * then the ones still open to claim.
  */
 function CreditOffers(props: {
-  readonly offers: ReadonlyArray<AuthenticatedUserCampaignCredit>;
+  readonly offers: ReadonlyArray<OfferRow>;
+  readonly claimingId: string | null;
+  readonly onClaim: (campaignId: string) => void;
   readonly installedApp: boolean;
 }): ReactNode {
   const headingId = useId();
@@ -216,15 +301,79 @@ function CreditOffers(props: {
       {/* Subgrid rows: the figure column is as wide as the widest figure, so
           every row's name starts at the same edge. */}
       <ul className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 divide-y divide-border/60 rounded-lg border border-border/60 bg-card/40 px-5 @md:grid-cols-[auto_minmax(0,1fr)_auto]">
-        {props.offers.map((offer) => (
-          <CreditOfferRow
-            key={offer.campaignId}
-            offer={offer}
-            installedApp={props.installedApp}
-          />
-        ))}
+        {props.offers.map((row) =>
+          row.kind === "claimed" ? (
+            <CreditOfferRow
+              key={row.offer.campaignId}
+              offer={row.offer}
+              installedApp={props.installedApp}
+            />
+          ) : (
+            <ClaimableOfferRow
+              key={row.offer.id}
+              offer={row.offer}
+              claimingId={props.claimingId}
+              onClaim={props.onClaim}
+              installedApp={props.installedApp}
+            />
+          ),
+        )}
       </ul>
     </section>
+  );
+}
+
+/**
+ * An offer not yet claimed: its grant, and Claim, or a disabled "Sold out"
+ * once every seat is taken.
+ */
+function ClaimableOfferRow(props: {
+  readonly offer: CreditOffer;
+  readonly claimingId: string | null;
+  readonly onClaim: (campaignId: string) => void;
+  readonly installedApp: boolean;
+}): ReactNode {
+  const { offer, installedApp } = props;
+  const soldOut = offer.claim === "sold_out";
+  return (
+    <li
+      className="col-span-full grid grid-cols-subgrid items-center gap-y-2 py-4"
+      data-testid="credits-offer-row"
+    >
+      <div className="row-span-2 self-start @md:row-span-1 @md:self-center">
+        <p
+          className={cn(
+            "text-title-sm font-semibold tabular-nums",
+            soldOut ? "text-muted-foreground" : "text-foreground",
+          )}
+          data-testid="credits-offer-remaining"
+        >
+          {formatAmount(offer.grantCredits, installedApp)}
+        </p>
+      </div>
+      <div className="min-w-0 space-y-0.5">
+        <p className="text-ui-sm font-medium text-foreground">{offer.name}</p>
+        {offer.description === null ? null : (
+          <p className="text-ui-xs text-muted-foreground">
+            {offer.description}
+          </p>
+        )}
+      </div>
+      <div className="col-start-2 flex flex-wrap items-center gap-3 @md:col-start-3 @md:justify-self-end">
+        <CreditOfferTimeLeft endsAt={offer.endsAt} />
+        <Button
+          type="button"
+          size="sm"
+          variant={soldOut ? "secondary" : "default"}
+          disabled={soldOut || props.claimingId !== null}
+          onClick={() => props.onClaim(offer.id)}
+          data-testid="credits-offer-claim"
+        >
+          {props.claimingId === offer.id ? <MutedAgentSpinner /> : null}
+          {soldOut ? CREDITS_PAGE.offerSoldOut : CREDITS_PAGE.offerClaim}
+        </Button>
+      </div>
+    </li>
   );
 }
 
