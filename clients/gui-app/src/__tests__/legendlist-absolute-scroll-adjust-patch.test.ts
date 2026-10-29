@@ -210,11 +210,13 @@ describe("@legendapp/list web patch", () => {
     // holds when the reader scrolls: left alone, it lands after the reader's
     // own scroll and undoes it. The cancel also drops the data change's anchor
     // lock and lets the adjusts a scroll in flight deferred land, and reports
-    // false when nothing was held.
+    // false when nothing was held. It keeps the runner later `scrollToEnd`
+    // commands need: the unmount's cancel drops it, and without it every
+    // later one never ran.
     it(`${file} lets a held scroll command be cancelled and settled`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
-        'cancelPendingScroll: () => {\n      state.mvcpAnchorLock = void 0;\n      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      cancelImperativeScroll(state);\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
+        'cancelPendingScroll: () => {\n      state.mvcpAnchorLock = void 0;\n      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
       );
       expect(source).toContain(
         "      return true;\n    },\n    setScrollProcessingEnabled:",
@@ -231,7 +233,7 @@ describe("@legendapp/list web patch", () => {
     it(`${file} finishes an in-flight first-paint scroll where the reader is when it is cancelled`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
-        "const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      cancelImperativeScroll(state);",
+        "const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;",
       );
       expect(source).toContain(
         "        clearBootstrapInitialScrollSession(state);\n        finishInitialScroll(ctx, {\n          recalculateItems: true,\n          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)\n        });\n      }\n      return true;",

@@ -279,6 +279,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
         processMemory: null,
         crossHostMessaging: null,
         sessions: null,
+        updatesExternallyManaged: null,
       }),
       "host.notifications.indicatorState": () => ({
         epics: {},

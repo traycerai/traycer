@@ -450,11 +450,13 @@ import {
   hostStatusUpgradeV16ToV17,
   hostStatusUpgradeV17ToV18,
   hostStatusUpgradeV18ToV19,
+  hostStatusUpgradeV19ToV110,
   hostStatusV15,
   hostStatusV16,
   hostStatusV17,
   hostStatusV18,
   hostStatusV19,
+  hostStatusV110,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -13679,7 +13681,7 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 9,
+      latestMinor: 10,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -13724,6 +13726,13 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
         9: {
           contract: hostStatusV19,
           upgradeFromPreviousVersion: hostStatusUpgradeV18ToV19,
+        },
+        // @1.10 adds `updatesExternallyManaged`: whether something other than
+        // the host's own CLI owns its version, read before a version list is
+        // offered.
+        10: {
+          contract: hostStatusV110,
+          upgradeFromPreviousVersion: hostStatusUpgradeV19ToV110,
         },
       },
       downgradePathsFromLatest: {},

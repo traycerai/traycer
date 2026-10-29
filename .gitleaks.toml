@@ -146,10 +146,13 @@ paths = [
 ]
 regexes = ['''^EnvironmentSecretV12$''']
 [[rules.allowlists]]
-description = "Android clone instance keys in the simulator tile-target unit fixture: `instanceKey` is a device identity (the AVD name an Android clone is keyed by, `Pixel_8_API_35_traycer_2` / `_3` for two clones of the fixture's Pixel 8), never a credential; the generic-api-key rule fires on the `instanceKey` identifier plus a 24-character value. Rule-scoped like the entry above, so the exact source path and the two exact values narrow it and any other value in that file still reports."
+description = "Android clone instance keys in the simulator unit fixtures (tile target, device split, tile schema, tile): `instanceKey` is a device identity (the AVD name an Android clone is keyed by, `Pixel_8_API_35_traycer_2` / `_3` for two clones of the fixture's Pixel 8), never a credential; the generic-api-key rule fires on the `instanceKey` identifier plus a 24-character value. Rule-scoped like the entry above, so the exact source path and the two exact values narrow it and any other value in that file still reports."
 condition = "AND"
 regexTarget = "secret"
 paths = [
   '''^clients/gui-app/src/lib/simulator-view/__tests__/simulator-tile-target\.test\.ts$''',
+  '''^clients/gui-app/src/lib/simulator-view/__tests__/simulator-device-split\.test\.ts$''',
+  '''^clients/gui-app/src/stores/epics/canvas/__tests__/simulator-tile-schema\.test\.ts$''',
+  '''^clients/gui-app/src/components/simulator-tile/__tests__/simulator-tile\.test\.tsx$''',
 ]
 regexes = ['''^Pixel_8_API_35_traycer_[23]$''']

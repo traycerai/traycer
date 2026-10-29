@@ -8,7 +8,7 @@
  *
  * A region is a THING ON SCREEN, not a setting: `usageLimits` is the one
  * region the three old usage rows collapsed into (L-28), and the sidebar rail
- * is nine regions rather than one list, because each icon is hoverable,
+ * is ten regions rather than one list, because each icon is hoverable,
  * selectable and separately shown or hidden.
  */
 
