@@ -545,10 +545,23 @@ describe("LegendList estimate recovery", () => {
    * estimates; the next pass that does maintain the position refreshes them.
    */
   describe("a scroll-driven pass after the type average jumps", () => {
-    it("keeps the reader's row where it was instead of re-estimating the rows above", async () => {
+    it("holds the row at the top of the reader's view instead of re-estimating the rows above", async () => {
       const listRef = createRef<LegendListRef | null>();
+      // End-aligned like the transcript: the rows near the top are never
+      // rendered or measured, so each caches the estimate from mount time.
       render(
-        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+        <LegendList
+          ref={listRef}
+          data={rows(70)}
+          estimatedItemSize={90}
+          getItemType={() => "assistant"}
+          initialScrollAtEnd
+          keyExtractor={(item) => item.id}
+          maintainScrollAtEndThreshold={0}
+          maintainVisibleContentPosition={{ data: false, size: true }}
+          recycleItems={false}
+          renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+        />,
       );
       act(() => {
         fireAllResizeObservers();
@@ -558,11 +571,6 @@ describe("LegendList estimate recovery", () => {
       const list = listRef.current;
       if (list === null) throw new Error("LegendList ref did not mount");
 
-      act(() => {
-        void list.scrollToIndex({ animated: false, index: 65 });
-      });
-      await settleLegendList();
-
       const measuredSize = list.getState().getAverageItemSizes()
         .assistant.average;
 
@@ -570,14 +578,18 @@ describe("LegendList estimate recovery", () => {
       // the average keeps whatever it is told.
       act(() => {
         list.setItemSize("row-69", {
-          height: measuredSize * 1_000,
+          height: measuredSize * 20,
           width: 800,
         });
       });
       await settleLegendList();
+      // Past the factor of two at which a cached estimate counts as stale,
+      // but small enough that the position pass still reaches the reader's
+      // rows from the top. The unmeasured rows above the view are the ones
+      // that re-estimate.
       expect(
         list.getState().getAverageItemSizes().assistant.average,
-      ).toBeGreaterThan(measuredSize * 10);
+      ).toBeGreaterThan(measuredSize * 2);
 
       // A one-pixel change to a row far above the window records the lowest
       // changed index without running a pass, so the next pass recomputes
@@ -587,32 +599,40 @@ describe("LegendList estimate recovery", () => {
         list.setItemSize("row-0", { height: measuredSize + 1, width: 800 });
       });
       await settleLegendList();
-      const anchorKey = "row-65";
-      const offsetOf = (): number => {
-        const state = list.getState();
-        const position = state.positionByKey(anchorKey);
-        if (position === undefined) {
-          throw new Error(`${anchorKey} left the list`);
-        }
-        return position - state.scroll;
-      };
-      const before = offsetOf();
+
       const scrollBefore = list.getState().scroll;
 
       // Far enough to leave the range the list already calculated, or the
-      // scroll event would not run a position pass at all.
-      const SCROLL_STEP = -1500;
+      // scroll event would not run a position pass at all, and short of the
+      // top.
+      const SCROLL_TARGET = 30 * measuredSize;
+
+      // The row that will sit at the top of the reader's view after the
+      // scroll. Rows below the view's bottom edge may re-estimate, since the
+      // reader cannot see them move; this row is what the reader is looking at.
+      const state = list.getState();
+      let anchorIndex = 0;
+      while (state.positionAtIndex(anchorIndex) < SCROLL_TARGET) {
+        anchorIndex += 1;
+      }
+      const offsetOf = (): number => {
+        const current = list.getState();
+        return current.positionAtIndex(anchorIndex) - current.scroll;
+      };
+      const before = offsetOf();
+
       const scrollNode = list.getScrollableNode();
       act(() => {
-        scrollNode.scrollTop = scrollBefore + SCROLL_STEP;
+        scrollNode.scrollTop = SCROLL_TARGET;
         scrollNode.dispatchEvent(new Event("scroll"));
       });
       await settleLegendList();
 
       const scrolled = list.getState().scroll - scrollBefore;
-      expect(scrolled).toBe(SCROLL_STEP);
-      // Within a few px: only the scroll and row-0's pixel may move the row,
-      // not a re-estimate of the unmeasured rows above it.
+      expect(scrolled).toBe(SCROLL_TARGET - scrollBefore);
+      // Within a few px: only the scroll and row-0's pixel may move the row
+      // at the top of the reader's view, not a re-estimate of the unmeasured
+      // rows above it.
       expect(offsetOf()).toBeCloseTo(before - scrolled, -1);
     });
   });

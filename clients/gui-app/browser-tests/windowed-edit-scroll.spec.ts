@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { fixture, wheelsDelivered } from "./support/fixtures.ts";
+import { fixture } from "./support/fixtures.ts";
 
 declare global {
   interface Window {
@@ -27,7 +27,11 @@ test("an end request follows the replacement across a windowed reindex", async (
   const box = await scroller.boundingBox();
   if (box === null) throw new Error("scroll box missing");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await wheelsDelivered(page, [{ deltaX: 0, deltaY: -30000 }], 0);
+  // Not `wheelsDelivered`: this scroller is as tall as its content, so its
+  // centre is far below the viewport and the wheel reaches no page - there is
+  // no event to wait for. Nothing reads a position it produced: the loop below
+  // asks the list to scroll.
+  await page.mouse.wheel(0, -30000);
   // Tall hydrated replies make the list's first long jump estimate imprecise.
   // Reissue until the reader is actually looking at the message to edit.
   for (let attempt = 0; attempt < 8; attempt++) {

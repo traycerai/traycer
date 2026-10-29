@@ -65,6 +65,11 @@ export async function nextFrames(page: Page, count: number): Promise<void> {
   }, count);
 }
 
+/** Far beyond a delivered wheel's latency on a loaded runner: a wheel that
+ *  has not arrived by then never will, and the test says why instead of
+ *  waiting out its own timeout. */
+const WHEEL_DELIVERY_TIMEOUT_MS = 10_000;
+
 export interface WheelDelta {
   readonly deltaX: number;
   readonly deltaY: number;
@@ -103,11 +108,21 @@ export async function wheelsDelivered(
     if (index > 0 && gapFrames > 0) await nextFrames(page, gapFrames);
     await page.mouse.wheel(deltaX, deltaY);
   }
-  await page.waitForFunction(
-    (expected) => (window.__wheelsSeen ?? 0) >= expected,
-    before + deltas.length,
-    { polling: "raf" },
-  );
+  const expected = before + deltas.length;
+  try {
+    await page.waitForFunction(
+      (count) => (window.__wheelsSeen ?? 0) >= count,
+      expected,
+      { polling: "raf", timeout: WHEEL_DELIVERY_TIMEOUT_MS },
+    );
+  } catch (error) {
+    const seen = await page.evaluate(() => window.__wheelsSeen ?? 0);
+    throw new Error(
+      `wheelsDelivered: the page received ${String(seen - before)} of ${String(deltas.length)} wheel events in ${String(WHEEL_DELIVERY_TIMEOUT_MS)}ms. ` +
+        "A wheel at a point outside the viewport reaches no page: move the mouse onto the visible part of the element first.",
+      { cause: error },
+    );
+  }
 }
 
 /**
