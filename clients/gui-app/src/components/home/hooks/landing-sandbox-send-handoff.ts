@@ -53,8 +53,13 @@ export function handLandingSandboxSend(
       const returned = returnPendingSandboxSend(id);
       if (returned.kind !== "landing-draft") return null;
       const store = useStagedSandboxStore.getState();
+      // A fresh stage on the same sandbox: only the create's key carries
+      // over, never the send's progress, failure or timing.
       store.stage(input.fromSurfaceKey, stage.target);
-      store.report(input.fromSurfaceKey, { ...stage, sendTaken: false });
+      if (stage.clientRequestId !== null)
+        store.report(input.fromSurfaceKey, {
+          clientRequestId: stage.clientRequestId,
+        });
       // The draft keeps where its message was going, so a reload stages it
       // again (`useReturnedSandboxStage`).
       useLandingDraftStore

@@ -40,6 +40,7 @@ import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { useSampledNow } from "@/lib/relative-time";
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
+import { supersedeReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
@@ -348,6 +349,7 @@ export function useSandboxStaging(input: {
     (target: NewStagedSandboxTarget): void => {
       const namedTarget = { ...target, name: stagedSandboxName(target.name) };
       if (forkOnNew === null) {
+        supersedeReturnedSandbox(surfaceKey);
         useStagedSandboxStore.getState().stage(surfaceKey, namedTarget);
       } else {
         forkOnNew(namedTarget);
@@ -493,6 +495,8 @@ export function useSandboxStaging(input: {
           wakeSandboxOnPick(host, null);
           return;
         }
+        // The person's pick: a message's returned sandbox no longer applies.
+        supersedeReturnedSandbox(surfaceKey);
         const target = restingTargetFor(host);
         if (target === null) {
           useStagedSandboxStore.getState().clear(surfaceKey);
@@ -602,7 +606,10 @@ export function useSandboxStaging(input: {
     consequences,
     openTerminalInstead,
     sheet,
-    chooseAnotherHost: () => useStagedSandboxStore.getState().clear(surfaceKey),
+    chooseAnotherHost: () => {
+      supersedeReturnedSandbox(surfaceKey);
+      useStagedSandboxStore.getState().clear(surfaceKey);
+    },
   };
 }
 

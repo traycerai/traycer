@@ -368,7 +368,7 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   // The window's pin key, which a staged sandbox is staged under.
   const composerSurfaceKey = useComposerSurfaceHostKey();
-  useLandingReturnedSandbox(composerSurfaceKey, draftId);
+  useLandingReturnedSandbox(composerSurfaceKey, draftId, activityEnabled);
   const settingsSeed = useMemo(
     () =>
       landingComposerSettingsSeedForDraft(

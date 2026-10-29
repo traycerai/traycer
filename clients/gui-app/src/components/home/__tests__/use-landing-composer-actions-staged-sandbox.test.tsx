@@ -619,7 +619,9 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       // the composer, create key and all.
       await reloadWindow();
       expect(readStagedSandbox(SURFACE)).toBeNull();
-      renderHook(() => useLandingReturnedSandbox(SURFACE, returnedDraft.id));
+      renderHook(() =>
+        useLandingReturnedSandbox(SURFACE, returnedDraft.id, true),
+      );
       expect(readStagedSandbox(SURFACE)).toMatchObject({
         target,
         phase: "staged",
@@ -664,6 +666,79 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       queryClient.clear();
     },
   );
+
+  it("gives the sandbox back as a fresh stage, carrying only the create's key", async () => {
+    useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+    const attach = deferred<unknown>();
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? attach.promise
+        : Promise.resolve({ roomInfo: null }),
+    );
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "team-9",
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+    await waitFor(() =>
+      expect(
+        landingMocks.request.mock.calls.some(
+          ([method]) => method === "epic.attachEnvironment",
+        ),
+      ).toBe(true),
+    );
+    const pending = pendingSendSurfaceKey(onlyPendingSend().id);
+    const requestId = readStagedSandbox(pending)?.clientRequestId;
+    // The send got somewhere before its task was refused.
+    act(() => {
+      useStagedSandboxStore.getState().report(pending, {
+        startedAt: Date.now() - 30_000,
+        step: "booting",
+        stepAt: Date.now(),
+        createdSandboxId: "sbx-9",
+        createdHostId: "sbx-9-host",
+        failure: { kind: "timed-out", step: "booting" },
+      });
+    });
+
+    await act(async () => {
+      attach.reject(
+        new HostRpcError({
+          code: "FORBIDDEN",
+          message: "This task cannot be attached to that team.",
+          requestId: "request-attach-refused",
+          method: "epic.attachEnvironment",
+          fatalDetails: null,
+        }),
+      );
+      await attach.promise.catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      target: TEAM_TARGET,
+      phase: "staged",
+      clientRequestId: requestId,
+      sendTaken: false,
+      startedAt: null,
+      stepAt: null,
+      createdSandboxId: null,
+      createdHostId: null,
+      failure: null,
+    });
+    queryClient.clear();
+  });
 
   it("keeps a late refusal with its pending send when the source has a newer explicit stage", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
