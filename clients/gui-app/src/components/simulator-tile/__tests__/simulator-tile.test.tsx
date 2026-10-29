@@ -133,7 +133,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
   useSimulatorSessionsForHost: () => fakes.sessions,
 }));
-vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
+vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
   // The open and the power off ride real mutations: what the tile does with
   // an answer depends on whether TanStack still delivers it to an observer
   // that may have unmounted, so a hand-rolled fake would pass whatever the
@@ -144,7 +144,14 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
     mutation: { mutate, isPending: false, variables: undefined },
     supported: true,
   });
+  // The sweep lists are the real ones: Check again is asserted through
+  // what it actually invalidates.
+  const { INSTANCE_INVALIDATIONS } =
+    await importOriginal<
+      typeof import("@/hooks/simulator/use-simulator-mutations")
+    >();
   return {
+    INSTANCE_INVALIDATIONS,
     useSimulatorConfigQuery: () => ({
       data: { enabled: false },
     }),

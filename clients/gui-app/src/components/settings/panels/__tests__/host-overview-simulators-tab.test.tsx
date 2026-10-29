@@ -100,10 +100,17 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersion: () => fakes.negotiated,
 }));
-vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
+vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
   const { useMutation, useQuery } = await import("@tanstack/react-query");
   const { hostQueryKeys } = await import("@/lib/query-keys/host-query-keys");
+  // The sweep lists are the real ones: Check again is asserted through what
+  // it actually invalidates.
+  const { INSTANCE_INVALIDATIONS } =
+    await importOriginal<
+      typeof import("@/hooks/simulator/use-simulator-mutations")
+    >();
   return {
+    INSTANCE_INVALIDATIONS,
     useSimulatorInstancesQuery: () => ({
       data: { instances: fakes.instances },
       isError: false,
@@ -393,6 +400,12 @@ describe("HostOverviewSimulatorsTab", () => {
       "simulator.list",
       { epicId: "epic-1" },
     );
+    /** The palette's inventory: its own `simulator.list`, under the instances scope. */
+    const INVENTORY_KEY = hostQueryKeys.simulatorInventory(
+      HOST,
+      "epic-1",
+      true,
+    );
     const OTHER_HOST_STATUS_KEY = hostQueryKeys.method<
       HostRpcRegistry,
       "simulator.status"
@@ -424,11 +437,12 @@ describe("HostOverviewSimulatorsTab", () => {
       };
     }
 
-    it("off: sits beside the disabled switch, re-reads this host's status and list, spins while the read is out, and the new answer enables the switch", async () => {
+    it("off: sits beside the disabled switch, re-reads this host's status, list and inventory, spins while the read is out, and the new answer enables the switch", async () => {
       fakes.config = { enabled: false };
       fakes.status = NEITHER;
       const queryClient = renderTab();
       queryClient.setQueryData(LIST_KEY, { simulators: [] });
+      queryClient.setQueryData(INVENTORY_KEY, []);
       queryClient.setQueryData(OTHER_HOST_STATUS_KEY, NEITHER);
       expect(switchRow().hasAttribute("disabled")).toBe(true);
       expect(rowLabelled("Use mobile simulators").contains(checkAgain())).toBe(
@@ -446,6 +460,9 @@ describe("HostOverviewSimulatorsTab", () => {
       ).not.toBeNull();
       expect(fakes.readStatus).toHaveBeenCalledTimes(1);
       expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(INVENTORY_KEY)?.isInvalidated).toBe(
+        true,
+      );
       expect(
         queryClient.getQueryState(OTHER_HOST_STATUS_KEY)?.isInvalidated,
       ).toBe(false);

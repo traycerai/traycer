@@ -2,20 +2,27 @@ import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useSimulatorStatusQuery } from "@/hooks/simulator/use-simulator-mutations";
+import {
+  INSTANCE_INVALIDATIONS,
+  useSimulatorStatusQuery,
+} from "@/hooks/simulator/use-simulator-mutations";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
- * The reads that say which platforms `hostId` can run. The host probes for
- * Xcode and the Android SDK on every one of them, so asking again IS looking
- * again: nothing else re-reads them once the tools are settled (the status
- * polls only while they download, and the sidebar holds it for the app's
- * life), so a toolchain installed after the first read stays unseen until a
- * switch write sweeps them.
+ * The reads that say which platforms `hostId` can run and what they offer.
+ * The host probes for Xcode and the Android SDK on every `simulator.status`
+ * and `simulator.list`, so asking again IS looking again: nothing else
+ * re-reads them once the tools are settled (the status polls only while they
+ * download, and the sidebar holds it for the app's life), so a toolchain
+ * installed after the first read stays unseen until a switch write sweeps
+ * them. The inventory pair goes with the status because the palette's
+ * inventory is its own `simulator.list`, cached under the instances scope
+ * (`hostQueryKeys.simulatorInventory`): sweeping the list alone left the
+ * devices a newly found platform brings out of it.
  */
 const RECHECK_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
   "simulator.status",
-  "simulator.list",
+  ...INSTANCE_INVALIDATIONS,
 ];
 
 /**
