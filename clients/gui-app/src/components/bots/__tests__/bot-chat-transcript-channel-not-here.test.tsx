@@ -111,6 +111,8 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   openAnnouncementThread: null,
   answerThreads: false,
   chooseOption: null,
+  answerQuestion: null,
+  discussQuestion: null,
   failedRequest: () => null,
   intro: { botTitle: "Release Bot", directive: null },
 };
@@ -329,6 +331,8 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     mountTranscript({
       kind: "thread",
       chooseOption: null,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
     });
 

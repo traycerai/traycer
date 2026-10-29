@@ -1,9 +1,16 @@
-import { Fragment, useContext, type ReactElement, type ReactNode } from "react";
+import {
+  Fragment,
+  useContext,
+  useEffect,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { MessageSquareText, Pencil, RotateCcw } from "lucide-react";
 import {
   isConversationRequestMessageId,
   type BotAnnouncement,
   type BotAnnouncementKind,
+  type BotQuestion,
   type ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
@@ -27,10 +34,21 @@ import {
   ChatBotPresentationContext,
   type ChatBotFailedRequest,
   type ChatBotPresentation,
+  type ChatBotQuestions,
   type ChatBotThreadLine,
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import {
+  answerDraftKey,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
+import { QuestionCard, type QuestionCardQuestion } from "./question-card";
+import {
+  EMPTY_QUESTION_CARD_DRAFT,
+  questionCardView,
+  type QuestionCardSettlement,
+} from "./question-card-view";
 import { TextSegment } from "./segments/text-segment";
 
 /**
@@ -41,8 +59,11 @@ import { TextSegment } from "./segments/text-segment";
  * its thread once the thread has a reply; an announcement carries its kind
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
- * reply that asks carries its options as buttons. A bot that answers posts
- * itself (reply mode `direct`) replies in the channel, as a plain row.
+ * reply that asks carries its options as buttons. A row that asks without
+ * waiting (decision 121) draws the question card in place of its text and
+ * options, and carries its thread's line as a question does. A bot that
+ * answers posts itself (reply mode `direct`) replies in the channel, as a
+ * plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
  * Slack offers it on every message, and a thread roots on the row it is
@@ -158,8 +179,8 @@ function failedActionsOf(
 
 /**
  * The bot's own row: a reply, or an announcement on its coloured bar; a
- * reply's options, and the thread line under a question or proposal once
- * its thread has a reply.
+ * reply's options, or the card of the questions it asks; and the thread line
+ * under a question or proposal once its thread has a reply.
  */
 function BotRow(props: {
   readonly message: ChatMessageModel;
@@ -170,6 +191,8 @@ function BotRow(props: {
 }): ReactElement {
   const { message, presentation, sentAt, body, hoverActions } = props;
   const announcement = message.announcement ?? null;
+  const question = message.question ?? null;
+  const questions = question === null ? null : presentation.questions;
   const { replyInThread, threadLine } = botRowThread(message, presentation);
   return (
     <BotMessageFrame
@@ -183,14 +206,17 @@ function BotRow(props: {
       replyInThread={replyInThread}
       failed={null}
     >
-      {announcement === null ? (
-        body
+      {question !== null && questions !== null ? (
+        <BotQuestionCard
+          messageId={message.persistentMessageId}
+          question={question}
+          botTitle={presentation.botTitle}
+          questions={questions}
+        />
       ) : (
-        <BotAnnouncementBody announcement={announcement}>
-          {body}
-        </BotAnnouncementBody>
+        <BotRowBody announcement={announcement} body={body} />
       )}
-      {message.options === undefined ? null : (
+      {message.options === undefined || questions !== null ? null : (
         <ReplyOptions
           options={message.options}
           onChoose={presentation.chooseOption}
@@ -205,6 +231,126 @@ function BotRow(props: {
       )}
     </BotMessageFrame>
   );
+}
+
+/** A bot row's text, on its announcement's coloured bar where it is one. */
+function BotRowBody(props: {
+  readonly announcement: BotAnnouncement | null;
+  readonly body: ReactNode;
+}): ReactNode {
+  const { announcement, body } = props;
+  if (announcement === null) return body;
+  return (
+    <BotAnnouncementBody announcement={announcement}>
+      {body}
+    </BotAnnouncementBody>
+  );
+}
+
+/**
+ * The card of the questions a bot's row asks, each settlement named as this
+ * surface names its members, and the person's own answers kept under the bot
+ * (`useBotDraftsStore`) so they outlive the view; without actions until the
+ * row is written. A sent answer that the host does not take is given back to
+ * edit; one whose question shows settled, or a draft with nothing of the
+ * person's left in it, is spent. Discuss takes the draft off the card into
+ * the discussion's box.
+ */
+function BotQuestionCard(props: {
+  /** The row, by its message id; `null` before it is written. */
+  readonly messageId: string | null;
+  readonly question: BotQuestion;
+  readonly botTitle: string;
+  readonly questions: ChatBotQuestions;
+}): ReactElement {
+  const { messageId, question, botTitle, questions } = props;
+  const { botId, viewerUserId, memberName, answer, discuss } = questions;
+  const drafts = useBotDraftsStore((state) => state.answers[botId]);
+  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
+  const cardQuestions = question.questions.map(
+    (item, index): QuestionCardQuestion => ({
+      index,
+      text: item.text,
+      options: item.options,
+      allowFreeText: item.allowFreeText,
+      settlement: cardSettlement(item.settlement, memberName, viewerUserId),
+      draft:
+        messageId === null
+          ? EMPTY_QUESTION_CARD_DRAFT
+          : (drafts?.[answerDraftKey(messageId, index)] ??
+            EMPTY_QUESTION_CARD_DRAFT),
+    }),
+  );
+  const spent =
+    messageId === null
+      ? ""
+      : cardQuestions
+          .filter(
+            (item) =>
+              drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
+              questionCardView(item.settlement, item.draft).kind === "settled",
+          )
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (spent.length === 0) return;
+    for (const key of spent.split("\n")) setAnswer(botId, key, null);
+  }, [botId, setAnswer, spent]);
+  const keyOf = (index: number): string | null =>
+    messageId === null ? null : answerDraftKey(messageId, index);
+  return (
+    <QuestionCard
+      asker={botTitle}
+      questions={cardQuestions}
+      onDraft={
+        answer === null
+          ? null
+          : (index, draft) => {
+              const key = keyOf(index);
+              if (key !== null) setAnswer(botId, key, draft);
+            }
+      }
+      onAnswer={(given) => {
+        const key = keyOf(given.questionIndex);
+        if (messageId === null || key === null || answer === null) return;
+        answer(messageId, given).catch(() => {
+          const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+          if (latest !== undefined) {
+            setAnswer(botId, key, { ...latest, sent: null });
+          }
+        });
+      }}
+      onDiscuss={
+        messageId === null || discuss === null
+          ? null
+          : (index, draft) => {
+              discuss(messageId, draft);
+              setAnswer(botId, answerDraftKey(messageId, index), null);
+            }
+      }
+    />
+  );
+}
+
+/** A question's settlement as the card names it. */
+function cardSettlement(
+  settlement: BotQuestion["questions"][number]["settlement"],
+  memberName: (userId: string) => string,
+  viewerUserId: string | null,
+): QuestionCardSettlement | null {
+  if (settlement === null) return null;
+  return {
+    answer: settlement.answer,
+    skipped: settlement.skipped,
+    by:
+      settlement.by.kind === "bot"
+        ? { kind: "asker" }
+        : {
+            kind: "person",
+            name: memberName(settlement.by.userId),
+            viewer: settlement.by.userId === viewerUserId,
+          },
+  };
 }
 
 /**
@@ -227,8 +373,8 @@ function memberReplyInThread(
 
 /**
  * The thread a bot's row opens from its hover actions, and the line of it
- * the row carries: a question's, a proposal's or a direct reply's own
- * thread; for a direct reply where the bot's host does not take replies
+ * the row carries: a question's, a proposal's, a row's that asks without
+ * waiting, or a direct reply's own thread; for a direct reply where the bot's host does not take replies
  * under one, the thread under the post it answers, with no line here. Any
  * other row of the bot takes none.
  */
@@ -240,11 +386,16 @@ function botRowThread(
   readonly threadLine: ChatBotThreadLine | null;
 } {
   const kind = message.announcement?.kind ?? null;
+  // A row that asks roots its own thread whatever post it follows, as a
+  // question announcement does.
+  const asks = message.question !== undefined;
   const answer =
     kind === null &&
+    !asks &&
     message.repliesTo !== undefined &&
     presentation.answerThreads;
-  const ownThread = kind === "question" || kind === "proposal" || answer;
+  const ownThread =
+    kind === "question" || kind === "proposal" || asks || answer;
   const anchorId = ownThread
     ? message.persistentMessageId
     : (message.repliesTo ?? null);

@@ -647,6 +647,8 @@ import {
   botConversationSendV10,
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
+  botConversationSendV12,
+  botConversationSendUpgradeV11ToV12,
   botThreadListV10,
   botThreadListV11,
   botThreadListUpgradeV10ToV11,
@@ -9229,7 +9231,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9240,6 +9242,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botConversationSendV11,
           upgradeFromPreviousVersion: botConversationSendUpgradeV10ToV11,
+        },
+        // @1.2 answers or skips a bot's question from its card (`answer`, T91).
+        2: {
+          contract: botConversationSendV12,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

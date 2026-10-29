@@ -2177,6 +2177,29 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "resolvedByMessageId"
                             ],
                             "additionalProperties": false
+                          },
+                          "questionAnswer": {
+                            "type": "object",
+                            "properties": {
+                              "questionMessageId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "questionIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "skipped": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "questionMessageId",
+                              "questionIndex",
+                              "skipped"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -6164,6 +6187,121 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "repliesTo": {
                             "type": "string",
                             "minLength": 1
+                          },
+                          "question": {
+                            "type": "object",
+                            "properties": {
+                              "requestId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "questions": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "options": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "allowFreeText": {
+                                      "type": "boolean"
+                                    },
+                                    "settlement": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "answer": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "skipped": {
+                                              "type": "boolean"
+                                            },
+                                            "by": {
+                                              "oneOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "const": "person"
+                                                    },
+                                                    "userId": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "userId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "const": "bot"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "at": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "answer",
+                                            "skipped",
+                                            "by",
+                                            "at"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "text",
+                                    "options",
+                                    "allowFreeText",
+                                    "settlement"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "requestId",
+                              "questions"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [

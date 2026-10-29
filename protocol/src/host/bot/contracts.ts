@@ -41,6 +41,7 @@ import {
   botConversationListResponseSchema,
   botConversationSendRequestSchema,
   botConversationSendRequestSchemaV10,
+  botConversationSendRequestSchemaV11,
   botConversationSendResponseSchema,
   botThreadListRequestSchema,
   botThreadListResponseSchema,
@@ -207,7 +208,7 @@ export const botConversationSendV10 = defineRpcContract({
 export const botConversationSendV11 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV11,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
@@ -221,6 +222,26 @@ export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
     redeliver: null,
     supersedes: null,
   }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.2` (T91): a send may answer or skip a question a
+ * bot asked without waiting (`answer`). A 1.1 request answers none.
+ */
+export const botConversationSendV12 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV11ToV12 = defineUpgradePath<
+  typeof botConversationSendV11,
+  typeof botConversationSendV12
+>({
+  from: botConversationSendV11.schemaVersion,
+  to: botConversationSendV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, answer: null }),
   upgradeResponse: (response) => response,
 });
 
