@@ -135,7 +135,7 @@ export function useHostScope(): HostScope {
  * A team, and Personal on a window whose host does not run it, read the
  * cloud instead (`PersonalPageFrame`).
  */
-const WINDOW_HOST_SELECTION: HostScopeSelection = {
+export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: () => undefined,
 };
