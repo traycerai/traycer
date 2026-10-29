@@ -319,7 +319,9 @@ function armDepartsOnGrowth(
  *  reader would retire the arm (`setFollowIntent`), and that scroll would
  *  then read as the list's and be corrected. A gesture toward the end is
  *  the reader asking for it. */
-function armAwaitsScrollAway(arm: ArmedReaderDeparture): boolean {
+function armAwaitsScrollAway(
+  arm: ArmedReaderDeparture,
+): arm is ReaderGestureArm {
   return (
     arm?.source === "gesture" &&
     arm.blocksAutomaticCorrection &&
@@ -376,12 +378,34 @@ function strictBottomReleasesGestureArm(
 ): boolean {
   if (arm?.source !== "gesture") return false;
   if (!arm.blocksAutomaticCorrection) return true;
+  return gestureScrollLanded(arm, geometry);
+}
+
+/** Whether the view stands where a gesture away from the end moves it:
+ *  above its offset at the gesture, and farther from the end. */
+function gestureScrollLanded(
+  arm: ReaderGestureArm,
+  geometry: ChatTimelineScrollGeometry,
+): boolean {
   const start = arm.geometryAtGesture;
   if (start === null) return false;
   return (
     geometry.scrollTop < start.scrollTop &&
     distanceFromEnd(geometry) > distanceFromEnd(start)
   );
+}
+
+/** The arm a free reader's report leaves. Their gesture away from the end
+ *  awaits nothing once its scroll has landed: the strict bottom they reach
+ *  after it, however they reach it, is theirs to follow
+ *  (`reconcileStrictBottom`). */
+function armAfterFreeReport(
+  arm: ArmedReaderDeparture,
+  geometry: ChatTimelineScrollGeometry,
+): ArmedReaderDeparture {
+  return armAwaitsScrollAway(arm) && gestureScrollLanded(arm, geometry)
+    ? null
+    : arm;
 }
 
 /**
@@ -1488,6 +1512,10 @@ export function useChatTimelineFollowLatch(
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) {
       publishFreeTouchWhileSuppressed(geometry);
+      armedReaderDepartureRef.current = armAfterFreeReport(
+        armedReaderDepartureRef.current,
+        geometry,
+      );
       return;
     }
     const armedDeparture = armedReaderDepartureRef.current;
