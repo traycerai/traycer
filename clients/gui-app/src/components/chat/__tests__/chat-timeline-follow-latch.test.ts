@@ -1221,6 +1221,35 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
+    // That departure was published ahead of the wheel's report, so the
+    // report is still to come: the end coming back to meet them, with no
+    // turn running, is the list's, and their wheel's report moves them off.
+    // Once it has come, none is owed: the end meeting them follows them.
+    it("a reader departed ahead of their wheel's report stays held when the end comes back to meet them, and follows once that report has come", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollHeight: 1450, scrollTop: 950 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      shim.setGeometry(node, { scrollHeight: 1450 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollTop: 910 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(910);
+
+      shim.setGeometry(node, { scrollHeight: 1410 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
     // A pad drop clamps the view past where the wheel will take it before
     // the wheel's frame lands. The clamp is not the wheel: its own report
     // follows, and nothing in between is corrected.
@@ -1559,10 +1588,11 @@ describe("useChatTimelineFollowLatch", () => {
     }
 
     // The pad dropping leaves the reader at the strict bottom with no scroll
-    // report. That is the list's clamp, not the reader returning: taken as
-    // that, the wheel's own report a moment later read as layout and was
-    // corrected back to the tail.
-    it("stays detached when the end pad drops under them, so the wheel's own report is not corrected", () => {
+    // report. No read can tell whether their wheel's scroll is still coming,
+    // and with no turn running nothing else would move them off the end, so
+    // they follow. A report of the wheel's a moment later is still theirs:
+    // it departs them again, and is not corrected back to the tail.
+    it("follows them when the end pad drops under them, and their wheel's own report departs them again without a correction", () => {
       const { node, listRef, onFollowIntentChange, result } =
         departedAtPaddedEnd();
 
@@ -1572,8 +1602,44 @@ describe("useChatTimelineFollowLatch", () => {
       shim.setGeometry(node, { scrollTop: 700 });
       fireNativeScroll(node);
 
-      expect(onFollowIntentChange).toHaveBeenCalledTimes(1);
+      expect(onFollowIntentChange.mock.calls).toEqual([
+        [false],
+        [true],
+        [false],
+      ]);
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(700);
+    });
+
+    // The price of following them there: rows that grow before the wheel's
+    // report pull them to the new end once. The report then departs them,
+    // with no second pull, and they stay free.
+    it("rows grown before their wheel's report pull them once to the new end, and the report departs them with no second pull", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        departedAtPaddedEnd();
+
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      flushAnimationFrame();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+      expect(node.scrollTop).toBe(1100);
+
+      shim.setGeometry(node, { scrollTop: 700 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      flushAnimationFrame();
+
+      expect(onFollowIntentChange.mock.calls).toEqual([
+        [false],
+        [true],
+        [false],
+      ]);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
       expect(node.scrollTop).toBe(700);
     });
 
@@ -3016,6 +3082,55 @@ describe("useChatTimelineFollowLatch", () => {
 
       turnRunning.current = false;
       shim.setGeometry(node, { scrollHeight: 1420 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    // Published at their wheel's report, not ahead of it: no report of theirs
+    // is owed, so with the turn finished the end meeting them, with no scroll
+    // event, follows them rather than leaving them free on it.
+    it("guard: with the turn finished, the end meeting a reader departed at their wheel's report follows them", () => {
+      const { node, onFollowIntentChange, result, turnRunning } =
+        followingWithTurn();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      turnRunning.current = false;
+      shim.setGeometry(node, { scrollHeight: 1460 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("guard: with the turn finished, the end meeting a reader a scrollbar drag's report departed follows them", () => {
+      const { node, onFollowIntentChange, result, turnRunning } =
+        followingWithTurn();
+
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      turnRunning.current = false;
+      shim.setGeometry(node, { scrollHeight: 1460 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    // iOS delivers no `touchmove`: the finger's report is the departure.
+    it("guard: with the turn finished, the end meeting a reader a finger's report departed follows them", () => {
+      const { node, onFollowIntentChange, result, turnRunning } =
+        followingWithTurn();
+
+      fireTouch(node, "touchstart", 300);
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      fireTouch(node, "touchend", 340);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      turnRunning.current = false;
+      shim.setGeometry(node, { scrollHeight: 1460 });
       result.current.followEndIfPermitted();
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     });

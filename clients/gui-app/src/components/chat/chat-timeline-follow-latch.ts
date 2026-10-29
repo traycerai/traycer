@@ -800,10 +800,11 @@ export function useChatTimelineFollowLatch(
   // write the app or the list announces moves it with the view: that write is
   // not the reader moving either.
   const readerDepartureScrollTopRef = useRef<number | null>(null);
-  // Whether a report of the reader's own has moved the departure on since it
-  // was published: their scroll has reported, so the end meeting them there
-  // holds them only while the turn runs.
-  const departureMovedByReportRef = useRef(false);
+  // Whether the departure was published ahead of its gesture's report (the
+  // tail moving away from a wheel up that has not reported), until a report
+  // arrives. Only then is a report of the reader's own still to come, so only
+  // then does the end meeting them hold them whether or not the turn runs.
+  const departureAwaitsReportRef = useRef(false);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const pendingEndCorrectionScrollRef = useRef<Promise<void> | null>(null);
@@ -995,7 +996,7 @@ export function useChatTimelineFollowLatch(
         return false;
       }
       readerDepartureScrollTopRef.current = geometry.scrollTop;
-      departureMovedByReportRef.current = false;
+      departureAwaitsReportRef.current = false;
       supersedePendingEndCorrection();
       onReaderGestureRef.current?.({
         direction: "away-from-end",
@@ -1318,7 +1319,7 @@ export function useChatTimelineFollowLatch(
         // The finger moved the view: this is the published reader position a
         // delivered `touchmove` would have reported.
         readerDepartureScrollTopRef.current = geometry.scrollTop;
-        departureMovedByReportRef.current = false;
+        departureAwaitsReportRef.current = false;
         supersedePendingEndCorrection();
         onReaderGestureRef.current?.({
           direction: "indeterminate",
@@ -1329,7 +1330,7 @@ export function useChatTimelineFollowLatch(
         // Backstop if arm-time geometry was unmeasurable or a later native
         // report is the first moment the reader's offset is known.
         readerDepartureScrollTopRef.current = geometry.scrollTop;
-        departureMovedByReportRef.current = false;
+        departureAwaitsReportRef.current = false;
         supersedePendingEndCorrection();
       }
       return true;
@@ -1460,6 +1461,7 @@ export function useChatTimelineFollowLatch(
   // the hold.
   const noteReportAfterDeparture = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
+      departureAwaitsReportRef.current = false;
       const departure = readerDepartureScrollTopRef.current;
       if (
         isChatTimelineAtStrictBottom(geometry) &&
@@ -1473,7 +1475,6 @@ export function useChatTimelineFollowLatch(
       const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
       if (geometry.scrollTop < departure - epsilon) {
         readerDepartureScrollTopRef.current = geometry.scrollTop;
-        departureMovedByReportRef.current = true;
       } else if (geometry.scrollTop > departure + epsilon) {
         readerDepartureScrollTopRef.current = null;
       }
@@ -1683,13 +1684,13 @@ export function useChatTimelineFollowLatch(
         return;
       }
       if (
-        departureMovedByReportRef.current
-          ? endMetHeldReaderMidTurn(geometry)
-          : holdsDepartedReaderAtEnd()
+        departureAwaitsReportRef.current
+          ? holdsDepartedReaderAtEnd()
+          : endMetHeldReaderMidTurn(geometry)
       ) {
-        // The end clamped to meet a departed reader (a temporary end pad
-        // dropped) is the list's, not the reader returning: until their
-        // gesture's own scroll reports, and after it while the turn runs,
+        // The end meeting a departed reader (a temporary end pad dropped) is
+        // the list's, not the reader returning: until the report of a
+        // gesture they were departed ahead of, and while the turn runs,
         // whose later chunks leave them behind. At rest, they follow.
         cancelActiveCorrection();
         return;
@@ -1753,6 +1754,7 @@ export function useChatTimelineFollowLatch(
       // end came up to absorb it, and no report tells the two apart. Their
       // scroll-up holds; the tail does not drag them.
       publishArmedDeparture(armedDeparture, geometry);
+      departureAwaitsReportRef.current = true;
       armedReaderDepartureRef.current = null;
       setFollowIntent(false);
       return;
