@@ -242,7 +242,10 @@ function refusalOf(
   ) {
     return hostAction.code;
   }
-  if (entry.phase === "unconfirmed") return "NOT_REACHABLE";
+  if (entry.phase === "unconfirmed") {
+    // The serving host holds it on its way: the call's answer was lost.
+    return hostAction?.state === "sending" ? null : "NOT_REACHABLE";
+  }
   return entry.phase === "refused" ? entry.code : null;
 }
 
@@ -260,23 +263,25 @@ function heldAction(
   );
 }
 
-/** Another action of the person's on the post than this window's is on its way. */
-function otherOnItsWay(
-  entry: BotSurfaceActionEntry | null,
+/** An action of the person's on the post is on its way, from any window. */
+function anyOnItsWay(
   postActions: ReadonlyArray<BotSurfaceActionState>,
 ): boolean {
-  return postActions.some(
-    (action) =>
-      action.state === "sending" && action.actionId !== entry?.actionId,
-  );
+  return postActions.some((action) => action.state === "sending");
 }
 
-/** The person's action is on its way: from this window, or from another the serving host holds. */
+/**
+ * The person's action is on its way: from this window (sent, or unanswered
+ * while the serving host holds it on its way), or from another the serving
+ * host holds.
+ */
 function isOnItsWay(
   entry: BotSurfaceActionEntry | null,
+  hostAction: BotSurfaceActionState | null,
   held: BotSurfaceActionState | null,
 ): boolean {
   if (entry === null) return held?.state === "sending";
+  if (entry.phase === "unconfirmed") return hostAction?.state === "sending";
   return entry.phase === "sending" || entry.phase === "forwarded";
 }
 
@@ -317,7 +322,7 @@ export function botSurfaceCardView(
       title,
       state: { kind: "refused", line },
       actions: again ? inline : null,
-      actionsBusy: again && otherOnItsWay(entry, input.postActions),
+      actionsBusy: again && anyOnItsWay(input.postActions),
     };
   }
   if (entry !== null && entry.phase === "settled") {
@@ -326,7 +331,7 @@ export function botSurfaceCardView(
       state: { kind: "resolved", line: ownSettlementLine(entry.action) },
     };
   }
-  if (isOnItsWay(entry, held)) {
+  if (isOnItsWay(entry, hostAction, held)) {
     return {
       title,
       state: { kind: "sending" },

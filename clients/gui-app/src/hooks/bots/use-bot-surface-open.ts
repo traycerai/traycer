@@ -26,7 +26,8 @@ import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
  * host, the host a hostless task tab opens on: a question or an approval on
  * another machine opens a chat tile bound to that machine in the task's tab
  * (the tab keeps its own host), and lands on the block or the row there; a
- * parked page opens its browser tile on its machine the same way.
+ * parked page opens its browser tile on its machine the same way, or with no
+ * page known, the chat that parked it on its machine.
  * `title` names a tile opened fresh until the chat's own name arrives.
  */
 export function useBotSurfaceOpen(
@@ -39,29 +40,31 @@ export function useBotSurfaceOpen(
   const { openTile } = useEpicTileNavigation();
   const requestJump = useChatTranscriptJumpStore((state) => state.requestJump);
   const linkPolicy = use(MarkdownLinkContext);
+  const elsewhere =
+    effectiveHostId !== null && surface.hostId !== effectiveHostId;
+  /** The chat's tile bound to the surface's machine, in the task's tab. */
+  const openChatThere = (chatId: string): void => {
+    openTile(
+      tileIntent(
+        makeOpenableNodeRef({
+          id: chatId,
+          instanceId: uuidv4(),
+          type: "chat",
+          name: title,
+          hostId: surface.hostId,
+        }),
+        { epicId: surface.epicId },
+        "explicit",
+        "direct_ui",
+      ),
+    );
+  };
   return () => {
     const context = { originHostId: surface.hostId, effectiveHostId };
     const now = Date.now();
     const gate = gateOf(surface);
-    if (
-      gate !== null &&
-      effectiveHostId !== null &&
-      surface.hostId !== effectiveHostId
-    ) {
-      openTile(
-        tileIntent(
-          makeOpenableNodeRef({
-            id: gate.chatId,
-            instanceId: uuidv4(),
-            type: "chat",
-            name: title,
-            hostId: surface.hostId,
-          }),
-          { epicId: surface.epicId },
-          "explicit",
-          "direct_ui",
-        ),
-      );
+    if (gate !== null && elsewhere) {
+      openChatThere(gate.chatId);
       requestJump(surface.hostId, gate.chatId, gate.target);
       return;
     }
@@ -95,9 +98,11 @@ export function useBotSurfaceOpen(
         );
         return;
       case "browser": {
-        const tabId =
-          surface.tabId ??
-          (open?.surface.kind === "browser" ? open.surface.tabId : null);
+        const tabId = browserTabOf(surface, open);
+        if (tabId === null && elsewhere && surface.chatId !== null) {
+          openChatThere(surface.chatId);
+          return;
+        }
         if (tabId === null) {
           routeNotificationForHost(
             navigate,
@@ -134,6 +139,15 @@ export function useBotSurfaceOpen(
       }
     }
   };
+}
+
+/** The parked page's tab: the post's, else the open park's; `null` when neither says. */
+function browserTabOf(
+  surface: Extract<BotSurfaceReference, { kind: "browser" }>,
+  open: BotInputNeeded | null,
+): string | null {
+  if (surface.tabId !== null) return surface.tabId;
+  return open?.surface.kind === "browser" ? open.surface.tabId : null;
 }
 
 /** A question's block or an approval's row, in its chat; `null` for any other surface. */

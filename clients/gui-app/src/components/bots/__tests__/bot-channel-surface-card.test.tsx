@@ -839,8 +839,50 @@ describe("<BotChannelView /> a post's surface card: Open", () => {
     expect(mocks.route).not.toHaveBeenCalled();
   });
 
-  it("opens the task where a parked page names no tab", async () => {
+  it.each([
+    {
+      name: "the window's machine is unknown",
+      effective: null,
+      chatId: AGENT_CHAT_ID,
+    },
+    {
+      name: "the page is on the window's machine",
+      effective: TASK_HOST_ID,
+      chatId: AGENT_CHAT_ID,
+    },
+    { name: "the post names no chat", effective: HOST_ID, chatId: null },
+  ])(
+    "opens the task where a parked page names no tab and $name",
+    async ({ effective, chatId }) => {
+      const user = userEvent.setup();
+      if (effective !== null) {
+        useSelectionAuthorityStore.setState({
+          attached: true,
+          effectiveHostId: effective,
+        });
+      }
+      mountChannel({
+        rows: [post({ ...BROWSER, tabId: null, chatId })],
+        tasks: [task([])],
+        surfaceActions: [],
+      });
+
+      await user.click(within(card()).getByRole("button", { name: "Open" }));
+
+      expect(
+        mocks.route.mock.calls.map((call) => call[1] as NotificationPayload),
+      ).toEqual([{ kind: "epic", epicId: TASK_ID }]);
+      expect(useEpicCanvasStore.getState().canvasByTabId).toEqual({});
+    },
+  );
+
+  it("opens the chat of a parked page that names no tab, on the other machine, as a chat tile bound to it", async () => {
     const user = userEvent.setup();
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: HOST_ID,
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab(TASK_ID, "Deploy");
     mountChannel({
       rows: [post({ ...BROWSER, tabId: null })],
       tasks: [task([])],
@@ -850,9 +892,15 @@ describe("<BotChannelView /> a post's surface card: Open", () => {
     await user.click(within(card()).getByRole("button", { name: "Open" }));
 
     expect(
-      mocks.route.mock.calls.map((call) => call[1] as NotificationPayload),
-    ).toEqual([{ kind: "epic", epicId: TASK_ID }]);
-    expect(useEpicCanvasStore.getState().canvasByTabId).toEqual({});
+      Object.values(
+        useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
+          {},
+      ),
+    ).toMatchObject([
+      { id: AGENT_CHAT_ID, type: "chat", hostId: TASK_HOST_ID },
+    ]);
+    expect(mocks.route).not.toHaveBeenCalled();
+    expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
 
   it("opens a question or an approval on another machine than the window's as a chat tile bound to that machine, and parks the jump to it", async () => {
@@ -1468,4 +1516,82 @@ describe("<BotChannelView /> a post's surface card: answering and deciding", () 
       ).toBe(false);
     },
   );
+
+  it("shows a decision whose answer was lost as sending while the host holds that same action sending, and as refused once the host reports it refused", async () => {
+    const user = userEvent.setup();
+    answer = () => Promise.reject(new Error("socket closed"));
+    const channel = mountChannel({
+      rows: [post(APPROVAL)],
+      tasks: [task([OPEN_APPROVAL])],
+      surfaceActions: [],
+    });
+    await user.click(within(card()).getByRole("button", { name: "Allow" }));
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task."),
+    );
+    const actionId = acts[0]?.actionId ?? "";
+
+    channel.serve(
+      [task([OPEN_APPROVAL])],
+      [{ actionId, messageId: POST_ID, state: "sending", code: null }],
+    );
+
+    expect(card().getAttribute("data-state")).toBe("sending");
+    expect(within(card()).queryByText("Couldn't reach the task.")).toBeNull();
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: /Allow/ })),
+    ).toBe(true);
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: /Deny/ })),
+    ).toBe(true);
+
+    channel.serve(
+      [task([OPEN_APPROVAL])],
+      [
+        {
+          actionId,
+          messageId: POST_ID,
+          state: "refused",
+          code: "NOT_REACHABLE",
+        },
+      ],
+    );
+
+    expect(stateLine()).toBe("Couldn't reach the task.");
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: "Allow" })),
+    ).toBe(false);
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: "Deny" })),
+    ).toBe(false);
+  });
+
+  it("holds the retry of a refused decision while the host holds that same action sending", async () => {
+    const user = userEvent.setup();
+    answer = () =>
+      Promise.resolve({ outcome: "refused", code: "NOT_REACHABLE" });
+    const channel = mountChannel({
+      rows: [post(APPROVAL)],
+      tasks: [task([OPEN_APPROVAL])],
+      surfaceActions: [],
+    });
+    await user.click(within(card()).getByRole("button", { name: "Allow" }));
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task."),
+    );
+    const actionId = acts[0]?.actionId ?? "";
+
+    channel.serve(
+      [task([OPEN_APPROVAL])],
+      [{ actionId, messageId: POST_ID, state: "sending", code: null }],
+    );
+
+    expect(stateLine()).toBe("Couldn't reach the task.");
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: "Allow" })),
+    ).toBe(true);
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: "Deny" })),
+    ).toBe(true);
+  });
 });
