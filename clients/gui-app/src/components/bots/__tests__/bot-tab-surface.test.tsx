@@ -90,6 +90,9 @@ const mocks = vi.hoisted(() => ({
     onboardingVersion: { major: 1, minor: 1 },
     /** When a successful `bot.onboarding.read` answered. */
     readAt: 1_000,
+    /** A disabled read still holds what it answered before, as TanStack's
+     * cache does across a reconnect. */
+    readsCached: false,
     /**
      * The bot list's last read failed: its status is `error`, with the data
      * it had kept, or none when `listedBotIds` is `undefined` (a cold read).
@@ -130,8 +133,8 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   },
 }));
 // The host RPC boundary: `bot.onboarding.read` answers what the test
-// scripted, and a query that is not enabled reads as pending, as TanStack's
-// does.
+// scripted, and a query that is not enabled reads as pending, or as what it
+// answered before when that is cached (`readsCached`), as TanStack's does.
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
     requests: ReadonlyArray<{ params: { environmentId: string } }>;
@@ -139,7 +142,7 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
   }) =>
     args.requests.map((request) => {
       const script =
-        args.options?.enabled === true
+        args.options?.enabled === true || mocks.state.readsCached
           ? mocks.reads[request.params.environmentId]
           : undefined;
       const pending = {
@@ -535,6 +538,7 @@ beforeEach(() => {
   mocks.state.onboardingSupport = true;
   mocks.state.onboardingVersion = { major: 1, minor: 1 };
   mocks.state.readAt = 1_000;
+  mocks.state.readsCached = false;
   mocks.state.listFailed = false;
   mocks.state.environmentsStatus = "success";
   mocks.state.environmentsKept = false;
@@ -789,9 +793,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
   /**
    * The host does not answer a team's setup, so the team cannot be told from
-   * a deleted bot. Nothing failed, so asking again would answer the same:
-   * the tab says the channel could not be loaded, with no Retry, and shows
-   * the setup once the host's methods answer it.
+   * a deleted bot - not even by the setup it answered before it reconnected,
+   * still cached. Nothing failed, so asking again would answer the same: the
+   * tab says the channel could not be loaded, with no Retry, and shows the
+   * setup once the host's methods answer it.
    */
   it.each<readonly [string, () => void]>([
     [
@@ -809,6 +814,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   ])(
     "shows the channel could not be loaded, without Retry, and never opens, subscribes to or closes the tab, when %s",
     (_name, script) => {
+      mocks.state.readsCached = true;
       script();
       const view = render(surfaceFor(SETUP_BOT_ID));
 

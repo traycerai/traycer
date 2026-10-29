@@ -95,18 +95,22 @@ export function useTeamSetups(input: {
     answersSetup && reads.some((read) => read.status === "error");
   const unresolved =
     settled && teams.length > 0 && (!answersSetup || readFailed);
-  const setups = teams.flatMap((team, index): TeamSetup[] => {
-    const setup = reads[index]?.data?.setup ?? null;
-    if (setup === null) return [];
-    return [
-      {
-        environmentId: team.environmentId,
-        teamName: team.label,
-        botId: setup.botId,
-        title: setup.title,
-      },
-    ];
-  });
+  // A host that stops answering `setup` (reconnected on an older line) keeps
+  // the reads it answered before in the cache: they are not its answer now.
+  const setups = !answersSetup
+    ? NO_SETUPS
+    : teams.flatMap((team, index): TeamSetup[] => {
+        const setup = reads[index]?.data?.setup ?? null;
+        if (setup === null) return [];
+        return [
+          {
+            environmentId: team.environmentId,
+            teamName: team.label,
+            botId: setup.botId,
+            title: setup.title,
+          },
+        ];
+      });
   const retry = (): void => {
     for (const read of reads) {
       if (read.status === "error") void read.refetch();
