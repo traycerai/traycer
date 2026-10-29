@@ -190,8 +190,8 @@ type ImportOutcome =
  *
  * Resolves to the installed draft id (or `null` when the fence refused it)
  * together with `readsSettled` - see {@link PromptHandoffOutcome}. Rejects only
- * if even the text-only fallback cannot be installed, which the caller treats
- * as unrecoverable.
+ * if even the text-only fallback cannot be installed and saved, which the
+ * caller treats as unrecoverable: its source is still the only copy.
  */
 export async function buildUnrecordedPromptHandoff(args: {
   readonly recovery?: PromptHandoffRecovery;
@@ -508,7 +508,13 @@ function installHandoffDraft(args: {
     closed: true,
     returnedSandbox: args.returnedSandbox,
   });
-  return installed ||
+  if (installed) return draftId;
+  // A recovery id is the same on every attempt, so its row may be one an
+  // earlier attempt of this recovery installed, and that row is saved:
+  // `installLandingDraft` takes back any row storage refused before it
+  // throws, so none outlives its write. A minted id was never offered
+  // before; a false for it installed nothing.
+  return args.recovery !== undefined &&
     useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)
     ? draftId
     : null;

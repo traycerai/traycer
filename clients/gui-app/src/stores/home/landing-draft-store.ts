@@ -213,6 +213,8 @@ interface LandingDraftStoreState {
    * touching `activeDraftId` - the stash migration installs many rows at
    * once and Undo restores one the user is not looking at, so neither may
    * hijack the composer. False when `id` is retired or already present.
+   * Throws when storage refuses the row, with the store as it was: an
+   * install that is not saved is not an install.
    *
    * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
    * then clears the active draft, and fires an image reconcile between the
@@ -752,10 +754,24 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
               ? null
               : storeReturnedSandbox(input.returnedSandbox),
         };
-        // Partial set: `activeDraftId` is deliberately left where it is.
-        set((state) => ({
-          drafts: [...uniqueLandingDrafts(state.drafts), next],
-        }));
+        const before = get().drafts;
+        try {
+          // Partial set: `activeDraftId` is deliberately left where it is.
+          set((state) => ({
+            drafts: [...uniqueLandingDrafts(state.drafts), next],
+          }));
+        } catch (error: unknown) {
+          // persist sets memory first, then writes storage, and a refused
+          // write throws out of `set` with the row already in memory. Take it
+          // back out: a row only memory holds is gone on reload, and a caller
+          // that saw it would end the only copy that is saved.
+          try {
+            set({ drafts: before });
+          } catch {
+            // Storage still holds the snapshot from before the refused write.
+          }
+          throw error;
+        }
         notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;
