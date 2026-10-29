@@ -514,30 +514,39 @@ function readerMomentumEndFor(
 /** The same momentum, read in the frame this observation sees: the end moves
  *  on to the one it measures, and the lift moves by what the list moved the
  *  rows since the last observation, which is `shift`. Both are recorded
- *  against the row this observation sees last, so a row that leaves the list
- *  costs one observation's netting and the next one is whole again. */
+ *  against the row this observation sees last, so the next observation reads
+ *  an interval it can net again.
+ *
+ *  An interval whose `shift` is unknown leaves the lift where the view
+ *  stands now. Carrying it would hold the movement that interval hid for
+ *  the life of the momentum, and every later observation would read that as
+ *  the reader having travelled; starting again from the view credits them
+ *  with none of it. */
 function readerMomentumEndMovedOn(
   momentum: ReaderMomentumEnd,
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
-  shift: number,
+  shift: number | null,
 ): ReaderMomentumEnd {
   return {
     targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
     lastRow: lastListRowTop(list),
-    liftScrollTop: momentum.liftScrollTop + shift,
+    liftScrollTop:
+      shift === null ? geometry.scrollTop : momentum.liftScrollTop + shift,
   };
 }
 
-/** How far the list has moved a row since its recorded top; zero once the
- *  row is gone. */
+/** How far the list has moved a row since its recorded top, and null when
+ *  there is no row to read it from - the list dropped the one recorded, or
+ *  none was. What the list moved is then unknown, never zero: read as zero
+ *  it is the reader's own movement, which is what follows them. */
 function listRowShift(
   list: LegendListRef | null,
   row: ListRowTop | null,
-): number {
-  if (list === null || row === null) return 0;
+): number | null {
+  if (list === null || row === null) return null;
   const top = list.getState().positionByKey(row.key);
-  return top === undefined ? 0 : top - row.top;
+  return top === undefined ? null : top - row.top;
 }
 
 /** The first row whose top is below the viewport's top edge; the last row
@@ -1253,13 +1262,20 @@ export function useChatTimelineFollowLatch(
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
       const readerCandidate = readerEndCandidateRef.current;
+      // As the momentum's arrival reads it: an end the list may have moved
+      // by an unknown amount is not an end this view can be said to reach.
+      const shift =
+        readerCandidate === null
+          ? null
+          : listRowShift(listRef.current, readerCandidate.lastRow);
       const reachedGestureStartEnd =
         readerCandidate !== null &&
+        shift !== null &&
         readerCandidate.readerGestureGeneration ===
           readerGestureGenerationRef.current &&
         geometry.scrollTop >=
           readerCandidate.targetScrollTop +
-            listRowShift(listRef.current, readerCandidate.lastRow) -
+            shift -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
       if (!reachedGestureStartEnd || isCorrectionSuppressed?.() === true) {
         return false;
@@ -1465,6 +1481,10 @@ export function useChatTimelineFollowLatch(
         list,
         shift,
       );
+      // What the list moved this interval has to be known before any of it
+      // can be told from what the reader did: unknown, the view sitting at
+      // the end reads as a reader who reached it.
+      if (shift === null) return false;
       // The view must also have travelled toward the end since the lift,
       // which the list moving rows carries along with it: an end clamped up
       // to a reader who has not moved, then grown back, is not their

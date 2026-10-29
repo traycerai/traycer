@@ -895,16 +895,22 @@ describe("useChatTimelineFollowLatch", () => {
 
       shim.setGeometry(node, { scrollHeight: 1450 });
       fireResizeObservers();
-      // The turn the lift measured is replaced: the list no longer knows
-      // that row, and another is last at the same place.
+      // One commit both replaces the turn the lift measured - the list no
+      // longer knows that row - and remeasures the rows above it, moving
+      // the view and the new last row down together, past the end this
+      // momentum last recorded. The list's own move is unreadable in that
+      // interval, and the reader has not moved.
       listRef.removeRow(FAKE_LAST_ROW_KEY);
-      listRef.setRowTop("replacement-last-row", FAKE_LAST_ROW_TOP_PX);
-      fireResizeObservers();
-      // Rows above the view remeasure, as in the clamp case: the list moves
-      // the view and the new last row down together, and the reader still
-      // has not moved.
       listRef.setRowTop("replacement-last-row", FAKE_LAST_ROW_TOP_PX + 40);
       shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 990 });
+      fireResizeObservers();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      // The end clamps onto the still reader again, and the tail grows back
+      // around them. What that unreadable interval hid is not theirs to
+      // have travelled, then or at any observation after it.
+      shim.setGeometry(node, { scrollHeight: 1490 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollHeight: 1540 });
       fireResizeObservers();
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
@@ -3878,6 +3884,27 @@ describe("useChatTimelineFollowLatch", () => {
       fireNativeScroll(node);
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("does not reattach a reader at an end the list may have moved unreadably", () => {
+      const { node, listRef, onFollowIntentChange } = mountDetachedReader();
+
+      // The turn the end was recorded against is replaced, so how far the
+      // list has moved that end is no longer readable. The offset the
+      // reader arrives at cannot be said to be the end they left.
+      listRef.removeRow(FAKE_LAST_ROW_KEY);
+      listRef.setRowTop(
+        "replacement-last-row",
+        FAKE_LAST_ROW_TOP_PX + SHIFT_PX,
+      );
+      shim.setGeometry(node, {
+        scrollTop: 1000 + SHIFT_PX,
+        scrollHeight: 2100,
+      });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
     it("still reattaches at the old end when only the tail grew", () => {
