@@ -675,6 +675,7 @@ function useTranscriptTurns(input: {
     sessionChatId: surface?.sessionChatId ?? null,
     turnOfRequest,
   });
+  const rows = useMemo(() => transcriptRowsOf(messages), [messages]);
   const openTurn = surface?.openTurn ?? null;
   const originPost = surface?.kind === "thread" ? surface.originPost : null;
   return useMemo((): TranscriptTurns => {
@@ -687,6 +688,7 @@ function useTranscriptTurns(input: {
               replyReceiptOf({
                 index,
                 messages,
+                rows,
                 messageIds,
                 chatId,
                 originPost,
@@ -698,18 +700,23 @@ function useTranscriptTurns(input: {
           : (requestId) => {
               const ref = index.byRequestId.get(requestId);
               if (ref === undefined) return null;
-              const post = messages.find(
-                (message) =>
-                  message.conversationRequest?.requestId === requestId,
-              );
-              const postId = post?.persistentMessageId ?? null;
+              const postId = rows.postIdByRequestId.get(requestId) ?? null;
               const question =
                 postId === null ? null : { chatId, messageId: postId };
               return receiptOf(ref, () => openTurn(ref, question));
             },
       failedRecovery,
     };
-  }, [chatId, failedRecovery, index, messages, openTurn, originPost, surface]);
+  }, [
+    chatId,
+    failedRecovery,
+    index,
+    messages,
+    openTurn,
+    originPost,
+    rows,
+    surface,
+  ]);
 }
 
 const NO_TURN_KEYS: ReadonlyArray<{ chatId: string; turnId: string }> = [];
@@ -748,6 +755,37 @@ function turnLocateKeysOf(
   return { messageIds, requestIds };
 }
 
+/**
+ * Where each row of the list is, read once per list rather than once per
+ * row's receipt: a record's row by every record it carries (its own and
+ * its turn's), and a member's post by its request.
+ */
+type TranscriptRows = {
+  readonly rowByMessageId: ReadonlyMap<string, number>;
+  readonly postIdByRequestId: ReadonlyMap<string, string | null>;
+};
+
+function transcriptRowsOf(
+  messages: ReadonlyArray<ChatMessage>,
+): TranscriptRows {
+  const rowByMessageId = new Map<string, number>();
+  const postIdByRequestId = new Map<string, string | null>();
+  messages.forEach((message, at) => {
+    const ids = [
+      message.persistentMessageId,
+      ...(message.turnMessageIds ?? []),
+    ];
+    for (const id of ids) {
+      if (id !== null && !rowByMessageId.has(id)) rowByMessageId.set(id, at);
+    }
+    const requestId = message.conversationRequest?.requestId;
+    if (requestId !== undefined && !postIdByRequestId.has(requestId)) {
+      postIdByRequestId.set(requestId, message.persistentMessageId);
+    }
+  });
+  return { rowByMessageId, postIdByRequestId };
+}
+
 function receiptOf(ref: BotTurnRef, open: () => void): ChatBotTurnReceipt {
   return {
     summary: ref.summary,
@@ -765,20 +803,22 @@ function receiptOf(ref: BotTurnRef, open: () => void): ChatBotTurnReceipt {
 function replyReceiptOf(input: {
   readonly index: BotTurnIndex;
   readonly messages: ReadonlyArray<ChatMessage>;
+  readonly rows: TranscriptRows;
   readonly messageIds: ReadonlyArray<string>;
   readonly chatId: string;
   readonly originPost: BotChatMessageRef | null;
   readonly openTurn: BotTurnOpen;
 }): ChatBotTurnReceipt | null {
-  const { index, messages, messageIds, chatId, originPost, openTurn } = input;
+  const { index, messages, rows, messageIds, chatId, originPost, openTurn } =
+    input;
   const ref = turnOfMessages(index, messageIds);
   if (ref === null) return null;
-  const at = messages.findIndex(
-    (message) =>
-      (message.persistentMessageId !== null &&
-        messageIds.includes(message.persistentMessageId)) ||
-      message.turnMessageIds?.some((id) => messageIds.includes(id)) === true,
-  );
+  // The first row carrying any of the reply's records, as a scan would find.
+  let at = -1;
+  for (const id of messageIds) {
+    const row = rows.rowByMessageId.get(id);
+    if (row !== undefined && (at === -1 || row < at)) at = row;
+  }
   const question = questionAbove(messages, at, chatId) ?? originPost;
   return receiptOf(ref, () => openTurn(ref, question));
 }

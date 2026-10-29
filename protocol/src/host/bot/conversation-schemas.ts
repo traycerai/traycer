@@ -312,6 +312,12 @@ export type BotTurnKey = z.infer<typeof botTurnKeySchema>;
  * not answered (`requestIds`), and turns it already knows (`turns`: a
  * check-in's). Any host answers: the bound one from its own record, any
  * other from what the bound host keeps in the bot's environment room.
+ *
+ * The lists carry no `.max()`: their size is what a reader has loaded, not
+ * a number. A transcript asks for the rows its window holds (a windowed
+ * subscription loads only what its byte budget admits; an older,
+ * unwindowed host does not serve this method), and the Activity page asks
+ * for the check-ins it shows, inside the week the host keeps.
  */
 export const botTurnLocateRequestSchema = lazySchema(() =>
   z.object({
