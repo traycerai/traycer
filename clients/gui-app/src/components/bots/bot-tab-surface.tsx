@@ -618,6 +618,10 @@ function BotTabContent(props: {
                   channelId={snapshot.bot.appConversationChatId}
                   tasks={snapshot.tasks}
                   notificationSubscriptions={snapshot.notificationSubscriptions}
+                  stoppedNotificationWatches={
+                    snapshot.stoppedNotificationWatches
+                  }
+                  resolveMember={resolveMember}
                   summary={activitySummary}
                   threads={threads}
                   onOpenPost={openPostInChannel}

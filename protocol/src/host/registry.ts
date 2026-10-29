@@ -655,6 +655,10 @@ import {
   botThreadListV11,
   botThreadListUpgradeV10ToV11,
   botTurnLocateV10,
+  botTaskRunNowV10,
+  botTaskSetPausedV10,
+  botTaskStopV10,
+  botNotificationsStopV10,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
@@ -9375,6 +9379,60 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botTurnLocateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // A member's actions on the bot's automations and notification watches
+  // from the Activity page (T92). Same optional posture.
+  "bot.task.runNow": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTaskRunNowV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.task.setPaused": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTaskSetPausedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.task.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTaskStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.notifications.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botNotificationsStopV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -94,6 +94,9 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
     ...overrides,
   };
 }

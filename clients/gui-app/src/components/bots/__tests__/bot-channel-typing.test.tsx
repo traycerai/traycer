@@ -369,6 +369,7 @@ function emitActivity(activity: BotActivity): void {
       openRequestCount: null,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      stoppedNotificationWatches: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
       hasBinaryPayload: false,

@@ -5,6 +5,7 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { BotTaskCheckins } from "@/components/bots/bot-task-checkins";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
@@ -44,6 +45,10 @@ export type BotTaskListPlace =
       readonly onOpenPost: (open: BotOpenThread) => void;
       /** Opens a check-in's turn beside the channel. */
       readonly onOpenTurn: (open: BotOpenTurn) => void;
+      /** Whether the tab's host is the one running the bot. */
+      readonly boundHere: boolean;
+      /** A member's name, as the environment's directory knows it. */
+      readonly nameOf: (userId: string) => string;
     }
   | { readonly kind: "thread"; readonly threadId: string };
 
@@ -81,7 +86,8 @@ function taskCreator(
  * nor the thread. In a thread's panel the title opens the task; on the bot's
  * Activity page (T86) the row also names its kind, its next check-in and the
  * host that last reported it, opens the task from "Open the brief", and
- * lists its check-ins under it.
+ * lists its check-ins under it; an automation there also carries its Run
+ * now, Pause and Stop (T92).
  */
 export function BotTaskList(props: {
   readonly botId: string;
@@ -210,6 +216,13 @@ function BotTaskRow(props: {
       </span>
       {onBotPage ? (
         <>
+          <BotTaskControls
+            botId={botId}
+            hostId={hostId}
+            task={task}
+            boundHere={place.boundHere}
+            nameOf={place.nameOf}
+          />
           <span className="flex">
             <Button
               type="button"
@@ -226,6 +239,7 @@ function BotTaskRow(props: {
             hostId={hostId}
             task={task}
             onOpenTurn={place.onOpenTurn}
+            nameOf={place.nameOf}
           />
         </>
       ) : null}
