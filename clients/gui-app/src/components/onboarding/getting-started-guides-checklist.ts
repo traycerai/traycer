@@ -80,6 +80,12 @@ export interface GuideCardPresentation {
   readonly status: string;
   readonly action: string;
   readonly unavailableReason: string | null;
+  /**
+   * The guide cannot run on this shell at all (as opposed to being blocked
+   * right now): the Home filter and the phone footnote key on this, not on
+   * the reason's wording.
+   */
+  readonly permanentlyUnavailable: boolean;
 }
 
 export interface GettingStartedGuideEntry {
@@ -107,6 +113,7 @@ function cardPresentation(
       status: done ? "Complete" : "Not started",
       action: done ? "Replay" : "Start guide",
       unavailableReason: null,
+      permanentlyUnavailable: false,
     };
   }
   // Stored progress counts the guide's whole step list, so "done" compares
@@ -118,9 +125,9 @@ function cardPresentation(
   const step = input.progress[id];
   const done = step === length;
   const started = step >= 0;
+  const permanentlyUnavailable = !isSetupGuideAvailable(id, input.shell);
   let unavailableReason: string | null = null;
-  if (!isSetupGuideAvailable(id, input.shell))
-    unavailableReason = UNAVAILABLE_ON_THIS_SHELL;
+  if (permanentlyUnavailable) unavailableReason = UNAVAILABLE_ON_THIS_SHELL;
   else if (id === "cookies" && !input.hostBound)
     unavailableReason = "Connect a host to continue";
   let status = "Not started";
@@ -141,6 +148,7 @@ function cardPresentation(
     status,
     action,
     unavailableReason,
+    permanentlyUnavailable,
   };
 }
 
@@ -153,7 +161,7 @@ function cardPresentation(
 export function isPermanentlyUnavailable(
   entry: GettingStartedGuideEntry,
 ): boolean {
-  return entry.presentation.unavailableReason === UNAVAILABLE_ON_THIS_SHELL;
+  return entry.presentation.permanentlyUnavailable;
 }
 
 export const UNAVAILABLE_ON_THIS_SHELL_NOTE =

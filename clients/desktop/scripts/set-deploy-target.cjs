@@ -157,6 +157,19 @@ const production = {
 
 runConfigTargetCli({
   sourcePath: path.resolve(__dirname, "..", "src", "config.ts"),
+  // The features the next release does not ship: on in a staging desktop, off
+  // in a production one and in the committed source. The literal lives in the
+  // gui-app this build bundles; the desktop has none of its own.
+  unreleasedFeaturesPaths: [
+    path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "gui-app",
+      "src",
+      "unreleased-features.ts",
+    ),
+  ],
   stringFields: {
     // Per-environment app identity (drives the userData dir + single-instance
     // lock, the OAuth scheme, and the Windows AppUserModelId). Source holds the

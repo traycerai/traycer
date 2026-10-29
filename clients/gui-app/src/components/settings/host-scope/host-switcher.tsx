@@ -763,12 +763,16 @@ function HostSwitcherEmptyList(props: {
   );
 }
 
-/** The list's ending: the caller's action, or the composer's Manage row. */
+/**
+ * The list's ending: the caller's action, or the composer's Manage row. A
+ * build without sandboxes (`unreleased-features.ts`) has no Sandboxes page
+ * for that row to open, so the composer's list ends with its hosts.
+ */
 function hostSwitcherTrailingAction(
   action: HostSwitcherAction | null,
   composer: HostSwitcherComposerMode | null,
 ): (HostSwitcherActionPresentation & { readonly onSelect: () => void }) | null {
-  if (composer !== null) {
+  if (composer !== null && UNRELEASED_FEATURES_ENABLED) {
     return {
       label: MANAGE_SANDBOXES_IN_SETTINGS,
       icon: Settings,
@@ -1408,7 +1412,7 @@ function HostSwitcherRow(props: {
           host={host}
           title={title}
           subLines={[
-            composerComputerSubLine(host, selectable),
+            composerComputerSubLine(host, selectable, title !== host.name),
             ...props.subLines,
           ]}
         />

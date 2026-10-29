@@ -48,6 +48,9 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
+/** No host to read a binding for: the off build's rows say nothing. */
+const NO_LABEL_HOST_IDS: readonly string[] = [];
+
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
   | {
@@ -248,8 +251,10 @@ function SettingsSidebarHostPicker(props: {
   // The environment label (Tracy Bots) causes no connection either: every
   // row is read from the pool, or, in a build without one, only a row whose
   // session this client already holds; every other row says nothing.
+  // A build without environments (`unreleased-features.ts`) reads no host's
+  // binding: every row says nothing.
   const environmentLabelForHost = useHostEnvironmentLabelResolver(
-    hostIds,
+    UNRELEASED_FEATURES_ENABLED ? hostIds : NO_LABEL_HOST_IDS,
     scope.hostId,
   );
   // `gap-0.5` matches the section rows below, so the picker reads as the first

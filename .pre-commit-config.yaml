@@ -55,6 +55,11 @@ repos:
   # Tests run in their own workflow (.github/workflows/test.yml).
   - repo: local
     hooks:
+      - id: unreleased-features-off
+        name: unreleased-features.ts commits the literal false
+        entry: scripts/check_unreleased_features_off.sh
+        language: script
+        files: (^|/)unreleased-features\.ts$
       - id: workspace-checks
         name: lint · format · compile (nx affected; CI also builds)
         entry: scripts/pre_commit_workspace_checks.sh

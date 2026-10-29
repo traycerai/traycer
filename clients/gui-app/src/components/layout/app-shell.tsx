@@ -208,7 +208,9 @@ function AppShellBody(props: AppShellProps) {
                   <TabStripKeybindingBridge />
                   {/* Once per window, for every strip placement: the fixed
                     Tracy entry's tab, its lock and its place first. */}
-                  {UNRELEASED_FEATURES_ENABLED ? <TracyEntryController /> : null}
+                  {UNRELEASED_FEATURES_ENABLED ? (
+                    <TracyEntryController />
+                  ) : null}
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
                   {isMobile ? <MobileNavDrawer /> : null}

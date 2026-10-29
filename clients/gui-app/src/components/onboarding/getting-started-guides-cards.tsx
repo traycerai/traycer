@@ -178,10 +178,7 @@ function GettingStartedGuideCardButton(props: {
           )}
         >
           {done ? (
-            <Check
-              className="size-3.5 text-[var(--term-ansi-green)]"
-              aria-hidden="true"
-            />
+            <Check className="size-3.5 text-success" aria-hidden="true" />
           ) : null}
           {status}
         </span>

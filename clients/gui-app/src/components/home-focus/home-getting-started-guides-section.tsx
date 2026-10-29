@@ -33,10 +33,7 @@ export function HomeGettingStartedGuidesSection(): ReactNode {
   const count = (
     <span className="flex items-center gap-1.5 tabular-nums">
       {complete === guideCount ? (
-        <Check
-          className="size-3.5 text-[var(--term-ansi-green)]"
-          aria-hidden="true"
-        />
+        <Check className="size-3.5 text-success" aria-hidden="true" />
       ) : null}
       {complete} of {guideCount} complete
     </span>

@@ -122,6 +122,23 @@ describe("useProfileSyncOverview", () => {
       queryClient.getQueryData(profileSyncKeys.overview(OTHER_SOURCE_HOST_ID)),
     ).toBeUndefined();
   });
+
+  it("caches an accepted overview under profileSyncKeys.overview", async () => {
+    const queryClient = makeQueryClient();
+    const returned = overviewFor(SOURCE_HOST_ID, DEST_A);
+    testState.request.mockResolvedValue(returned);
+
+    const rendered = renderHook(() => useProfileSyncOverview(SOURCE_HOST_ID), {
+      wrapper: wrapperFor(queryClient),
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.isSuccess).toBe(true);
+    });
+    expect(
+      queryClient.getQueryData(profileSyncKeys.overview(SOURCE_HOST_ID)),
+    ).toEqual(returned);
+  });
 });
 
 describe("profile sync mutations", () => {

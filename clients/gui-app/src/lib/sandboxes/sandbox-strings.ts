@@ -719,3 +719,10 @@ export function hoverSandboxIdentity(args: {
 export function hoverAgentIdentity(agent: string, payer: string): string {
   return `${AGENT_SANDBOX} · created by ${agent} for this task · paid by ${payer}`;
 }
+
+/**
+ * Why a build without sandboxes (`unreleased-features.ts`) reaches no sandbox
+ * control plane: the reason every sandbox read and write answers there.
+ */
+export const SANDBOXES_NOT_IN_THIS_BUILD =
+  "Sandboxes are not available in this build.";

@@ -4,7 +4,13 @@
  * rather than `This computer` beside sandbox rows it does not have.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
@@ -69,7 +75,15 @@ describe("<HostSwitcher /> composer mode without sandboxes", () => {
     );
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
     const row = screen.getByTestId("settings-host-switcher-option-laptop");
-    expect(row.textContent).toContain("Laptop");
-    expect(row.textContent).not.toContain("This computer");
+    // The name is the title, said once: the line below carries only the
+    // platform and the status. A screen reader still hears what the row is,
+    // as it does on every other list.
+    expect(within(row).getByText("Laptop")).toBeDefined();
+    expect(within(row).queryByText(/Laptop ·/)).toBeNull();
+    expect(
+      within(row).queryByText("This computer", {
+        ignore: ".sr-only, script, style",
+      }),
+    ).toBeNull();
   });
 });
