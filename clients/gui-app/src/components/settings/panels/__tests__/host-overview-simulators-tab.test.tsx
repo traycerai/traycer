@@ -15,7 +15,11 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryKey,
+} from "@tanstack/react-query";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   SimulatorHostInstance,
@@ -26,6 +30,8 @@ import type {
 } from "@traycer/protocol/host/simulator/schemas";
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
 import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 /**
  * The Host panel's Mobile simulators tab: one switch that gates the rest.
@@ -46,6 +52,8 @@ interface TabFakes {
     (request: SimulatorPowerOffRequest) => Promise<SimulatorPowerOffResponse>
   >;
   status: SimulatorStatusResponse;
+  /** The host's side of `simulator.status`: answers `status` unless a case says otherwise. */
+  readStatus: Mock<() => Promise<SimulatorStatusResponse>>;
   write: Mock;
   remove: Mock;
   removePending: boolean;
@@ -65,6 +73,7 @@ const fakes = vi.hoisted((): TabFakes => ({
     packVersion: null,
     installed: null,
   },
+  readStatus: vi.fn(),
   write: vi.fn(),
   remove: vi.fn(),
   removePending: false,
@@ -91,9 +100,17 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersion: () => fakes.negotiated,
 }));
-vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
-  const { useMutation } = await import("@tanstack/react-query");
+vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
+  const { useMutation, useQuery } = await import("@tanstack/react-query");
+  const { hostQueryKeys } = await import("@/lib/query-keys/host-query-keys");
+  // The sweep lists are the real ones: Check again is asserted through what
+  // it actually invalidates.
+  const { INSTANCE_INVALIDATIONS } =
+    await importOriginal<
+      typeof import("@/hooks/simulator/use-simulator-mutations")
+    >();
   return {
+    INSTANCE_INVALIDATIONS,
     useSimulatorInstancesQuery: () => ({
       data: { instances: fakes.instances },
       isError: false,
@@ -114,7 +131,18 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
       isPending: false,
       isError: false,
     }),
-    useSimulatorStatusQuery: () => ({ data: fakes.status, isError: false }),
+    // A real query under the real key, so what the tab's Check again
+    // invalidates is what this read answers again from `fakes.readStatus`.
+    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) =>
+      useQuery({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
+          hostId,
+          "simulator.status",
+          {},
+        ),
+        queryFn: () => fakes.readStatus(),
+        staleTime: Number.POSITIVE_INFINITY,
+      }),
     useSimulatorConfigSetMutation: () => ({
       mutation: { mutate: fakes.write, isPending: false },
       supported: true,
@@ -152,6 +180,8 @@ beforeEach(() => {
   fakes.removePending = false;
   fakes.titles = new Map();
   fakes.openTask.mockReset();
+  fakes.readStatus.mockReset();
+  fakes.readStatus.mockImplementation(() => Promise.resolve(fakes.status));
   fakes.status = {
     platforms: [
       { platform: "ios", available: true, reason: null },
@@ -171,9 +201,20 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderTab(): void {
+function statusKey(): QueryKey {
+  return hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
+    HOST,
+    "simulator.status",
+    {},
+  );
+}
+
+/** The tab over a cache already holding the host's last status answer. */
+function renderTab(): QueryClient {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(statusKey(), fakes.status);
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={queryClient}>
       <HostOverviewSimulatorsTab
         client={null}
         hostId={HOST}
@@ -181,6 +222,7 @@ function renderTab(): void {
       />
     </QueryClientProvider>,
   );
+  return queryClient;
 }
 
 const RUNNING: SimulatorHostInstance = {
@@ -333,6 +375,147 @@ describe("HostOverviewSimulatorsTab", () => {
     expect(
       screen.getByTestId("host-overview-mobile-simulators").textContent,
     ).toContain("iOS: No Xcode. Android: No Android SDK.");
+  });
+
+  describe("Check again", () => {
+    const NEITHER: SimulatorStatusResponse = {
+      platforms: [
+        { platform: "ios", available: false, reason: "No Xcode." },
+        { platform: "android", available: false, reason: "No Android SDK." },
+      ],
+      packState: { kind: "unsupported", reason: null, progress: null },
+      packVersion: null,
+      installed: null,
+    };
+    const BOTH: SimulatorStatusResponse = {
+      ...NEITHER,
+      platforms: [
+        { platform: "ios", available: true, reason: null },
+        { platform: "android", available: true, reason: null },
+      ],
+      packState: OFF,
+    };
+    const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "simulator.list">(
+      HOST,
+      "simulator.list",
+      { epicId: "epic-1" },
+    );
+    /** The palette's inventory: its own `simulator.list`, under the instances scope. */
+    const INVENTORY_KEY = hostQueryKeys.simulatorInventory(
+      HOST,
+      "epic-1",
+      true,
+    );
+    const OTHER_HOST_STATUS_KEY = hostQueryKeys.method<
+      HostRpcRegistry,
+      "simulator.status"
+    >("host-2", "simulator.status", {});
+
+    function checkAgain(): HTMLElement {
+      return screen.getByRole("button", { name: "Check again" });
+    }
+
+    /** The settings row whose label reads `label`. */
+    function rowLabelled(label: string): HTMLElement {
+      const row = screen.getByText(label, { exact: true }).parentElement
+        ?.parentElement;
+      if (row === null || row === undefined) throw new Error(`no ${label} row`);
+      return row;
+    }
+
+    /** The host's next `simulator.status` answer, held until the case releases it. */
+    function holdNextStatus(): (answer: SimulatorStatusResponse) => void {
+      let release: (answer: SimulatorStatusResponse) => void = () => undefined;
+      fakes.readStatus.mockImplementationOnce(
+        () =>
+          new Promise<SimulatorStatusResponse>((resolve) => {
+            release = resolve;
+          }),
+      );
+      return (answer) => {
+        release(answer);
+      };
+    }
+
+    it("off: sits beside the disabled switch, re-reads this host's status, list and inventory, spins while the read is out, and the new answer enables the switch", async () => {
+      fakes.config = { enabled: false };
+      fakes.status = NEITHER;
+      const queryClient = renderTab();
+      queryClient.setQueryData(LIST_KEY, { simulators: [] });
+      queryClient.setQueryData(INVENTORY_KEY, []);
+      queryClient.setQueryData(OTHER_HOST_STATUS_KEY, NEITHER);
+      expect(switchRow().hasAttribute("disabled")).toBe(true);
+      expect(rowLabelled("Use mobile simulators").contains(checkAgain())).toBe(
+        true,
+      );
+      const answer = holdNextStatus();
+
+      fireEvent.click(checkAgain());
+
+      await waitFor(() => {
+        expect(checkAgain()).toHaveProperty("disabled", true);
+      });
+      expect(
+        screen.queryByTestId("settings-simulators-check-again-spinner"),
+      ).not.toBeNull();
+      expect(fakes.readStatus).toHaveBeenCalledTimes(1);
+      expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(INVENTORY_KEY)?.isInvalidated).toBe(
+        true,
+      );
+      expect(
+        queryClient.getQueryState(OTHER_HOST_STATUS_KEY)?.isInvalidated,
+      ).toBe(false);
+
+      answer(BOTH);
+
+      await waitFor(() => {
+        expect(switchRow().hasAttribute("disabled")).toBe(false);
+      });
+      expect(
+        screen.getByTestId("host-overview-mobile-simulators").textContent,
+      ).toContain("iOS available. Android available.");
+      // Nothing is unavailable any more, so there is nothing to check.
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    });
+
+    it("on: sits on the Platforms row, and the platform the host now finds reads Available", async () => {
+      const queryClient = renderTab();
+      queryClient.setQueryData(LIST_KEY, { simulators: [] });
+      const platforms = rowLabelled("Platforms");
+      expect(platforms.contains(checkAgain())).toBe(true);
+      expect(rowLabelled("Use mobile simulators").contains(checkAgain())).toBe(
+        false,
+      );
+      const answer = holdNextStatus();
+
+      fireEvent.click(checkAgain());
+
+      await waitFor(() => {
+        expect(checkAgain()).toHaveProperty("disabled", true);
+      });
+      expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+
+      answer({ ...fakes.status, platforms: BOTH.platforms });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("settings-simulator-platform-android").textContent,
+        ).toContain("Available");
+      });
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    });
+
+    it("is not drawn while every platform is available, on or off", () => {
+      fakes.status = { ...fakes.status, platforms: BOTH.platforms };
+      renderTab();
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+      cleanup();
+
+      fakes.config = { enabled: false };
+      renderTab();
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    });
   });
 
   describe("on a @1.1 host", () => {

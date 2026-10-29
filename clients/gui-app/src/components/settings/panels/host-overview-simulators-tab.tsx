@@ -34,6 +34,7 @@ import {
   useSimulatorRemoveToolsMutation,
   useSimulatorStatusQuery,
 } from "@/hooks/simulator/use-simulator-mutations";
+import { useSimulatorRecheck } from "@/hooks/simulator/use-simulator-recheck";
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatHostProgressBytes } from "@/lib/host/host-progress-copy";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
@@ -117,12 +118,21 @@ function SimulatorSettingsRows(props: {
   const remove = useSimulatorRemoveToolsMutation(client, hostId);
   const switches = simulatorSwitch(config, mutation, remove.mutation.isPending);
   const installed = status.data?.installed ?? null;
+  // What the rows say about the platforms: nothing from a host that does not
+  // advertise the read.
+  const statusRead = statusSupported ? (status.data ?? null) : null;
+  // Wherever the platforms are shown: on the switch's row while off, where
+  // its description carries them, and on Platforms while on.
+  const checkAgain = (
+    <SimulatorCheckAgain client={client} hostId={hostId} status={statusRead} />
+  );
 
   return (
     <>
       <SimulatorEnabledRow
         switches={switches}
-        status={statusSupported ? (status.data ?? null) : null}
+        status={statusRead}
+        checkAgain={checkAgain}
       />
       {/* Platforms only while on; the switch's description carries the
           platform status while off. The tools row while on, and while off
@@ -131,7 +141,7 @@ function SimulatorSettingsRows(props: {
         <SettingsRow
           row={HOST_OVERVIEW.definitions.simulatorPlatforms}
           status={status.isError ? "Couldn't ask this host." : undefined}
-          control={null}
+          control={checkAgain}
           details={
             status.data === undefined ? null : (
               <SimulatorPlatformList platforms={status.data.platforms} />
@@ -230,6 +240,8 @@ function SimulatorEnabledRow(props: {
   readonly switches: SimulatorSwitch;
   /** The host's status read, or null while it is unavailable or not advertised. */
   readonly status: SimulatorStatusResponse | null;
+  /** Drawn beside the switch while it is off. */
+  readonly checkAgain: ReactNode;
 }): ReactNode {
   const { switches, status } = props;
   const row = HOST_OVERVIEW.definitions.mobileSimulatorsEnabled;
@@ -252,17 +264,20 @@ function SimulatorEnabledRow(props: {
       row={row}
       status={description}
       control={
-        <Switch
-          checked={switches.enabled}
-          // A machine that can run neither platform has nothing to turn on;
-          // one already on can still be turned off.
-          disabled={switches.locked || (noPlatform && !switches.enabled)}
-          aria-label="Use mobile simulators"
-          data-testid="settings-simulators-enabled"
-          onCheckedChange={(next) => {
-            switches.write({ enabled: next });
-          }}
-        />
+        <div className="flex items-center gap-3">
+          {switches.enabled ? null : props.checkAgain}
+          <Switch
+            checked={switches.enabled}
+            // A machine that can run neither platform has nothing to turn on;
+            // one already on can still be turned off.
+            disabled={switches.locked || (noPlatform && !switches.enabled)}
+            aria-label="Use mobile simulators"
+            data-testid="settings-simulators-enabled"
+            onCheckedChange={(next) => {
+              switches.write({ enabled: next });
+            }}
+          />
+        </div>
       }
     />
   );
@@ -399,6 +414,50 @@ function SimulatorToolsControl(props: {
         />
       ) : null}
       Remove
+    </Button>
+  );
+}
+
+/**
+ * Asks the host to look for the missing platforms again; drawn only while
+ * the status read names one it cannot run.
+ */
+function SimulatorCheckAgain(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  /** The host's status read, or null while it is unavailable or not advertised. */
+  readonly status: SimulatorStatusResponse | null;
+}): ReactNode {
+  const missing =
+    props.status?.platforms.some((platform) => !platform.available) === true;
+  if (!missing) return null;
+  return (
+    <SimulatorCheckAgainButton client={props.client} hostId={props.hostId} />
+  );
+}
+
+function SimulatorCheckAgainButton(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+}): ReactNode {
+  const { recheck, checking } = useSimulatorRecheck(props.client, props.hostId);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={checking}
+      data-testid="settings-simulators-check-again"
+      onClick={recheck}
+    >
+      {checking ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId="settings-simulators-check-again-spinner"
+          variant={undefined}
+        />
+      ) : null}
+      Check again
     </Button>
   );
 }

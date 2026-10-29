@@ -84,13 +84,17 @@ export function SimulatorLoadingView(props: { readonly hostLabel: string }) {
 /**
  * The host cannot run simulators at all, or cannot show them to this app.
  * One line per platform with the host's own reason, so the person knows
- * which toolchain the machine is missing.
+ * which toolchain the machine is missing, and Check again for once they have
+ * installed it.
  */
 export function SimulatorUnavailableView(props: {
   readonly hostLabel: string;
   readonly platforms: readonly SimulatorPlatformAvailability[];
   /** The pack's own reason when it, rather than a platform, is what is missing. */
   readonly reason: string | null;
+  readonly onCheckAgain: () => void;
+  /** Whether the read Check again sent is still out. */
+  readonly checking: boolean;
 }) {
   const reasons = props.platforms.filter(
     (platform) => !platform.available && platform.reason !== null,
@@ -120,6 +124,23 @@ export function SimulatorUnavailableView(props: {
           ))}
         </ul>
       )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.checking}
+        className="mt-2"
+        onClick={props.onCheckAgain}
+      >
+        {props.checking ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId="simulator-check-again-spinner"
+            variant={undefined}
+          />
+        ) : null}
+        Check again
+      </Button>
     </SimulatorStateFrame>
   );
 }
