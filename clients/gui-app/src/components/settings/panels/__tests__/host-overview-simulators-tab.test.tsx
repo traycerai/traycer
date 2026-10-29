@@ -439,11 +439,10 @@ describe("HostOverviewSimulatorsTab", () => {
       });
     });
 
-    it("writes nothing for an unchanged or out-of-range idle window", () => {
+    it("writes nothing for an out-of-range idle window or a blur with no typed draft", () => {
       renderTab();
       const input = screen.getByTestId("settings-simulators-idle-minutes");
 
-      fireEvent.change(input, { target: { value: "15" } });
       fireEvent.blur(input);
       fireEvent.change(input, { target: { value: "0" } });
       fireEvent.blur(input);
@@ -451,6 +450,21 @@ describe("HostOverviewSimulatorsTab", () => {
       fireEvent.blur(input);
 
       expect(fakes.write).not.toHaveBeenCalled();
+    });
+
+    it("writes a typed value that equals the stale prop, since the prop may lag the host's actual value", () => {
+      renderTab();
+      const input = screen.getByTestId("settings-simulators-idle-minutes");
+
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.change(input, { target: { value: "15" } });
+      fireEvent.blur(input);
+
+      expect(fakes.write).toHaveBeenCalledTimes(1);
+      expect(fakes.write).toHaveBeenCalledWith({
+        enabled: null,
+        idleMinutes: 15,
+      });
     });
 
     it("counts the running instances on the tab trigger", () => {
