@@ -15,7 +15,11 @@ import { DELETE_ACCOUNT } from "@/components/settings/panels/delete-account-sett
 import { DEVICES } from "@/components/settings/panels/devices-sessions.definitions";
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
-import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
+import {
+  GETTING_STARTED,
+  GETTING_STARTED_GUIDES,
+} from "@/components/settings/panels/getting-started-settings.definitions";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
 import { BROWSER_AGENT_ACCESS } from "@/components/settings/panels/browser-agent-access.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
@@ -57,7 +61,9 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     KEYBINDINGS,
     APP_DIAGNOSTICS,
     LAYOUT,
-    GETTING_STARTED,
+    // The 1.5.1 guides in a build without environments
+    // (`unreleased-features.ts`).
+    UNRELEASED_FEATURES_ENABLED ? GETTING_STARTED : GETTING_STARTED_GUIDES,
     PROVIDERS,
     MCP_SERVERS,
     SKILLS,

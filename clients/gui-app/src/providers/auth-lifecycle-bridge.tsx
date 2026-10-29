@@ -19,6 +19,8 @@ import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dia
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
+import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
 import {
   useAuthIdentityTransition,
@@ -151,6 +153,14 @@ export function EpicSessionLifecycleBridge(
       // The move reminder survives navigation, but its host belongs to the
       // outgoing identity. Retire the toast and any retained action callback.
       retireOnboardingReminder();
+      // The Sync profiles dialog of a build without environments is mounted
+      // at the app root and survives a switch, so its module-level store is
+      // on this boundary too: left standing, account B would see A's open
+      // dialog - A's profile names and A's captured source host id, which it
+      // would then dial under B's session.
+      if (!UNRELEASED_FEATURES_ENABLED) {
+        useProfileSyncModalStore.getState().close();
+      }
       // Chat/artifact blob-cache keys omit the account. Drop in-memory
       // maps so remount grace cannot join the outgoing fetch, then drop
       // the outgoing IndexedDB partition.

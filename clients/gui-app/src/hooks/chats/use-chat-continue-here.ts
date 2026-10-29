@@ -25,11 +25,17 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 const CONTINUE_METHOD = "chat.continueHere";
 
-/** The task lists that place a chat under its owning host. */
-const TASK_LIST_METHODS = ["epic.listCloudChats", "epic.listTaskHosts"];
+/**
+ * The task lists that place a chat under its owning host. A build without
+ * environments and sandboxes (`unreleased-features.ts`) reads no task hosts.
+ */
+const TASK_LIST_METHODS = UNRELEASED_FEATURES_ENABLED
+  ? ["epic.listCloudChats", "epic.listTaskHosts"]
+  : ["epic.listCloudChats"];
 
 const NO_ENTRIES: readonly HostDirectoryEntry[] = [];
 
@@ -153,7 +159,12 @@ export function useChatContinueHere(args: {
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
+  // No team environments to list in a build without them
+  // (`unreleased-features.ts`).
+  const listApplies =
+    UNRELEASED_FEATURES_ENABLED &&
+    authorized &&
+    readProcessHostRpcTierPlan().pool !== null;
   const environments = useEnvironmentListQuery(
     useOptionalHostClient(),
     listApplies,

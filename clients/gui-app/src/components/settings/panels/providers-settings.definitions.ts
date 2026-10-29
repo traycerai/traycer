@@ -1,5 +1,9 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  alwaysAvailable,
+  neverOffered,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // A bespoke page: its per-provider tab bar exists only once a host answers,
 // so its concepts are region groups with a `null` anchor — each lands at the
@@ -159,11 +163,35 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["placeholder", "project", "branch", "date"],
   },
+  // Without environments these two have no page of their own, so Providers is
+  // where searching for them lands again, as it did before those pages.
+  mcpServers: {
+    kind: "group",
+    search: { anchor: null },
+    label: "MCP servers",
+    description: "Model Context Protocol servers, per provider.",
+    breadcrumb: "Providers",
+    availableWhen: UNRELEASED_FEATURES_ENABLED ? neverOffered : alwaysAvailable,
+    keywords: ["mcp", "model context protocol", "server", "tools", "connector"],
+  },
+  skills: {
+    kind: "group",
+    search: { anchor: null },
+    label: "Skills",
+    description: "Skills installed into a provider.",
+    breadcrumb: "Providers",
+    availableWhen: UNRELEASED_FEATURES_ENABLED ? neverOffered : alwaysAvailable,
+    keywords: ["skill", "skills", "playbook", "install"],
+  },
   environmentVariables: {
     kind: "group",
     search: { anchor: null },
-    label: "Variables",
-    description: "Per-provider variable overrides.",
+    // The page itself still draws `Environment variables` off; the shorter
+    // label came with the environments pages.
+    label: UNRELEASED_FEATURES_ENABLED ? "Variables" : "Environment variables",
+    description: UNRELEASED_FEATURES_ENABLED
+      ? "Per-provider variable overrides."
+      : "Per-provider environment overrides.",
     breadcrumb: "Providers",
     availableWhen: alwaysAvailable,
     keywords: [

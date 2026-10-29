@@ -74,6 +74,7 @@ import { CredentialRefusalNote } from "@/components/providers/credential-refusal
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
@@ -443,10 +444,11 @@ export function ProviderReauthBanner({
   // offered, because each one would send a credential to it.
   const credentialRefusal = useHostCredentialRefusal(tabHostId);
   // The configuration the tab's host runs, which the sentence names and which
-  // decides where a pasted key is stored.
+  // decides where a pasted key is stored. A build without environments
+  // (`unreleased-features.ts`) reads none: the key stays on the device.
   const principal =
-    useEnvironmentStatusRead(tabClient, tabHostId, true).data?.principal ??
-    null;
+    useEnvironmentStatusRead(tabClient, tabHostId, UNRELEASED_FEATURES_ENABLED)
+      .data?.principal ?? null;
 
   const tabEntry = useMemo(
     () =>
@@ -1055,6 +1057,9 @@ function PastedKeyCustody(props: {
   readonly keyCustody: KeyCustody;
 }): ReactNode {
   const { providerId, keyCustody } = props;
+  // No custody line in a build without environments (`unreleased-features.ts`):
+  // the banner had none before them.
+  if (!UNRELEASED_FEATURES_ENABLED) return null;
   if (providerKeyIsPersonalSecret(providerId, keyCustody.principal)) {
     return (
       <>
