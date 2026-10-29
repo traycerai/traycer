@@ -161,7 +161,8 @@ export function BotChannelView(props: {
   /** The thread open beside the channel; `null` for none. */
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
-  readonly onOpenUnderTheHood: (sessionChatId: string) => void;
+  /** Opens the bot's Activity tab, from the open thread's header. */
+  readonly onOpenActivity: () => void;
 }): ReactNode {
   const {
     botId,
@@ -175,7 +176,7 @@ export function BotChannelView(props: {
     tasks,
     openThread: open,
     onOpenThread,
-    onOpenUnderTheHood,
+    onOpenActivity,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -572,7 +573,7 @@ export function BotChannelView(props: {
               anchorSenderLabel={anchorSenderLabel}
               resolveMember={resolveMember}
               onClose={() => onOpenThread(null)}
-              onOpenUnderTheHood={onOpenUnderTheHood}
+              onOpenActivity={onOpenActivity}
               onEditPost={editPostFromThread}
             />
           </BotResizablePane>

@@ -112,6 +112,9 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
 }));
+vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
+  useUsageSummarySupported: () => false,
+}));
 vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
   useEnvironmentSetMainBotMutation: () => ({
     isPending: false,

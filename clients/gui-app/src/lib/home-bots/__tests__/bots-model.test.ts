@@ -71,6 +71,7 @@ function trackingTask(taskId: string, spun: boolean | null): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
+    checkins: null,
   };
 }
 

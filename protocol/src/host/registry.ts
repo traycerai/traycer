@@ -667,6 +667,7 @@ import {
   botSubscribeV11,
   botSubscribeV12,
   botSubscribeV13,
+  botSubscribeV14,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -15538,7 +15539,10 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.3 says where each task came from (`spun`, `label`,
       // `originRequestId`, `createdByChatId`, T82); @1.2 and earlier bind
       // the task entry frozen without them.
-      latestMinor: 3,
+      // @1.4 carries each task's check-in history (`checkins`) and when each
+      // notification subscription started (`since`, T86); @1.3 is frozen
+      // without them.
+      latestMinor: 4,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15551,6 +15555,9 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         3: {
           contract: botSubscribeV13,
+        },
+        4: {
+          contract: botSubscribeV14,
         },
       },
     },

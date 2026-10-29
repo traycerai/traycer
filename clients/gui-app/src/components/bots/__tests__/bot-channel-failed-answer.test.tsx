@@ -147,6 +147,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: () => null,
+  useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
 // Opening Settings is the router's; the providers focus it sets is real.
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -409,7 +410,7 @@ function mountChannelWith(
               tasks={[]}
               openThread={openThread}
               onOpenThread={onOpenThread}
-              onOpenUnderTheHood={vi.fn()}
+              onOpenActivity={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>

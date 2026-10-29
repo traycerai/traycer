@@ -186,6 +186,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: (_args: ChatLocateRowArgs) => null,
+  useChatLocateRowAnswer: (_args: ChatLocateRowArgs) => ({
+    status: "waiting",
+  }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   ...(await importOriginal<
@@ -502,7 +505,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       onOpenThread={(open) =>
         useBotOpenThreadStore.getState().setOpenThread(BOT_ID, open)
       }
-      onOpenUnderTheHood={vi.fn()}
+      onOpenActivity={vi.fn()}
     />
   );
 }
@@ -837,9 +840,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
       threads: { [THREAD_ID]: replying("request-1", null) },
     });
 
-    expect(
-      await within(panel).findByTestId("bot-thread-under-the-hood"),
-    ).toBeTruthy();
+    expect(await within(panel).findByTestId("bot-thread-replies")).toBeTruthy();
     expect(
       within(panel).getByRole("textbox", { name: "Reply in the thread" }),
     ).toBe(reply);
@@ -894,7 +895,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
 
-    // Messages → Under the hood → Messages: the tab unmounts the channel and
+    // Messages → Activity → Messages: the tab unmounts the channel and
     // mounts it again on the thread it holds open.
     view.unmount();
     mountChannel([]);

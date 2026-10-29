@@ -113,7 +113,7 @@ function nextRevision(): number {
  * What a member has not sent yet on a bot's tab and must not lose to the
  * views that draw it: a card's answer, and the draft Discuss put in a
  * thread's box. Held above the tab's views, as the open thread is, so a
- * switch to Under the hood and back, or closing and reopening the thread,
+ * switch to another tab and back, or closing and reopening the thread,
  * keeps them; a send consumes what it carried. Closing the tab drops them
  * (`closeBotTab`). Not persisted.
  */

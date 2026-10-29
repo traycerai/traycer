@@ -93,6 +93,7 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
+    checkins: null,
     ...overrides,
   };
 }

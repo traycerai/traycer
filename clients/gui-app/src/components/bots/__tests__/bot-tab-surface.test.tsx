@@ -6,7 +6,8 @@
  * back into view, the tab closing when the bot is gone from `bot.list`, and a
  * team whose onboarding locks its chat (the real gate, over a mocked read).
  * The three views are replaced by stubs that expose their props, so what the
- * surface PASSES them is what is asserted.
+ * surface PASSES them is what is asserted. The tab strip's Activity label
+ * reads the real summary hook over the real agent-activity store.
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { StrictMode, type ReactNode } from "react";
@@ -17,9 +18,15 @@ import type {
   BotOpenPausedReason,
   BotOpenResponse,
   BotRecord,
+  BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 
 type OpenResult =
   | { readonly kind: "answer"; readonly response: BotOpenResponse }
@@ -231,6 +238,8 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     boundHostId: string | null;
     botTitle: string;
     appConversationChatId: string | null;
+    openThread: BotOpenThread | null;
+    onOpenActivity: () => void;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -241,22 +250,57 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
+      data-open-thread={props.openThread?.anchorMessageId ?? "none"}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
       }
+    >
+      <button
+        type="button"
+        data-testid="stub-channel-open-activity"
+        onClick={props.onOpenActivity}
+      />
+    </div>
+  ),
+}));
+// The Activity page takes the bot's bound host, which says where its
+// background work can be read, whether or not this host serves the tab.
+vi.mock("@/components/bots/bot-activity-page", () => ({
+  BotActivityPage: (props: {
+    boundHost: { hostId: string | null; isThisHost: boolean };
+    onOpenPost: (open: BotOpenThread) => void;
+  }) => (
+    <div
+      data-testid="stub-activity"
+      data-bound-host-id={props.boundHost.hostId ?? "none"}
+      data-is-this-host={String(props.boundHost.isThisHost)}
+    >
+      <button
+        type="button"
+        data-testid="stub-activity-open-post"
+        onClick={() =>
+          props.onOpenPost({
+            anchorMessageId: "post-1",
+            announcement: false,
+            answer: false,
+            sent: null,
+          })
+        }
+      />
+    </div>
+  ),
+}));
+vi.mock("@/components/bots/bot-threads-page", () => ({
+  BotThreadsPage: (props: { botId: string; hostId: string }) => (
+    <div
+      data-testid="stub-threads"
+      data-bot-id={props.botId}
+      data-host-id={props.hostId}
     />
   ),
 }));
-vi.mock("@/components/bots/bot-under-the-hood-panel", () => ({
-  BotUnderTheHoodPanel: (props: {
-    boundHost: { hostId: string; isThisHost: boolean } | null;
-  }) => (
-    <div
-      data-testid="stub-under-the-hood"
-      data-bound-host-id={props.boundHost?.hostId ?? "none"}
-      data-is-this-host={String(props.boundHost?.isThisHost)}
-    />
-  ),
+vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
+  useBotThreadListQuery: () => ({ data: { threads: [] } }),
 }));
 // The panel takes the bot, whether it is main, whether its environment is a
 // person's own, its channel, its environment's bots and how to close, and
@@ -288,6 +332,7 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
+import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -322,6 +367,24 @@ function snapshot(): BotSubscriptionSnapshot {
     notificationSubscriptions: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
     activity: null,
+  };
+}
+
+function trackingTask(taskId: string): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "every", seconds: 3_600 },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+    checkins: null,
   };
 }
 
@@ -373,6 +436,8 @@ beforeEach(() => {
   onboardingReads.clear();
   onboardingReads.set("env-team", noOnboardingRead());
   useBotTabsStore.setState({ tabs: {} });
+  useBotOpenThreadStore.setState({ byBotId: {} });
+  __resetAgentActivityStoreForTests();
   useBotTabsStore
     .getState()
     .openBotTab({ botId: BOT_ID, hostId: TAB_HOST, title: "Release Bot" });
@@ -736,7 +801,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("unresolved");
   });
 
-  it("hands the under-the-hood view the bound host, paused or not", async () => {
+  it("hands the Activity page the bound host, paused or not", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -744,10 +809,10 @@ describe("<BotTabSurface /> paused", () => {
     });
     render(surface());
 
-    await user.click(screen.getByTestId("bot-tab-view-under-the-hood"));
-    const panel = screen.getByTestId("stub-under-the-hood");
-    expect(panel.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
-    expect(panel.getAttribute("data-is-this-host")).toBe("false");
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+    const page = screen.getByTestId("stub-activity");
+    expect(page.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
+    expect(page.getAttribute("data-is-this-host")).toBe("false");
   });
 
   it("keeps the channel settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
@@ -814,7 +879,7 @@ describe("<BotTabSurface /> paused", () => {
     ["a team's", "organization", "Acme", "Members of Acme"],
     ["a person's own", "user", "Olive Owner", "Only you"],
   ] as const)(
-    "opens the bot's card from the header for %s bot, naming its owner and who may message it, with its activity a click away",
+    "opens the bot's card from the header for %s bot, naming its owner and who may message it",
     async (_name, ownerKind, owner, access) => {
       const user = userEvent.setup();
       useAuthStore.setState({
@@ -836,13 +901,6 @@ describe("<BotTabSurface /> paused", () => {
       expect(within(card).getByTestId("bot-profile-access").textContent).toBe(
         access,
       );
-
-      await user.click(within(card).getByTestId("bot-profile-view-activity"));
-      expect(
-        screen
-          .getByTestId("bot-tab-view-under-the-hood")
-          .getAttribute("aria-selected"),
-      ).toBe("true");
     },
   );
 
@@ -975,7 +1033,7 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the bot's picture, the channel's name with the main bot's star, its two views and the settings ⋮ only", () => {
+  it("draws the header as the bot's picture, the channel's name with the main bot's star, its three views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -986,9 +1044,9 @@ describe("<BotTabSurface /> main bot", () => {
       within(header)
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
-    ).toEqual(["Messages", "Under the hood"]);
+    ).toEqual(["Messages", "Activity", "Threads"]);
     expect(header.textContent).toBe(
-      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hood`,
+      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesActivityThreads`,
     );
     expect(
       within(header).getByRole("button", { name: "Channel settings" }),
@@ -1029,6 +1087,112 @@ describe("<BotTabSurface /> main bot", () => {
       ).toBe(expected);
     },
   );
+});
+
+describe("<BotTabSurface /> views", () => {
+  function activityTab(): HTMLElement {
+    return screen.getByTestId("bot-tab-view-activity");
+  }
+
+  it("shows Messages first, with Activity and Threads beside it, and no counts for a quiet bot", () => {
+    render(surface());
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Messages",
+      "Activity",
+      "Threads",
+    ]);
+    expect(
+      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+    expect(
+      activityTab().querySelector("[data-testid^='bot-tab-activity-']"),
+    ).toBeNull();
+  });
+
+  it("counts what stopped, in red and first, what runs and the tasks the bot tracks, leaving out a zero", () => {
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [trackingTask("task-1"), trackingTask("task-2")],
+      activity: {
+        trunk: {
+          state: "failed",
+          startedAt: null,
+          step: null,
+          requestId: "req-1",
+          reason: null,
+        },
+        threads: {},
+      },
+    };
+    __setAgentActivityStateForTests(
+      { "task-1": { working: ["agent-1"], turn: [] } },
+      "local",
+      null,
+    );
+    render(surface());
+
+    expect(activityTab().textContent).toBe(
+      "Activity · 1 stopped · 1 running · 2 tasks",
+    );
+    const parts = within(activityTab()).getAllByTestId(/^bot-tab-activity-/);
+    expect(parts.map((part) => part.dataset.testid)).toEqual([
+      "bot-tab-activity-stopped",
+      "bot-tab-activity-running",
+      "bot-tab-activity-tasks",
+    ]);
+    expect(parts[0].className).toContain("text-destructive");
+    expect(parts[1].className).not.toContain("text-destructive");
+  });
+
+  it("leaves out the stopped and running counts when nothing has stopped or runs", () => {
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [trackingTask("task-1")],
+    };
+    render(surface());
+
+    expect(activityTab().textContent).toBe("Activity · 1 task");
+  });
+
+  it("shows the Threads page when Threads is chosen", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-tab-view-threads"));
+
+    const page = screen.getByTestId("stub-threads");
+    expect(page.getAttribute("data-bot-id")).toBe(BOT_ID);
+    expect(page.getAttribute("data-host-id")).toBe(TAB_HOST);
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+  });
+
+  it("switches to Activity from the open thread's Activity link", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    await user.click(screen.getByTestId("stub-channel-open-activity"));
+
+    expect(activityTab().getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("stub-activity")).toBeTruthy();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+  });
+
+  it("returns to Messages with the thread open when Activity opens a post", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+
+    await user.click(screen.getByTestId("stub-activity-open-post"));
+
+    expect(
+      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+    ).toBe("post-1");
+  });
 });
 
 describe("<BotTabSurface /> tab lifetime", () => {

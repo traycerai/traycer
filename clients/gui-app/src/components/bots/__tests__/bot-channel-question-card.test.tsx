@@ -11,7 +11,7 @@
  * a host too old to take an answer gets a card without actions;
  * a member whose answer is overtaken keeps it, loses Submit, and takes it to
  * the question's thread unsent. What a member has not sent outlives the views
- * that draw it: the channel unmounting, as a switch to Under the hood does,
+ * that draw it: the channel unmounting, as a switch to another tab does,
  * and the thread closing.
  */
 import { StrictMode, type ReactNode } from "react";
@@ -143,6 +143,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: () => null,
+  useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
@@ -440,7 +441,7 @@ function mountChannel(openThread: BotOpenThread | null): {
               tasks={[]}
               openThread={open}
               onOpenThread={onOpenThread}
-              onOpenUnderTheHood={vi.fn()}
+              onOpenActivity={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
@@ -1008,7 +1009,7 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
     );
   }
 
-  it("keeps a card's answers, typed, picked and sent, across the channel unmounting and mounting again, as a switch to Under the hood and back does", async () => {
+  it("keeps a card's answers, typed, picked and sent, across the channel unmounting and mounting again, as a switch to another tab and back does", async () => {
     const user = userEvent.setup();
     delivery = "queued";
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);

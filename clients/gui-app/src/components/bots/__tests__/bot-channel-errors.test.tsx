@@ -221,7 +221,7 @@ const OPEN_UNOPENED_THREAD: BotOpenThread = {
   sent: null,
 };
 
-const onOpenUnderTheHood = vi.fn<(sessionChatId: string) => void>();
+const onOpenActivity = vi.fn<() => void>();
 
 function mount(openThread: BotOpenThread | null): void {
   render(
@@ -240,7 +240,7 @@ function mount(openThread: BotOpenThread | null): void {
             tasks={[]}
             openThread={openThread}
             onOpenThread={vi.fn()}
-            onOpenUnderTheHood={onOpenUnderTheHood}
+            onOpenActivity={onOpenActivity}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -275,7 +275,7 @@ async function typeAndEnter(box: HTMLElement, text: string): Promise<void> {
 beforeEach(() => {
   mocks.sends.length = 0;
   mocks.toastFromHostError.mockClear();
-  onOpenUnderTheHood.mockClear();
+  onOpenActivity.mockClear();
   mocks.state.threads = [];
   mocks.state.activity = null;
   vi.spyOn(document, "hasFocus").mockReturnValue(true);

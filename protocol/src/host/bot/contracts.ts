@@ -26,6 +26,7 @@ import {
   botSubscribeServerFrameSchemaV10,
   botSubscribeServerFrameSchemaV11,
   botSubscribeServerFrameSchemaV12,
+  botSubscribeServerFrameSchemaV13,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -355,6 +356,20 @@ export const botSubscribeV12 = defineStreamRpcContract({
 export const botSubscribeV13 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV13,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.4` (T86): each task entry carries its check-in history
+ * (`checkins`), and each notification subscription when it started
+ * (`since`). A 1.3 subscriber's snapshot carries neither, and reads the last
+ * check-in alone.
+ */
+export const botSubscribeV14 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,

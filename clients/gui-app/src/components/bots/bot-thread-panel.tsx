@@ -45,7 +45,6 @@ import type {
   ChatBotPresentation,
   ChatBotQuestions,
 } from "@/components/chat/chat-bot-presentation-context";
-import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
@@ -96,14 +95,13 @@ export type BotThreadPanelThread =
 
 /**
  * A thread of a bot's channel, in Slack's thread panel (Tracy Bots): the
- * header names the thread and its channel and says what the thread has cost,
- * the post it opens on sits on top, as the channel draws it, in every state
- * (decision 90), then the replies - the thread record in the ordinary message
- * list - and a box that replies in the thread. With no reply yet, the box
- * follows the post.
+ * header names the thread and its channel, the post it opens on sits on top,
+ * as the channel draws it, in every state (decision 90), then the replies -
+ * the thread record in the ordinary message list - and a box that replies in
+ * the thread. With no reply yet, the box follows the post.
  *
- * "Under the hood" opens the transcript of the bot's session that runs the
- * thread, read-only, in the bot's under-the-hood view.
+ * "Activity" opens the bot's Activity tab, where the thread's work is listed
+ * with the rest of the bot's (decision 115).
  *
  * A message of the thread the bot failed to answer is retried as it is, or
  * edited in the thread's box; the post the thread opens on is edited in the
@@ -135,10 +133,10 @@ export function BotThreadPanel(props: {
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
   readonly onClose: () => void;
-  readonly onOpenUnderTheHood: (sessionChatId: string) => void;
+  readonly onOpenActivity: () => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
 }): ReactNode {
-  const { botTitle, onClose, onOpenUnderTheHood } = props;
+  const { botTitle, onClose, onOpenActivity } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   const threadId =
     props.thread.kind === "posted"
@@ -166,25 +164,15 @@ export function BotThreadPanel(props: {
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
-        {thread === null || thread.costUsd === null ? null : (
-          <span
-            className="shrink-0 text-ui-xs tabular-nums text-muted-foreground"
-            data-testid="bot-thread-cost"
-          >
-            {formatUsd(thread.costUsd)}
-          </span>
-        )}
-        {thread === null ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-testid="bot-thread-under-the-hood"
-            onClick={() => onOpenUnderTheHood(thread.sessionChatId)}
-          >
-            Under the hood
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          data-testid="bot-thread-activity"
+          onClick={onOpenActivity}
+        >
+          Activity
+        </Button>
         <Button
           type="button"
           variant="ghost"
