@@ -250,11 +250,13 @@ export function sessionTurn(input: {
 export const SUBAGENT_NAME = "Log reader";
 export const SENT_MESSAGE = "Please rerun the nightly.";
 export const BACKGROUND_COMMAND = "bun run nightly --watch";
+/** The host a browser session of the promoted turn runs on. */
+export const BROWSER_HOST_ID = "host-browser";
 export const ANSWER_PROSE = "The nightly is red; I asked for a rerun.";
 
 /**
  * A turn that spawned a subagent, started a command that went to the
- * background, sent a message to another agent, and then wrote its answer: the
+ * background, sent a message to another agent, opened a browser, and then wrote its answer: the
  * items the agent chat lifts out of its activity groups, and the prose.
  */
 export function promotedSessionTurn(input: {
@@ -306,6 +308,20 @@ export function promotedSessionTurn(input: {
         startedAt: input.startedAt,
         endedAt: input.endedAt,
       }),
+      {
+        type: "text",
+        blockId: `${input.messageId}:browser`,
+        status: "completed",
+        timestamp: input.endedAt,
+        text: "Opened a browser.",
+        providerNotice: null,
+        browserSession: {
+          hostId: BROWSER_HOST_ID,
+          sessionId: "browser-1",
+          tabId: "tab-1",
+          profile: "primary",
+        },
+      },
       textBlock(`${input.messageId}:text`, ANSWER_PROSE, input.endedAt),
     ],
   });

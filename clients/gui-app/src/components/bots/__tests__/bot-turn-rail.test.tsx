@@ -23,13 +23,18 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type {
   BotThreadSummary,
   BotTurnLocateRequest,
+  BotTurnRef,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   ANSWER_PROSE,
   BACKGROUND_COMMAND,
   BOT_ID,
+  BROWSER_HOST_ID,
   CHANNEL_ID,
   CHANNEL_REPLY_TURN,
   COST_USD,
@@ -68,6 +73,11 @@ const mocks = vi.hoisted(() => ({
   threads: [] as BotThreadSummary[],
   /** Whether the tab's host negotiated `bot.turn.locate`. */
   locateSupported: true,
+  /** What a browser session row asked the browser inventory for. */
+  browserAsked: [] as Array<{
+    hostId: string | null;
+    scope: HostResourceScope;
+  }>,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -99,6 +109,15 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 // host runtime.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
+}));
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsForHost: (args: {
+    hostId: string | null;
+    scope: HostResourceScope;
+  }): BrowserSessionsState => {
+    mocks.browserAsked.push(args);
+    return browserInventory();
+  },
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
@@ -172,6 +191,30 @@ vi.mock("@/components/chat/chat-messages", async () => {
   };
 });
 
+/** A live browser inventory that holds no session. */
+function browserInventory(): BrowserSessionsState {
+  return {
+    viewports: {},
+    setViewport: async () => {},
+    reportViewport: () => {},
+    hostId: BROWSER_HOST_ID,
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    connectionGeneration: 1,
+    items: [],
+    errorMessage: null,
+    retry: () => {},
+    openTab: () => Promise.reject(new Error("unused in this suite")),
+    prepareOpenTab: () => {
+      throw new Error("unused in this suite");
+    },
+    closeTab: async () => {},
+    attachTab: async () => {},
+    moveTab: async () => {},
+  };
+}
+
 /** What the bot is doing, as the scripted `useBotActivity` reads it. */
 const activityStore = create<{ activity: BotActivity | null }>()(() => ({
   activity: null,
@@ -201,6 +244,7 @@ beforeEach(() => {
   activityStore.setState({ activity: null });
   useBotOpenThreadStore.setState({ byBotId: {} });
   mocks.locateSupported = true;
+  mocks.browserAsked = [];
   scene = buildScene();
   mocks.sessions = scene.sessions;
   mocks.threads = scene.threads;
@@ -683,5 +727,198 @@ describe("the rail's turn, as the session ran it", () => {
     );
     expect(within(rail).queryByTestId("bot-turn-loading")).toBeNull();
     expect(within(rail).queryByTestId("bot-turn-activity")).toBeNull();
+  });
+});
+
+/** The bot's trunk, replying to the post, or idle between turns. */
+function trunkActivity(state: "replying" | "idle"): BotActivity {
+  return {
+    trunk: {
+      state,
+      startedAt: state === "replying" ? STARTED_AT : null,
+      step: null,
+      requestId: null,
+      reason: null,
+    },
+    threads: {},
+  };
+}
+
+describe("the rail's turn across a retry", () => {
+  const RETRY_TURN_ID = "turn-retry";
+  const RETRY_SUMMARY = "Read 2 files";
+
+  /** The reply's turn run again under a further id, still running. */
+  function runningRetry(): BotTurnRef {
+    return {
+      ...CHANNEL_REPLY_TURN,
+      turnIds: [REPLY_TURN_ID, RETRY_TURN_ID],
+      startedAt: Date.now() - 65_000,
+      endedAt: null,
+      summary: null,
+    };
+  }
+
+  /** The retry once it has settled, after 2m 20s. */
+  function settledRetry(running: BotTurnRef): BotTurnRef {
+    return {
+      ...running,
+      endedAt: running.startedAt + 140_000,
+      summary: RETRY_SUMMARY,
+    };
+  }
+
+  function retryRows(): ReadonlyArray<Message> {
+    return [
+      sessionPrompt(REPLY_PROMPT_ID, 90_000),
+      sessionTurn({
+        messageId: "turn-reply-record",
+        turnId: REPLY_TURN_ID,
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        costUsd: COST_USD,
+      }),
+      promotedSessionTurn({
+        messageId: "turn-retry-record",
+        turnId: RETRY_TURN_ID,
+        startedAt: ENDED_AT,
+        endedAt: ENDED_AT + 140_000,
+        costUsd: COST_USD,
+      }),
+    ];
+  }
+
+  it("follows the turn it showed ended when the host reports it running again under a further id, and settles into the retry's end", async () => {
+    const user = userEvent.setup();
+    scene.trunk.setState({ messages: [...retryRows()] });
+    mountChannel(null);
+    await user.click(await receiptIn(channelList()));
+    expect(
+      within(turnRail()).getByTestId("bot-turn-meta").textContent,
+    ).toContain(`for ${TOOK}`);
+    expect(
+      within(turnRail()).getByTestId("bot-turn-activity").textContent,
+    ).not.toContain(SUBAGENT_NAME);
+
+    const running = runningRetry();
+    scene.knownTurns = [running];
+    act(() => {
+      activityStore.setState({ activity: trunkActivity("replying") });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(turnRail()).getByTestId("bot-turn-meta").textContent,
+      ).toMatch(/^Working for 1m \d+s/);
+    });
+    expect(within(turnRail()).queryByTestId("bot-turn-summary")).toBeNull();
+    expect(
+      within(turnRail()).getByTestId("bot-turn-activity").textContent,
+    ).toContain(SUBAGENT_NAME);
+
+    scene.knownTurns = [settledRetry(running)];
+    act(() => {
+      activityStore.setState({ activity: trunkActivity("idle") });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(turnRail()).getByTestId("bot-turn-summary").textContent,
+      ).toBe(RETRY_SUMMARY);
+    });
+    const meta = within(turnRail()).getByTestId("bot-turn-meta").textContent;
+    expect(meta).toContain("for 2m 20s");
+    expect(meta).not.toContain("Working for");
+  });
+
+  // The rail's own read can still hold the end (here: the host answers its
+  // by-turn read with the ended turn) when the receipt, read by the reply,
+  // already names the retry: the receipt clicked again is the newer ref.
+  it("takes the receipt clicked again after a retry over the end its own read still holds", async () => {
+    const user = userEvent.setup();
+    scene.trunk.setState({ messages: [...retryRows()] });
+    let railRead: BotTurnRef[] = [CHANNEL_REPLY_TURN];
+    mocks.client = hostClientLocating(
+      (request) =>
+        turnsAskedFor(
+          request.turns.length > 0 ? railRead : scene.knownTurns,
+          request,
+        ),
+      asked,
+    );
+    mountChannel(null);
+    await user.click(await receiptIn(channelList()));
+    expect(
+      within(turnRail()).getByTestId("bot-turn-meta").textContent,
+    ).toContain(`for ${TOOK}`);
+
+    const running = runningRetry();
+    scene.knownTurns = [running];
+    act(() => {
+      activityStore.setState({ activity: trunkActivity("replying") });
+    });
+    await waitFor(() => {
+      expect(
+        within(channelList())
+          .getByTestId("bot-turn-receipt")
+          .getAttribute("data-running"),
+      ).toBe("true");
+    });
+    expect(
+      within(turnRail()).getByTestId("bot-turn-meta").textContent,
+    ).toContain(`for ${TOOK}`);
+
+    await user.click(within(channelList()).getByTestId("bot-turn-receipt"));
+
+    expect(within(turnRail()).getByTestId("bot-turn-meta").textContent).toMatch(
+      /^Working for 1m \d+s/,
+    );
+    expect(within(turnRail()).queryByTestId("bot-turn-summary")).toBeNull();
+    expect(
+      within(turnRail()).getByTestId("bot-turn-activity").textContent,
+    ).toContain(SUBAGENT_NAME);
+
+    const settled = settledRetry(running);
+    railRead = [settled];
+    scene.knownTurns = [settled];
+    act(() => {
+      activityStore.setState({ activity: trunkActivity("idle") });
+    });
+    await waitFor(() => {
+      expect(
+        within(turnRail()).getByTestId("bot-turn-summary").textContent,
+      ).toBe(RETRY_SUMMARY);
+    });
+  });
+});
+
+describe("a browser session in the rail's turn", () => {
+  it("reads the browser inventory of the bot whose session opened it, on the session's host", async () => {
+    const user = userEvent.setup();
+    scene.trunk.setState({
+      messages: [
+        sessionPrompt(REPLY_PROMPT_ID, 90_000),
+        promotedSessionTurn({
+          messageId: "turn-reply-record",
+          turnId: REPLY_TURN_ID,
+          startedAt: STARTED_AT,
+          endedAt: ENDED_AT,
+          costUsd: COST_USD,
+        }),
+      ],
+    });
+    mountChannel(null);
+
+    await user.click(await receiptIn(channelList()));
+
+    const activity = within(turnRail()).getByTestId("bot-turn-activity");
+    expect(activity.textContent).toContain("Browser · Primary");
+    expect(mocks.browserAsked.length).toBeGreaterThan(0);
+    for (const request of mocks.browserAsked) {
+      expect(request).toEqual({
+        hostId: BROWSER_HOST_ID,
+        scope: { kind: "epic", epicId: BOT_ID },
+      });
+    }
   });
 });

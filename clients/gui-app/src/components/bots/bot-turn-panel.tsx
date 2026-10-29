@@ -19,6 +19,7 @@ import {
   type ChatActivityTimelineItem,
 } from "@/components/chat/chat-activity-groups";
 import { formatUsd, pickElapsedVerb } from "@/lib/chat/turn-footer-format";
+import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import {
@@ -57,7 +58,6 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
 
 const NO_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const NO_IDS: ReadonlyArray<string> = [];
-const NO_TURN_KEYS: ReadonlyArray<BotTurnKey> = [];
 
 /**
  * One turn of the bot, in the rail beside its channel: "How Tracy answered"
@@ -68,7 +68,7 @@ const NO_TURN_KEYS: ReadonlyArray<BotTurnKey> = [];
  * in the agent chat's words, the model and cost as the agent chat's turn
  * footer says them, and the turn's activity as the agent chat draws its
  * activity group; live while the turn runs - the turn is read again from
- * its bot's host until it has ended - and fixed once it ends. The footer
+ * its bot's host while the panel shows it, a retry included. The footer
  * names the session - the trunk's or a thread's - and opens its transcript
  * in the panel, landed on the turn. The turn links to nothing above it.
  */
@@ -168,12 +168,15 @@ export function BotTurnPanel(props: {
 }
 
 /**
- * The open turn as its bot's host names it now. The turn the rail opened is
- * what its receipt said at the click; one still running is read again
- * through the same `bot.turn.locate` read the receipts use - keyed by the
- * session and one of its ids, refetched when the bot's activity says a turn
- * started or settled - until the host says it ended, when its end, summary
- * and every id it ran under are kept and nothing more is asked.
+ * The open turn as its bot's host names it now. The ref the rail opened is
+ * what a receipt said at its click; the panel also reads the turn through
+ * the same `bot.turn.locate` read the receipts use - keyed by the session
+ * and the turn's first id, refetched when the bot's activity says a turn
+ * started or settled - for as long as it shows the turn, ended or not: a
+ * retry reopens an ended turn under a further id, and the panel follows it.
+ * Of the two, the newer wins (`newerTurnRef`), so a receipt clicked again
+ * after a retry replaces an end the read still holds, and the read's end
+ * replaces the running ref the rail was opened with.
  */
 function useLiveTurnRef(input: {
   readonly botId: string;
@@ -182,15 +185,10 @@ function useLiveTurnRef(input: {
 }): BotTurnRef {
   const { botId, hostId, opened } = input;
   const client = useTabHostClient();
-  const [ended, setEnded] = useState<BotTurnRef | null>(
-    opened.endedAt === null ? null : opened,
-  );
+  const firstId = opened.turnIds[0];
   const turns = useMemo<ReadonlyArray<BotTurnKey>>(
-    () =>
-      ended === null
-        ? [{ chatId: opened.chatId, turnId: opened.turnIds[0] }]
-        : NO_TURN_KEYS,
-    [ended, opened.chatId, opened.turnIds],
+    () => [{ chatId: opened.chatId, turnId: firstId }],
+    [firstId, opened.chatId],
   );
   const located = useBotTurnLocateQuery({
     client,
@@ -206,10 +204,21 @@ function useLiveTurnRef(input: {
         ref.chatId === opened.chatId &&
         ref.turnIds.some((id) => opened.turnIds.includes(id)),
     ) ?? null;
-  // Kept during render (the adjust-state-on-prop-change pattern): the read
-  // stops asking once it has the end, so its answer is not held by the query.
-  if (ended === null && live !== null && live.endedAt !== null) setEnded(live);
-  return ended ?? live ?? opened;
+  return live === null ? opened : newerTurnRef(live, opened);
+}
+
+/**
+ * Which of two refs of one turn is newer. A retry runs the turn again under
+ * a further id, so more ids is newer; under the same ids the turn only goes
+ * from running to ended, so an ended ref is newer than a running one. A tie
+ * keeps the host's read (`live`).
+ */
+function newerTurnRef(live: BotTurnRef, opened: BotTurnRef): BotTurnRef {
+  if (opened.turnIds.length !== live.turnIds.length) {
+    return opened.turnIds.length > live.turnIds.length ? opened : live;
+  }
+  if (live.endedAt === null && opened.endedAt !== null) return opened;
+  return live;
 }
 
 function TurnPanelHeader(props: {
@@ -429,14 +438,18 @@ function TurnSessionBody(props: {
     );
   }
   return (
-    <ChatTranscriptProvider value={{ chatId: turnRef.chatId, hostId }}>
-      <TurnMeta turnRef={turnRef} rows={rows} />
-      <TurnActivity
-        rows={rows}
-        backgroundItems={state.backgroundItems}
-        instanceId={`bot-turn:${turnRef.turnIds[0]}`}
-      />
-    </ChatTranscriptProvider>
+    // The bot is the session's container, as its transcript says: a browser
+    // session the turn opened reads the bot's browser inventory.
+    <ChatContainerContext.Provider value={botId}>
+      <ChatTranscriptProvider value={{ chatId: turnRef.chatId, hostId }}>
+        <TurnMeta turnRef={turnRef} rows={rows} />
+        <TurnActivity
+          rows={rows}
+          backgroundItems={state.backgroundItems}
+          instanceId={`bot-turn:${turnRef.turnIds[0]}`}
+        />
+      </ChatTranscriptProvider>
+    </ChatContainerContext.Provider>
   );
 }
 
