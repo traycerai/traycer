@@ -256,17 +256,13 @@ describe("@legendapp/list web patch", () => {
     // rows above the view by tens of thousands of pixels after a long jump.
     // Anchoring that re-layout keeps the rows the scroll left on screen there,
     // except at the end, where anchoring inflates the content for a frame.
-    // `react.*` alone holds the estimates above the view in an unanchored
-    // pass, and releases them there only after a scroll that asked for the end.
     it(`${file} recalculates a settled scroll with MVCP unless it finished at the end`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
         "const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;",
       );
       expect(source).toContain(
-        file.startsWith("react.")
-          ? "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true, refreshEstimatesAtEnd: finishedAtEnd && requestedEnd });"
-          : "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });",
+        "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });",
       );
     });
 
