@@ -458,8 +458,10 @@ export function returnPendingSandboxSendToSandbox(
   if (returned.kind !== "task") return returned;
   const surfaceKey = newConversationSurfaceKey(returned.epicId);
   const pins = useSurfaceHostSelectionStore.getState();
+  const drafts = useNewConversationModalStore.getState();
   if (pick.kind === "host") {
     useStagedSandboxStore.getState().clear(surfaceKey);
+    drafts.setReturnedSandbox(returned.epicId, null);
     pins.setSelection(surfaceKey, pick.hostId);
     return returned;
   }
@@ -467,6 +469,12 @@ export function returnPendingSandboxSendToSandbox(
   staged.stage(surfaceKey, pick.target);
   if (pick.clientRequestId !== null)
     staged.report(surfaceKey, { clientRequestId: pick.clientRequestId });
+  // The draft now holding the message keeps its destination, so a reload
+  // stages it again (`useReturnedSandboxStage`).
+  drafts.setReturnedSandbox(returned.epicId, {
+    target: pick.target,
+    clientRequestId: pick.clientRequestId,
+  });
   if (pick.target.kind === "existing")
     pins.setSelection(surfaceKey, pick.target.hostId);
   return returned;
@@ -476,7 +484,9 @@ export function returnPendingSandboxSendToSandbox(
  * Whether the task's new-agent composer holds a stage the person picked
  * there that is not this send's own sandbox. Only a stage counts: the
  * composer's host pin is also recorded by every ordinary create, so it says
- * where the last agent went, not what the person chose for the next one.
+ * where the last agent went, not what the person chose for the next one. A
+ * sandbox not yet created is this send's own only by its create key: the
+ * person can pick one with the same name and shape, and that is a new one.
  */
 function anotherSandboxStaged(
   epicId: string,
@@ -491,7 +501,10 @@ function anotherSandboxStaged(
     return (
       target.kind !== "existing" || target.sandboxId !== pick.target.sandboxId
     );
-  return JSON.stringify(target) !== JSON.stringify(pick.target);
+  return (
+    pick.clientRequestId === null ||
+    stage.clientRequestId !== pick.clientRequestId
+  );
 }
 
 /** A background Stop leaves an explicit saved draft for its receipt to open. */

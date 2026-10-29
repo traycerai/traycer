@@ -89,6 +89,8 @@ export interface DesktopPerWindowLandingDraft {
    * without dropping their image-hash roots.
    */
   readonly closed: boolean | null;
+  /** The sandbox a given-back message was going to; present only while set. */
+  readonly returnedSandbox?: DesktopJsonValue;
 }
 
 export interface DesktopPerWindowSnapshot {

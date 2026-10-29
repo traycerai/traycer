@@ -89,6 +89,7 @@ function landingTab(
     publication: null,
     confirmedHostBlobHashes: [],
     closed: true,
+    returnedSandbox: null,
     ...overrides,
   };
 }

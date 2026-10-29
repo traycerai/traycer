@@ -9,6 +9,7 @@ import {
   readStagedSandbox,
   useStagedSandboxStore,
 } from "@/stores/composer/staged-sandbox-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
@@ -54,6 +55,14 @@ export function handLandingSandboxSend(
       const store = useStagedSandboxStore.getState();
       store.stage(input.fromSurfaceKey, stage.target);
       store.report(input.fromSurfaceKey, { ...stage, sendTaken: false });
+      // The draft keeps where its message was going, so a reload stages it
+      // again (`useReturnedSandboxStage`).
+      useLandingDraftStore
+        .getState()
+        .setDraftReturnedSandbox(returned.draftId, {
+          target: stage.target,
+          clientRequestId: stage.clientRequestId,
+        });
       return returned.draftId;
     },
   };
