@@ -16,6 +16,7 @@ import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import {
   BotMessageComposer,
   type BotComposerEdit,
+  type BotComposerSeed,
 } from "@/components/bots/bot-message-composer";
 import {
   useBotSendFailure,
@@ -37,6 +38,7 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import type { QuestionAnswerSend } from "@/components/bots/bot-chat-transcript";
 import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentation-context";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
@@ -99,6 +101,11 @@ export type BotThreadPanelThread =
  * A message of the thread the bot failed to answer is retried as it is, or
  * edited in the thread's box; the post the thread opens on is edited in the
  * channel's box (`onEditPost`), since its replacement is a new post.
+ *
+ * A question card in the thread answers in the thread. A member whose answer
+ * someone else's overtook takes it to the discussion: the thread's box, with
+ * their draft in it unsent (`draft`, for a question in the channel whose
+ * thread this is).
  */
 export function BotThreadPanel(props: {
   readonly botId: string;
@@ -113,6 +120,8 @@ export function BotThreadPanel(props: {
   readonly originMessageId: string;
   /** That post as the person sent it, when its send opened the thread; `null` otherwise. */
   readonly sent: BotSentPost | null;
+  /** A draft to put in the thread's box, unsent; `null` for none. */
+  readonly draft: BotComposerSeed | null;
   readonly thread: BotThreadPanelThread;
   /** The bot's tasks: the panel lists the ones this thread set up. */
   readonly tasks: ReadonlyArray<BotTaskEntry>;
@@ -204,6 +213,7 @@ type ThreadPanelBodyProps = {
   readonly conversationId: string;
   readonly originMessageId: string;
   readonly sent: BotSentPost | null;
+  readonly draft: BotComposerSeed | null;
   readonly thread: BotThreadPanelThread;
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
@@ -255,16 +265,22 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     failure: sendFailure,
   });
   const loadedPresentation = useMemo(
-    () => originPresentation(botTitle, failedRequest),
-    [botTitle, failedRequest],
+    () => originPresentation(botTitle, anchorSenderLabel, failedRequest),
+    [anchorSenderLabel, botTitle, failedRequest],
   );
   const unloadedPresentation = useMemo(
     () =>
-      originPresentation(botTitle, (requestId, senderUserId) => {
-        const failed = failedRequest(requestId, senderUserId);
-        return failed === null ? null : { ...failed, retry: null, edit: null };
-      }),
-    [botTitle, failedRequest],
+      originPresentation(
+        botTitle,
+        anchorSenderLabel,
+        (requestId, senderUserId) => {
+          const failed = failedRequest(requestId, senderUserId);
+          return failed === null
+            ? null
+            : { ...failed, retry: null, edit: null };
+        },
+      ),
+    [anchorSenderLabel, botTitle, failedRequest],
   );
   const anchor =
     props.thread.kind === "listed" ? props.thread.thread.anchor : null;
@@ -389,9 +405,14 @@ function useCollapsed(element: HTMLElement | null): boolean {
   return collapsed;
 }
 
-/** The origin's row: no thread to open, no jump, no options to pick. */
+/**
+ * The origin's row: no thread to open, no jump, no options to pick, and a
+ * question's card that says how each question was settled and is answered
+ * in the channel.
+ */
 function originPresentation(
   botTitle: string,
+  memberName: (senderUserId: string | null) => string,
   failedRequest: ChatBotPresentation["failedRequest"],
 ): ChatBotPresentation {
   return {
@@ -403,6 +424,7 @@ function originPresentation(
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
+    questions: { memberName, answer: null, discuss: null },
     failedRequest,
   };
 }
@@ -428,6 +450,18 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // replacement under the post as it does in the thread.
   const [edit, setEdit] = useState<BotComposerEdit | null>(null);
   const endEdit = useCallback(() => setEdit(null), []);
+  // What the box is handed to hold unsent: the channel's draft for the
+  // thread, or one from a question card of the thread itself.
+  const [seed, setSeed] = useState<BotComposerSeed | null>(props.draft);
+  const [heldDraft, setHeldDraft] = useState(props.draft);
+  if (props.draft !== heldDraft) {
+    setHeldDraft(props.draft);
+    if (props.draft !== null) setSeed(props.draft);
+  }
+  const discuss = useCallback(
+    (_questionMessageId: string, draft: string) => setSeed({ text: draft }),
+    [],
+  );
   if (thread.kind === "pending" || thread.kind === "failed") {
     return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
   }
@@ -445,6 +479,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           retry={thread.retry}
           sendable={thread.sendable}
           onEdit={setEdit}
+          onDiscuss={discuss}
         />
       )}
       <BotMessageComposer
@@ -459,6 +494,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         failure={props.sendFailure}
         edit={edit}
         onEditEnd={endEdit}
+        seed={seed}
         onSent={keepOpenThread}
       />
     </>
@@ -536,6 +572,8 @@ function KnownThread(
     readonly sendable: boolean;
     /** Edit on a failed message: its text goes in the panel's box. */
     readonly onEdit: (edit: BotComposerEdit) => void;
+    /** Discuss on an overtaken answer to a question here: its draft goes in the panel's box. */
+    readonly onDiscuss: (questionMessageId: string, draft: string) => void;
   },
 ): ReactNode {
   const {
@@ -551,10 +589,14 @@ function KnownThread(
     resolveMember,
     sendFailure,
     onEdit,
+    onDiscuss,
   } = props;
   const client = useTabHostClient();
-  const { mutate: send, isPending: sending } =
-    useBotConversationSendMutation(client);
+  const {
+    mutate: send,
+    mutateAsync: sendAsync,
+    isPending: sending,
+  } = useBotConversationSendMutation(client);
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
   // The thread's own session answers in it; its running turn is the
   // thread's typing line, and an answer it holds or fails is said on the
@@ -589,6 +631,32 @@ function KnownThread(
           },
     [failedRequest, sendable],
   );
+  // A question card's answer or Skip, on a question asked in the thread, is
+  // the person's next message in it; a failed one says so where a failed
+  // message does, and the card keeps the draft.
+  const answerQuestion = useCallback<QuestionAnswerSend>(
+    async (questionMessageId, given) => {
+      clearSendFailure();
+      await sendAsync(
+        {
+          botId,
+          conversationId,
+          text: given.text,
+          threadId,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: {
+            questionMessageId,
+            questionIndex: given.questionIndex,
+            skipped: given.skipped,
+          },
+        },
+        { onError: failSend },
+      );
+    },
+    [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
+  );
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent and the thread
   // takes a send, and a pick that fails says so where a failed message does.
@@ -609,18 +677,23 @@ function KnownThread(
                   announcementId: null,
                   redeliver: null,
                   supersedes: null,
+                  answer: null,
                 },
                 { onError: failSend },
               );
             },
+      answerQuestion: sendable ? answerQuestion : null,
+      discussQuestion: onDiscuss,
       failedRequest: failedRequestShown,
     }),
     [
+      answerQuestion,
       botId,
       clearSendFailure,
       conversationId,
       failSend,
       failedRequestShown,
+      onDiscuss,
       send,
       sendable,
       sending,

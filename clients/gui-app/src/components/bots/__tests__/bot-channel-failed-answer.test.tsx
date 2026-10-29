@@ -468,6 +468,7 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: POST_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -741,6 +742,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: POST_REQUEST,
+        answer: null,
       },
     ]);
     await waitFor(() => {

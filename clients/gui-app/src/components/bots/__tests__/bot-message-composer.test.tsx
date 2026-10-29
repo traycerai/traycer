@@ -74,6 +74,7 @@ function composer(edit: BotComposerEdit | null): ReactNode {
       failure={FAILURE}
       edit={edit}
       onEditEnd={onEditEnd}
+      seed={null}
       onSent={onSent}
     />
   );

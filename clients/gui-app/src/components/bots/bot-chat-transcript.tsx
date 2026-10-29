@@ -16,6 +16,7 @@ import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-tr
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
+  botMemberName,
   botUserSenderAvatarUrl,
   botUserSenderId,
   botUserSenderLabel,
@@ -35,6 +36,7 @@ import {
   type ChatBotPresentation,
   type ChatBotThreadLine,
 } from "@/components/chat/chat-bot-presentation-context";
+import type { QuestionCardAnswer } from "@/components/chat/question-card";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { queuedPromptMessageIds } from "@/components/chat/chat-queue-utils";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
@@ -85,6 +87,12 @@ export type BotTranscriptSurface =
       readonly answerThreads: boolean;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
+      readonly answerQuestion: QuestionAnswerSend | null;
+      /** Opens a question's thread with the person's draft in its box; `null` where threads cannot be opened. */
+      readonly discussQuestion:
+        | ((questionMessageId: string, draft: string) => void)
+        | null;
       /** A post the bot failed to answer, by its request id and writer, and what can be done about it. */
       readonly failedRequest: (
         requestId: string,
@@ -100,12 +108,27 @@ export type BotTranscriptSurface =
       readonly kind: "thread";
       /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** Sends a question card's answer in the thread; `null` where the thread takes no send. */
+      readonly answerQuestion: QuestionAnswerSend | null;
+      /** Puts the person's draft in the thread's box, unsent. */
+      readonly discussQuestion:
+        | ((questionMessageId: string, draft: string) => void)
+        | null;
       /** A message the bot failed to answer, by its request id and writer, and what can be done about it. */
       readonly failedRequest: (
         requestId: string,
         senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
     };
+
+/**
+ * Sends a question card's answer or Skip to the question on the row
+ * `questionMessageId`: resolves once the host takes it, rejects when not.
+ */
+export type QuestionAnswerSend = (
+  questionMessageId: string,
+  answer: QuestionCardAnswer,
+) => Promise<void>;
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
@@ -525,6 +548,12 @@ function BotChatTranscriptBody(props: {
     if (surface === null) return null;
     const followsPost = (postMessageId: string, replyMessageId: string) =>
       replyFollowsPost(messages, postMessageId, replyMessageId);
+    const questions = {
+      memberName: (userId: string) =>
+        botMemberName(userId, profile, resolveMember),
+      answer: surface.answerQuestion,
+      discuss: surface.discussQuestion,
+    };
     if (surface.kind === "thread") {
       return {
         botTitle: title,
@@ -535,6 +564,7 @@ function BotChatTranscriptBody(props: {
         openAnnouncementThread: null,
         answerThreads: false,
         chooseOption: surface.chooseOption,
+        questions,
         failedRequest: surface.failedRequest,
       };
     }
@@ -549,9 +579,10 @@ function BotChatTranscriptBody(props: {
       openAnnouncementThread: surface.openAnnouncementThread,
       answerThreads: surface.answerThreads,
       chooseOption: surface.chooseOption,
+      questions,
       failedRequest: surface.failedRequest,
     };
-  }, [messages, scrollToMessage, surface, title]);
+  }, [messages, profile, resolveMember, scrollToMessage, surface, title]);
 
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow

@@ -41,7 +41,9 @@ const MESSAGE_MAX = 100_000;
  *
  * Edit on a message the bot failed to answer (`edit`) puts its text in the
  * box; what the person sends then is a new message that replaces the failed
- * one (`supersedes`), which stays where it is.
+ * one (`supersedes`), which stays where it is. A `seed` puts its text in the
+ * box as a draft of a new message, unsent: the answer a member had for a
+ * question someone else settled first, taken to its discussion.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -65,6 +67,8 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
+  /** A draft to put in the box, unsent; each new one replaces what the box holds. `null` for none. */
+  readonly seed: BotComposerSeed | null;
   /**
    * The host accepted `text`, what the box held, and the box was cleared.
    * Answers whether the owner says the send's delivery itself, where the
@@ -87,6 +91,7 @@ export function BotMessageComposer(props: {
     failure,
     edit,
     onEditEnd,
+    seed,
     onSent,
   } = props;
   const client = useTabHostClient();
@@ -98,6 +103,12 @@ export function BotMessageComposer(props: {
     setLoadedEdit(edit);
     if (edit !== null) setText(edit.text);
   }
+  // As does a new seed.
+  const [loadedSeed, setLoadedSeed] = useState<BotComposerSeed | null>(null);
+  if (seed !== loadedSeed) {
+    setLoadedSeed(seed);
+    if (seed !== null) setText(seed.text);
+  }
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // The edit the box holds now, for a send that lands after the person moved
   // on to another.
@@ -106,6 +117,9 @@ export function BotMessageComposer(props: {
     currentEditRef.current = edit;
     if (edit !== null) inputRef.current?.focus();
   }, [edit]);
+  useEffect(() => {
+    if (seed !== null) inputRef.current?.focus();
+  }, [seed]);
   const [lastDelivery, setLastDelivery] =
     useState<BotConversationSendDelivery | null>(null);
   const inputId = useId();
@@ -129,6 +143,7 @@ export function BotMessageComposer(props: {
         announcementId,
         redeliver: null,
         supersedes,
+        answer: null,
       },
       {
         onSuccess: (response) => {
@@ -254,6 +269,11 @@ function ComposerStatus(props: {
   if (!props.queued) return null;
   return <BotQueuedNotice testId={`${props.testId}-queued`} />;
 }
+
+/** A draft put in the box to be sent as a new message, once the person sends it. */
+export type BotComposerSeed = {
+  readonly text: string;
+};
 
 /** A failed message loaded into the box to be edited and sent again. */
 export type BotComposerEdit = {

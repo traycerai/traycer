@@ -81,6 +81,7 @@ const PRESENTATION: ChatBotPresentation = {
   openAnnouncementThread: null,
   answerThreads: false,
   chooseOption: null,
+  questions: null,
   failedRequest: null,
 };
 

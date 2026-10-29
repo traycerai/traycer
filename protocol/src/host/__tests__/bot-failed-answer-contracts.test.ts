@@ -85,7 +85,7 @@ describe("bot.conversation.send@1.1 retry and edit", () => {
     if (upgrade === null) throw new Error("expected a 1.0 to 1.1 upgrade path");
     expect(
       upgrade.upgradeRequest(frozenSend.requestSchema.parse(POST)),
-    ).toEqual({ ...POST, redeliver: null, supersedes: null });
+    ).toEqual({ ...POST, redeliver: null, supersedes: null, answer: null });
   });
 
   it("freezes 1.0 without the retry and the replaced request", () => {
@@ -103,6 +103,7 @@ describe("bot.conversation.send@1.1 retry and edit", () => {
       ...POST,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
   });
 });

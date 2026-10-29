@@ -412,6 +412,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               conversationId={CONVERSATION_ID}
               originMessageId={originOf(thread)}
               sent={panelSent}
+              draft={null}
               thread={thread}
               tasks={panelTasks}
               anchorSenderLabel={(senderUserId) =>
@@ -501,6 +502,7 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
         announcementId: "question-1",
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -571,6 +573,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
         announcementId: "answer-1",
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -786,6 +789,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -928,6 +932,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -1000,6 +1005,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
           announcementId: null,
           redeliver: null,
           supersedes: null,
+          answer: null,
         },
       ]);
     });
@@ -1440,6 +1446,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: REPLY_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -1485,6 +1492,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -1543,6 +1551,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
   });
@@ -1565,6 +1574,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: "answer-1",
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
   });
@@ -1653,6 +1663,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: POST_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
   });

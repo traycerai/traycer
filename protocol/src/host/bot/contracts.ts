@@ -220,6 +220,7 @@ export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
     ...request,
     redeliver: null,
     supersedes: null,
+    answer: null,
   }),
   upgradeResponse: (response) => response,
 });

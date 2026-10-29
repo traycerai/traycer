@@ -803,6 +803,7 @@ describe("a task id in a bot's row", () => {
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
+    questions: null,
     failedRequest: null,
   };
 

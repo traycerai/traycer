@@ -58,6 +58,7 @@ const SEND: BotConversationSendRequest = {
   announcementId: null,
   redeliver: null,
   supersedes: null,
+  answer: null,
 };
 
 function hostOver(
@@ -247,6 +248,7 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
   const EDIT: BotConversationSendRequest = {
     ...SEND,
     supersedes: "req-failed",
+    answer: null,
   };
 
   it.each([

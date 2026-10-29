@@ -1177,6 +1177,7 @@ describe("<BotChannelView /> channel", () => {
       announcementId: null,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
   });
 

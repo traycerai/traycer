@@ -117,6 +117,7 @@ export function useBotFailedRequest(args: {
                     announcementId: null,
                     redeliver: { requestId },
                     supersedes: null,
+                    answer: null,
                   },
                   { onError: fail },
                 );

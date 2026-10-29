@@ -266,6 +266,8 @@ function createReplyJumpStore(
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
+  answerQuestion: null,
+  discussQuestion: null,
   failedRequest: () => null,
 };
 
@@ -466,6 +468,8 @@ describe("<BotChatTranscript /> in the channel", () => {
       openAnnouncementThread,
       answerThreads: false,
       chooseOption,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
       intro: { botTitle: "Release Bot", directive: null },
     };
@@ -541,6 +545,8 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openAnnouncementThread: vi.fn(),
       answerThreads: false,
       chooseOption,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
       intro: { botTitle: "Release Bot", directive: null },
     };

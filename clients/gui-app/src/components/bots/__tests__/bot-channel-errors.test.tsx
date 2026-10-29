@@ -327,6 +327,7 @@ describe("<BotChannelView /> an option pick the host refuses", () => {
       announcementId: null,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     settle("fail");
@@ -364,6 +365,7 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
       announcementId: null,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
     settle("fail");
 
