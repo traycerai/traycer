@@ -2361,6 +2361,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
       simulatorId: "udid-1",
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     });
     // The spec tab stays active so the simulator tile's renderer never mounts.
     const tabs = [SPEC, simulatorTab];

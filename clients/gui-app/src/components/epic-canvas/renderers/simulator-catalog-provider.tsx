@@ -127,6 +127,8 @@ function SimulatorPendingOpensWatcher(props: {
             simulatorId: session.simulatorId,
             platform: session.platform,
             name: open.name,
+            // The session names the pair this tile is placed on.
+            instanceKey: session.instanceKey ?? null,
           }),
         );
         continue;

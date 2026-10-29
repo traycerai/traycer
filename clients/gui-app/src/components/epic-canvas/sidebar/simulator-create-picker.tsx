@@ -178,14 +178,13 @@ function useSuggestedSimulatorHostId(tabId: string): string | null {
 }
 
 /**
- * Keeps the picker's devices with the host's pack. `simulator.list` carries
- * both the pack state the footer reads and the devices the tools enumerate,
- * but it neither polls nor moves on its own, so a Turn on - which installs
- * the tools before anything can be listed - would otherwise leave the picker
- * on its off state until it was closed and reopened. `simulator.status` is
- * what the rest of the app watches through that install (its row polls while
- * the pack is installing), so the list is asked again whenever that pack
- * state moves.
+ * Keeps the picker's devices with the host's pack. The flip itself sweeps
+ * both inventory reads, but it ANSWERS before the install: a Turn on's own
+ * sweep reads a machine with no tools and still nothing to list, so the
+ * picker would sit on its off state until it was closed and reopened.
+ * `simulator.status` is what the rest of the app watches through that install
+ * (its row polls while the pack is installing), so the list is asked again
+ * whenever that pack state moves - which is the moment the devices exist.
  */
 function useSimulatorListFollowsPack(
   client: HostClient<HostRpcRegistry> | null,
@@ -269,7 +268,11 @@ export function SimulatorCreatePickerBody(props: {
     hostName,
     offline,
     listSupport,
-    unreachable: list.isError,
+    unreachable: pickerUnreachable({
+      list: list.isError,
+      instances: instances.isError,
+      v11,
+    }),
     noPlatform:
       state !== null &&
       state.platforms.every((platform) => !platform.available),
@@ -369,12 +372,29 @@ function PickerTopRow(props: {
 }
 
 /**
+ * Whether the machine has stopped answering for what it offers. BOTH reads
+ * count: the Running section is the instance read's alone, and a failed poll
+ * keeps its last answer, so a picker watching only the device list would go
+ * on drawing instances the host had stopped confirming, with nothing on
+ * screen to say so. The instance read is withheld from a machine not known
+ * to speak `@1.1`, which has no answer there to fail with.
+ */
+function pickerUnreachable(args: {
+  readonly list: boolean;
+  readonly instances: boolean;
+  readonly v11: boolean | null;
+}): boolean {
+  return args.list || (args.v11 === true && args.instances);
+}
+
+/**
  * The sentence that replaces the two sections, or null to draw them.
  *
  * `listSupport` is the manifest's three states, and only the middle one is a
  * fact about the machine's age: `null` is "not addressed yet", which the read
  * itself resolves, so it draws the loading state and never the update line.
- * A machine that cannot be reached says so instead of spinning.
+ * A machine that cannot be reached says so instead of spinning - or instead
+ * of drawing the sections off whichever of its two reads last answered.
  */
 function pickerNote(args: {
   readonly hostId: string | null;
@@ -394,6 +414,39 @@ function pickerNote(args: {
 }
 
 type PickInstance = "auto" | "new" | { readonly key: string };
+
+const NO_RUNNING_DEVICES: ReadonlySet<string> = new Set();
+
+/**
+ * The devices whose OWN copy is running, under the key a COLD device is
+ * listed by: an instance's `instanceKey` is its device's id while that device
+ * is cold on both platforms - an iOS udid for life, an Android AVD name until
+ * its emulator takes a serial - where the instance's own `simulatorId` is
+ * that serial. So this set is only ever probed with a row the device list
+ * calls cold, which is all `coldMatches` below asks it, and never with a
+ * booted Android row, whose id is a serial no key equals.
+ *
+ * The picker folds two separately cached reads, and the instance read is the
+ * fresher one - it polls while the picker is open, where `simulator.list`
+ * neither polls nor follows a boot this client did not send (an agent's,
+ * another window's). So a device the instances show running is never offered
+ * Boot, however stale the device list's own `booted` flag is; without this
+ * the same device was listed twice, once under Running and once with a live
+ * Boot button, until the list's 60 s freshness window ran out.
+ *
+ * A clone is not its source: a device can be cold and bootable while a copy
+ * of it runs.
+ */
+function runningDeviceIds(
+  instances: readonly SimulatorHostInstance[] | null,
+): ReadonlySet<string> {
+  if (instances === null) return NO_RUNNING_DEVICES;
+  return new Set(
+    instances
+      .filter((instance) => instance.cloneOf === null)
+      .map((instance) => instance.instanceKey),
+  );
+}
 
 /**
  * The two sections. `instances` is the `@1.1` host's `simulator.instances`;
@@ -436,10 +489,12 @@ function PickerContent(props: {
   const runningMatches = running.filter((row) =>
     matchesQuery(row.target, query),
   );
+  const runningDevices = runningDeviceIds(instances);
   const coldMatches = state.simulators.filter(
     (simulator) =>
       !simulator.booted &&
       !simulator.physical &&
+      !runningDevices.has(simulator.simulatorId) &&
       matchesQuery(simulator, query),
   );
   return (
