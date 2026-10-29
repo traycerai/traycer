@@ -88,6 +88,8 @@ const mocks = vi.hoisted(() => ({
     onboardingVersion: { major: 1, minor: 1 },
     /** When a successful `bot.onboarding.read` answered. */
     readAt: 1_000,
+    /** The bot list's last read failed: its status is `error`, its data kept. */
+    listFailed: false,
     /** The bot list query's freshness, as TanStack reports it. */
     list: {
       dataUpdatedAt: 1_000,
@@ -228,25 +230,31 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
     ],
   }),
 }));
-vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({
-    status: mocks.state.listedBotIds === undefined ? "pending" : "success",
-    data:
-      mocks.state.listedBotIds === undefined
-        ? undefined
-        : {
-            bots: mocks.state.listedBotIds.map((botId) => ({
-              botId,
-              title: botId,
-              environmentId: "env-team",
-              archivedAt: null,
-            })),
-            mainBotIds: mocks.state.mainBotIds,
-          },
-    ...mocks.state.list,
-    refetch: mocks.listRefetch,
-  }),
-}));
+vi.mock("@/hooks/bots/use-bot-list-query", () => {
+  const listStatus = (): "pending" | "error" | "success" => {
+    if (mocks.state.listedBotIds === undefined) return "pending";
+    return mocks.state.listFailed ? "error" : "success";
+  };
+  return {
+    useBotListQuery: () => ({
+      status: listStatus(),
+      data:
+        mocks.state.listedBotIds === undefined
+          ? undefined
+          : {
+              bots: mocks.state.listedBotIds.map((botId) => ({
+                botId,
+                title: botId,
+                environmentId: "env-team",
+                archivedAt: null,
+              })),
+              mainBotIds: mocks.state.mainBotIds,
+            },
+      ...mocks.state.list,
+      refetch: mocks.listRefetch,
+    }),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
   useBotListChangedSubscriptionForHost: (hostId: string, enabled: boolean) =>
     mocks.useBotListChangedSubscriptionForHost(hostId, enabled),
@@ -510,6 +518,7 @@ beforeEach(() => {
   mocks.state.onboardingSupport = true;
   mocks.state.onboardingVersion = { major: 1, minor: 1 };
   mocks.state.readAt = 1_000;
+  mocks.state.listFailed = false;
   mocks.state.list = {
     dataUpdatedAt: 1_000,
     errorUpdatedAt: 0,
@@ -847,6 +856,60 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).not.toBeNull();
     },
   );
+
+  /**
+   * The team's read answers `setup: null` (the bot has been created), but the
+   * list's required refetch failed and TanStack kept the old data, which lacks
+   * the bot. Only a successful read can say a bot is absent, so the tab says
+   * the setup could not be read - it does not open the bot, which would find
+   * it gone and close the tab - and asks the list again only on Retry.
+   */
+  it("shows the setup could not be read, never opening or closing the tab nor refetching the list on its own, when the list's refresh failed over old data; Retry reads it again and the bot then opens", async () => {
+    mocks.reads["env-new"] = { setup: null };
+    mocks.state.listFailed = true;
+    mocks.state.list = {
+      dataUpdatedAt: 500,
+      errorUpdatedAt: 2_000,
+      isFetchedAfterMount: true,
+      isFetching: false,
+    };
+    const user = userEvent.setup();
+    const view = render(surfaceFor(SETUP_BOT_ID));
+
+    const notice = screen.getByTestId("bot-tab-error");
+    expect(notice.textContent).toContain("Couldn't load your team's setup.");
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.subscribed).toEqual([]);
+    expect(mocks.listRefetch).not.toHaveBeenCalled();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
+
+    mocks.listRefetch.mockImplementation(() => {
+      mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
+      mocks.state.listFailed = false;
+      mocks.state.list = {
+        dataUpdatedAt: 3_000,
+        errorUpdatedAt: 2_000,
+        isFetchedAfterMount: true,
+        isFetching: false,
+      };
+    });
+    await user.click(within(notice).getByRole("button", { name: "Retry" }));
+
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(1);
+    view.rerender(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+    expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(1);
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
+  });
 
   it("draws the post in a scroller that starts at the top, with the post at the bottom through its own margin", () => {
     render(surfaceFor(SETUP_BOT_ID));
@@ -1519,7 +1582,44 @@ describe("<BotTabSurface /> a check-in's turn from Activity", () => {
 });
 
 describe("<BotTabSurface /> tab lifetime", () => {
-  it("closes the tab when bot.list no longer carries the bot", () => {
+  /**
+   * The last bot of a team is deleted: the list no longer carries it and its
+   * team has no bot, which is what a team still to be set up looks like. A tab
+   * that showed the bot listed is that bot's, so it closes - it never shows the
+   * setup notice, whatever the host answers about the team's onboarding.
+   */
+  it.each<readonly [string, () => void]>([
+    [
+      "the host answers bot.onboarding.read at 1.0",
+      () => {
+        mocks.state.onboardingVersion = { major: 1, minor: 0 };
+      },
+    ],
+    [
+      "the setup read fails",
+      () => {
+        mocks.reads["env-team"] = "fails";
+      },
+    ],
+  ])(
+    "closes the tab, never showing the setup notice, when bot.list no longer carries the last bot of its team and %s",
+    (_name, script) => {
+      script();
+      const view = render(surface());
+      expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
+      ).not.toBeNull();
+
+      mocks.state.listedBotIds = [];
+      view.rerender(surface());
+
+      expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toBeNull();
+      expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+    },
+  );
+
+  it("closes a tab that was never listed when the list carries another bot of its team", () => {
     mocks.state.listedBotIds = [OTHER_BOT_ID];
     render(surface());
 

@@ -27,7 +27,7 @@ import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
-import { useTeamSetups } from "@/hooks/bots/use-team-setups";
+import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
@@ -146,12 +146,15 @@ export function BotTabSurface(props: {
  * neither is a listed bot's tab all the same, which closes itself once the
  * list does not carry it.
  *
- * An unlisted bot is never taken for a deleted one on a list older than the
- * tab or than the newest setup read: the list is read again first, so a main
- * bot created since is found rather than its tab closed. Nor while a team
- * with no bot cannot be told apart (`unresolved`: its setup read failed, or
- * the host does not answer it): the tab may be that team's main bot, so it
- * says the setup could not be read and offers to read it again.
+ * A bot this tab has shown listed is that bot until a list without it closes
+ * the tab. Any other unlisted bot may be a team's main bot still to be set
+ * up, so it is never taken for a deleted one on a list older than the tab or
+ * than the newest setup read: the list is read again first, so a main bot
+ * created since is found rather than its tab closed. Only a list that was
+ * read says what is absent: while the list's last read failed, or a team with
+ * no bot cannot be told apart (`unresolved`: its setup read failed, or the
+ * host does not answer it), the tab says the setup could not be read and
+ * offers to read both again.
  */
 function BotTabRoute(props: {
   readonly botId: string;
@@ -174,44 +177,77 @@ function BotTabRoute(props: {
     [botList.data, environments.data],
   );
   const teamSetups = useTeamSetups({ client, hostId, groups });
-  const unlisted = !listed && groups !== null;
+  const [shownListed, setShownListed] = useState(false);
+  if (listed && !shownListed) setShownListed(true);
+  const unlisted = !listed && !shownListed && groups !== null;
   const setup = unlisted
     ? teamSetups.setups.find((entry) => entry.botId === botId)
     : undefined;
-  // A list read that failed counts as read: the tab does not wait on it.
-  const listReadAt = Math.max(botList.dataUpdatedAt, botList.errorUpdatedAt);
+  // A refresh that failed keeps the list it had: it is asked again only on
+  // Retry, never in a loop.
+  const listFailed = botList.status === "error";
   const listStale =
     unlisted &&
     setup === undefined &&
-    (!botList.isFetchedAfterMount || listReadAt < teamSetups.readAt);
+    (!botList.isFetchedAfterMount || botList.dataUpdatedAt < teamSetups.readAt);
   const { isFetching: listFetching, refetch: refetchList } = botList;
   useEffect(() => {
-    if (listStale && !listFetching) void refetchList();
-  }, [listFetching, listStale, refetchList]);
-  if (botList.status === "pending" || environments.status === "pending") {
-    return <BotTabConnecting />;
+    if (listStale && !listFailed && !listFetching) void refetchList();
+  }, [listFailed, listFetching, listStale, refetchList]);
+  const route = botTabRouteOf({
+    listsPending:
+      botList.status === "pending" || environments.status === "pending",
+    unlisted,
+    setup: setup ?? null,
+    listFailed,
+    listStale,
+    setupsSettled: teamSetups.settled,
+    setupsUnresolved: teamSetups.unresolved,
+  });
+  if (route.kind === "connecting") return <BotTabConnecting />;
+  if (route.kind === "setup") {
+    return <TeamSetupChannel setup={route.setup} hostId={hostId} />;
   }
-  // A list that failed names no setup: the tab opens the bot, which reports
-  // what it can.
-  if (unlisted) {
-    if (setup !== undefined) {
-      return <TeamSetupChannel setup={setup} hostId={hostId} />;
-    }
-    if (listStale || !teamSetups.settled) return <BotTabConnecting />;
-    if (teamSetups.unresolved) {
-      return (
-        <ErrorNotice
-          text="Couldn't load your team's setup."
-          onRetry={() => {
-            teamSetups.retry();
-            void refetchList();
-          }}
-          className="m-4"
-        />
-      );
-    }
+  if (route.kind === "unresolved") {
+    return (
+      <ErrorNotice
+        text="Couldn't load your team's setup."
+        onRetry={() => {
+          teamSetups.retry();
+          void refetchList();
+        }}
+        className="m-4"
+      />
+    );
   }
   return <BotTabBody {...props} />;
+}
+
+/** What a bot's tab shows, as {@link BotTabRoute} decides it. */
+type BotTabRouteView =
+  | { readonly kind: "connecting" }
+  | { readonly kind: "setup"; readonly setup: TeamSetup }
+  | { readonly kind: "unresolved" }
+  | { readonly kind: "bot" };
+
+function botTabRouteOf(input: {
+  readonly listsPending: boolean;
+  /** Not listed, never shown listed by this tab, and the lists answered. */
+  readonly unlisted: boolean;
+  readonly setup: TeamSetup | null;
+  readonly listFailed: boolean;
+  readonly listStale: boolean;
+  readonly setupsSettled: boolean;
+  readonly setupsUnresolved: boolean;
+}): BotTabRouteView {
+  if (input.listsPending) return { kind: "connecting" };
+  // A list that never answered names no setup: the tab opens the bot, which
+  // reports what it can.
+  if (!input.unlisted) return { kind: "bot" };
+  if (input.setup !== null) return { kind: "setup", setup: input.setup };
+  if (input.listFailed) return { kind: "unresolved" };
+  if (input.listStale || !input.setupsSettled) return { kind: "connecting" };
+  return input.setupsUnresolved ? { kind: "unresolved" } : { kind: "bot" };
 }
 
 function BotTabBody(props: {
