@@ -1,4 +1,5 @@
-import { useMemo, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import {
   BotIdentityContext,
@@ -90,8 +91,8 @@ export function TeamSetupChannel(props: {
 
 /**
  * The ways a team gets a host its bots can run on (decision 127): cloud for
- * the team, or a team host on a machine. What each one does from here is not
- * settled yet, so each is its heading and what it is, with no action.
+ * the team, or a team host on a machine. Neither can run a team's bots yet,
+ * so each option's button is drawn and does nothing, with a line saying so.
  */
 function TeamHostOptionsCard(): ReactNode {
   return (
@@ -102,20 +103,55 @@ function TeamHostOptionsCard(): ReactNode {
       <h2 className="text-ui-sm font-semibold text-foreground">
         Give the team a host
       </h2>
+      <TeamHostOption
+        title="Enable cloud for the team"
+        description="Bots run on sandboxes started for each job."
+        action="Enable cloud"
+        testId="team-host-option-cloud"
+      />
+      <TeamHostOption
+        title="Create a team host on a machine"
+        description="A machine the team keeps running, signed in as the team."
+        action="Create team host"
+        testId="team-host-option-machine"
+      />
+    </div>
+  );
+}
+
+function TeamHostOption(props: {
+  readonly title: string;
+  readonly description: string;
+  readonly action: string;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const noteId = useId();
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5" data-testid={testId}>
       <div className="flex min-w-0 flex-col gap-0.5">
         <h3 className="text-ui-sm font-medium text-foreground">
-          Enable cloud for the team
+          {props.title}
         </h3>
-        <p className="text-ui-xs text-muted-foreground">
-          Bots run on sandboxes started for each job.
-        </p>
+        <p className="text-ui-xs text-muted-foreground">{props.description}</p>
       </div>
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <h3 className="text-ui-sm font-medium text-foreground">
-          Create a team host on a machine
-        </h3>
-        <p className="text-ui-xs text-muted-foreground">
-          A machine the team keeps running, signed in as the team.
+      <div className="flex min-w-0 flex-col items-start gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled
+          aria-describedby={noteId}
+          data-testid={`${testId}-action`}
+        >
+          {props.action}
+        </Button>
+        <p
+          id={noteId}
+          className="text-ui-xs text-muted-foreground"
+          data-testid={`${testId}-unavailable`}
+        >
+          Not available yet.
         </p>
       </div>
     </div>

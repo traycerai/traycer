@@ -577,11 +577,36 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       "Enable cloud for the team",
       "Create a team host on a machine",
     ]);
-    expect(within(card).queryAllByRole("button")).toHaveLength(0);
     expect(within(card).queryAllByRole("link")).toHaveLength(0);
     expect(channel.textContent).not.toMatch(/github|starter|seat/i);
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+  });
+
+  it("draws each way to get a host with its button disabled and a line saying it is not available yet, and a click does nothing", async () => {
+    const user = userEvent.setup();
+    render(surfaceFor(SETUP_BOT_ID));
+
+    const card = screen.getByTestId("team-host-options");
+    const buttons = within(card).getAllByRole("button");
+    expect(
+      buttons.map((button) => [
+        button.textContent,
+        button.hasAttribute("disabled"),
+        button.getAttribute("aria-describedby") === null
+          ? null
+          : document.getElementById(
+              button.getAttribute("aria-describedby") ?? "",
+            )?.textContent,
+      ]),
+    ).toEqual([
+      ["Enable cloud", true, "Not available yet."],
+      ["Create team host", true, "Not available yet."],
+    ]);
+    for (const button of buttons) await user.click(button);
+
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
   });
 
   it("draws the message box with nothing to type into or send, and says why", () => {
