@@ -39,7 +39,9 @@ import {
 } from "@/lib/provider-ordering";
 import {
   readStagedSandbox,
+  stagedCreateNeedsFreshKey,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import {
@@ -63,7 +65,10 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
-import { markReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
+import {
+  markReturnedSandboxRestored,
+  type ReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
@@ -325,7 +330,7 @@ async function recoverTaskLostSend(id: string): Promise<void> {
   )
     return;
   if (plan.effects.includes("end-host") || plan.effects.includes("remove"))
-    returnPendingSandboxSend(id);
+    returnPendingSandboxSendOnItsSandbox(id);
 }
 
 /** Captures a record with its authority before executing any recovery effects. */
@@ -418,7 +423,7 @@ export type ReturnedPendingSandboxSend =
 export function returnPendingSandboxSend(
   id: string,
 ): ReturnedPendingSandboxSend {
-  return returnPendingMessage(id, false);
+  return returnPendingMessage(id, false, null);
 }
 
 /**
@@ -436,15 +441,22 @@ export type ReturnedSandboxPick =
       readonly target: StagedSandboxTarget;
       readonly clientRequestId: string | null;
     }
-  /** Awake: its host, with nothing staged. */
-  | { readonly kind: "host"; readonly hostId: string };
+  /**
+   * Awake: its host, with nothing staged. `target` names the sandbox, for a
+   * draft that keeps it when the composer can't take the message.
+   */
+  | {
+      readonly kind: "host";
+      readonly target: Extract<StagedSandboxTarget, { kind: "existing" }>;
+    };
 
 /**
  * `returnPendingSandboxSend`, keeping the message on the sandbox it was sent
  * to: once it is back in its task's new-agent composer, that composer is on
  * the sandbox (`pick`), so its Send goes there again in this task, never to
  * the composer's default host. A composer that already holds another
- * sandbox the person staged keeps it, and the message is saved in Drafts.
+ * sandbox the person staged, or another message, keeps it: the message is
+ * put in its own draft instead, which keeps the sandbox and its create key.
  */
 export function returnPendingSandboxSendToSandbox(
   id: string,
@@ -455,6 +467,10 @@ export function returnPendingSandboxSendToSandbox(
   const returned = returnPendingMessage(
     id,
     anotherSandboxStaged(sends[id].epicId, pick),
+    {
+      target: pick.target,
+      clientRequestId: pick.kind === "stage" ? pick.clientRequestId : null,
+    },
   );
   if (returned.kind !== "task") return returned;
   const surfaceKey = newConversationSurfaceKey(returned.epicId);
@@ -463,7 +479,7 @@ export function returnPendingSandboxSendToSandbox(
   if (pick.kind === "host") {
     useStagedSandboxStore.getState().clear(surfaceKey);
     drafts.setReturnedSandbox(returned.epicId, null);
-    pins.setSelection(surfaceKey, pick.hostId);
+    pins.setSelection(surfaceKey, pick.target.hostId);
     return returned;
   }
   const staged = useStagedSandboxStore.getState();
@@ -500,7 +516,7 @@ function anotherSandboxStaged(
   if (stage === null) return false;
   const { target } = stage;
   if (pick.kind === "host")
-    return target.kind !== "existing" || target.hostId !== pick.hostId;
+    return target.kind !== "existing" || target.hostId !== pick.target.hostId;
   if (pick.target.kind === "existing")
     return (
       target.kind !== "existing" || target.sandboxId !== pick.target.sandboxId
@@ -515,12 +531,64 @@ function anotherSandboxStaged(
 export function returnPendingSandboxSendToDraft(
   id: string,
 ): ReturnedPendingSandboxSend {
-  return returnPendingMessage(id, true);
+  return returnPendingMessage(id, true, null);
 }
 
+/**
+ * A send withdrawn on its own (its window gone before its task was
+ * confirmed, or its task deleted) keeps the sandbox its stage names, and
+ * the create's key while that create may have been accepted. With no stage
+ * there is nothing to keep.
+ */
+export function returnPendingSandboxSendOnItsSandbox(
+  id: string,
+): ReturnedPendingSandboxSend {
+  if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
+    return { kind: "none" };
+  const stage = readStagedSandbox(pendingSendSurfaceKey(id));
+  if (stage === null) return returnPendingSandboxSend(id);
+  return returnPendingSandboxSendToSandbox(id, {
+    kind: "stage",
+    ...stagedSandboxDestination(stage),
+  });
+}
+
+/**
+ * The sandbox a send's stage names, as a draft keeps it: not created yet,
+ * the stage itself with the create's key whenever Cancel would keep it;
+ * created, that sandbox, to wake (the wake reads the sandbox's own state).
+ * A created stage is always named: its create names a blank one first.
+ */
+function stagedSandboxDestination(stage: StagedSandbox): {
+  readonly target: StagedSandboxTarget;
+  readonly clientRequestId: string | null;
+} {
+  const { createdSandboxId, createdHostId, target } = stage;
+  if (createdSandboxId === null || createdHostId === null)
+    return {
+      target,
+      clientRequestId: stagedCreateNeedsFreshKey(stage)
+        ? null
+        : stage.clientRequestId,
+    };
+  return {
+    target: {
+      kind: "existing",
+      hostId: createdHostId,
+      sandboxId: createdSandboxId,
+      name: target.name,
+      configuration: target.configuration,
+      verb: "resume",
+    },
+    clientRequestId: null,
+  };
+}
+
+/** `destination`: the sandbox any draft this message lands in keeps. */
 function returnPendingMessage(
   id: string,
   saveInDrafts: boolean,
+  destination: ReturnedSandbox | null,
 ): ReturnedPendingSandboxSend {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
@@ -537,7 +605,7 @@ function returnPendingMessage(
   const { request } = send;
   let returned: ReturnedPendingSandboxSend = { kind: "none" };
   if (request.kind === "chat") {
-    returned = restorePendingMessage(send, request, saveInDrafts);
+    returned = restorePendingMessage(send, request, saveInDrafts, destination);
   } else if (request.kind === "message") {
     void returnPendingSandboxMessage(id, saveInDrafts).catch(() => undefined);
     return { kind: "dispatching" };
@@ -724,19 +792,33 @@ export function pendingSandboxRecoveryDraftId(id: string): string {
 /** A stable closed draft makes background give-back repeatable across fallback windows. */
 function restoreSavedPendingMessage(
   send: PendingSandboxSend,
+  destination: ReturnedSandbox | null,
 ): ReturnedPendingSandboxSend {
   const draftId = pendingSandboxRecoveryDraftId(send.id);
-  useLandingDraftStore.getState().installLandingDraft({
+  installReturnedLandingDraft(draftId, send, destination);
+  return { kind: "landing-draft", draftId };
+}
+
+/** A closed start-task draft holding the message, on its sandbox when it has one. */
+function installReturnedLandingDraft(
+  draftId: string,
+  send: PendingSandboxSend,
+  destination: ReturnedSandbox | null,
+): void {
+  const drafts = useLandingDraftStore.getState();
+  drafts.installLandingDraft({
     id: draftId,
     content: send.content,
     selection: null,
     lastTouchedAt: Date.now(),
     settings: send.settings,
     composerMode: "chat",
+    // The task's sandbox started empty: the message named no folder here.
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
   });
-  return { kind: "landing-draft", draftId };
+  if (destination !== null)
+    drafts.setDraftReturnedSandbox(draftId, destination);
 }
 
 /** Preserves an occupied task draft by putting this message in its own closed draft. */
@@ -744,9 +826,10 @@ function restorePendingMessage(
   send: PendingSandboxSend,
   request: Extract<PendingSandboxSendRequest, { kind: "chat" }>,
   saveInDrafts: boolean,
+  destination: ReturnedSandbox | null,
 ): ReturnedPendingSandboxSend {
   if (send.ended === true || saveInDrafts)
-    return restoreSavedPendingMessage(send);
+    return restoreSavedPendingMessage(send, destination);
   // Write the replacement before removing the image roots in the pending record.
   let returned: ReturnedPendingSandboxSend;
   const modal = useNewConversationModalStore.getState();
@@ -765,17 +848,7 @@ function restorePendingMessage(
   } else {
     // A fresh draft every time: never another draft's text written over.
     const draftId = mintDraftId();
-    useLandingDraftStore.getState().installLandingDraft({
-      id: draftId,
-      content: send.content,
-      selection: null,
-      lastTouchedAt: Date.now(),
-      settings: send.settings,
-      composerMode: "chat",
-      // The task's sandbox started empty: the message named no folder here.
-      workspace: emptyLandingDraftWorkspaceSnapshot(),
-      closed: true,
-    });
+    installReturnedLandingDraft(draftId, send, destination);
     returned = { kind: "landing-draft", draftId };
   }
   return returned;
