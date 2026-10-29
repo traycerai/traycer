@@ -212,6 +212,47 @@ describe("The Skills page", () => {
     expect(await screen.findByText("Review a change.")).toBeTruthy();
   });
 
+  it("mounts a picker beside the upload only once the host refuses it as not-served", async () => {
+    negotiateMethods({
+      ...BASE_METHODS,
+      "environment.configuration.skills.upload": LIST,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([BUILT_IN]), hostSkills: [] }),
+      // Two eligible hosts, so a picker drawn here would have a switch in it.
+      "environment.host.list": () => ({
+        hosts: [
+          reachableHost,
+          { ...reachableHost, hostId: "host-b", hostLabel: "Studio" },
+        ],
+      }),
+      "environment.configuration.skills.upload": () => ({
+        outcome: "not_served" as const,
+        reason: null,
+      }),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    // The list comes from the room, so the page names no host for it.
+    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    expect(screen.queryByText(/as reported by/)).toBeNull();
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+
+    await userEvent.upload(
+      screen.getByLabelText("Skill folder archive"),
+      new File([new Uint8Array([1, 2, 3, 4])], "review.tar.gz", {
+        type: "application/gzip",
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add a skill" }));
+
+    // The refusal is the one moment this page needs a host of its own: the
+    // picker mounts and opens on the hosts it can switch to. (Its trigger is
+    // aria-hidden while the list is open, so the options are what to read.)
+    expect(await screen.findByText(/as reported by/)).toBeTruthy();
+    expect(await screen.findByRole("option", { name: "Studio" })).toBeTruthy();
+  });
+
   describe("a skill's files that cannot be read", () => {
     async function openReview(
       nativeSkills: () => readonly ProviderSkill[],
