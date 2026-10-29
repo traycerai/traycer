@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * The chat transcript's bottom-follow under real touch input, against the
@@ -176,7 +176,7 @@ test.describe("wheel (desktop control)", () => {
     await page.setViewportSize({ width: 390, height: 700 });
     const start = await loadFollowingAtEnd(page);
     await page.mouse.move(195, 350);
-    await page.mouse.wheel(0, -400);
+    await wheelsDelivered(page, [{ deltaX: 0, deltaY: -400 }], 0);
     await expectReadingPositionKept(page, start);
   });
 });
