@@ -3,6 +3,9 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
+import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,7 +47,6 @@ import {
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
   PROVIDER_KEYS_LINE,
-  SECRET_CUSTODY_SENTENCE,
   SECRET_SAVED_OFFLINE,
   SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
@@ -192,13 +194,19 @@ function KindPicker(props: {
 
 /** Where the value is stored and who reads it, then how Traycer handles it. */
 function Custody(): ReactNode {
+  const source = useConfigurationSource();
+  const personal =
+    source.kind === "host" || source.configuration === "personal";
+  const name =
+    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
+    "this team";
   return (
     <div className="flex flex-col gap-1">
       <p
         className="max-w-[72ch] text-ui-xs text-muted-foreground"
         data-testid="secret-custody-sentence"
       >
-        {SECRET_CUSTODY_SENTENCE}
+        {custodySentence(personal, name)}
       </p>
       <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
     </div>
