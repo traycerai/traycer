@@ -317,7 +317,7 @@ describe("buildServiceInstallCommand", () => {
       authPreflight: signedInPreflight(),
       credentialProvision: outcome,
     });
-    expect(result.human ?? "").toMatch(/host credential provisioned$/);
+    expect(result.human ?? "").toMatch(/host authorized$/);
   });
 
   it("passes exactly 'install' as the postSwapAction on every run - service install always starts the host", async () => {
@@ -335,7 +335,7 @@ describe("buildServiceInstallCommand", () => {
       credentialProvision: { kind: "not-adopted" },
     });
     expect(result.human).toContain(
-      "host credential not provisioned (the host did not adopt it in time)",
+      "host not authorized (the host did not confirm it in time)",
     );
   });
 

@@ -359,7 +359,7 @@ describe("buildHostEnsureCommand", () => {
       credentialProvision: outcome,
     });
     expect(result.human ?? "").toContain(
-      "host credential not provisioned (the host did not respond in time)",
+      "host not authorized (the host did not respond in time)",
     );
   });
 

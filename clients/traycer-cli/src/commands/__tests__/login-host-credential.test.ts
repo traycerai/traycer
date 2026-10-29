@@ -95,10 +95,10 @@ const signedInIdentity = {
   name: "Ada",
 };
 const SIGNED_IN_LINE = `Signed in as ${signedInIdentity.email}.`;
-const PROVISIONED_LINE = `${SIGNED_IN_LINE} Host credential provisioned.`;
+const PROVISIONED_LINE = `${SIGNED_IN_LINE} Host authorized.`;
 const UNREACHABLE_LINE =
   SIGNED_IN_LINE +
-  " Host credential not provisioned (the host did not respond in time) - run `traycer host doctor` to see how to fix it.";
+  " Host not authorized (the host did not respond in time) - run `traycer host doctor` to see how to fix it.";
 const DEVICE_TOKEN = "minted-bearer";
 const TOKEN_LOGIN_BEARER = "captured-bearer";
 const RUNNING_HOST_URL = "ws://127.0.0.1:7100/rpc";

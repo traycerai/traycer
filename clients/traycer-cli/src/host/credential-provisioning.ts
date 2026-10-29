@@ -300,7 +300,7 @@ export async function provisionInstalledHostCredential(
       signal: probeAbort.signal,
       // The install's consequence, not the connection-lease one: this probe
       // closes its connection on purpose, and the install already succeeded.
-      unavailableNote: "continuing - the host stays unprovisioned for now.",
+      unavailableNote: "continuing - the host is not authorized yet.",
       onUnauthorized: () => {
         mintUnauthorized = true;
       },

@@ -369,20 +369,20 @@ export function formatCredentialProvisionNote(
   const nextStep = "run `traycer host doctor` to see how to fix it";
   switch (outcome.kind) {
     case "active":
-      return outcome.minted ? "host credential provisioned" : null;
+      return outcome.minted ? "host authorized" : null;
     case "unreachable":
-      return `host credential not provisioned (the host did not respond in time) - ${nextStep}`;
+      return `host not authorized (the host did not respond in time) - ${nextStep}`;
     case "unsupported":
-      return "host credential not provisioned (this host cannot accept a delegated credential from this client)";
+      return "host not authorized (this host can't be authorized from this version of the CLI)";
     case "mint-unavailable":
-      return `host credential not provisioned (the credential handoff did not complete) - ${nextStep}`;
+      return `host not authorized (the authorization did not complete) - ${nextStep}`;
     case "not-adopted":
-      return `host credential not provisioned (the host did not adopt it in time) - ${nextStep}`;
+      return `host not authorized (the host did not confirm it in time) - ${nextStep}`;
     // A dead sign-in stops every client from minting, so the one thing that
     // helps is signing in again - say that directly.
     case "unauthorized":
-      return `host credential not provisioned - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
+      return `host not authorized - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
-      return `host credential not provisioned (${outcome.message}) - ${nextStep}`;
+      return `host not authorized (${outcome.message}) - ${nextStep}`;
   }
 }
