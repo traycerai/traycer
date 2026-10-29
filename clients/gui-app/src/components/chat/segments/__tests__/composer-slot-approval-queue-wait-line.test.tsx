@@ -47,7 +47,9 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
 
     const row = screen.getByTestId("approval-row");
     const waitLine = within(row).getByTestId("approval-wait-line");
-    expect(waitLine.textContent).toContain(APPROVAL_PAUSED_LINE);
+    expect(waitLine.textContent).toMatch(
+      new RegExp(`· 12 minutes\\. ${APPROVAL_PAUSED_LINE}$`),
+    );
   });
 
   it("shows no wait line for a fresh answerable row", () => {
