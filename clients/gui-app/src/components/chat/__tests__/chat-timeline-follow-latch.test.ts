@@ -5115,7 +5115,7 @@ describe("useChatTimelineFollowLatch", () => {
         }),
       );
       restoreHolds = false;
-      return { node, onFollowIntentChange, result };
+      return { node, listRef, onFollowIntentChange, result };
     }
 
     it("carries the wheel's armed start through an announced write, so its own landing still releases it", () => {
@@ -5272,6 +5272,64 @@ describe("useChatTimelineFollowLatch", () => {
       result.current.followEndIfPermitted();
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    describe("a clamp the end regrew over before its report retires the arm early, yet the wheel's delayed scroll still departs them and nothing corrects it", () => {
+      // The browser's own clamp (scrollHeight 1500 -> 1400, scrollTop
+      // clamped to 900) queues a scroll report; the end grows back to 1500
+      // before that report is delivered, so it reads 900 OFF the end. No
+      // observation can tell that from the wheel's own landing, and
+      // `noteFreeReportAway` retires the arm on it. The retirement is still
+      // harmless: this same report restarts `noteReportMovement`'s ledger
+      // and records the reader's departure at 900.
+      function armedThenClampedAndRegrown(isTurnRunning: () => boolean) {
+        const { node, listRef, onFollowIntentChange, result } = freeReader(
+          { scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 },
+          isTurnRunning,
+        );
+
+        node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+        shim.setGeometry(node, { scrollHeight: 1400, scrollTop: 900 });
+        shim.setGeometry(node, { scrollHeight: 1500 });
+        fireNativeScroll(node);
+
+        return { node, listRef, onFollowIntentChange, result };
+      }
+
+      it("mid-turn: stays free through the end catching up to the clamp, and the wheel's delayed landing after it", () => {
+        const turnRunning = true;
+        const { node, listRef, onFollowIntentChange } =
+          armedThenClampedAndRegrown(() => turnRunning);
+
+        // The end comes to them: a strict-bottom report at 900.
+        shim.setGeometry(node, { scrollHeight: 1400 });
+        fireNativeScroll(node);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+        // The wheel's delayed scroll lands.
+        shim.setGeometry(node, { scrollTop: 860 });
+        fireNativeScroll(node);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      });
+
+      it("at rest: follows the clamp's own strict bottom, then departs again on the wheel's delayed landing with nothing correcting it", () => {
+        const { node, listRef, onFollowIntentChange } =
+          armedThenClampedAndRegrown(() => false);
+
+        // A strict-bottom report where the clamp itself moved scrollTop.
+        shim.setGeometry(node, { scrollHeight: 1390, scrollTop: 890 });
+        fireNativeScroll(node);
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+        // The wheel's delayed scroll lands.
+        shim.setGeometry(node, { scrollTop: 850 });
+        fireNativeScroll(node);
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      });
     });
   });
 });
