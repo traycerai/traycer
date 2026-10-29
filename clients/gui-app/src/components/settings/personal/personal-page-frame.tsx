@@ -48,6 +48,7 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { cn } from "@/lib/utils";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 interface WindowHostEnvironment {
   readonly state: PersonalHostState;
@@ -139,6 +140,13 @@ export function PersonalPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
+  if (!UNRELEASED_FEATURES_ENABLED) {
+    return (
+      <HostOwnPageFrame section={props.section}>
+        {props.children}
+      </HostOwnPageFrame>
+    );
+  }
   const environmentPage = SETTINGS_SECTIONS.some(
     (section) => section.id === props.section && section.group === "personal",
   );
@@ -174,6 +182,40 @@ export function PersonalPageFrame(props: {
   }
   return (
     <HostPageFrame section={props.section}>{props.children}</HostPageFrame>
+  );
+}
+
+/**
+ * A build without environments (`unreleased-features.ts`): every page is its
+ * host's own, read through the Host picker (`usePersonalHostScope` resolves
+ * to its selection there), as the release before the feature read them. The
+ * frame itself reads nothing, since there is no status, no notice and no
+ * value kept on one host to show; the context carries the host for the rows
+ * that address it.
+ */
+function HostOwnPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const pick = useEnvironmentPick();
+  const scope = usePersonalHostScope();
+  return (
+    <PersonalPageContext.Provider
+      value={{
+        section: props.section,
+        pick,
+        state: { kind: "unknown" },
+        line: null,
+        hostName: scope.hostLabel,
+        hostId: scope.hostId,
+        client: scope.client,
+        localOverrides: NO_OVERRIDES,
+        notices: NO_NOTICES,
+        review: NO_REVIEW,
+      }}
+    >
+      {props.children}
+    </PersonalPageContext.Provider>
   );
 }
 
@@ -424,7 +466,9 @@ function PersonalPageStatusBanner(props: {
  */
 export function PersonalPageHeaderStatus(): ReactNode {
   const value = useContext(PersonalPageContext);
-  if (value === null) return null;
+  // No chip, line or notice in a build without environments: the pages are
+  // their host's own, with no delivery to report.
+  if (value === null || !UNRELEASED_FEATURES_ENABLED) return null;
   if (value.pick.kind === "team")
     return <PageChipRow section={value.section} pick={value.pick} />;
   if (value.state.kind === "unsupported" || teamNameOf(value.state) !== null) {

@@ -26,6 +26,7 @@ import {
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
@@ -50,6 +51,7 @@ import {
 } from "@/components/settings/panels/host-overview-ports-tab";
 import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
+import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -1995,23 +1997,29 @@ export function HostOverviewPanel(props: {
       >
         {notices}
         {/* The one-time Remote access question, on every tab like the
-            strip above it; it draws nothing once answered on this desktop. */}
-        <RemoteAccessQuestion
-          client={client}
-          hostId={scope.hostId}
-          enabled={usable}
-        />
-        {/* Which configuration this host runs, for the host the picker names. */}
-        <HostEnvironmentSection scope={scope} />
-        {/* The settings card, on every tab like the lines above it: whether
+            strip above it (it draws nothing once answered on this desktop);
+            which configuration this host runs, for the host the picker names;
+            and the settings card on every tab like the lines above it: whether
             this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. */}
-        <HostOverviewSettingsCardSlot
-          client={client}
-          hostId={scope.hostId}
-          hostName={displayName}
-          usable={usable}
-        />
+            earlier version or stopped. None in a build without environments
+            (`unreleased-features.ts`): a host there runs its own settings,
+            has nowhere to move them, and asks no remote access question. */}
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <>
+            <RemoteAccessQuestion
+              client={client}
+              hostId={scope.hostId}
+              enabled={usable}
+            />
+            <HostEnvironmentSection scope={scope} />
+            <HostOverviewSettingsCardSlot
+              client={client}
+              hostId={scope.hostId}
+              hostName={displayName}
+              usable={usable}
+            />
+          </>
+        ) : null}
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -2024,6 +2032,12 @@ export function HostOverviewPanel(props: {
               portForwards.count === null ? null : (
                 <HostOverviewPortsCount count={portForwards.count} />
               ),
+            simulators: (
+              <HostOverviewSimulatorsCount
+                client={client}
+                hostId={host.hostId}
+              />
+            ),
             // Same gate and same query as the Command-line tools hint on
             // the tab, so the dot and the hint come and go together.
             installation: props.hasLocalBridge ? (
@@ -2033,7 +2047,9 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
-            access: accessTab,
+            // No Access and setup tab in a build without environments
+            // (`HOST_OVERVIEW_TABS`).
+            access: UNRELEASED_FEATURES_ENABLED ? accessTab : null,
             data: dataTab,
             ports: portsTab,
             simulators: simulatorsTab,

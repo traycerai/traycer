@@ -233,9 +233,11 @@ export function hostOptionStatusWord(
 export function composerComputerSubLine(
   host: HostScopeOption,
   pickable: boolean,
+  /** The row's title is `This computer`, so the machine's name goes here. */
+  nameBelow: boolean,
 ): string {
   return computerSubLine([
-    host.isLocalMachine ? host.name : null,
+    nameBelow && host.isLocalMachine ? host.name : null,
     formatPlatform(host.platform),
     composerComputerStatus(host, pickable),
   ]);

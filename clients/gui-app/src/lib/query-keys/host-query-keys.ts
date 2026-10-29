@@ -46,6 +46,48 @@ export const hostQueryKeys = {
       ),
       userId,
     ] as const,
+  simulatorCatalog: (
+    hostId: string | null,
+    epicId: string,
+    userId: string | null,
+  ) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "simulator.catalog.read">(
+        hostId,
+        "simulator.catalog.read",
+        { epicId },
+      ),
+      userId,
+    ] as const,
+  /**
+   * One machine's simulator devices and instances, as the palette and the
+   * mobile switcher list them across several machines at once.
+   *
+   * Under the `simulator.instances` METHOD scope, not the host's alone, so the
+   * invalidations the simulator mutations already send reach this derived
+   * entry by prefix: the instance open's `onSettled`, and the power-off,
+   * shutdown, keep-running and simulators-switch `invalidateMethods` all
+   * sweep that method, with `simulator.list` - the read's other input - in
+   * the same set. Keyed under the host scope alone, the entry outlived every
+   * one of them for the 60 s freshness window.
+   *
+   * `simulatorVerbsV11` is the negotiated gate that DECIDED the cached shape:
+   * a `@1.1` host's entry holds `simulator.instances` rows, a `@1.0` host's
+   * holds the stand-in minted from its booted devices. In the key, so a
+   * renegotiation that moves the gate is a different entry rather than a
+   * reinterpretation of this one.
+   */
+  simulatorInventory: (
+    hostId: string,
+    epicId: string,
+    simulatorVerbsV11: boolean,
+  ) =>
+    [
+      ...hostQueryKeys.methodScope(hostId, "simulator.instances"),
+      "inventory",
+      epicId,
+      simulatorVerbsV11,
+    ] as const,
   plainTerminals: (hostId: string, scope: PlainTerminalScope) =>
     hostQueryKeys.method<HostRpcRegistry, "terminal.plain.list">(
       hostId,
@@ -270,6 +312,25 @@ export function isBrowserCatalogQueryKey(
   return (
     queryKey[0] === "host" &&
     queryKey[methodIndex] === "browser.catalog.read" &&
+    typeof params === "object" &&
+    params !== null &&
+    "epicId" in params &&
+    params.epicId === epicId &&
+    queryKey[methodIndex + 2] === userId
+  );
+}
+
+/** The same viewer/task simulator catalog may have been read through several hosts. */
+export function isSimulatorCatalogQueryKey(
+  queryKey: readonly unknown[],
+  userId: string,
+  epicId: string,
+): boolean {
+  const methodIndex = queryKey[1] === "simulator.catalog.read" ? 1 : 2;
+  const params = queryKey[methodIndex + 1];
+  return (
+    queryKey[0] === "host" &&
+    queryKey[methodIndex] === "simulator.catalog.read" &&
     typeof params === "object" &&
     params !== null &&
     "epicId" in params &&

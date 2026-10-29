@@ -59,6 +59,7 @@ import {
 } from "./report-ledger";
 import { buildPublicDraftFields } from "./support-public-draft";
 import { deepScrubSupportValue, scrubSupportText } from "./support-scrubber";
+import { UNRELEASED_FEATURES_ENABLED } from "../../unreleased-features";
 import {
   REPORT_LOG_TAIL_MAX_BYTES,
   reportImageMediaTypeForMimeType,
@@ -495,7 +496,13 @@ export class DesktopSupportService {
     // everything above, and never in the public draft or the saved bundle.
     // Scrubbed leaf by leaf inside `environmentContextForSentry`, not by the
     // deep scrub above.
-    if (includeDiagnostics && privateDiagnostics !== undefined) {
+    // A build without environments (`unreleased-features.ts`) has no such
+    // section to attach, as the release before them had none.
+    if (
+      UNRELEASED_FEATURES_ENABLED &&
+      includeDiagnostics &&
+      privateDiagnostics !== undefined
+    ) {
       contexts.environment = environmentContextForSentry(
         privateDiagnostics.environment,
       );

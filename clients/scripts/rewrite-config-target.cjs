@@ -22,6 +22,10 @@
  *     fields must be declared as `value: null as string | null` or
  *     `value: "..." as string | null`.
  *   - arrayFields:  { field: { dev, production } } - string[] literals.
+ *   - unreleasedFeaturesPaths: `unreleased-features.ts` files whose
+ *     `UNRELEASED_FEATURES_ENABLED` literal the target selects: `true` for
+ *     dev and staging, `false` for production (`set-unreleased-features.cjs`).
+ *     `--unreleased-features=on|off` overrides staging or dev, never production.
  *
  * Usage (per-module wrapper):
  *   bun scripts/set-deploy-target.cjs --target=production
@@ -105,7 +109,44 @@ function rewriteVersionFieldIfPresent(source, version, sourcePath) {
   return source.replace(re, `$1${version}$2`);
 }
 
-function applyTarget(spec, target, version) {
+/**
+ * What a target writes into `unreleased-features.ts`: dev and staging builds
+ * ship the features the next release does not (the committed literal), a
+ * production build does not. An explicit `--unreleased-features=on|off`
+ * overrides staging or dev (a venue that wants a production-configured client
+ * against staging endpoints); production is never on, whatever the flag says.
+ */
+function unreleasedFeaturesFor(target, override) {
+  if (target === "production") {
+    if (override === true) {
+      console.error(
+        `${PREFIX} --target=production never ships the unreleased features; drop --unreleased-features=on`,
+      );
+      process.exit(5);
+    }
+    return false;
+  }
+  return override ?? true;
+}
+
+function applyTarget(spec, target, version, unreleasedFeatures) {
+  const unreleasedFeaturesPaths = spec.unreleasedFeaturesPaths ?? [];
+  if (unreleasedFeaturesPaths.length > 0) {
+    // Loaded here, not at the top: this file is also exercised alone by its
+    // tests.
+    const {
+      rewriteUnreleasedFeatures,
+    } = require("./set-unreleased-features.cjs");
+    const enabled = unreleasedFeaturesFor(target, unreleasedFeatures);
+    for (const sourcePath of unreleasedFeaturesPaths) {
+      try {
+        rewriteUnreleasedFeatures(sourcePath, enabled);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(3);
+      }
+    }
+  }
   let source = fs.readFileSync(spec.sourcePath, "utf8");
   source = rewriteEnvironment(source, target, spec.sourcePath);
   source = rewriteVersionFieldIfPresent(source, version, spec.sourcePath);
@@ -136,6 +177,7 @@ function parseArgs(argv) {
   let restore = false;
   let version = null;
   let emptyVersion = false;
+  let unreleasedFeatures = null;
   for (const arg of argv) {
     if (arg === "--restore") restore = true;
     else if (arg.startsWith("--target="))
@@ -143,20 +185,28 @@ function parseArgs(argv) {
     else if (arg.startsWith("--version=")) {
       version = arg.slice("--version=".length);
       emptyVersion = version.length === 0;
+    } else if (arg.startsWith("--unreleased-features=")) {
+      const value = arg.slice("--unreleased-features=".length);
+      if (value !== "on" && value !== "off") {
+        console.error(
+          `${PREFIX} --unreleased-features must be 'on' or 'off', got '${value}'`,
+        );
+        process.exit(2);
+      }
+      unreleasedFeatures = value === "on";
     }
   }
-  return { target, restore, version, emptyVersion };
+  return { target, restore, version, emptyVersion, unreleasedFeatures };
 }
 
 function runConfigTargetCli(spec) {
-  const { target, restore, version, emptyVersion } = parseArgs(
-    process.argv.slice(2),
-  );
+  const { target, restore, version, emptyVersion, unreleasedFeatures } =
+    parseArgs(process.argv.slice(2));
   if (restore) {
     // Restore is just "set dev" (the source default) - deterministic and
     // git-state-independent. Reset the version stamp to the committed
     // sentinel so the working tree matches source after a build.
-    applyTarget(spec, "dev", DEV_VERSION_SENTINEL);
+    applyTarget(spec, "dev", DEV_VERSION_SENTINEL, null);
     return;
   }
   if (target === null) {
@@ -175,7 +225,7 @@ function runConfigTargetCli(spec) {
     console.error(`${PREFIX} --version requires a non-empty value`);
     process.exit(2);
   }
-  applyTarget(spec, target, version);
+  applyTarget(spec, target, version, unreleasedFeatures);
 }
 
 module.exports = { runConfigTargetCli };

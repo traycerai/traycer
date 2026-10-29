@@ -1344,14 +1344,14 @@ export function readSimulatorConfigSync(): SimulatorConfig {
 }
 
 /**
- * Writes the simulator switch while preserving the rest of the config. The
- * caller states the value: there is no implicit default on this write.
+ * Writes the simulator block while preserving the rest of the config. The
+ * caller states both values: there is no implicit default on this write.
  */
 export async function setSimulatorConfig(next: SimulatorConfig): Promise<void> {
   await updateCliConfig((current) => ({
     next: {
       ...current,
-      simulator: { enabled: next.enabled },
+      simulator: { enabled: next.enabled, idleMinutes: next.idleMinutes },
     },
     result: undefined,
   }));

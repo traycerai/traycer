@@ -15,6 +15,7 @@ import {
 import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 const CARDS = [
   {
@@ -161,9 +162,18 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   };
 }
 
-export function useGettingStartedGuideIsComplete(): boolean {
+function useFirstStepsAreComplete(): boolean {
   return gettingStartedGuideIsComplete(useGettingStartedFacts());
 }
+
+/**
+ * Whether the Guide group has nothing left to show (E4). A build without
+ * environments (`unreleased-features.ts`) shows the 1.5.1 guides
+ * (`getting-started-guides-checklist.ts`), which never hide the group, and
+ * reads none of the first steps' facts.
+ */
+export const useGettingStartedGuideIsComplete: () => boolean =
+  UNRELEASED_FEATURES_ENABLED ? useFirstStepsAreComplete : () => false;
 
 /**
  * The checklist as every surface reads it: one entry per visible card, plus

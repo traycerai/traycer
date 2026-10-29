@@ -1061,13 +1061,27 @@ import {
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import { browserCatalogReadV10 } from "@traycer/protocol/host/browser/discovery-contracts";
 import {
+  configSimulatorGetUpgradeV10ToV11,
   configSimulatorGetV10,
+  configSimulatorGetV11,
+  configSimulatorSetUpgradeV10ToV11,
   configSimulatorSetV10,
+  configSimulatorSetV11,
+  simulatorCatalogReadV10,
+  simulatorCloseUpgradeV10ToV11,
   simulatorCloseV10,
+  simulatorCloseV11,
+  simulatorInstancesV10,
+  simulatorListUpgradeV10ToV11,
   simulatorListV10,
+  simulatorListV11,
+  simulatorOpenUpgradeV10ToV11,
   simulatorOpenV10,
+  simulatorOpenV11,
+  simulatorPowerOffV10,
   simulatorRemoveToolsV10,
   simulatorScreenshotV10,
+  simulatorSetKeepRunningV10,
   simulatorShutdownV10,
   simulatorStatusV10,
 } from "@traycer/protocol/host/simulator/contracts";
@@ -1077,6 +1091,7 @@ import {
 } from "@traycer/protocol/host/simulator/actions";
 import {
   simulatorSessionsV10,
+  simulatorSessionsV11,
   simulatorStreamV10,
 } from "@traycer/protocol/host/simulator/stream-contracts";
 import {
@@ -6655,11 +6670,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.simulator.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configSimulatorGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configSimulatorGetV11,
+          upgradeFromPreviousVersion: configSimulatorGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6668,11 +6687,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.simulator.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configSimulatorSetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configSimulatorSetV11,
+          upgradeFromPreviousVersion: configSimulatorSetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6681,11 +6704,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorListV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorListV11,
+          upgradeFromPreviousVersion: simulatorListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6694,11 +6721,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.open": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorOpenV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorOpenV11,
+          upgradeFromPreviousVersion: simulatorOpenUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6707,11 +6738,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.close": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorCloseV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorCloseV11,
+          upgradeFromPreviousVersion: simulatorCloseUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6789,6 +6824,61 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: simulatorActionV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Host-wide instance verbs and the catalog relay, new with the `@1.1`
+  // simulator minors: optional like the rest, so an older host reports them
+  // missing and the client hides what needs them.
+  "simulator.instances": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorInstancesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.powerOff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorPowerOffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.setKeepRunning": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorSetKeepRunningV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.catalog.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorCatalogReadV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -15020,10 +15110,13 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // the subset rule, and the unary verbs stay off the released floor.
   "simulator.sessions": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorSessionsV10,
+        },
+        1: {
+          contract: simulatorSessionsV11,
         },
       },
     },
