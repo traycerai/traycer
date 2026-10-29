@@ -1426,6 +1426,35 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
     expect(view.container.textContent).not.toContain("owner-host-1");
   });
 
+  it("never names the host from the previous account's list", async () => {
+    signInOnAppHost(["environment.list", "environment.host.list"]);
+    appHost.hostsByEnvironmentId.set("env-personal", [OWNER_RECORD]);
+    mockUseHostReachability.mockReturnValue(UNLISTED_OWNER);
+    const first = await renderTile();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+      ).toContain('"windows-test-machine"');
+    });
+    first.unmount();
+
+    // Another account on the same app: its list does not carry the machine.
+    appHost.hostsByEnvironmentId.clear();
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: { userId: "user-2", userName: "Bo", email: "bo@example.com" },
+      contextMetadata: { userId: "user-2", username: "Bo" },
+    });
+    const second = await renderTile();
+
+    // The first frame, before any refetch: the cached answer is user-1's.
+    expect(
+      screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+    ).toContain("Clone this agent to continue while the host is offline");
+    await settled();
+    expect(second.container.textContent).not.toContain("windows-test-machine");
+  });
+
   // A label the host reported that is its own id names nothing either: the
   // search goes on to the next environment, and stops at "the host".
   describe("an account record labelled with the host's own id", () => {
