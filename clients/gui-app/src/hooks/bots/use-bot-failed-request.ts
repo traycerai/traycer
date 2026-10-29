@@ -4,10 +4,11 @@ import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { ChatBotFailedRequest } from "@/components/chat/chat-bot-presentation-context";
+import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import {
   BOT_CONVERSATION_RETRY_VERSION,
-  useBotConversationSendMutation,
-} from "@/hooks/bots/use-bot-mutations";
+  botSendTakes,
+} from "@/hooks/bots/use-bot-send-version";
 import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
@@ -65,10 +66,7 @@ export function useBotFailedRequest(args: {
     hostId,
     "bot.conversation.send",
   );
-  const supported =
-    sendVersion !== null &&
-    sendVersion.major === BOT_CONVERSATION_RETRY_VERSION.major &&
-    sendVersion.minor >= BOT_CONVERSATION_RETRY_VERSION.minor;
+  const supported = botSendTakes(sendVersion, BOT_CONVERSATION_RETRY_VERSION);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
   const signIn = useProviderSignIn(boundHostId);
   const { mutate, isPending, variables } =

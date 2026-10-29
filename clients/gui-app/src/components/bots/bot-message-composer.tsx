@@ -11,7 +11,6 @@ import type {
   BotConversationSendDelivery,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -196,7 +195,7 @@ export function BotMessageComposer(props: {
           const deliverySaid = onSent(response, trimmed);
           setLastDelivery(deliverySaid ? null : response.delivery);
         },
-        (error: HostRpcError) => failure.fail(error),
+        () => failure.fail(),
       );
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {

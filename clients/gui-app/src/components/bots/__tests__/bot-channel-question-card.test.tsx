@@ -8,6 +8,7 @@
  * host RECEIVES: an answer or a Skip goes out as the person's message with
  * the question it settles; the settlement the host writes on the row closes
  * the question for everyone, and until it lands the card holds what was sent;
+ * a host too old to take an answer gets a card without actions;
  * a member whose answer is overtaken keeps it, loses Submit, and takes it to
  * the question's thread unsent. What a member has not sent outlives the views
  * that draw it: the channel unmounting, as a switch to Under the hood does,
@@ -474,7 +475,7 @@ beforeEach(() => {
   rowBlocks.clear();
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   mocks.client = hostClientRecordingSends();
-  negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+  negotiateBotSend(HOST_ID, { major: 1, minor: 2 });
   signInViewer(VIEWER_USER_ID);
 });
 
@@ -656,6 +657,43 @@ describe("<BotChannelView /> a question the bot asks without waiting", () => {
   });
 });
 
+describe("<BotChannelView /> a question on a tab whose host cannot take a card's answer", () => {
+  it("draws the card with nothing to press on a host that negotiated bot.conversation.send 1.1, keeping the member's draft, and offers them again once the host reaches 1.2", async () => {
+    const user = userEvent.setup();
+    session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+
+    act(() => {
+      negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+    });
+
+    expect(
+      within(channelCard())
+        .getAllByRole("button")
+        .filter((button) => !(button as HTMLButtonElement).disabled),
+    ).toEqual([]);
+    expect(holdField().value).toBe("Hold the migration");
+    expect(holdField().disabled).toBe(true);
+    expect(sent).toEqual([]);
+
+    act(() => {
+      negotiateBotSend(HOST_ID, { major: 1, minor: 2 });
+    });
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    expect(sent.map((request) => [request.text, request.answer])).toEqual([
+      [
+        "Hold the migration",
+        { questionMessageId: QUESTION_ID, questionIndex: 1, skipped: false },
+      ],
+    ]);
+  });
+});
+
 describe("<BotChannelView /> a question settled while a member was answering (decision 122)", () => {
   it("refuses the member's answer at the host, keeps their draft, and once the settlement lands says who answered, drops Submit, and offers Copy and Discuss", async () => {
     const user = userEvent.setup();
@@ -684,11 +722,7 @@ describe("<BotChannelView /> a question settled while a member was answering (de
     expect(
       within(question).getByTestId("question-card-overtaken").textContent,
     ).toBe("Answered by Tess Teammate while you were answering: Nothing");
-    expect(
-      within(question).getByRole("textbox", {
-        name: "Your answer",
-      }).value,
-    ).toBe("Hold the migration");
+    expect(holdField().value).toBe("Hold the migration");
     expect(
       within(question).queryByRole("button", { name: "Submit" }),
     ).toBeNull();
@@ -1167,6 +1201,24 @@ describe("<BotChannelView /> a question a thread's session asks in its thread", 
     );
     expect((box as HTMLTextAreaElement).value).toBe("Now");
     expect(sent).toHaveLength(1);
+  });
+
+  it("draws the thread's card with nothing to press on a host that negotiated bot.conversation.send 1.1", () => {
+    negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+    mocks.threads = [postThread()];
+    session(CHANNEL_ID, [memberPost()]);
+    session(THREAD_ID, [threadQuestion(null)]);
+    mountChannel(POST_THREAD);
+
+    const card = within(screen.getByTestId("bot-thread-replies")).getByTestId(
+      "question-card",
+    );
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .filter((button) => !(button as HTMLButtonElement).disabled),
+    ).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
   const REPLY_REQUEST = "req-reply";

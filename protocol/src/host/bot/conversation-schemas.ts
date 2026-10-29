@@ -107,7 +107,8 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      */
     supersedes: z.string().min(1).max(255).nullable().default(null),
     /**
-     * An answer or Skip from a bot's question card (decision 121): the
+     * `bot.conversation.send@1.2`: an answer or Skip from a bot's question
+     * card (decision 121): the
      * question it settles, on the record the question is on - its thread
      * (`threadId`), or the channel's top level (`null`), where the answer
      * goes to the bot itself and opens no thread. `text` is the answer, or
@@ -131,6 +132,22 @@ export const botConversationSendRequestSchema = lazySchema(() =>
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
 >;
+
+/** The 1.1 request, frozen by hand: without `answer`. */
+export const botConversationSendRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1).max(255),
+    text: z.string().min(1).max(100_000),
+    threadId: z.string().min(1).max(36).nullable().default(null),
+    announcementId: z.string().min(1).max(255).nullable().default(null),
+    redeliver: z
+      .object({ requestId: z.string().min(1).max(255) })
+      .nullable()
+      .default(null),
+    supersedes: z.string().min(1).max(255).nullable().default(null),
+  }),
+);
 
 /** The 1.0 request, frozen by hand: without `redeliver` and `supersedes`. */
 export const botConversationSendRequestSchemaV10 = lazySchema(() =>

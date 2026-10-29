@@ -43,6 +43,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import {
   failedOnRequest,
@@ -239,7 +240,9 @@ export function BotChannelView(props: {
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
   // opens no thread. A send that fails says so where a failed message does,
-  // and the card keeps the person's draft.
+  // and the card keeps the person's draft. A host that cannot take the
+  // answer gets a card without actions.
+  const answersTaken = useBotSendTakesAnswers(hostId);
   const answerQuestion = useCallback<QuestionAnswerSend>(
     async (questionMessageId, given) => {
       if (channelId === null) return;
@@ -380,7 +383,7 @@ export function BotChannelView(props: {
         : null,
       answerThreads,
       chooseOption: sending ? null : chooseOption,
-      answerQuestion,
+      answerQuestion: answersTaken ? answerQuestion : null,
       discussQuestion,
       failedRequest,
       intro: { botTitle, directive },
@@ -388,6 +391,7 @@ export function BotChannelView(props: {
     [
       answerThreads,
       answerQuestion,
+      answersTaken,
       botTitle,
       activity?.threads,
       chooseOption,

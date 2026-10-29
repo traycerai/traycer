@@ -33,6 +33,7 @@ import { BotTaskList } from "@/components/bots/bot-task-list";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOn,
   failedOnRequest,
@@ -664,7 +665,9 @@ function KnownThread(
   );
   // A question card's answer or Skip, on a question asked in the thread, is
   // the person's next message in it; a failed one says so where a failed
-  // message does, and the card keeps the draft.
+  // message does, and the card keeps the draft. A host that cannot take the
+  // answer gets a card without actions.
+  const answersTaken = useBotSendTakesAnswers(hostId);
   const answerQuestion = useCallback<QuestionAnswerSend>(
     async (questionMessageId, given) => {
       clearSendFailure();
@@ -713,12 +716,13 @@ function KnownThread(
                 { onError: failSend },
               );
             },
-      answerQuestion: sendable ? answerQuestion : null,
+      answerQuestion: sendable && answersTaken ? answerQuestion : null,
       discussQuestion: onDiscuss,
       failedRequest: failedRequestShown,
     }),
     [
       answerQuestion,
+      answersTaken,
       botId,
       clearSendFailure,
       conversationId,
