@@ -748,8 +748,9 @@ describe("<BotChannelView /> a post's surface card: what it shows", () => {
 });
 
 describe("<BotChannelView /> a post's surface card: Open", () => {
-  it("opens a question, an approval and a parked page where their notifications open them, on the task's machine", async () => {
+  it("opens a question and an approval where their notifications open them, and a parked page as its browser tile, on the task's machine", async () => {
     const user = userEvent.setup();
+    const tabId = useEpicCanvasStore.getState().openEpicTab(TASK_ID, "Deploy");
     mountChannel({
       rows: [
         botPost(QUESTION, "q", "post-question"),
@@ -789,19 +790,69 @@ describe("<BotChannelView /> a post's surface card: Open", () => {
         },
         origin: TASK_HOST_ID,
       },
-      {
-        payload: {
-          kind: "browserSession",
-          epicId: TASK_ID,
-          sessionId: "session-1",
-          tabId: "tab-1",
-        },
-        origin: TASK_HOST_ID,
-      },
     ]);
     expect(
       mocks.route.mock.calls.every((call) => call[0] === mocks.navigate),
     ).toBe(true);
+    expect(
+      Object.values(
+        useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
+          {},
+      ),
+    ).toMatchObject([
+      {
+        id: "browser-session:session-1:tab-1",
+        type: "browser-session",
+        hostId: TASK_HOST_ID,
+      },
+    ]);
+  });
+
+  it("opens a parked page on another machine than the window's as one browser tile bound to that machine, focused again by a second Open", async () => {
+    const user = userEvent.setup();
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: HOST_ID,
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab(TASK_ID, "Deploy");
+    mountChannel({
+      rows: [post(BROWSER)],
+      tasks: [task([OPEN_BROWSER])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "Open" }));
+    await user.click(within(card()).getByRole("button", { name: "Open" }));
+
+    expect(
+      Object.values(
+        useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
+          {},
+      ),
+    ).toMatchObject([
+      {
+        id: "browser-session:session-1:tab-1",
+        type: "browser-session",
+        hostId: TASK_HOST_ID,
+      },
+    ]);
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
+
+  it("opens the task where a parked page names no tab", async () => {
+    const user = userEvent.setup();
+    mountChannel({
+      rows: [post({ ...BROWSER, tabId: null })],
+      tasks: [task([])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "Open" }));
+
+    expect(
+      mocks.route.mock.calls.map((call) => call[1] as NotificationPayload),
+    ).toEqual([{ kind: "epic", epicId: TASK_ID }]);
+    expect(useEpicCanvasStore.getState().canvasByTabId).toEqual({});
   });
 
   it("opens a question or an approval on another machine than the window's as a chat tile bound to that machine, and parks the jump to it", async () => {
@@ -1354,4 +1405,67 @@ describe("<BotChannelView /> a post's surface card: answering and deciding", () 
     expect(acts[0]?.actionId).toMatch(UUID);
     expect(acts[0]?.actionId).not.toBe("other-window");
   });
+
+  it.each([
+    {
+      name: "refused as unreachable",
+      reply: (): Promise<BotSurfaceActResponse> =>
+        Promise.resolve({ outcome: "refused", code: "NOT_REACHABLE" }),
+    },
+    {
+      name: "unconfirmed",
+      reply: (): Promise<BotSurfaceActResponse> =>
+        Promise.reject(new Error("socket closed")),
+    },
+  ])(
+    "holds the retry of a decision $name while another window's action on the post is sending, and offers it again once that one is no longer sending",
+    async ({ reply }) => {
+      const user = userEvent.setup();
+      answer = reply;
+      const channel = mountChannel({
+        rows: [post(APPROVAL)],
+        tasks: [task([OPEN_APPROVAL])],
+        surfaceActions: [],
+      });
+      await user.click(within(card()).getByRole("button", { name: "Allow" }));
+      await vi.waitFor(() =>
+        expect(stateLine()).toBe("Couldn't reach the task."),
+      );
+      const sending: BotSurfaceActionState = {
+        actionId: "other-window",
+        messageId: POST_ID,
+        state: "sending",
+        code: null,
+      };
+
+      channel.serve([task([OPEN_APPROVAL])], [sending]);
+
+      expect(stateLine()).toBe("Couldn't reach the task.");
+      expect(
+        isDisabled(within(card()).getByRole("button", { name: "Allow" })),
+      ).toBe(true);
+      expect(
+        isDisabled(within(card()).getByRole("button", { name: "Deny" })),
+      ).toBe(true);
+
+      channel.serve(
+        [task([OPEN_APPROVAL])],
+        [{ ...sending, state: "refused", code: "NOT_REACHABLE" }],
+      );
+
+      expect(
+        isDisabled(within(card()).getByRole("button", { name: "Allow" })),
+      ).toBe(false);
+
+      channel.serve([task([OPEN_APPROVAL])], [sending]);
+      expect(
+        isDisabled(within(card()).getByRole("button", { name: "Allow" })),
+      ).toBe(true);
+
+      channel.serve([task([OPEN_APPROVAL])], []);
+      expect(
+        isDisabled(within(card()).getByRole("button", { name: "Deny" })),
+      ).toBe(false);
+    },
+  );
 });

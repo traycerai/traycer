@@ -260,6 +260,17 @@ function heldAction(
   );
 }
 
+/** Another action of the person's on the post than this window's is on its way. */
+function otherOnItsWay(
+  entry: BotSurfaceActionEntry | null,
+  postActions: ReadonlyArray<BotSurfaceActionState>,
+): boolean {
+  return postActions.some(
+    (action) =>
+      action.state === "sending" && action.actionId !== entry?.actionId,
+  );
+}
+
 /** The person's action is on its way: from this window, or from another the serving host holds. */
 function isOnItsWay(
   entry: BotSurfaceActionEntry | null,
@@ -298,14 +309,15 @@ export function botSurfaceCardView(
   const refusedCode = refusalOf(entry, hostAction, held);
   if (refusedCode !== null) {
     const line = refusedLine(refusedCode, surface);
-    // Unreachable: the answer is kept and can be sent again. Every other
-    // refusal leaves Open alone.
+    // Unreachable: the answer is kept and can be sent again, once no other
+    // action of the person's on the post is on its way. Every other refusal
+    // leaves Open alone.
     const again = refusedCode === "NOT_REACHABLE" && open !== null;
     return {
       title,
       state: { kind: "refused", line },
       actions: again ? inline : null,
-      actionsBusy: false,
+      actionsBusy: again && otherOnItsWay(entry, input.postActions),
     };
   }
   if (entry !== null && entry.phase === "settled") {

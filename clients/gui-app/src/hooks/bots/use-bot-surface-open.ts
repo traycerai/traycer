@@ -14,6 +14,7 @@ import {
   useChatTranscriptJumpStore,
   type ChatTranscriptJumpTarget,
 } from "@/stores/chats/chat-transcript-jump-store";
+import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
 /**
@@ -24,7 +25,8 @@ import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
  * actions it compares the surface's machine with the window's effective
  * host, the host a hostless task tab opens on: a question or an approval on
  * another machine opens a chat tile bound to that machine in the task's tab
- * (the tab keeps its own host), and lands on the block or the row there.
+ * (the tab keeps its own host), and lands on the block or the row there; a
+ * parked page opens its browser tile on its machine the same way.
  * `title` names a tile opened fresh until the chat's own name arrives.
  */
 export function useBotSurfaceOpen(
@@ -96,18 +98,26 @@ export function useBotSurfaceOpen(
         const tabId =
           surface.tabId ??
           (open?.surface.kind === "browser" ? open.surface.tabId : null);
-        routeNotificationForHost(
-          navigate,
-          tabId === null
-            ? { kind: "epic", epicId: surface.epicId }
-            : {
-                kind: "browserSession",
-                epicId: surface.epicId,
-                sessionId: surface.sessionId,
-                tabId,
-              },
-          now,
-          context,
+        if (tabId === null) {
+          routeNotificationForHost(
+            navigate,
+            { kind: "epic", epicId: surface.epicId },
+            now,
+            context,
+          );
+          return;
+        }
+        openTile(
+          tileIntent(
+            makeBrowserSessionTileRef({
+              hostId: surface.hostId,
+              sessionId: surface.sessionId,
+              tabId,
+            }),
+            { epicId: surface.epicId },
+            "explicit",
+            "direct_ui",
+          ),
         );
         return;
       }
