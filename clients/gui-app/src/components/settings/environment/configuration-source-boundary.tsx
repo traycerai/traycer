@@ -299,12 +299,14 @@ function useGoneConfiguration(input: {
   // not in the reply, so a removal and a re-invitation that cross here read as
   // a plain removal. The toast names the team, the selection moves to
   // Personal, and the Accept this page would have offered is not offered. It
-  // returns without a reload, from the environment picker: neither route of
-  // the invitations read sets a `staleTime`, so it takes the app's 60s
-  // default, and `TeamRows` lives in the picker's dropdown content, which
-  // mounts afresh on each open — the first open past that reads invitations
-  // again, and the team is a row there, marked `invited`, carrying the same
-  // Review that opens `InviteAcceptDialog`.
+  // returns without a reload, from the environment picker, bounded by that
+  // read's own staleness: neither route of the invitations read sets a
+  // `staleTime`, so it takes the app's 60s default, and `TeamRows` lives in
+  // the picker's dropdown content, which mounts afresh on each open. An open
+  // within 60s of the racing reply is served that reply from cache and shows
+  // the same list; the first open after that reads invitations again, and the
+  // team is a row there, marked `invited`, carrying the same Review that opens
+  // `InviteAcceptDialog`.
   const goneId =
     absent && answer?.state === "answered" && invitation === null
       ? environmentId
