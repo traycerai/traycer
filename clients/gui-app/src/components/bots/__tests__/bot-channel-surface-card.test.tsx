@@ -1594,4 +1594,33 @@ describe("<BotChannelView /> a post's surface card: answering and deciding", () 
       isDisabled(within(card()).getByRole("button", { name: "Deny" })),
     ).toBe(true);
   });
+
+  it.each([
+    {
+      name: "question",
+      surface: QUESTION,
+      open: { ...OPEN_QUESTION, acceptsActions: false },
+      line: "Needs your answer",
+    },
+    {
+      name: "approval",
+      surface: APPROVAL,
+      open: { ...OPEN_APPROVAL, acceptsActions: false },
+      line: "Needs your decision",
+    },
+  ])(
+    "offers only Open for the $name card when the task's machine takes no action on it from here",
+    ({ surface, open, line }) => {
+      mountChannel({
+        rows: [post(surface)],
+        tasks: [task([open])],
+        surfaceActions: [],
+      });
+
+      expect(stateLine()).toBe(line);
+      expect(cardButtons()).toEqual(["Open"]);
+      expect(within(card()).queryByTestId("question-card")).toBeNull();
+      expect(acts).toEqual([]);
+    },
+  );
 });

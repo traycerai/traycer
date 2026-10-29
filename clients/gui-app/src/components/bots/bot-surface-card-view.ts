@@ -60,7 +60,10 @@ export interface BotSurfaceCardInput {
   readonly postActions: ReadonlyArray<BotSurfaceActionState>;
   readonly viewerUserId: string | null;
   readonly memberName: SurfaceMemberName;
-  /** Whether the tab's host takes an answer or a decision from the card. */
+  /**
+   * Whether the tab's host takes an answer or a decision from the card; the
+   * task's own report (`acceptsActions`) decides for a surface it lists.
+   */
   readonly canAct: boolean;
 }
 
@@ -309,7 +312,12 @@ export function botSurfaceCardView(
   if (surface.kind === "artifact") {
     return { ...quiet, state: { kind: "unknown" } };
   }
-  const inline = input.canAct ? inlineActionOf(surface) : null;
+  // The task's machine takes the action only where its report says so; a
+  // surface it reports as not taking one is answered in the task.
+  const inline =
+    input.canAct && open?.acceptsActions !== false
+      ? inlineActionOf(surface)
+      : null;
   const held = entry === null ? heldAction(input.postActions) : null;
   const refusedCode = refusalOf(entry, hostAction, held);
   if (refusedCode !== null) {
