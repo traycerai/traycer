@@ -110,9 +110,10 @@ vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
 }));
 
 /**
- * `useEpicPinLocalHomeSupported` and `tab-strip.tsx`'s own `useHostClient()`
- * (for the Undo dispatch's `epicPinDispatchAdmitted` re-check) both need a
- * `<HostRuntimeProvider>` this tree does not build.
+ * `useEpicPinLocalHomeSupported`, `tab-strip.tsx`'s own `useHostClient()`
+ * (for the Undo dispatch's `epicPinDispatchAdmitted` re-check) and the
+ * OrganizationProvider's `useAuthService()` (its membership-change identity
+ * read) all need a `<HostRuntimeProvider>` this tree does not build.
  */
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
   useEpicPinLocalHomeSupported: () => false,
@@ -122,6 +123,9 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostClient: () => ({ getActiveHostId: () => null }),
+    useAuthService: () => ({
+      revalidateCurrentContextAfterInvalidation: () => Promise.resolve(null),
+    }),
   };
 });
 

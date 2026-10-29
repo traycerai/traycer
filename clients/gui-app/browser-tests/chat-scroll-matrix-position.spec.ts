@@ -7,7 +7,7 @@ import {
   startTimeline,
   type ChatScrollView,
 } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * The reader's place in the transcript across hide/show and close/reopen:
@@ -48,18 +48,24 @@ async function withTimeline(
   }
 }
 
-async function wheel(page: Page, deltaY: number): Promise<void> {
+/** Wheels over the transcript by each of `deltaYs`, back to back, and
+ *  returns once the page has received them all. */
+async function wheel(page: Page, deltaYs: readonly number[]): Promise<void> {
   const box = await page
     .locator('[data-testid="chat-messages-scroll"]')
     .boundingBox();
   if (box === null) throw new Error("no scroll node");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.wheel(0, deltaY);
+  await wheelsDelivered(
+    page,
+    deltaYs.map((deltaY) => ({ deltaX: 0, deltaY })),
+    0,
+  );
 }
 
 /** The reader wheels up into the middle of the transcript and rests there. */
 async function detach(page: Page): Promise<ChatScrollView> {
-  await wheel(page, -1500);
+  await wheel(page, [-1500]);
   const view = await settle(page, 12);
   if (view.mode !== "free-scrolling") {
     throw new Error(
@@ -212,7 +218,9 @@ for (const line of LINES) {
 
   // D6: hide before the wheel's scroll has settled; the position the reader
   // actually saw (the live view, read in the same task as the hide, before
-  // React commits it) is the one that comes back.
+  // React commits it) is the one that comes back. The hide follows the
+  // wheels' arrival, not their sending: sent before a wheel lands, it reads a
+  // view the reader then wheels away from.
   for (const kind of HIDE_KINDS) {
     for (const delayMs of [0, 50, 150]) {
       test(`${line} D6: wheel, hide ${kind} after ${String(delayMs)}ms, show -> the live position at the hide`, async ({
@@ -220,9 +228,7 @@ for (const line of LINES) {
       }) => {
         await open(page, line);
         await withTimeline(page, async () => {
-          await wheel(page, -600);
-          await wheel(page, -600);
-          await wheel(page, -400);
+          await wheel(page, [-600, -600, -400]);
           if (delayMs > 0) await page.waitForTimeout(delayMs);
           const live = await hideReadingLive(page, kind);
           await page.waitForTimeout(300);
@@ -347,7 +353,7 @@ for (const line of LINES) {
           const before = await detach(page);
           await reopen(page, how);
           if (wheelDelayMs > 0) await page.waitForTimeout(wheelDelayMs);
-          await wheel(page, -400);
+          await wheel(page, [-400]);
           const after = await settle(page, 12);
           await expectAtRest(page, intentOf(after), "after wheel");
           // The wheel moved the reader 400px up from where the restore put
@@ -373,7 +379,7 @@ for (const line of LINES) {
     }) => {
       await open(page, line);
       await withTimeline(page, async () => {
-        await wheel(page, -100);
+        await wheel(page, [-100]);
         const before = await settle(page, 12);
         if (before.mode !== "free-scrolling" || before.fromEnd <= 1) {
           throw new Error(

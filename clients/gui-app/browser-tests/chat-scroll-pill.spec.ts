@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 import { expectAtRest, startTimeline } from "./support/chat-scroll-oracle";
 
 /**
@@ -121,10 +121,12 @@ for (const stream of STREAMS) {
       await page.waitForTimeout(300);
     }
     await page.mouse.move(195, 350);
-    for (let i = 0; i < 3; i += 1) {
-      await page.mouse.wheel(0, -500);
-      await nextFrames(page, 2);
-    }
+    await wheelsDelivered(
+      page,
+      Array.from({ length: 3 }, () => ({ deltaX: 0, deltaY: -500 })),
+      2,
+    );
+    await nextFrames(page, 2);
     await page.waitForTimeout(300);
     await expect
       .poll(() => page.evaluate(() => window.__chatScrollProbe.pillShown()))

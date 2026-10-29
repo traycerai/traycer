@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * A send while the reader is scrolled up, against the fixture in
@@ -172,7 +172,7 @@ test.describe("wheel", () => {
   }) => {
     await loadAfterTwoSendsAtTheEnd(page);
     await page.mouse.move(195, 350);
-    await page.mouse.wheel(0, -600);
+    await wheelsDelivered(page, [{ deltaX: 0, deltaY: -600 }], 0);
     await expectSendKeepsTheAnchor(page);
   });
 });

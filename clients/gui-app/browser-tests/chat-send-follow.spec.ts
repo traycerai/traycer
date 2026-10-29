@@ -59,16 +59,21 @@ async function startWatching(page: Page): Promise<void> {
     window.__followFrames = frames;
     window.__followStep = "start";
     let running = true;
-    window.__followStop = () => {
-      running = false;
-    };
     const t0 = performance.now();
-    // The frame record is the reading taken in a message task posted from the
-    // rAF callback: it runs after the rendering update, so it is what was
-    // painted. The rAF-start reading (distanceA) still sees pre-render state.
-    const channel = new MessageChannel();
+    // The frame record is read in a ResizeObserver callback the rAF callback
+    // arms by resizing a marker: observer callbacks run after the rendering
+    // update's layout, after the transcript's own observers (created before
+    // this one), right before paint, so the record is what was painted. A
+    // message task posted from the rAF callback is not: under load a stream
+    // token's timer task runs before it, and its commit reads as painted even
+    // though the next rendering update corrects it first. The rAF-start
+    // reading (distanceA) still sees pre-render state.
+    const marker = document.createElement("div");
+    marker.style.cssText =
+      "position:fixed;left:0;top:0;width:1px;height:1px;visibility:hidden;pointer-events:none";
+    document.body.append(marker);
     const pending: { t: number; step: string; distanceA: number }[] = [];
-    channel.port1.onmessage = (): void => {
+    const observer = new ResizeObserver(() => {
       const early = pending.shift();
       if (early === undefined || window.__followDriver === undefined) return;
       frames.push({
@@ -78,19 +83,28 @@ async function startWatching(page: Page): Promise<void> {
         wheel: 0,
         distanceA: early.distanceA,
       });
+    });
+    window.__followStop = () => {
+      running = false;
+      observer.disconnect();
+      marker.remove();
     };
+    let wide = false;
     const tick = (): void => {
       if (!running) return;
       if (window.__followDriver !== undefined) {
+        pending.length = 0;
         pending.push({
           t: Math.round(performance.now() - t0),
           step: window.__followStep ?? "",
           distanceA: window.__followDriver.probe().distance,
         });
-        channel.port2.postMessage(0);
+        wide = !wide;
+        marker.style.width = wide ? "2px" : "1px";
       }
       requestAnimationFrame(tick);
     };
+    observer.observe(marker);
     requestAnimationFrame(tick);
   });
 }

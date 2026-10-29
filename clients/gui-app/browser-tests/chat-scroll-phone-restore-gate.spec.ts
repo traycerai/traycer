@@ -7,7 +7,7 @@ import {
   startTimeline,
   type ChatScrollView,
 } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * R3: a free reader's touch lands while a remount's saved-position restore is
@@ -56,10 +56,12 @@ async function load(page: Page, suppression: Suppression): Promise<void> {
 /** Free position well away from the tail, at rest. */
 async function parkFree(page: Page): Promise<ChatScrollView> {
   await page.mouse.move(X, 400);
-  for (let i = 0; i < 4; i += 1) {
-    await page.mouse.wheel(0, -500);
-    await nextFrames(page, 2);
-  }
+  await wheelsDelivered(
+    page,
+    Array.from({ length: 4 }, () => ({ deltaX: 0, deltaY: -500 })),
+    2,
+  );
+  await nextFrames(page, 2);
   const view = await settle(page, 12);
   expect(view.mode, "parked away from the tail").toBe("free-scrolling");
   return view;
