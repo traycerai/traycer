@@ -423,8 +423,6 @@ describe("complete notification indicators re-ask", () => {
     vi.useRealTimers();
   });
 
-  /** A mounted indicator read whose cached answer is a host's whole origin;
-   * `requests` counts the reads the host was asked for. */
   const wholeOriginKey = indicatorKey({
     hostId: "host-b",
     userId: "alice",
@@ -432,6 +430,8 @@ describe("complete notification indicators re-ask", () => {
     chatIds: ["chat-a"],
   });
 
+  /** A mounted indicator read whose cached answer is a host's whole origin;
+   * `requests` counts the reads the host was asked for. */
   async function mountWholeOriginRead(
     queryClient: QueryClient,
   ): Promise<{ readonly requests: Array<string> }> {

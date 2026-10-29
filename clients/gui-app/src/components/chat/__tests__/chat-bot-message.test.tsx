@@ -1546,6 +1546,5 @@ describe("<ChatEmptyState /> in a bot channel", () => {
 
     expect(document.body.textContent).toBe("");
     expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
-    expect(screen.queryByText("Start the conversation")).toBeNull();
   });
 });

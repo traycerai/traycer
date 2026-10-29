@@ -1828,7 +1828,6 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       expect(sent).toHaveLength(1);
       const notice = await screen.findByTestId("bot-thread-send-failed");
       expect(notice.textContent).toBe("Couldn't send. Try again.");
-      expect(notice.textContent).not.toContain("Edit");
     },
   );
 

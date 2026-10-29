@@ -674,7 +674,6 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       "bot-channel-composer-send-failed",
     );
     expect(notice.textContent).toBe("Couldn't send. Try again.");
-    expect(notice.textContent).not.toContain("Edit");
     expect(channelBox().value).toBe("");
   });
 
