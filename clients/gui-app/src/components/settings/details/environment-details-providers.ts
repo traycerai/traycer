@@ -325,7 +325,12 @@ async function loadEnvironmentDetails(
     reason: null,
     hosts,
   };
-  if (subject.kind === "member") {
+  // One member, named by the subject's key. The roles notice opens the drawer
+  // with no key, and `environment.history` then answers for the whole
+  // configuration, where the newest `delete` is as likely to be a secret's as
+  // a member's: that drawer keeps the delivery summary and claims nothing
+  // about a person.
+  if (subject.kind === "member" && subject.key.length > 0) {
     // A member is not a setting delivered to hosts: their `Now` is their own
     // role, and it carries the time and the actor, so the change line below it
     // would only repeat them.

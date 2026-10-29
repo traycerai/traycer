@@ -1,6 +1,18 @@
+const hoisted = vi.hoisted(() => ({
+  toasts: [] as { message: string; options: { id?: string } | undefined }[],
+}));
+vi.mock("sonner", () => ({
+  toast: Object.assign(
+    (message: string, options: { id?: string } | undefined) => {
+      hoisted.toasts.push({ message, options });
+    },
+    { success: () => undefined, info: () => undefined },
+  ),
+}));
+
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentDescriptorV11,
   EnvironmentInvitation,
@@ -9,6 +21,8 @@ import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
+import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { negotiateMethods } from "./mcp-skills-test-support";
@@ -37,6 +51,10 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   >()),
   useCloudChatViewerId: () => "user-me",
 }));
+
+beforeEach(() => {
+  hoisted.toasts.length = 0;
+});
 
 afterEach(() => {
   cleanup();
@@ -129,29 +147,91 @@ function mountBoundary(options: {
   };
 }
 
+/**
+ * The removal through the real frame, which is what makes the toast necessary:
+ * `PersonalPageFrame` keys its cloud frame by the selection, so moving the
+ * selection unmounts the boundary and anything it was holding. A case that
+ * mounts the boundary on a fixed `target` never sees that, and would pass on a
+ * page state the app throws away.
+ */
+function mountFrame(options: {
+  readonly environments: () => readonly EnvironmentDescriptorV11[];
+  readonly invitations: readonly EnvironmentInvitation[];
+}): { readonly rerenderList: () => Promise<void> } {
+  negotiateMethods({
+    "environment.invitations.list": V10,
+    "environment.invitations.accept": V10,
+  });
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "team", environmentId: "env-a" },
+  });
+  const harness = mountTeamPage(poolSource("editor"), {
+    "environment.list": () => ({ environments: [...options.environments()] }),
+    "environment.invitations.list": () => ({
+      invitations: [...options.invitations],
+    }),
+  });
+  render(
+    <HeldValueHostRuntime>
+      <PersonalPageFrame section="secrets">
+        <Probe />
+      </PersonalPageFrame>
+    </HeldValueHostRuntime>,
+    { wrapper: harness.Wrapper },
+  );
+  return { rerenderList: () => harness.queryClient.invalidateQueries() };
+}
+
 describe("a team the environment list no longer carries", () => {
-  it("says the person is no longer in it and moves the selection to Personal", async () => {
+  it("says the person is no longer in it, once, and moves the selection to Personal", async () => {
     const listed: { current: readonly EnvironmentDescriptorV11[] } = {
       current: [PERSONAL, team("editor")],
     };
-    const { rerenderList } = mountBoundary({
+    const { rerenderList } = mountFrame({
       environments: () => listed.current,
       invitations: [],
     });
     await screen.findByTestId("probe");
+    expect(hoisted.toasts).toEqual([]);
 
     listed.current = [PERSONAL];
     await rerenderList();
 
-    expect(await screen.findByText("You're no longer in Acme.")).toBeTruthy();
-    expect(
-      screen.queryByText("These settings are no longer available."),
-    ).toBeNull();
+    // The selection moves off a team no page can read, which is what unmounts
+    // the page the removal happened on.
     await waitFor(() =>
       expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
         PERSONAL_PICK,
       ),
     );
+    // The sentence outlives that page, and is raised once under the team's own
+    // id, so a remount or a re-read of the same removal cannot stack it.
+    expect(hoisted.toasts).toEqual([
+      {
+        message: "You're no longer in Acme.",
+        options: { id: "environment-left:env-a" },
+      },
+    ]);
+    // Nothing of the dead team is left on the page the person lands on.
+    expect(document.body.textContent).not.toContain("Acme");
+    expect(document.body.textContent).not.toContain("You're no longer in");
+  });
+
+  it("raises nothing for a team it never read the name of", async () => {
+    const { rerenderList } = mountFrame({
+      environments: () => [PERSONAL],
+      invitations: [],
+    });
+    await rerenderList();
+
+    await waitFor(() =>
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      ),
+    );
+    // A pick made on another computer: the selection still moves, because no
+    // page can read it, but no removal is claimed from a team never seen.
+    expect(hoisted.toasts).toEqual([]);
   });
 
   it("offers Review for a team that has invited the person back", async () => {
@@ -175,6 +255,109 @@ describe("a team the environment list no longer carries", () => {
       kind: "team",
       environmentId: "env-a",
     });
+  });
+
+  it("re-reads the invitations the membership list's answer outdated, and keeps the team", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const listed: { current: readonly EnvironmentDescriptorV11[] } = {
+      current: [PERSONAL, team("editor")],
+    };
+    const invited: { current: readonly EnvironmentInvitation[] } = {
+      current: [],
+    };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [...listed.current] }),
+      "environment.invitations.list": () => ({
+        invitations: [...invited.current],
+      }),
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+    await screen.findByTestId("probe");
+
+    // Removed and invited back between the two reads. Only the membership
+    // list is marked stale — `invalidateConfigurationReads` leaves the
+    // invitations read alone, and that read neither polls nor refreshes on
+    // focus — so the empty answer in hand predates the invitation.
+    listed.current = [PERSONAL];
+    invited.current = [INVITATION];
+    await harness.queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("environment.list"),
+    });
+
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
+  });
+
+  it("claims no removal, and moves nothing, while the invitations read is failing", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+      "environment.invitations.list": () => {
+        throw new Error("down");
+      },
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+
+    // The list says the team is gone, but a failed invitations read is no
+    // answer about an invitation, so nothing is claimed and the selection the
+    // person made stays put.
+    expect(
+      await screen.findByText("These settings are no longer available."),
+    ).toBeTruthy();
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
+  });
+
+  it("promises a viewer's invitation only what accepting it gives", async () => {
+    mountBoundary({
+      environments: () => [PERSONAL],
+      invitations: [{ ...INVITATION, role: "viewer" }],
+    });
+
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see its settings.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/and change its settings/)).toBeNull();
   });
 
   it("keeps the failed read's own line and Retry, which an answer has not refuted", async () => {
@@ -212,10 +395,11 @@ describe("the name a picked configuration is called", () => {
     );
   }
 
-  function mountLabel(options: {
+  /** Mounts the label and waits for both reads, so "none" is an answer. */
+  async function mountLabel(options: {
     readonly environments: readonly EnvironmentDescriptorV11[];
     readonly invitations: readonly EnvironmentInvitation[];
-  }): void {
+  }): Promise<void> {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -227,20 +411,29 @@ describe("the name a picked configuration is called", () => {
       }),
     });
     render(<Label />, { wrapper: harness.Wrapper });
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
   }
 
   it("names a team the list carries by its label", async () => {
-    mountLabel({ environments: [PERSONAL, team("editor")], invitations: [] });
+    await mountLabel({
+      environments: [PERSONAL, team("editor")],
+      invitations: [],
+    });
     expect(await screen.findByText("Acme")).toBeTruthy();
   });
 
   it("names a team that has only invited the person by the invitation", async () => {
-    mountLabel({ environments: [PERSONAL], invitations: [INVITATION] });
+    await mountLabel({
+      environments: [PERSONAL],
+      invitations: [INVITATION],
+    });
     expect(await screen.findByText("Acme")).toBeTruthy();
   });
 
   it("names nothing for an id neither the list nor an invitation knows", async () => {
-    mountLabel({ environments: [PERSONAL], invitations: [] });
+    await mountLabel({ environments: [PERSONAL], invitations: [] });
     expect(await screen.findByText("none")).toBeTruthy();
   });
 });

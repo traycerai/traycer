@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  MEMBER_REMOVED_TOAST,
   demotionConfirmBody,
   demotionConfirmLabel,
   demotionConfirmTitle,
@@ -76,8 +75,9 @@ describe("one name everywhere", () => {
     );
   });
 
-  it("names the toast by the same name", () => {
-    expect(MEMBER_REMOVED_TOAST).toBe("Member removed");
+  // The toast's own title and raising are asserted through MembersView; what
+  // belongs here is that its body uses the same one name.
+  it("names the toast body by the same name", () => {
     expect(memberRemovedToastBody("Priya Rao", "Acme")).toBe(
       "Priya Rao is no longer in Acme.",
     );

@@ -20,7 +20,6 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 
@@ -72,9 +71,6 @@ function TeamSecretsSettingsPanel(): ReactNode {
  * The shell over the secrets list. No subtitle while an editor's list is
  * empty: that empty state says the same sentence, and a reader who cannot
  * edit reads "No secrets." instead, so the subtitle stays here for them.
- * The emptiness is read through the tier that serves the page's own list, so
- * a build with a server pool does not answer the header from one read and the
- * page from another, and print the subtitle twice.
  */
 function SecretsListPanelShell(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -82,7 +78,8 @@ function SecretsListPanelShell(props: {
   readonly headerAction: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
-  const list = useEnvironmentSecretsQuery(usePoolTierHostClient(props.client));
+  // The read pools the client itself, so the header and the page share one key.
+  const list = useEnvironmentSecretsQuery(props.client);
   const canEdit = useCanEditConfiguration();
   // Match the page's retained answer even if a refetch fails: the failure
   // stays beside that content rather than duplicating its empty-state copy.

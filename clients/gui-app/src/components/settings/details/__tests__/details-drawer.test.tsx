@@ -1149,6 +1149,39 @@ describe("a member's Now", () => {
     expect(screen.queryByText("No hosts yet")).toBeNull();
     expect(document.body.textContent).not.toMatch(/unknown/i);
   });
+
+  // The roles notice opens the drawer with no member named, so
+  // `environment.history` answers for the whole configuration. A secret
+  // removed there is the newest `delete` in that answer, and it says nothing
+  // about anyone's membership.
+  it("reads another item's removal as no person's, when the subject names none", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            // The configuration's newest change: a secret was removed.
+            {
+              at: AT,
+              actor: { label: "Ada", tombstoned: false },
+              operation: "delete",
+              outcome: "live",
+            },
+          ],
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+    });
+    openDrawer(
+      harness,
+      { kind: "member", key: "", roleLabel: null },
+      "Member details",
+    );
+
+    // The delivery summary, as every keyless subject reads, and no claim that
+    // a person is on their way out.
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.queryByText("Removing")).toBeNull();
+    expect(document.body.textContent).not.toContain("since");
+  });
 });
 
 /**

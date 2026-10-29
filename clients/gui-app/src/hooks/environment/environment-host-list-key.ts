@@ -71,8 +71,12 @@ export const CONFIGURATION_READS = [
  * that read is marked stale here too: without it a page kept the form its old
  * role was given long after its items had been read again, while every page
  * whose content changes shape for the new role appeared to switch at once.
- * The cost is one account-wide `environment.list` read per revision tick,
- * focus or stale-write recovery — all event-driven, none polled.
+ *
+ * The cost is an account-wide read, refetched once per active
+ * `environment.list` key — one on a pooled build, one per host scope
+ * otherwise — each time this runs: on a revision change, on focus, on
+ * stale-write recovery, and after the writes that call it. The list itself
+ * never polls; the revision does, and only a revision that moved gets here.
  */
 export function invalidateConfigurationReads(
   queryClient: QueryClient,
