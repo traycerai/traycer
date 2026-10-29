@@ -302,6 +302,7 @@ function statusWith(
     processMemory: null,
     crossHostMessaging: null,
     sessions: null,
+    updatesExternallyManaged: null,
     ...extra,
   };
 }

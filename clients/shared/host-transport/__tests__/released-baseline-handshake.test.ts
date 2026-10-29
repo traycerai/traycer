@@ -524,6 +524,7 @@ describe.skipIf(baselines.length === 0)(
             processMemory: null,
             crossHostMessaging: null,
             sessions: null,
+            updatesExternallyManaged: null,
           };
 
           // SELF-CHECKING FIXTURE. Without this, the next released minor a

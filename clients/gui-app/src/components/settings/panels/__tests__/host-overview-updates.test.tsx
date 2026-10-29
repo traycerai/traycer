@@ -646,6 +646,43 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(checkCalls).toBe(1);
   });
 
+  it("a host that reports its updates as externally managed gets the lock card up front, and no catalog is ever asked for", async () => {
+    // Before `host.status@1.10` the page learned this from the first REFUSED
+    // install: six Install buttons for a host that would refuse all of them,
+    // then the lock card. The status read now says it first, so the region
+    // opens retired - and the check must not have fired meanwhile, or a list
+    // would flash and vanish.
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.0.0",
+      updatesExternallyManaged: true,
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: multiVersionManifest(["1.7.0", "1.6.0"]),
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+    await selectHostOverviewTab("updates");
+
+    const notice = await screen.findByTestId("host-overview-updates-degraded");
+    expect(notice.textContent).toContain("managed outside Traycer");
+    expect(screen.queryByTestId("host-version-rows")).toBeNull();
+    expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
+    expect(checkCalls).toBe(0);
+  });
+
   it("the release-candidate checkbox RE-ASKS the host with includePreReleases, rather than filtering a list already in hand", async () => {
     // Re-pins, on the RPC path, the one invariant the deleted bridge suite
     // owned ("passes the include prereleases filter when the Advanced version
@@ -3991,6 +4028,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
             processMemory: null,
             crossHostMessaging: null,
             sessions: null,
+            updatesExternallyManaged: null,
           };
         },
         "host.update.check": () => ({

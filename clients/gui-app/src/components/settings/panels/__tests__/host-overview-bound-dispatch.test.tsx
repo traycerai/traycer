@@ -389,6 +389,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -507,6 +508,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -576,6 +578,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
       },
     });
@@ -625,6 +628,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -767,6 +771,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -916,6 +921,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1020,6 +1026,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         // The catalog does NOT list "1.6.0" — the attempt's own target.
         // Falsifies: routing the dialog's Force through `installForce`
@@ -1103,6 +1110,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1220,6 +1228,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         // Registered so "never called" is a fact about the page's routing and
         // not about a handler that was missing anyway.
@@ -1320,6 +1329,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1450,6 +1460,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
             processMemory: null,
             crossHostMessaging: null,
             sessions: null,
+            updatesExternallyManaged: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
@@ -1728,6 +1739,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         ...overrides,
       },
@@ -1889,6 +1901,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
       },
     });
@@ -1943,6 +1956,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
       },
     });
@@ -2031,6 +2045,7 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
           processMemory: null,
           crossHostMessaging: null,
           sessions: null,
+          updatesExternallyManaged: null,
         }),
         "host.update.check": () => {
           checkCalls += 1;
@@ -2224,6 +2239,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
             processMemory: null,
             crossHostMessaging: null,
             sessions: null,
+            updatesExternallyManaged: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
