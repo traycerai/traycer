@@ -105,7 +105,6 @@ import {
   promptSuggestionAllowed,
 } from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
-import { clearChatComposerDraft } from "./clear-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
@@ -664,13 +663,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
-  // "Cancel the message": withdrawn, not sent - the composer clears as a send
-  // clears it, and the refusal it answered closes.
+  // "Cancel the message": not sent - the refusal it answered closes, and the
+  // text stays in the composer, unsent.
   const [cancelledMessages, setCancelledMessages] = useState(0);
   const cancelMessage = useCallback((): void => {
-    clearChatComposerDraft({ taskId, pickerStore, editorRef });
     setCancelledMessages((count) => count + 1);
-  }, [pickerStore, taskId]);
+  }, []);
   const boundSandboxRemedies = useBoundSandboxRemedies({
     chatId: taskId,
     epicId: currentEpicId,

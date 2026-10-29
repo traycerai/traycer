@@ -299,7 +299,12 @@ function ReturnedSendReceipt(props: {
               )}
         </span>
         <div className="flex flex-wrap gap-2">
-          {receipt.returned.kind === "landing-draft" ? (
+          {receipt.returned.kind === "landing-draft" ||
+          // Back in this task's composer: the way back to it, where Stop's
+          // Choose another host is not offered.
+          (receipt.returned.kind === "task" &&
+            props.tabId !== null &&
+            startSandbox === null) ? (
             <Button
               type="button"
               variant="link"
@@ -336,7 +341,7 @@ function ReturnedSendReceipt(props: {
         {startSandbox?.failure}
       </div>
     ),
-    [receipt, openDraft, startSandbox],
+    [receipt, openDraft, startSandbox, props.tabId],
   );
   const onToastDismissRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {

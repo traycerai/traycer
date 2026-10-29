@@ -40,7 +40,12 @@ import {
 import {
   readStagedSandbox,
   useStagedSandboxStore,
+  type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import {
   pendingSendSurfaceKey,
   pendingSandboxSendFacts,
@@ -413,6 +418,41 @@ export function returnPendingSandboxSend(
   id: string,
 ): ReturnedPendingSandboxSend {
   return returnPendingMessage(id, false);
+}
+
+/**
+ * The sandbox a new agent's message stays on once it is back in its task's
+ * composer, as that composer's own pick would have it.
+ */
+export type ReturnedSandboxPick =
+  /** Resting, or not created yet: staged, so the composer's Send wakes or creates it. */
+  | { readonly kind: "stage"; readonly target: StagedSandboxTarget }
+  /** Awake: its host, with nothing staged. */
+  | { readonly kind: "host"; readonly hostId: string };
+
+/**
+ * `returnPendingSandboxSend`, keeping the message on the sandbox it was sent
+ * to: once it is back in its task's new-agent composer, that composer is on
+ * the sandbox (`pick`), so its Send goes there again in this task, never to
+ * the composer's default host.
+ */
+export function returnPendingSandboxSendToSandbox(
+  id: string,
+  pick: ReturnedSandboxPick,
+): ReturnedPendingSandboxSend {
+  const returned = returnPendingMessage(id, false);
+  if (returned.kind !== "task") return returned;
+  const surfaceKey = newConversationSurfaceKey(returned.epicId);
+  const pins = useSurfaceHostSelectionStore.getState();
+  if (pick.kind === "host") {
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    pins.setSelection(surfaceKey, pick.hostId);
+    return returned;
+  }
+  useStagedSandboxStore.getState().stage(surfaceKey, pick.target);
+  if (pick.target.kind === "existing")
+    pins.setSelection(surfaceKey, pick.target.hostId);
+  return returned;
 }
 
 /** A background Stop leaves an explicit saved draft for its receipt to open. */

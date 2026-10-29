@@ -4906,10 +4906,16 @@ describe("cancelling a refused pending message", () => {
           });
           expect(
             useNewConversationModalOpenStore.getState().request,
-          ).toMatchObject({ epicId: "epic-1", tabId: "tab-1" });
+          ).toMatchObject({ epicId: "epic-1", tabId: "tab-1", hostId: null });
+          // Still on the resting sandbox, staged so the composer's Send wakes it.
           expect(
-            screen.queryByRole("button", { name: "Open draft" }),
-          ).toBeNull();
+            readStagedSandbox(newConversationSurfaceKey("epic-1")),
+          ).toMatchObject({
+            target: { kind: "existing", sandboxId: SANDBOX_ID, verb: "resume" },
+          });
+          expect(
+            screen.getByRole("button", { name: "Open draft" }),
+          ).toBeDefined();
           answerSandboxRows(
             [{ ...resting, state: "awake" }],
             Date.now() + 120_001,
@@ -5453,6 +5459,72 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(screen.queryByText(/is awake, but/)).toBeNull();
     expect(mocks.wake).not.toHaveBeenCalled();
     expect(createChatCalls()).toEqual([]);
+  });
+
+  it("puts the message back in this task's composer on the suspended sandbox, and says so where the line was", async () => {
+    await mountHeld();
+
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    const taskSurface = newConversationSurfaceKey("epic-1");
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
+    // Staged to resume, so the composer's Send wakes it in this task.
+    expect(readStagedSandbox(taskSurface)).toMatchObject({
+      phase: "staged",
+      target: {
+        kind: "existing",
+        hostId: SANDBOX_HOST,
+        sandboxId: SANDBOX_ID,
+        name: "api-refactor",
+        verb: "resume",
+      },
+    });
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[taskSurface],
+    ).toBe(SANDBOX_HOST);
+    // A rest is nobody's gesture: nothing opens on its own.
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "Your message wasn't sent; it's back in the composer.",
+    );
+
+    fireEvent.click(within(line).getByRole("button", { name: "Open draft" }));
+
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      hostId: null,
+    });
+  });
+
+  it("puts a cancelled message back in this task's composer on the awake sandbox", async () => {
+    await mountHeld();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel the message" }));
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    const taskSurface = newConversationSurfaceKey("epic-1");
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[taskSurface],
+    ).toBe(SANDBOX_HOST);
+    // Awake: the pick is the host itself, as the picker makes it.
+    expect(readStagedSandbox(taskSurface)).toBeNull();
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      hostId: null,
+    });
   });
 
   it("stops saying the sandbox is awake and offers no Retry applying while it suspends", async () => {
@@ -7353,11 +7425,12 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
     ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-    // Named, so the composer stays on the sandbox though its lease is offline.
+    // Unnamed, so its picker is live and the staged sandbox carries its Send:
+    // a composer named on a stopped host refuses to send.
     expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
       epicId: "epic-1",
       tabId: "tab-1",
-      hostId: SANDBOX_HOST,
+      hostId: null,
     });
     // On the sandbox it was sent to, never the composer's default host.
     expect(
@@ -7365,6 +7438,18 @@ describe("choosing Stop on an unclaimed send", () => {
         newConversationSurfaceKey("epic-1")
       ],
     ).toBe(SANDBOX_HOST);
+    expect(
+      readStagedSandbox(newConversationSurfaceKey("epic-1")),
+    ).toMatchObject({
+      phase: "staged",
+      target: {
+        kind: "existing",
+        hostId: SANDBOX_HOST,
+        sandboxId: SANDBOX_ID,
+        name: "api-refactor",
+        verb: "start",
+      },
+    });
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(

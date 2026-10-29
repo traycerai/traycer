@@ -48,7 +48,10 @@ import {
   StoppedSandboxSendReceipts,
   StoppedSandboxSendReceiptStrip,
 } from "@/components/sandboxes/stopped-sandbox-send-receipts";
-import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
+import {
+  openStagedShapeSheet,
+  restingVerb,
+} from "@/components/composer/use-sandbox-staging";
 import {
   stagedSandboxFallbackName,
   useNewHostActions,
@@ -99,7 +102,6 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useOpenLink } from "@/lib/links/open-link";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import {
   isNewConversationDraftOccupied,
   useNewConversationModalStore,
@@ -140,9 +142,11 @@ import {
   returnPendingSandboxSend,
   returnPendingSandboxMessage,
   returnPendingSandboxSendToDraft,
+  returnPendingSandboxSendToSandbox,
   pendingSandboxRecoveryDraftId,
   requestedAgentReadiness,
   type ReturnedPendingSandboxSend,
+  type ReturnedSandboxPick,
   type RequestedAgentReadiness,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
@@ -1097,6 +1101,7 @@ function useWatchedSandboxRow(
     send === null ? null : send.id,
   );
   const settings = useSandboxSettingsStatus(row.row);
+  const rowState = row.row?.state ?? null;
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
     settingsReady: settings.ready,
@@ -1126,7 +1131,7 @@ function useWatchedSandboxRow(
           .getState()
           .endDispatch(send.id, null, "terminal-row", environment)
       ) {
-        returnWatchedSend(send);
+        returnWatchedSend(send, stage, rowState);
       }
     }
     if (decision.effects.includes("rehydrate"))
@@ -1135,14 +1140,15 @@ function useWatchedSandboxRow(
       decision.effects.includes("return-message") ||
       decision.effects.includes("remove")
     ) {
-      returnWatchedSend(send);
+      returnWatchedSend(send, stage, rowState);
     }
   }, [
     decision,
     environment,
     row.failure,
+    rowState,
     send,
-    stage?.failure,
+    stage,
     surfaceKey,
     wake,
   ]);
@@ -1160,9 +1166,65 @@ function clearPendingSandboxFailure(surfaceKey: string): void {
   useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
 }
 
-function returnWatchedSend(send: PendingSandboxSend): void {
-  if (send.stopRequested === true) returnStoppedPendingSend(send.id);
-  else returnPendingSandboxSend(send.id);
+/**
+ * A new agent's message withdrawn because its sandbox rests goes back to its
+ * task's composer, still on that sandbox, and the task says so where its
+ * setup line was. Nothing opens: a rest is nobody's gesture.
+ */
+function returnWatchedSend(
+  send: PendingSandboxSend,
+  stage: StagedSandbox | null,
+  rowState: HostSandboxState | null,
+): void {
+  if (send.stopRequested === true) {
+    returnStoppedPendingSend(send.id);
+    return;
+  }
+  if (
+    send.request.kind !== "chat" ||
+    stage === null ||
+    restingVerb(rowState) === null
+  ) {
+    returnPendingSandboxSend(send.id);
+    return;
+  }
+  const returned = returnPendingSandboxSendToSandbox(
+    send.id,
+    returnedSandboxPick(send, stage, rowState),
+  );
+  if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
+    recordCancelledSandboxSend(send, returned);
+}
+
+/**
+ * The sandbox a send's message stays on in its task's composer, as that
+ * composer's own pick of it would be: an awake one is its host, a resting
+ * one is staged to wake, and one not created yet is its own stage again.
+ */
+function returnedSandboxPick(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  state: HostSandboxState | null,
+): ReturnedSandboxPick {
+  const { createdSandboxId, createdHostId, target } = stage;
+  if (createdSandboxId === null || createdHostId === null)
+    return { kind: "stage", target };
+  if (state === "awake") return { kind: "host", hostId: createdHostId };
+  return {
+    kind: "stage",
+    target: {
+      kind: "existing",
+      hostId: createdHostId,
+      sandboxId: createdSandboxId,
+      name:
+        target.name.length > 0
+          ? target.name
+          : stagedSandboxFallbackName(send.text),
+      configuration: target.configuration,
+      // Still on its way up: waking it joins that.
+      verb: restingVerb(state) ?? "resume",
+    },
+  };
 }
 
 /** Persist the kernel's live blocker in the setup line's existing representation. */
@@ -2849,6 +2911,7 @@ function pendingSandboxModelRecovery(input: {
   readonly tabId: string;
   readonly canWithdraw: boolean;
   readonly draftOccupied: boolean;
+  readonly pick: ReturnedSandboxPick;
 }): (() => void) | null {
   if (
     input.send.request.kind !== "chat" ||
@@ -2864,7 +2927,7 @@ function pendingSandboxModelRecovery(input: {
       stage: input.stage,
       tabId: input.tabId,
       restage: false,
-      keepHost: true,
+      pick: input.pick,
       modelPickerHarnessId: "traycer",
     });
   };
@@ -2963,16 +3026,19 @@ function PendingStagedSendItem(props: {
   if (stage === null || facts === null) {
     return <PendingSendMessage send={send} />;
   }
+  const rowState =
+    sandboxList.data?.sandboxes.find((row) => row.id === stage.createdSandboxId)
+      ?.state ?? null;
   const backToComposer = (
     restage: boolean,
-    keepHost: boolean,
+    pick: ReturnedSandboxPick | null,
   ): ReturnedPendingSandboxSend => {
     return endSendBackToComposer({
       send,
       stage,
       tabId: props.tabId,
       restage,
-      keepHost,
+      pick,
     });
   };
   const stop = (): void => {
@@ -2984,7 +3050,8 @@ function PendingStagedSendItem(props: {
           userId: send.userId,
           // Back in this task's composer, still on the stopped sandbox: its
           // send starts it again.
-          giveBack: () => backToComposer(false, true),
+          giveBack: () =>
+            backToComposer(false, returnedSandboxPick(send, stage, "stopped")),
         };
         stopAttention.set(send.id, attention.current);
       },
@@ -3001,10 +3068,11 @@ function PendingStagedSendItem(props: {
     tabId: props.tabId,
     canWithdraw,
     draftOccupied: taskDraftOccupied,
+    pick: returnedSandboxPick(send, stage, rowState),
   });
   const lineRemedies = pendingMessageRemedies(send, facts.offeredAgents, {
     onChooseModel: chooseModel,
-    onChooseAnotherHost: () => backToComposer(false, false),
+    onChooseAnotherHost: () => backToComposer(false, null),
   });
   return (
     <div
@@ -3038,7 +3106,10 @@ function PendingStagedSendItem(props: {
                 );
                 return;
               }
-              const returned = backToComposer(false, false);
+              const returned = backToComposer(
+                false,
+                returnedSandboxPick(send, stage, rowState),
+              );
               if (
                 !Object.hasOwn(
                   usePendingSandboxSendStore.getState().sends,
@@ -3051,7 +3122,7 @@ function PendingStagedSendItem(props: {
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),
-            onChangeShape: () => backToComposer(true, false),
+            onChangeShape: () => backToComposer(true, null),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,
@@ -3220,18 +3291,19 @@ function useOpenTerminalWhenUp(
 
 /**
  * Ends the send and puts the message back in this task's new-agent
- * composer, where the person picks a host again; `restage` stages the same
- * sandbox there, for a shape change, and `keepHost` names the sandbox the
- * send was made on (a Stop's give-back, a model recovery). A fork has no
- * message to put back: it ends, and the chat it came from is where to fork
- * again.
+ * composer, opened unnamed so its picker stays live. `pick` keeps it on the
+ * sandbox the send was made on (a Stop's give-back, Cancel, a model
+ * recovery), staged when it rests so the composer's Send wakes it again;
+ * `null` leaves the person to pick a host. `restage` stages the same
+ * sandbox's shape there, for a shape change. A fork has no message to put
+ * back: it ends, and the chat it came from is where to fork again.
  */
 function endSendBackToComposer(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly tabId: string;
   readonly restage: boolean;
-  readonly keepHost: boolean;
+  readonly pick: ReturnedSandboxPick | null;
   readonly modelPickerHarnessId?: GuiHarnessId;
 }): ReturnedPendingSandboxSend {
   const { send } = input;
@@ -3242,7 +3314,10 @@ function endSendBackToComposer(input: {
     )
   )
     return { kind: "none" };
-  const returned = returnPendingSandboxSend(send.id);
+  const returned =
+    input.pick === null
+      ? returnPendingSandboxSend(send.id)
+      : returnPendingSandboxSendToSandbox(send.id, input.pick);
   if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
     return returned;
   // A task that never came to be: its start-task draft holds the message.
@@ -3258,22 +3333,13 @@ function endSendBackToComposer(input: {
     useStagedSandboxStore.getState().stage(key, input.stage.target);
     openStagedShapeSheet(key);
   }
-  if (input.keepHost && input.stage.createdHostId !== null) {
-    useSurfaceHostSelectionStore
-      .getState()
-      .setSelection(
-        newConversationSurfaceKey(send.epicId),
-        input.stage.createdHostId,
-      );
-  }
   useNewConversationModalOpenStore.getState().open({
     epicId: send.epicId,
     tabId: input.tabId,
     placement: returned.kind === "task" ? returned.placement : null,
     parentId: returned.kind === "task" ? returned.parentId : null,
-    // Named, not only pinned: a pin on an offline sandbox falls back to
-    // another host, and a named one sends there or nowhere.
-    hostId: input.keepHost ? input.stage.createdHostId : null,
+    // Unnamed: a named host stages nothing, and refuses to send while it rests.
+    hostId: null,
     modelPickerHarnessId: input.modelPickerHarnessId,
   });
   return returned;
