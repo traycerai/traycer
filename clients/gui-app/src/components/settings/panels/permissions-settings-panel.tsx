@@ -51,6 +51,8 @@ import { EnvironmentHostBinding } from "@/components/settings/environment/enviro
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened,
@@ -153,6 +155,12 @@ function PermissionsBrowserAgentAccess(): ReactNode {
 const PERSONAL_PERMISSIONS_DESCRIPTION =
   "What your agents may do without asking, on every computer and sandbox running Personal.";
 
+function permissionsDescription(pick: EnvironmentPick): string {
+  return pick.kind === "personal"
+    ? PERSONAL_PERMISSIONS_DESCRIPTION
+    : "How much an agent may do on its own, and who reviews the rest.";
+}
+
 /** A machine's Permissions: the five tabs, three of them host-gated. */
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
@@ -228,11 +236,7 @@ function HostPermissionsSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Permissions"
-      description={
-        pick.kind === "personal"
-          ? PERSONAL_PERMISSIONS_DESCRIPTION
-          : "How much an agent may do on its own, and who reviews the rest."
-      }
+      description={permissionsDescription(pick)}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <Tabs
@@ -306,13 +310,17 @@ function HostPermissionsSettingsPanel(): ReactNode {
             />,
           )}
         </TabsContent>
-        <TabsContent
-          value="browser"
-          className="pt-5"
-          {...contentLabel("browser")}
-        >
-          <PermissionsBrowserAgentAccess />
-        </TabsContent>
+        {/* Settings > Browser's row in a build without environments
+            (`PERMISSIONS_TABS`). */}
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <TabsContent
+            value="browser"
+            className="pt-5"
+            {...contentLabel("browser")}
+          >
+            <PermissionsBrowserAgentAccess />
+          </TabsContent>
+        ) : null}
       </Tabs>
     </SettingsPanelShell>
   );

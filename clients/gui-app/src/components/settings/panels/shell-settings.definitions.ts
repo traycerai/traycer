@@ -1,5 +1,6 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // Both cards are replaced by a notice for a remote host too old to answer the
 // shell config RPC, and by a no-source notice for this computer's host with no
@@ -7,9 +8,12 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 export const SHELL = defineSettingsSection("shell", {
   page: {
     availableWhen: alwaysAvailable,
-    label: "Variables & shells",
-    description:
-      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+    // The page's names from before environments in a build without them
+    // (`unreleased-features.ts`).
+    label: UNRELEASED_FEATURES_ENABLED ? "Variables & shells" : "Shell",
+    description: UNRELEASED_FEATURES_ENABLED
+      ? "Plain values every computer and sandbox running Personal gets, and the shell agents run in."
+      : "How Traycer launches terminals, the host, and provider harnesses.",
     keywords: [
       "terminal",
       "bash",
@@ -25,7 +29,7 @@ export const SHELL = defineSettingsSection("shell", {
       "arguments",
       "wsl",
       "host environment",
-      "variables",
+      ...(UNRELEASED_FEATURES_ENABLED ? (["variables"] as const) : []),
       "env",
       "environment variables",
       "path",
@@ -46,7 +50,9 @@ export const SHELL = defineSettingsSection("shell", {
   hostEnvironment: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Variables · After restart",
+    label: UNRELEASED_FEATURES_ENABLED
+      ? "Variables · After restart"
+      : "Host environment · After restart",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,

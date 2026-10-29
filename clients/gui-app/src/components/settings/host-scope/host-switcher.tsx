@@ -58,6 +58,7 @@ import {
   splitNewRows,
   type HostSwitcherNewRow,
 } from "@/components/settings/host-scope/host-switcher-new-rows";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   IN_THIS_TASK_LABEL,
   MANAGE_SANDBOXES_IN_SETTINGS,
@@ -100,10 +101,14 @@ function hostSwitcherLabel(
 /**
  * What a host is called on the chip and its row. The composer and in-task
  * pickers call the machine this app runs on `This computer`, its own name
- * moving to the row's sub-line; every other list names it.
+ * moving to the row's sub-line, so it reads beside the sandbox rows; every
+ * other list names it, and so does a build without sandboxes
+ * (`unreleased-features.ts`).
  */
 function hostRowTitle(host: HostScopeOption, composer: boolean): string {
-  return composer && host.isLocalMachine ? THIS_COMPUTER : host.name;
+  return composer && host.isLocalMachine && UNRELEASED_FEATURES_ENABLED
+    ? THIS_COMPUTER
+    : host.name;
 }
 
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";
@@ -758,12 +763,16 @@ function HostSwitcherEmptyList(props: {
   );
 }
 
-/** The list's ending: the caller's action, or the composer's Manage row. */
+/**
+ * The list's ending: the caller's action, or the composer's Manage row. A
+ * build without sandboxes (`unreleased-features.ts`) has no Sandboxes page
+ * for that row to open, so the composer's list ends with its hosts.
+ */
 function hostSwitcherTrailingAction(
   action: HostSwitcherAction | null,
   composer: HostSwitcherComposerMode | null,
 ): (HostSwitcherActionPresentation & { readonly onSelect: () => void }) | null {
-  if (composer !== null) {
+  if (composer !== null && UNRELEASED_FEATURES_ENABLED) {
     return {
       label: MANAGE_SANDBOXES_IN_SETTINGS,
       icon: Settings,
@@ -1403,7 +1412,7 @@ function HostSwitcherRow(props: {
           host={host}
           title={title}
           subLines={[
-            composerComputerSubLine(host, selectable),
+            composerComputerSubLine(host, selectable, title !== host.name),
             ...props.subLines,
           ]}
         />

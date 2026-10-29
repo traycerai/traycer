@@ -854,6 +854,46 @@ Supporting pieces, all viewport-agnostic where possible:
 
 ## Team configuration sources
 
+A build without environments (`src/unreleased-features.ts`, off for the
+release that ships before they are ready) has no Environment dropdown and no
+Environment group: `settings-sections.ts` puts its pages under the Host
+picker in the release before's order and names (Overview, Providers,
+Worktrees, Notifications, Permissions, Agent selection, Model routing, Shell,
+Diagnostics), and every one of those pages reads the host the picker names,
+as before the feature: `usePersonalHostScope` resolves to the picker's own
+selection there (a vanished pick stays vanished), `useEnvironmentPick()` is
+that host as a Local row (never Personal, so every page takes its host arm,
+the Providers MCP and Skills tabs included), `PersonalPageFrame` wraps the
+page in a frame that reads no status, draws no chip, line or notice and never
+makes the page read-only, and none reads the cloud. The pages keep the copy
+they had before environments: the Agent selection page is the guide alone
+(no tab strip, no caption, its own description and "Revert to default"), the
+Shell page says "host env" and "Host environment", the API key and profile
+key lines say "Stored encrypted on this device", the composer's key paste
+draws no custody line, and the agent browser access switch is a row of
+Settings > Browser again (Permissions has no Browser tab, and
+`/settings/browser-agent-access` lands on Browser). No write mints or asks
+for an executable-write grant. Machine setup is not offered and its route
+redirects to Settings like the features' pages, and a routed panel for any
+page the build hides draws its replacement or General
+(`SettingsPanelForSection`). The Overview draws neither the
+configuration line, the settings card, the remote access question nor the
+Access and setup tab (`HOST_OVERVIEW_TABS` leaves `access` out and its groups
+are offered to no search), the Local row note and the move reminders are not
+drawn, and Credits, MCP servers, Skills, Secrets, Sandboxes and Members are
+not offered. Permissions keeps its earlier words too: the page's search
+description reads "How much an agent may do on its own, and who reviews the
+rest.", Rules names its first section "Environment" and its footer is Discard
+and Save with no **Reset to default**, and the Modes row carries the "All
+machines" badge and the note that the machine picker above changes nothing on
+that tab instead of the "This app only" caption. Searching for MCP servers or
+Skills lands on Providers, where each provider's own tabs for them are, and
+the Providers variables group is "Environment variables" again, as the page
+itself reads. Every host picker outside Settings lists one "Host" group, with
+its search above six hosts, the layout before sandboxes. The suites describe the build with
+everything on (`__tests__/test-browser-apis.ts` mocks the switch to `true`);
+a suite of the switched-off build mocks it to `false` itself.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the

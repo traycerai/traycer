@@ -184,12 +184,24 @@ describe("settings search assembly", () => {
         ),
     );
     // The glob found the modules at all — an empty match would pass the
-    // membership checks below vacuously.
-    expect(exported.length).toBe(SEARCHABLE_SECTION_IDS.length);
-    const unassembled = exported
-      .filter(({ value }) => !SETTINGS_SEARCH_COLLECTIONS.includes(value))
-      .map(({ label }) => label);
-    expect(unassembled).toEqual([]);
+    // membership checks below vacuously. A section may export two variants
+    // of its collection (Getting started: the first steps, or the 1.5.1
+    // guides in a build without environments), of which the assembly lists
+    // exactly one.
+    const bySection = new Map<string, string[]>();
+    for (const { label, value } of exported) {
+      bySection.set(value.section, [
+        ...(bySection.get(value.section) ?? []),
+        ...(SETTINGS_SEARCH_COLLECTIONS.includes(value) ? [label] : []),
+      ]);
+    }
+    expect([...bySection.keys()].sort()).toEqual(
+      [...SEARCHABLE_SECTION_IDS].sort(),
+    );
+    const misassembled = [...bySection]
+      .filter(([, assembled]) => assembled.length !== 1)
+      .map(([section, assembled]) => `${section}: ${assembled.join(", ")}`);
+    expect(misassembled).toEqual([]);
   });
 
   it("is exactly its collections' entries, then the Layout launch results", () => {

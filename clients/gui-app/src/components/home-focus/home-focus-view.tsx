@@ -57,6 +57,7 @@ import {
 import { HomeHostGroupedContext } from "@/components/home-focus/home-host-grouped-context";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
 import { HomeBotsSection } from "@/components/home/bots/home-bots-section";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
   useAuthStore,
@@ -432,7 +433,7 @@ export function HomeFocusView(): ReactNode {
             page with nothing running still lists the bots and lets one be
             created, and a host without bots hides the band with a notice of
             its own rather than emptying the page. */}
-        <HomeBotsSection />
+        {UNRELEASED_FEATURES_ENABLED ? <HomeBotsSection /> : null}
         {empty ? (
           <HomeFocusEmptyState />
         ) : (
