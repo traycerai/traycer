@@ -66,8 +66,10 @@ import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   parseReturnedSandbox,
   returnedSandboxToJson,
-  sameReturnedSandbox,
+  sameStoredReturnedSandbox,
+  storeReturnedSandbox,
   type ReturnedSandbox,
+  type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
 import {
   landingPlacementHostId,
@@ -133,7 +135,7 @@ export interface LandingDraftTab {
    * to this device: the landing composer stages it again while it holds no
    * pick of its own, so the draft's Send goes there even after a reload.
    */
-  readonly returnedSandbox: ReturnedSandbox | null;
+  readonly returnedSandbox: StoredReturnedSandbox | null;
 }
 
 export type LandingDraftAdoption =
@@ -266,12 +268,13 @@ interface LandingDraftStoreState {
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
   /**
-   * Records or forgets where the draft's given-back message was going. Not an
-   * edit: nothing is published, and the draft's place in the LRU stays.
+   * Records, under the signed-in account, or forgets where the draft's
+   * given-back message was going. Not an edit: nothing is published, and the
+   * draft's place in the LRU stays.
    */
   setDraftReturnedSandbox: (
     id: string,
-    returned: ReturnedSandbox | null,
+    returned: ReturnedSandbox | StoredReturnedSandbox | null,
   ) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
@@ -957,9 +960,13 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         notifyDraftLocalEdit(id);
       },
 
-      setDraftReturnedSandbox: (id, returned) => {
+      setDraftReturnedSandbox: (id, given) => {
         const draft = get().drafts.find((d) => d.id === id);
-        if (!draft || sameReturnedSandbox(draft.returnedSandbox, returned))
+        const returned = given === null ? null : storeReturnedSandbox(given);
+        if (
+          !draft ||
+          sameStoredReturnedSandbox(draft.returnedSandbox, returned)
+        )
           return;
         set((state) => ({
           drafts: state.drafts.map((d) =>
@@ -1156,7 +1163,7 @@ function areLandingDraftsEqual(
     }
     if (left[index].closed !== right[index].closed) return false;
     if (
-      !sameReturnedSandbox(
+      !sameStoredReturnedSandbox(
         left[index].returnedSandbox,
         right[index].returnedSandbox,
       )
@@ -1966,7 +1973,7 @@ function incomingClosedState(
  */
 function keptReturnedSandbox(
   existing: LandingDraftTab | undefined,
-): ReturnedSandbox | null {
+): StoredReturnedSandbox | null {
   return existing?.returnedSandbox ?? null;
 }
 

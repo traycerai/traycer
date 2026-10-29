@@ -905,7 +905,7 @@ describe("a returned sandbox on the open landing draft", () => {
       useLandingDraftStore
         .getState()
         .drafts.find((draft) => draft.id === "draft-other")?.returnedSandbox,
-    ).toEqual(otherDraft);
+    ).toEqual({ ...otherDraft, userId: "u1" });
   });
 
   it("never releases the person's pick of the same sandbox a draft had returned", () => {

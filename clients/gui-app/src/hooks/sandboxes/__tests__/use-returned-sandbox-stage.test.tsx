@@ -6,15 +6,26 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { deleteNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
+import type { DraftDocument } from "@traycer/protocol/host";
+import {
+  deleteLandingDraftRow,
+  deleteNewChatDraftRow,
+} from "@/lib/drafts/draft-inventory-actions";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
-import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
+import type {
+  ReturnedSandbox,
+  StoredReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  applyNewChatHostDocument,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -50,6 +61,11 @@ const RETURNED: ReturnedSandbox = {
   clientRequestId: null,
 };
 
+/** As a draft keeps it: under the account that was signed in. */
+function stored(returned: ReturnedSandbox): StoredReturnedSandbox {
+  return { ...returned, userId: "user-a" };
+}
+
 const LOCAL_PICK: StagedSandboxTarget = {
   kind: "existing",
   hostId: "other-host",
@@ -82,7 +98,7 @@ function mountComposer(): void {
   renderHook(() => useNewConversationReturnedSandbox(EPIC_ID, null));
 }
 
-function returnedOnDraft(): ReturnedSandbox | undefined {
+function returnedOnDraft(): StoredReturnedSandbox | undefined {
   return useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
     ?.returnedSandbox;
 }
@@ -91,12 +107,14 @@ beforeEach(() => {
   localStorage.clear();
   useNewConversationModalStore.getState().resetForTests();
   useStagedSandboxStore.setState({ bySurface: {} });
+  signInAs("user-a");
 });
 
 afterEach(() => {
   cleanup();
   useNewConversationModalStore.getState().resetForTests();
   useStagedSandboxStore.setState({ bySurface: {} });
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   localStorage.clear();
 });
 
@@ -117,7 +135,7 @@ describe("useNewConversationReturnedSandbox", () => {
       target: LOCAL_PICK,
       clientRequestId: null,
     });
-    expect(returnedOnDraft()).toEqual(RETURNED);
+    expect(returnedOnDraft()).toEqual(stored(RETURNED));
   });
 
   it("stages nothing after the draft is deleted from Drafts and the window reloads", async () => {
@@ -157,7 +175,7 @@ describe("a restored stage leaves with its draft", () => {
     composer.unmount();
 
     expect(readStagedSandbox(SURFACE)).toBeNull();
-    expect(returnedOnDraft()).toEqual(keyed);
+    expect(returnedOnDraft()).toEqual(stored(keyed));
 
     mountComposer();
 
@@ -165,6 +183,82 @@ describe("a restored stage leaves with its draft", () => {
       target: keyed.target,
       clientRequestId: "key-1",
     });
+  });
+});
+
+describe("a task draft deleted while its composer shows it", () => {
+  it("takes its restored stage with it", () => {
+    act(() => {
+      const drafts = useNewConversationModalStore.getState();
+      drafts.setContent(EPIC_ID, MESSAGE);
+      drafts.setReturnedSandbox(EPIC_ID, {
+        ...RETURNED,
+        clientRequestId: "key-1",
+      });
+    });
+    mountComposer();
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId ?? null;
+    if (draftId === null) throw new Error("expected a draft id");
+    expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe("key-1");
+
+    act(() => {
+      deleteNewChatDraftRow(
+        { epicId: EPIC_ID, draftId, ownerHostId: null },
+        null,
+      );
+    });
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+});
+
+describe("a task draft the host replaces with another line while its composer shows it", () => {
+  it("takes its restored stage with it, so the new line holds none", () => {
+    act(() => {
+      const drafts = useNewConversationModalStore.getState();
+      drafts.setContent(EPIC_ID, MESSAGE);
+      drafts.setReturnedSandbox(EPIC_ID, {
+        ...RETURNED,
+        clientRequestId: "key-1",
+      });
+      // The draft's text has reached the host: its next document lands.
+      useNewConversationModalStore.setState((state) => {
+        const patch = state.draftPatchesByEpicId[EPIC_ID];
+        if (patch === undefined) throw new Error("expected the draft");
+        return {
+          draftPatchesByEpicId: {
+            [EPIC_ID]: { ...patch, syncedGeneration: patch.generation },
+          },
+        };
+      });
+    });
+    mountComposer();
+    expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe("key-1");
+
+    act(() => {
+      applyNewChatHostDocument(newLineDocument("draft-other-line"));
+    });
+
+    expect(returnedOnDraft()).toBeUndefined();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+});
+
+describe("a returned sandbox across an account switch", () => {
+  it("is never restored into the next account's task composer", () => {
+    signInAs("user-a");
+    giveBack();
+    // The switch clears every stage (`auth-lifecycle-bridge`); the draft stays.
+    signInAs("user-b");
+    useStagedSandboxStore.getState().clearAll();
+
+    mountComposer();
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    act(() => signInAs("user-a"));
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
   });
 });
 
@@ -193,7 +287,7 @@ describe("a restored stage a send has taken up", () => {
         phase,
         target: RETURNED.target,
       });
-      expect(returnedOnDraft()).toEqual(RETURNED);
+      expect(returnedOnDraft()).toEqual(stored(RETURNED));
     },
   );
 });
@@ -201,7 +295,10 @@ describe("a restored stage a send has taken up", () => {
 describe("useLandingReturnedSandbox", () => {
   const WINDOW_SURFACE = "landing:window-test";
 
-  function installReturnedDraft(id: string, returned: ReturnedSandbox): void {
+  function installReturnedDraft(
+    id: string,
+    returned: ReturnedSandbox | null,
+  ): void {
     const drafts = useLandingDraftStore.getState();
     drafts.installLandingDraft({
       id,
@@ -222,6 +319,45 @@ describe("useLandingReturnedSandbox", () => {
 
   afterEach(() => {
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  it("takes a deleted draft's restored stage off the composer, so the next draft shown holds none", () => {
+    installReturnedDraft("draft-a", { ...RETURNED, clientRequestId: "key-a" });
+    installReturnedDraft("draft-b", null);
+    const composer = renderHook<void, { readonly draftId: string }>(
+      (props) => useLandingReturnedSandbox(WINDOW_SURFACE, props.draftId, true),
+      { initialProps: { draftId: "draft-a" } },
+    );
+    expect(readStagedSandbox(WINDOW_SURFACE)?.clientRequestId).toBe("key-a");
+    const shown = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "draft-a");
+    if (shown === undefined) throw new Error("expected draft A");
+
+    act(() => {
+      deleteLandingDraftRow(shown, null, null);
+    });
+    composer.rerender({ draftId: "draft-b" });
+
+    expect(readStagedSandbox(WINDOW_SURFACE)).toBeNull();
+    expect(
+      Object.values(useStagedSandboxStore.getState().bySurface).map(
+        (stage) => stage?.clientRequestId,
+      ),
+    ).not.toContain("key-a");
+  });
+
+  it("never restores another account's returned sandbox into this window's composer", () => {
+    signInAs("user-a");
+    installReturnedDraft("draft-a", RETURNED);
+    signInAs("user-b");
+    useStagedSandboxStore.getState().clearAll();
+
+    renderHook(() =>
+      useLandingReturnedSandbox(WINDOW_SURFACE, "draft-a", true),
+    );
+
+    expect(readStagedSandbox(WINDOW_SURFACE)).toBeNull();
   });
 
   it("stages only the shown draft's sandbox when a hidden draft's composer is also mounted", () => {
@@ -284,15 +420,15 @@ describe("useLandingReturnedSandbox", () => {
         target: second.target,
         clientRequestId: null,
       });
-      expect(landingReturned("draft-a")).toEqual(first);
-      expect(landingReturned("draft-b")).toEqual(second);
+      expect(landingReturned("draft-a")).toEqual(stored(first));
+      expect(landingReturned("draft-b")).toEqual(stored(second));
 
       show("draft-a");
       expect(readStagedSandbox(WINDOW_SURFACE)).toMatchObject({
         target: first.target,
         clientRequestId: "key-a",
       });
-      expect(landingReturned("draft-b")).toEqual(second);
+      expect(landingReturned("draft-b")).toEqual(stored(second));
     },
   );
 });
@@ -335,8 +471,47 @@ function mountLanding(
   return (draftId) => composers.rerender({ shown: draftId });
 }
 
-function landingReturned(draftId: string): ReturnedSandbox | null | undefined {
+function landingReturned(
+  draftId: string,
+): StoredReturnedSandbox | null | undefined {
   return useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === draftId)?.returnedSandbox;
+}
+
+function signInAs(userId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId, username: userId },
+  });
+}
+
+/** The host's document for another draft line in this task's composer. */
+function newLineDocument(draftId: string): DraftDocument {
+  return {
+    draftId,
+    kind: "new-chat",
+    target: { epicId: EPIC_ID, chatId: null, blockId: null },
+    revision: 1,
+    lastTouchedAt: 1,
+    workspace: null,
+    ownerHostId: "owner-host",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "owner-host" },
+    publication: {
+      status: "unpublished",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+    supersedes: null,
+    portable: {
+      content: MESSAGE,
+      selection: null,
+      runSettings: null,
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+  };
 }
