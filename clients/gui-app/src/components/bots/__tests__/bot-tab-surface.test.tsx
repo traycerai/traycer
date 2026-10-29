@@ -1379,6 +1379,33 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ).toBe("none");
   });
 
+  it.each([
+    { leaveBy: "the Activity tab", leave: "bot-tab-view-activity" },
+    {
+      leaveBy: "the channel's Activity link",
+      leave: "stub-channel-open-activity",
+    },
+  ])(
+    "lands the channel on a send's post once: leaving Messages by $leaveBy and coming back does not land again",
+    async ({ leave }) => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+      await user.click(screen.getByTestId("stub-session-post"));
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+      ).toBe("post-1");
+
+      await user.click(screen.getByTestId(leave));
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      await user.click(screen.getByTestId("bot-tab-view-messages"));
+
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+      ).toBe("none");
+    },
+  );
+
   it("opens a thread's session from its panel, and shows that thread beside the channel by its post from the session", async () => {
     const user = userEvent.setup();
     mocks.state.threads = [

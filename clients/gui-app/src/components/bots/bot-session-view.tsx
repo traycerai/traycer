@@ -108,7 +108,7 @@ export function BotSessionView(props: {
       aria-label={title}
       data-testid="bot-session-view"
       data-chat-id={session.chatId}
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      className="flex min-h-0 min-w-0 flex-1 flex-col pb-safe-bottom"
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
         <Button

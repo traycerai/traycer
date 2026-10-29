@@ -380,6 +380,7 @@ function useBotTabRail(
  * so the same turn opened again lands again. The session's links show the
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
+ * The channel lands on a post once: leaving Messages drops the landing.
  */
 function useBotTabSession(args: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
@@ -391,6 +392,7 @@ function useBotTabSession(args: {
   readonly openSession: BotSessionOpen;
   readonly openTurn: BotTurnOpen;
   readonly closeSession: () => void;
+  readonly changeView: (view: BotTabView) => void;
   readonly showChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string) => void;
 } {
@@ -439,6 +441,21 @@ function useBotTabSession(args: {
     },
     [onViewChange],
   );
+  // Leaving Messages spends the channel's landing: the channel mounts again
+  // when Messages shows, and must not land on that post a second time.
+  const changeView = useCallback(
+    (view: BotTabView) => {
+      if (view !== "messages") {
+        setShown((previous) =>
+          previous.channelLanding === null
+            ? previous
+            : { ...previous, channelLanding: null },
+        );
+      }
+      onViewChange(view);
+    },
+    [onViewChange],
+  );
   // A thread the list does not name has no post to open it by: the channel
   // shows instead.
   const showThread = useCallback(
@@ -463,6 +480,7 @@ function useBotTabSession(args: {
     openSession,
     openTurn,
     closeSession,
+    changeView,
     showChannel,
     showThread,
   };
@@ -549,10 +567,6 @@ function BotTabContent(props: {
       environmentBots?.find((bot) => bot.botId === otherBotId)?.title ?? null,
     [environmentBots],
   );
-  const openActivity = useCallback(
-    () => onViewChange("activity"),
-    [onViewChange],
-  );
   // Any host with the list lists the threads; Activity names a thread's work
   // by it, and the label tells a thread's session from the bot's other chats.
   const threadListSupported =
@@ -567,9 +581,11 @@ function BotTabContent(props: {
     openSession,
     openTurn,
     closeSession,
+    changeView,
     showChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
     trunkChatId: snapshot.bot.trunkChatId,
@@ -645,7 +661,7 @@ function BotTabContent(props: {
               <Tabs
                 value={view}
                 onValueChange={(next) => {
-                  if (isBotTabView(next)) onViewChange(next);
+                  if (isBotTabView(next)) changeView(next);
                 }}
                 className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
               >
