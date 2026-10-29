@@ -231,6 +231,8 @@ function instancesNow(): SimulatorInstancesResponse {
 
 const opens: unknown[] = [];
 const shutdowns: unknown[] = [];
+/** Whether the host's instance read refuses, as a dropped dial does. */
+const instancesFail = { on: false };
 /** Whether the picker reached the host at all: the read that handshakes it. */
 const reads = { list: 0 };
 
@@ -270,6 +272,19 @@ async function tickPackPoll(): Promise<void> {
   await act(async () => {
     await queryClient.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(HOST, "simulator.status"),
+    });
+  });
+}
+
+/**
+ * Makes the next `simulator.instances` read happen now, as its poll would -
+ * and only that read, so `simulator.list` stays on the answer it is holding,
+ * which is the picker's two freshnesses as the person meets them.
+ */
+async function tickInstancePoll(): Promise<void> {
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(HOST, "simulator.instances"),
     });
   });
 }
@@ -353,6 +368,7 @@ describe("SimulatorCreatePicker", () => {
     freshQueryClient();
     opens.length = 0;
     shutdowns.length = 0;
+    instancesFail.on = false;
     reads.list = 0;
     resetBootState();
     pack.state = READY_PACK;
@@ -369,7 +385,10 @@ describe("SimulatorCreatePicker", () => {
           return listNow();
         },
         "simulator.status": () => statusNow(),
-        "simulator.instances": () => instancesNow(),
+        "simulator.instances": () => {
+          if (instancesFail.on) throw new Error("dial refused");
+          return instancesNow();
+        },
         "config.simulator.set": () => {
           // The host takes the flip and starts fetching the tools.
           pack.state = { kind: "installing", reason: null, progress: 0 };
@@ -567,6 +586,49 @@ describe("SimulatorCreatePicker", () => {
     });
   });
 
+  it("offers no Boot for a device the instance read shows running, however the device list still calls it", async () => {
+    // A boot this client did not send - an agent's, another window's. The
+    // host-wide instance read polls and picks it up; `simulator.list` is
+    // inside its freshness window with `booted: false` for that device and
+    // nothing to move it, which is what put the same device under Running
+    // and under Not running with a live Boot button at once.
+    queryClient = createAppQueryClient();
+    const user = await openPicker();
+    expect(
+      await screen.findByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+
+    booted.add("udid-cold");
+    await tickInstancePoll();
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("simulator-picker-running-udid-cold"),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
+    await user.keyboard("{Escape}");
+  });
+
+  it("says it couldn't reach the machine when the instance read stops answering, rather than drawing its last instances", async () => {
+    const user = await openPicker();
+    await screen.findByTestId("simulator-picker-running-udid-1");
+
+    // The instance poll is the Running section's only input, and a failed
+    // refetch keeps its last answer: the person has to be told the machine
+    // stopped confirming it.
+    instancesFail.on = true;
+    await tickInstancePoll();
+
+    expect(
+      await screen.findByText("Couldn't reach Studio Mac."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("simulator-picker-running-udid-1"),
+    ).toBeNull();
+    await user.keyboard("{Escape}");
+  });
+
   it("leaves the off state and lists the cold devices once the switch is on and the pack has installed", async () => {
     pack.state = { kind: "off", reason: null, progress: null };
     const user = await openPicker();
@@ -656,6 +718,7 @@ describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
     freshQueryClient();
     opens.length = 0;
     shutdowns.length = 0;
+    instancesFail.on = false;
     reads.list = 0;
     resetBootState();
     pack.state = READY_PACK;
