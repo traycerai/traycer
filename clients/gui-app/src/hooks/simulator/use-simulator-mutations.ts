@@ -66,12 +66,17 @@ const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
 /**
  * The reads a boot or a power off moves host-wide: the instances themselves,
  * and the DEVICES, whose `booted` flag is what the + picker's Not running
- * section lists and what stands in for an instance on a `@1.0` host.
+ * section lists and what stands in for an instance on a `@1.0` host. Dropping
+ * the devices leaves a booted one offering Boot for the 60 s freshness window -
+ * the instance poll does not touch that read, and the picker's pack-following
+ * effect never fires, because a boot does not move the pack.
+ *
+ * Shared with the instance open (`useSimulatorInstanceOpen`), which sends its
+ * own `simulator.open` and sweeps the same pair.
  */
-const INSTANCE_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
-  "simulator.instances",
-  "simulator.list",
-];
+export const INSTANCE_INVALIDATIONS: ReadonlyArray<
+  keyof HostRpcRegistry & string
+> = ["simulator.instances", "simulator.list"];
 
 /** The machine-user-global switch on `hostId`. */
 export function useSimulatorConfigQuery(
