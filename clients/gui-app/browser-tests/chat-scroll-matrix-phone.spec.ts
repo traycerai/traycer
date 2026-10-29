@@ -9,7 +9,7 @@ import {
   type ChatScrollView,
   type ReaderIntent,
 } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * The PHONE family of the chat-scroll scenario matrix: the real transcript
@@ -415,7 +415,7 @@ for (const remount of REMOUNTS) {
       await startStream(page);
       await page.waitForTimeout(300);
       await page.mouse.move(X, 400);
-      await page.mouse.wheel(0, -300);
+      await wheelsDelivered(page, [{ deltaX: 0, deltaY: -300 }], 0);
       await page.waitForTimeout(200);
       await stopStream(page);
       const before = await settle(page, 12);

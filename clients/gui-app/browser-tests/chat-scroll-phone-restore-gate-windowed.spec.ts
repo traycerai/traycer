@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readView, settle, startTimeline } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * R3 on the windowed line: the saved FREE anchor is in a turn that is not
@@ -97,10 +97,12 @@ for (const variant of ["plain", "no-touchmove", "control"] as const) {
 
     // Park deep in the scrollback that was cold at mount.
     await page.mouse.move(X, 400);
-    for (let i = 0; i < 6; i += 1) {
-      await page.mouse.wheel(0, -1200);
-      await nextFrames(page, 2);
-    }
+    await wheelsDelivered(
+      page,
+      Array.from({ length: 6 }, () => ({ deltaX: 0, deltaY: -1200 })),
+      2,
+    );
+    await nextFrames(page, 2);
     await expect
       .poll(
         () =>

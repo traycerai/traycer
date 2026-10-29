@@ -5,7 +5,7 @@ import {
   intentOf,
   settle,
 } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * R4 (ported from chat-scroll-diag-long-anchor.spec.ts): the saved reading
@@ -59,13 +59,17 @@ async function scrollInto(page: Page, id: number, into: number): Promise<void> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const top = await replyTop(page, id);
     if (top === null) {
-      await page.mouse.wheel(0, -1500);
+      await wheelsDelivered(page, [{ deltaX: 0, deltaY: -1500 }], 0);
       await settle(page, 6);
       continue;
     }
     const delta = top + into;
     if (Math.abs(delta) <= 2) return;
-    await page.mouse.wheel(0, Math.max(-1500, Math.min(1500, delta)));
+    await wheelsDelivered(
+      page,
+      [{ deltaX: 0, deltaY: Math.max(-1500, Math.min(1500, delta)) }],
+      0,
+    );
     await settle(page, 6);
   }
 }

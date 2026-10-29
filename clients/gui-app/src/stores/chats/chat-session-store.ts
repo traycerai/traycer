@@ -282,7 +282,7 @@ import type {
   InterviewAnswer,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { latestAssistantAuthFailureTurnKey } from "@traycer/protocol/persistence/chat-transcript/provider-auth-failure";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import {
   buildTextOnlyPromptHandoff,
   buildUnrecordedPromptHandoff,
@@ -7302,7 +7302,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         const releaseCaptureRoots = (): void => {
           handoffCaptureRoots.delete(captureId);
         };
+        // Every attempt for this prompt lands in one draft: an install whose
+        // write is refused keeps its row in memory, and the next attempt
+        // takes that row rather than adding another copy.
+        const recovery = {
+          draftId: chatTeardownDraftId(source.clientActionId),
+          settings: null,
+        };
         void buildUnrecordedPromptHandoff({
+          recovery,
           content: source.content,
           browserAnnotations: source.browserAnnotations,
           reason: source.reason,
@@ -7330,6 +7338,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // same oversized document and was refused all over again.
           .catch(() =>
             buildTextOnlyPromptHandoff({
+              recovery,
               content: source.content,
               // Not carried - a landing draft owns no annotation sidecar - but
               // passed so the draft can SAY the sidecar was dropped rather
@@ -13920,6 +13929,16 @@ interface UnrecordedPrompt {
    * composer, so each needs its worktree named and a re-pick asked for.
    */
   readonly reason: string;
+}
+
+/**
+ * The draft a prompt handed off at teardown lives in, from the prompt's own
+ * identity: the same prompt always lands in the same draft. Once the person
+ * deletes that draft, its id is retired, and the prompt is not handed off
+ * again.
+ */
+function chatTeardownDraftId(clientActionId: string): string {
+  return uuidv5(`chat-teardown:${clientActionId}:recovered`, uuidv5.URL);
 }
 
 /**

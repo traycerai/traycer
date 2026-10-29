@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { settle } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * A reader's gesture during a reopen's restore is the reader's position, and
@@ -108,10 +108,10 @@ const rowTopsOf = (page: Page): Promise<Record<string, number>> =>
  *  a free reading row. The saved entry is written when the tile unmounts or
  *  hides, so a free reading row is what shows here. */
 async function park(page: Page): Promise<Reading> {
-  await page.mouse.wheel(0, 100_000);
+  await wheelsDelivered(page, [{ deltaX: 0, deltaY: 100_000 }], 0);
   await settle(page, 12);
   for (let attempt = 0; attempt < PARK_ATTEMPTS; attempt += 1) {
-    await page.mouse.wheel(0, -600);
+    await wheelsDelivered(page, [{ deltaX: 0, deltaY: -600 }], 0);
     await settle(page, 12);
     const reading = await readingOf(page);
     const mode = await page.evaluate(() => window.__chatScrollProbe.mode());
