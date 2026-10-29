@@ -598,11 +598,14 @@ test.describe("C10: keyboard", () => {
               1,
             );
           if (key === "PageUp" && !streaming) {
+            // Measured from the end, not as scrollTop: the list may refresh
+            // the estimates of unmeasured rows above the reader in an
+            // anchored pass, which moves scrollTop by their change while the
+            // reader sees nothing move. The rows below the reader are
+            // measured and still while idle.
             expect(
-              Math.abs(
-                after.scrollTop - (before.scrollTop - before.clientHeight),
-              ),
-              `PageUp moves one page (from ${String(before.scrollTop)} to ${String(after.scrollTop)})`,
+              Math.abs(after.fromEnd - before.fromEnd - before.clientHeight),
+              `PageUp moves one page from the end (fromEnd ${String(before.fromEnd)} to ${String(after.fromEnd)}, scrollTop ${String(before.scrollTop)} to ${String(after.scrollTop)})`,
             ).toBeLessThanOrEqual(2);
           }
           // A key that cannot leave the tail (PageDown there) keeps the tail, and
