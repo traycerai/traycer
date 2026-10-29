@@ -79,14 +79,16 @@ function locate(input: {
   return result.current;
 }
 
-describe("useChatLocateRow", () => {
-  beforeEach(() => {
-    answer.value = undefined;
-    captured.value = null;
-    status.fetching = false;
-    status.rejected = false;
-  });
+// Every case starts from a query with no answer, nothing in flight and no
+// rejection, whichever describe it is in.
+beforeEach(() => {
+  answer.value = undefined;
+  captured.value = null;
+  status.fetching = false;
+  status.rejected = false;
+});
 
+describe("useChatLocateRow", () => {
   it("takes an ordinal numbered in the epoch the caller is holding", () => {
     expect(
       locate({ epoch: 7, response: { found: true, ordinal: 42, epoch: 7 } }),
