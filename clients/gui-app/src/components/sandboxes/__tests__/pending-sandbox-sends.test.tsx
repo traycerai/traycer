@@ -5582,6 +5582,48 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     });
   });
 
+  it("leaves another sandbox the person staged in the task's composer, and saves the message in drafts", async () => {
+    await mountHeld();
+    const taskSurface = newConversationSurfaceKey("epic-1");
+    const otherSandbox: StagedSandboxTarget = {
+      ...RESUME_TARGET,
+      hostId: "other-sbx-host",
+      sandboxId: "sbx-2",
+      name: "other-box",
+    };
+    act(() => {
+      useStagedSandboxStore.getState().stage(taskSurface, otherSandbox);
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(taskSurface, "other-sbx-host");
+    });
+
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(readStagedSandbox(taskSurface)).toMatchObject({
+      phase: "staged",
+      target: otherSandbox,
+    });
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[taskSurface],
+    ).toBe("other-sbx-host");
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.content,
+    ).not.toEqual(MESSAGE_CONTENT);
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+    ]);
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "Your message wasn't sent; it's saved in your drafts.",
+    );
+  });
+
   it("puts a cancelled message back in this task's composer on the awake sandbox", async () => {
     await mountHeld();
 
