@@ -25,9 +25,12 @@ import { postTextOf } from "@/lib/bots/reply-row";
  * posted, its Markdown rendered as the channel renders it, a reply's choices and a question's options drawn as they read, with
  * nothing to press but the link to where it landed: the post a reply or
  * question follows, the thread, or the channel. What in a task a send
- * pointed at (T89) is named under its text, never acted on. A question or an
- * approval - asked, or pointed at - is answered there, never here. Outside a
- * bot's session it names no place and links nowhere.
+ * pointed at (T89) is named under its text, never acted on. A question is
+ * drawn as the bot asked it and claims no state - neither open nor answered
+ * nor settled: the tool call does not name the post it wrote, so the
+ * settlement arrives with the host stamping that post on the call. Nothing
+ * is answered here. Outside a bot's session it names no place and links
+ * nowhere.
  */
 export function BotSendCard(props: {
   readonly id: string;
@@ -177,19 +180,13 @@ function SendLink(props: {
   );
 }
 
-/** Whether a send waits on the person's answer: a question it asked, or one or an approval it pointed at. */
-function asksTheReader(send: BotSend): boolean {
-  if (send.kind === "ask") return true;
-  return send.surface === "question" || send.surface === "approval";
-}
-
 function sendLinkLabel(
   send: BotSend,
   inThread: boolean,
   followsPost: boolean,
 ): string {
-  if (asksTheReader(send)) {
-    return inThread ? "Answer in the thread" : "Answer in the channel";
+  if (send.kind === "ask") {
+    return inThread ? "Open in the thread" : "Open in the channel";
   }
   if (inThread) return "Open thread";
   return followsPost ? "Open post" : "Open channel";

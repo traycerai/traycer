@@ -405,7 +405,7 @@ describe("a bot's trunk session, read whole", () => {
     expect(opened.channel).toHaveBeenCalledWith(POST_ID);
   });
 
-  it("draws the bot's question with nothing to press but Answer in the channel, which shows the channel at the post it follows", async () => {
+  it("draws the bot's question as it asked it, claiming no state, with nothing to press but Open in the channel, which shows the channel at the post it follows", async () => {
     const user = userEvent.setup();
     mountTrunk(null);
     await settleLegendList();
@@ -419,10 +419,16 @@ describe("a bot's trunk session, read whole", () => {
       within(ask)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Answer in the channel"]);
+    ).toEqual(["Open in the channel"]);
+    expect(
+      within(ask)
+        .getAllByTestId("bot-send-option")
+        .map((option) => option.textContent),
+    ).toEqual(["Keep it", "Bump now"]);
+    expect(ask.textContent).not.toMatch(/answer|open question|settled/i);
 
     await user.click(
-      within(ask).getByRole("button", { name: "Answer in the channel" }),
+      within(ask).getByRole("button", { name: "Open in the channel" }),
     );
 
     expect(opened.channel).toHaveBeenCalledWith(POST_ID);
@@ -503,7 +509,7 @@ describe("a bot's trunk session, read whole", () => {
     expect(view().textContent).toContain("traycer_reply");
   });
 
-  it("names an agent's question the bot pointed at, with nothing to press but Answer in the channel", async () => {
+  it("names an agent's question the bot pointed at, with nothing to press but the link to the post it follows", async () => {
     const user = userEvent.setup();
     mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
       checkinPrompt(),
@@ -544,11 +550,10 @@ describe("a bot's trunk session, read whole", () => {
       within(reply)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Answer in the channel"]);
+    ).toEqual(["Open post"]);
+    expect(reply.textContent).not.toMatch(/answer/i);
 
-    await user.click(
-      within(reply).getByRole("button", { name: "Answer in the channel" }),
-    );
+    await user.click(within(reply).getByRole("button", { name: "Open post" }));
 
     expect(opened.channel).toHaveBeenCalledWith(POST_ID);
   });

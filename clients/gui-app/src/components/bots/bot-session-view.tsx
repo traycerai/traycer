@@ -36,7 +36,7 @@ export interface BotOpenSession {
  * jump, in place of the channel, which needs their width. Nothing in it acts
  * on the session: no box, and the footer says where the bot is spoken to.
  * The bot's sends read as sends (`BotSendCard`): where each went and what it
- * said, linked to where it landed, a question answered there.
+ * said, linked to where it landed.
  */
 export function BotSessionView(props: {
   readonly botId: string;
