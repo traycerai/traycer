@@ -311,6 +311,24 @@ describe("TeamVariablesAndShells", () => {
     expect(harness.paramsOf("config.shell.get")).toHaveLength(0);
   });
 
+  it("claims nothing about where the team runs while the host list is still being read", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+      // The inventory never answers: this is the state every first paint of
+      // the card passes through.
+      "environment.host.list": () => new Promise<never>(() => undefined),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    const card = (await screen.findByText("Live values")).closest("section");
+    expect(card).not.toBeNull();
+    if (card === null) return;
+    // An unread inventory is not an empty one, so the card says nothing at
+    // all rather than sending the reader to start a sandbox.
+    expect(within(card).queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/sandbox to see/)).toBeNull();
+  });
+
   it("says the host list could not be read, with Retry, rather than that the team runs nowhere", async () => {
     const world = { failing: true };
     const harness = mountTeamPage(poolSource("editor"), {

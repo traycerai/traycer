@@ -50,16 +50,27 @@ export function skillPageLine(
 ): string {
   return skill.origin === "room"
     ? providers
-    : `${skillSourcePhrase(skill, name)} · ${providers}`;
+    : `${skillSourceLine(skill, name)} · ${providers}`;
 }
 
 /**
- * A skill's source beside a provider's switch, where sources mix: "Built-in"
- * for one Traycer ships as it is, the configuration's name (`name`) for its
- * own, and for a built-in whose files the configuration replaced, that name
- * with the built-in it stands in for.
+ * A skill's source as a WORD, for the places that label a skill with one: a
+ * badge beside its name, or a provider's switch where sources mix. "Built-in"
+ * for one Traycer ships, the configuration's name (`name`) for its own.
+ *
+ * Deliberately not the replacement clause below: a badge is a word's worth of
+ * room, and the clause names the skill the badge already sits beside.
  */
 export function skillSourcePhrase(skill: SkillSource, name: string): string {
+  return skill.origin === "room" ? name : "Built-in";
+}
+
+/**
+ * A skill's source as a LINE, where there is room to say what the source
+ * means: for a built-in whose files the configuration replaced, the
+ * configuration's name and the built-in it stands in for.
+ */
+export function skillSourceLine(skill: SkillSource, name: string): string {
   if (skill.origin === "room") return name;
   return skill.edited
     ? `${name} · used instead of the built-in ${skill.name}`

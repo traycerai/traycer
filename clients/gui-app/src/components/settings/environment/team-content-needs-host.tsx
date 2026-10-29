@@ -22,18 +22,24 @@ const NEED_OPENING: Readonly<Record<TeamHostNeed, string>> = {
 
 /**
  * A card that only a host running the picked configuration can fill, with no
- * such host picked. Four states, each with its own remedy:
+ * such host picked. Five states:
  *
+ * - the host inventory has not answered yet: no line at all, since an unread
+ *   inventory is not an empty one;
  * - the host inventory could not be read: that, and Retry. An unread
  *   inventory is not an empty one, so this state claims nothing about where
  *   the configuration runs;
- * - a host can be picked: `Pick one.`, which opens the picker;
  * - the configuration runs somewhere, but nothing there can be reached right
  *   now: that, and Retry, which reads the host list again;
+ * - a host OTHER than the one being viewed can be picked: `Pick one.`, which
+ *   opens the picker;
+ * - the only host that can be picked is the one already being viewed: the
+ *   opening alone. Picking is no remedy when there is nothing to switch to;
  * - nothing runs it at all: a sandbox of the configuration's.
  *
- * `Pick one.` is never offered where the picker would open with nothing in
- * it: a verb that leads nowhere is no remedy.
+ * `Pick one.` is offered on the picker's own predicate — an eligible host
+ * that is not the viewed one — so the verb is never drawn where the picker
+ * would open with nothing in it.
  */
 export function TeamContentNeedsHost(props: {
   readonly content: TeamHostNeed;
@@ -43,6 +49,10 @@ export function TeamContentNeedsHost(props: {
   const scope = useTeamViewingHost();
   const personal = useConfigurationIsPersonal();
   const hosts = scope.hosts.data?.hosts ?? [];
+  // An inventory still being read is not an empty one either: until it
+  // answers, the card has nothing true to say about where the configuration
+  // runs, so it says nothing. The line arrives with the answer.
+  if (scope.hosts.isPending) return null;
   return (
     <p
       role="status"
@@ -54,7 +64,15 @@ export function TeamContentNeedsHost(props: {
         personal,
         unread: scope.hosts.isError,
         listed: hosts.length,
-        pickable: hosts.some((host) => scope.canSelectHost(host.hostId)),
+        reachable: hosts.some((host) => scope.canSelectHost(host.hostId)),
+        // The picker's own predicate: it draws a Select only for an eligible
+        // host that is not the one being viewed, so that is the only state in
+        // which `Pick one.` opens anything.
+        pickable: hosts.some(
+          (host) =>
+            host.hostId !== scope.viewingHost?.hostId &&
+            scope.canSelectHost(host.hostId),
+        ),
         onPickHost: props.onPickHost,
         onRetry: () => void scope.hosts.refetch(),
       })}
@@ -69,6 +87,9 @@ function needsHostLine(state: {
   readonly personal: boolean;
   readonly unread: boolean;
   readonly listed: number;
+  /** Whether any listed host can be reached at all. */
+  readonly reachable: boolean;
+  /** Whether one of those is a host other than the one being viewed. */
   readonly pickable: boolean;
   readonly onPickHost: () => void;
   readonly onRetry: () => void;
@@ -89,7 +110,7 @@ function needsHostLine(state: {
       </>
     );
   }
-  if (!state.pickable && state.listed > 0) {
+  if (!state.reachable && state.listed > 0) {
     return (
       <>
         <span>
@@ -100,12 +121,15 @@ function needsHostLine(state: {
       </>
     );
   }
-  return (
-    <>
-      <span>
-        {NEED_OPENING[state.content]} a host running {state.teamName}.
-      </span>
-      {state.pickable ? (
+  const opening = (
+    <span>
+      {NEED_OPENING[state.content]} a host running {state.teamName}.
+    </span>
+  );
+  if (state.pickable) {
+    return (
+      <>
+        {opening}
         <Button
           type="button"
           variant="link"
@@ -114,12 +138,19 @@ function needsHostLine(state: {
         >
           Pick one.
         </Button>
-      ) : (
-        <span>
-          Start {withIndefiniteArticle(state.teamName)} sandbox to see{" "}
-          {state.content === "guide" ? "it" : "them"}.
-        </span>
-      )}
+      </>
+    );
+  }
+  // A reachable host with nothing to switch to: the one that can be picked is
+  // the one already being viewed, so the opening is the whole line.
+  if (state.reachable) return opening;
+  return (
+    <>
+      {opening}
+      <span>
+        Start {withIndefiniteArticle(state.teamName)} sandbox to see{" "}
+        {state.content === "guide" ? "it" : "them"}.
+      </span>
     </>
   );
 }

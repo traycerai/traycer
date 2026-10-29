@@ -525,31 +525,55 @@ describe("The Skills page", () => {
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
 
-  it("says skills need a host when the viewing host does not serve the configuration", async () => {
-    negotiateMethods(BASE_METHODS);
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers({ list: { outcome: "not_served" }, hostSkills: [] }),
-    );
-    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+  it.each([
+    {
+      what: "the only host there is, is the one being read",
+      hosts: [reachableHost],
+      line: "Skills need a host running Acme.",
+      verb: false,
+    },
+    {
+      what: "another host could be read instead",
+      hosts: [
+        reachableHost,
+        { ...reachableHost, hostId: "host-b", hostLabel: "Studio" },
+      ],
+      line: "Skills need a host running Acme.Pick one.",
+      verb: true,
+    },
+  ])(
+    "offers Pick one. only where the picker has something to switch to: $what",
+    async ({ hosts, line, verb }) => {
+      negotiateMethods(BASE_METHODS);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: { outcome: "not_served" }, hostSkills: [] }),
+        "environment.host.list": () => ({ hosts }),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "Skills need a host running Acme.Pick one.",
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(line);
+      });
+      // The verb and the picker's own Select answer the same question, so
+      // neither is ever drawn without the other.
+      const select = screen.queryAllByRole("combobox");
+      expect(screen.queryByRole("button", { name: "Pick one." }) !== null).toBe(
+        verb,
       );
-    });
-  });
+      expect(select.length > 0).toBe(verb);
+    },
+  );
 
   it.each([
     {
       source: personalPoolSource(),
       line: "No computer running Personal can be reached.Retry",
-      picked: "Skills need a host running Personal.Pick one.",
+      picked: "Skills need a host running Personal.",
     },
     {
       source: poolSource("editor"),
       line: "No host running Acme can be reached.Retry",
-      picked: "Skills need a host running Acme.Pick one.",
+      picked: "Skills need a host running Acme.",
     },
   ])(
     "says no host can be reached, with Retry and no dead Pick one, while the configuration's hosts do not answer: $line",
@@ -1005,6 +1029,49 @@ describe("A provider's Skills tab on Personal or a team", () => {
       ).toBeTruthy();
     },
   );
+
+  it("labels a replaced built-in with a word in its badge and the clause in its row", async () => {
+    negotiateMethods(SWITCHES);
+    const replaced: EnvironmentSkill = {
+      ...BUILT_IN,
+      name: "traycer-epic-brief",
+      edited: true,
+    };
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        list: listed([replaced]),
+        hostSkills: [
+          {
+            name: "traycer-epic-brief",
+            description: null,
+            path: "/skills/traycer-epic-brief",
+            source: "managed",
+          },
+        ],
+      }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    const row = (await screen.findByText("traycer-epic-brief")).closest("li");
+    expect(row).not.toBeNull();
+    if (row === null) return;
+    // The row has room for what the source means; its line carries the
+    // providers after it, so this is the clause inside that line.
+    expect(
+      within(row).getByText(/used instead of the built-in traycer-epic-brief/),
+    ).toBeTruthy();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Preview" }));
+
+    // The dialog's badge is a word's worth of room, and the clause would name
+    // the skill the badge sits beside.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Built-in")).toBeTruthy();
+    expect(
+      within(dialog).queryByText(/used instead of the built-in/),
+    ).toBeNull();
+  });
 
   it.each([
     { source: personalPoolSource(), word: "Personal" },

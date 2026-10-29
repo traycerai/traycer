@@ -43,6 +43,7 @@ import {
   removeSkillReach,
   removeTitle,
   skillPageLine,
+  skillSourceLine,
   skillSourcePhrase,
   skillsCardHeading,
   skillsPageSubtitle,
@@ -151,12 +152,22 @@ function EnvironmentSkills(props: {
   const canEdit = useCanEditConfiguration();
   const canRemove = canEdit && served.removable;
   const [picking, setPicking] = useState(false);
+  // An upload the host refused as not-served is the one moment the listed
+  // page needs a host of its own: the picker mounts beside the upload from
+  // then on, and not before, so the room-read list carries no host line.
+  const [uploadNeedsHost, setUploadNeedsHost] = useState(false);
+  const picker = (
+    <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
+  );
   const noHost = (
-    <TeamContentNeedsHost
-      content="skills"
-      teamName={name}
-      onPickHost={() => setPicking(true)}
-    />
+    <>
+      <TeamContentNeedsHost
+        content="skills"
+        teamName={name}
+        onPickHost={() => setPicking(true)}
+      />
+      {picker}
+    </>
   );
   // Listing and the writes go through the room; Preview and Edit read the
   // skill's files where a picked host projects them. The page names no host
@@ -184,12 +195,7 @@ function EnvironmentSkills(props: {
       />
     );
   if (query.data.outcome === "not_served")
-    return (
-      <section className="flex flex-col gap-3">
-        <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
-        {noHost}
-      </section>
-    );
+    return <section className="flex flex-col gap-3">{noHost}</section>;
   const { skills, revision } = query.data;
   const list =
     props.providerId === null ? (
@@ -220,7 +226,15 @@ function EnvironmentSkills(props: {
         list
       )}
       {props.providerId === null && canEdit && served.uploadable ? (
-        <TeamSkillUpload onNotServed={() => setPicking(true)} />
+        <>
+          <TeamSkillUpload
+            onNotServed={() => {
+              setUploadNeedsHost(true);
+              setPicking(true);
+            }}
+          />
+          {uploadNeedsHost ? picker : null}
+        </>
       ) : null}
     </section>
   );
@@ -616,7 +630,7 @@ function ProviderSkillsList(props: {
                 <div className="min-w-0">
                   <div className="truncate text-ui-sm">{skill.name}</div>
                   <div className="text-ui-xs text-muted-foreground">
-                    {skillSourcePhrase(skill, name)}
+                    {skillSourceLine(skill, name)}
                   </div>
                 </div>
                 <Switch

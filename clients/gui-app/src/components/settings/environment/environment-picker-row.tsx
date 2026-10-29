@@ -17,13 +17,6 @@ export interface EnvironmentPickerRowVerb {
 }
 
 /**
- * One row of the Environment dropdown: a name, an optional badge, the line
- * under it, and an optional verb that continues that line. Shared by the picker's own rows
- * and the rows its slots fill (P1's team rows), so every row reads the same.
- * A radio item inside the picker's radio group, keyed by
- * `environmentPickValue`, so the current pick is checked by the menu itself.
- */
-/**
  * A radio item keeps a right gutter for the check it may show. A row that is
  * disabled can never be the current pick, so on one that carries a verb the
  * gutter would only push that verb away from the line it continues.
@@ -35,6 +28,13 @@ function rowClassName(hasVerb: boolean, disabled: boolean): string {
     : "min-w-0 flex-col items-start gap-0.5";
 }
 
+/**
+ * One row of the Environment dropdown: a name, an optional badge, the line
+ * under it, and an optional verb that continues that line. Shared by the picker's own rows
+ * and the rows its slots fill (P1's team rows), so every row reads the same.
+ * A radio item inside the picker's radio group, keyed by
+ * `environmentPickValue`, so the current pick is checked by the menu itself.
+ */
 export function EnvironmentPickerRow(props: {
   readonly value: string;
   readonly label: string;
