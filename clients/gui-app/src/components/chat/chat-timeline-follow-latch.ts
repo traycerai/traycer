@@ -368,7 +368,8 @@ function distanceFromEnd(geometry: ChatTimelineScrollGeometry): number {
  * movable gesture with no such evidence keeps its arm until its scroll
  * reports, the tail grows away from a wheel's reader (their departure), a
  * nested scroller it was latched to ends its scroll
- * (`gestureScrollEndUnblocks`), or the next reader input replaces it: a
+ * (`gestureScrollEndUnblocks`), a press's own pointer release ends it
+ * (`completePointerPreflight`), or the next reader input replaces it: a
  * browser that scrolls a wheel frames after its event has no bound to wait
  * out.
  */
@@ -392,6 +393,30 @@ function gestureScrollLanded(
   return (
     geometry.scrollTop < start.scrollTop &&
     distanceFromEnd(geometry) > distanceFromEnd(start)
+  );
+}
+
+/**
+ * Whether an indeterminate gesture arm still holds its reader's follow: a
+ * press (the scrollbar's) that has not scrolled yet. It arms before anything
+ * moves, and the press itself says nothing about which way it will go, so
+ * only its own scroll landing makes a view off the end the reader's. While it
+ * blocks correction, a row that grows or an end pad that opens moves the end
+ * alone and leaves the view behind it; departing on that would detach a
+ * reader who never moved, whose intent is still the tail.
+ *
+ * With no measurable offset at the press there is nothing to measure against,
+ * and the report is the first moment the reader's position is known: it
+ * departs, as any gesture's backstop does.
+ */
+function indeterminateArmHoldsFollow(
+  arm: ReaderGestureArm,
+  geometry: ChatTimelineScrollGeometry,
+): boolean {
+  return (
+    arm.direction === "indeterminate" &&
+    arm.geometryAtGesture !== null &&
+    !gestureScrollLanded(arm, geometry)
   );
 }
 
@@ -1300,6 +1325,9 @@ export function useChatTimelineFollowLatch(
           publishesReaderPosition: true,
         });
       } else if (armedDeparture.source === "gesture") {
+        // A press that has not scrolled is not a departure: the view sits off
+        // the end because the arm held correction off while the list grew.
+        if (indeterminateArmHoldsFollow(armedDeparture, geometry)) return false;
         // Backstop if arm-time geometry was unmeasurable or a later native
         // report is the first moment the reader's offset is known.
         readerDepartureScrollTopRef.current = geometry.scrollTop;
@@ -1894,6 +1922,15 @@ export function useChatTimelineFollowLatch(
           // intervening ResizeObserver cannot classify it as layout-owned and
           // yank the viewport back to the tail.
           observeLiveGeometry();
+          // Whichever way that read decided, the press is over and its arm
+          // goes with it. A departure spent the arm and turned follow off,
+          // so the catch-up below is a no-op; a press that scrolled nothing
+          // (`indeterminateArmHoldsFollow` held its departure) still follows,
+          // and live geometry at the release is every scroll it ever made -
+          // so the view sits off the end because the arm held correction off
+          // while the list grew, and the correction now takes them to it.
+          armedReaderDepartureRef.current = null;
+          followEndIfPermitted();
           return;
         }
         // A click/release whose live geometry stayed at the strict edge was a
