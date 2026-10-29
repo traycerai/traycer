@@ -145,3 +145,12 @@ paths = [
   '''^clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question\.test\.tsx$''',
 ]
 regexes = ['''^EnvironmentSecretV12$''']
+
+[[allowlists]]
+description = "Android clone instance keys in the simulator tile-target unit fixture: `instanceKey` is a device identity (the AVD name an Android clone is keyed by, `Pixel_8_API_35_traycer_2` / `_3` for two clones of the fixture's Pixel 8), never a credential; the generic-api-key rule fires on the `instanceKey` identifier plus a 24-character value. Scoped to the exact source path and the two exact values."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/lib/simulator-view/__tests__/simulator-tile-target\.test\.ts$''',
+]
+regexes = ['''^Pixel_8_API_35_traycer_[23]$''']
