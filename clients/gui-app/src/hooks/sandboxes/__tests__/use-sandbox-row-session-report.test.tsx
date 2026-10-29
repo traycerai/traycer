@@ -116,6 +116,26 @@ function mount(
   return { ...view, queryClient, reads: () => reads };
 }
 
+/** Submit a real Resume mutation while retaining control of its reply. */
+async function submitResume(queryClient: QueryClient, sandboxId: string) {
+  const answer = Promise.withResolvers<void>();
+  const mutation = queryClient.getMutationCache().build(queryClient, {
+    mutationKey: sandboxMutationKeys.verb(sandboxId),
+    mutationFn: () => answer.promise,
+    onMutate: () => ({ userId: null }),
+  });
+  let completion = Promise.resolve();
+  act(() => {
+    completion = mutation.execute("resume");
+  });
+  await waitFor(() => expect(mutation.state.context).toEqual({ userId: null }));
+  onTestFinished(async () => {
+    answer.resolve();
+    await completion;
+  });
+  return { finish: answer.resolve, completion };
+}
+
 afterEach(() => {
   cleanup();
   state.client = null;
@@ -255,7 +275,6 @@ describe("a resumed row's first host report", () => {
 
   it("keeps a Resume this client sent pending when the list skips straight to awake", async () => {
     const answer = Promise.withResolvers<unknown>();
-    const reply = Promise.withResolvers<void>();
     const resting = sandboxSummaryFixture({
       hostId: HOST_ID,
       state: "suspended",
@@ -264,27 +283,12 @@ describe("a resumed row's first host report", () => {
     await waitFor(() =>
       expect(view.result.current.unscoped.report.kind).toBe("live"),
     );
-    let sending: Promise<void> | null = null;
-    act(() => {
-      sending = view.queryClient
-        .getMutationCache()
-        .build(view.queryClient, {
-          mutationKey: sandboxMutationKeys.verb(resting.id),
-          mutationFn: () => reply.promise,
-          onMutate: () => ({ userId: null }),
-        })
-        .execute("resume");
-    });
-    await waitFor(() =>
-      expect(
-        view.queryClient.getMutationCache().getAll()[0]?.state.context,
-      ).toEqual({ userId: null }),
-    );
+    const sending = await submitResume(view.queryClient, resting.id);
     // Observe the pending mutation before its successful control-plane reply.
     view.rerender(resting);
     await act(async () => {
-      reply.resolve();
-      await sending;
+      sending.finish();
+      await sending.completion;
     });
     view.rerender(resumed(100, "awake"));
     expect(view.result.current.row.resumePending).toBe(true);
@@ -292,6 +296,78 @@ describe("a resumed row's first host report", () => {
     await act(async () => {
       answer.resolve(STATUS);
       await answer.promise;
+    });
+    await waitFor(() =>
+      expect(view.result.current.row.resumePending).toBe(false),
+    );
+  });
+
+  it("lets a resting lifecycle consume a still-pending Resume without rearming it", async () => {
+    const answer = Promise.withResolvers<unknown>();
+    const nextAnswer = Promise.withResolvers<unknown>();
+    const resting = sandboxSummaryFixture({
+      hostId: HOST_ID,
+      state: "suspended",
+    });
+    const view = mount(
+      [() => STATUS, () => answer.promise, () => nextAnswer.promise],
+      resting,
+    );
+    await waitFor(() =>
+      expect(view.result.current.unscoped.report.kind).toBe("live"),
+    );
+    const sending = await submitResume(view.queryClient, resting.id);
+    view.rerender(resumed(100, "awake"));
+    await waitFor(() => expect(view.reads()).toBe(2));
+    await act(async () => {
+      answer.resolve(STATUS);
+      await answer.promise;
+    });
+    await waitFor(() =>
+      expect(view.result.current.row.report.kind).toBe("live"),
+    );
+    expect(view.queryClient.getMutationCache().getAll()[0]?.state.status).toBe(
+      "pending",
+    );
+
+    const suspended = sandboxSummaryFixture({
+      hostId: HOST_ID,
+      state: "suspended",
+      operation: sandboxOperationFixture({
+        at: 200,
+        fromState: "awake",
+        state: "suspended",
+        cause: "idle",
+        outcomeCause: "idle",
+      }),
+    });
+    view.rerender(suspended);
+    expect(
+      sandboxClockLine({
+        summary: suspended,
+        configuration: { kind: "personal" },
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now: 0,
+        resumePending: view.result.current.row.resumePending,
+      }),
+    ).toMatch(/^Suspended since /);
+
+    await act(async () => {
+      sending.finish();
+      await sending.completion;
+    });
+    const next = await submitResume(view.queryClient, resting.id);
+    view.rerender(resumed(300, "awake"));
+    expect(view.result.current.row.resumePending).toBe(true);
+    await waitFor(() => expect(view.reads()).toBe(3));
+    await act(async () => {
+      nextAnswer.resolve(STATUS);
+      await nextAnswer.promise;
+      next.finish();
+      await next.completion;
     });
     await waitFor(() =>
       expect(view.result.current.row.resumePending).toBe(false),

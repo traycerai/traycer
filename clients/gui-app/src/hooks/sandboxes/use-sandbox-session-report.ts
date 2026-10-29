@@ -23,14 +23,20 @@ interface SandboxSessionObservation {
 }
 
 interface ObservedResume {
-  readonly sandboxId: string;
-  readonly userId: string | null;
   readonly identity: readonly ["sandbox-wake", "mutation" | "list", number];
   readonly operationAt: number | null;
   /** A sent Resume can precede the list's observation of its operation. */
   readonly awaitingOperation: boolean;
   /** Once a reply arrived, evicting its query must not rearm the Resume. */
   readonly hasReported: boolean;
+}
+
+interface ResumeObservationFence {
+  readonly sandboxId: string;
+  readonly userId: string | null;
+  /** A lifecycle change can clear the observation without rearming this ask. */
+  readonly consumedMutationAt: number | null;
+  readonly resume: ObservedResume | null;
 }
 
 /** Only a Resume this client saw start waits for its first host answer. */
@@ -41,12 +47,14 @@ export function useSandboxRowSessionReport(summary: SandboxSummary): {
 } {
   const operation = useSandboxOperation(summary.id);
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  const [observed, setObserved] = useState<ObservedResume | null>(null);
-  const current =
-    observed?.sandboxId === summary.id && observed.userId === userId
-      ? observed
-      : null;
-  let resume = observeResume(summary, operation, userId, current);
+  const [observed, setObserved] = useState<ResumeObservationFence>({
+    sandboxId: summary.id,
+    userId,
+    consumedMutationAt: null,
+    resume: null,
+  });
+  let fence = observeResumeFence(summary, operation, userId, observed);
+  let resume = fence.resume;
   const awake = sandboxPublicState(summary) === "awake";
   const observation = useSessionObservation(
     summary.hostId,
@@ -55,8 +63,9 @@ export function useSandboxRowSessionReport(summary: SandboxSummary): {
   );
   if (resume !== null && !resume.hasReported && observation.hasReported) {
     resume = { ...resume, hasReported: true };
+    fence = { ...fence, resume };
   }
-  if (resume !== observed) setObserved(resume);
+  if (fence !== observed) setObserved(fence);
   return {
     report: observation.report,
     failed: observation.failed,
@@ -68,22 +77,50 @@ export function useSandboxRowSessionReport(summary: SandboxSummary): {
   };
 }
 
-function observeResume(
+function observeResumeFence(
   summary: SandboxSummary,
   operation: SandboxRowOperation | null,
   userId: string | null,
+  previous: ResumeObservationFence,
+): ResumeObservationFence {
+  const current =
+    previous.sandboxId === summary.id && previous.userId === userId
+      ? previous
+      : {
+          sandboxId: summary.id,
+          userId,
+          consumedMutationAt: null,
+          resume: null,
+        };
+  const resume = observeResume(
+    summary,
+    operation,
+    current.resume,
+    current.consumedMutationAt,
+  );
+  const consumedMutationAt =
+    resume?.identity[1] === "mutation"
+      ? resume.identity[2]
+      : current.consumedMutationAt;
+  if (
+    resume === current.resume &&
+    consumedMutationAt === current.consumedMutationAt
+  )
+    return current;
+  return { ...current, consumedMutationAt, resume };
+}
+
+function observeResume(
+  summary: SandboxSummary,
+  operation: SandboxRowOperation | null,
   observed: ObservedResume | null,
+  consumedMutationAt: number | null,
 ): ObservedResume | null {
   if (summary.kind === "automation" || summary.frozen) return null;
   if (operation?.kind === "pending") {
     if (operation.verb !== "resume") return null;
-    if (
-      observed?.identity[1] !== "mutation" ||
-      observed.identity[2] !== operation.submittedAt
-    ) {
+    if (consumedMutationAt !== operation.submittedAt) {
       return {
-        sandboxId: summary.id,
-        userId,
         identity: ["sandbox-wake", "mutation", operation.submittedAt],
         operationAt: summary.operation?.at ?? null,
         awaitingOperation: true,
@@ -97,17 +134,16 @@ function observeResume(
     operation.verb === "resume"
   )
     return null;
-  return observeListedResume(summary, userId, observed);
+  return observeListedResume(summary, observed);
 }
 
 function observeListedResume(
   summary: SandboxSummary,
-  userId: string | null,
   observed: ObservedResume | null,
 ): ObservedResume | null {
   const operationAt = summary.operation?.at ?? null;
   if (summary.state === "resuming") {
-    return observeResumingRow(summary, userId, observed);
+    return observeResumingRow(summary, observed);
   }
   if (observed === null) return null;
   if (operationAt !== null && observed.operationAt !== operationAt) {
@@ -132,7 +168,6 @@ function observeListedResume(
 /** A listed resuming state starts a wake, or acknowledges the Resume we sent. */
 function observeResumingRow(
   summary: SandboxSummary,
-  userId: string | null,
   observed: ObservedResume | null,
 ): ObservedResume {
   const at = summary.operation?.at ?? summary.lastTransitionAt;
@@ -141,8 +176,6 @@ function observeResumingRow(
   }
   if (observed === null || observed.operationAt !== at) {
     return {
-      sandboxId: summary.id,
-      userId,
       identity: ["sandbox-wake", "list", at],
       operationAt: at,
       awaitingOperation: false,
