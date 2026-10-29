@@ -641,6 +641,55 @@ describe("sandbox row operations", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("asks for the name again after a Destroy the row closed on its own", async () => {
+    const resumeCase = CASES.find((entry) => entry.verb === "resume");
+    if (resumeCase === undefined) throw new Error("Expected the Resume case");
+    const { binding, client, main, other } = setup(resumeCase);
+    const row = await screen.findByRole("region", { name: "build-box" });
+    const openDestroy = async (): Promise<HTMLElement> => {
+      await userEvent.click(
+        within(row).getByRole("button", {
+          name: "More actions for build-box",
+        }),
+      );
+      await userEvent.click(
+        await screen.findByRole("menuitem", { name: "Destroy" }),
+      );
+      return screen.getByRole("dialog");
+    };
+    const listing = async (state: HostSandboxState): Promise<void> => {
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [{ ...main, state }, other] },
+      });
+      await act(() => client.invalidateQueries());
+    };
+    await userEvent.type(
+      within(await openDestroy()).getByRole("textbox", {
+        name: "Type the name to confirm",
+      }),
+      "build-box",
+    );
+
+    // Another member resumes it: the resuming row offers no Destroy.
+    await listing("resuming");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await listing("awake");
+    await within(row).findByRole("button", { name: "Suspend" });
+
+    const reopened = await openDestroy();
+    expect(
+      within(reopened).getByRole<HTMLInputElement>("textbox", {
+        name: "Type the name to confirm",
+      }).value,
+    ).toBe("");
+    expect(
+      within(reopened)
+        .getByRole("button", { name: "Destroy" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
   it("drops a Stop refused as a conflict, on the row and the card, once neither offers Stop", async () => {
     const { answer, binding, client, main, other } = setup(STOP_CASE);
     const card = (state: HostSandboxState) => (

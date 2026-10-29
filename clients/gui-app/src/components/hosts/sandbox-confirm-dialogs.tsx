@@ -332,6 +332,13 @@ export function SandboxDestroyDialog(
   },
 ): ReactNode {
   const [typed, setTyped] = useState("");
+  // Every close clears the typed name, a close the surface makes on its own
+  // included, so a reopen always asks for it again.
+  const [wasOpen, setWasOpen] = useState(props.open);
+  if (wasOpen !== props.open) {
+    setWasOpen(props.open);
+    if (!props.open) setTyped("");
+  }
   const destroy = useSandboxDestroy(props.sandbox);
   const operation = useSandboxOperation(props.sandbox.id);
   const report = useDialogSessions(props.sandbox, props.open);
@@ -345,10 +352,7 @@ export function SandboxDestroyDialog(
     <ConfirmDestructiveDialog
       blockedReason={reason}
       open={props.open}
-      onOpenChange={(next) => {
-        if (!next) setTyped("");
-        props.onOpenChange(next);
-      }}
+      onOpenChange={props.onOpenChange}
       title={`Destroy ${name}?`}
       description={`${sandboxDestroySessionsSentence(report, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
       cascadeSummary={null}
@@ -356,7 +360,6 @@ export function SandboxDestroyDialog(
       isPending={operation?.kind === "pending" && operation.verb === "destroy"}
       onConfirm={() => {
         if (reason !== null) return;
-        setTyped("");
         props.onOpenChange(false);
         destroy.mutate(undefined, {
           onSuccess: (gone) => {
@@ -375,10 +378,7 @@ export function SandboxDestroyDialog(
           report={report}
           countLine={false}
           hostId={props.sandbox.hostId}
-          onNavigate={() => {
-            setTyped("");
-            props.onOpenChange(false);
-          }}
+          onNavigate={() => props.onOpenChange(false)}
         />
       )}
       <SandboxDestroyNameField name={name} typed={typed} onChange={setTyped} />
