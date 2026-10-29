@@ -57,8 +57,13 @@ const toastState = vi.hoisted(() => {
       if (options.id !== undefined) byId.set(options.id, options);
     }),
     {
+      // A dismissed toast is GONE, so the id leaves `byId` with it: that is
+      // what makes `optionsFor` an answer about what is on screen rather than
+      // about what was once shown, and it is what lets a case claim an
+      // invitation is still standing.
       dismiss: vi.fn((id: string) => {
         const handler = byId.get(id)?.onDismiss ?? onDismiss;
+        byId.delete(id);
         handler?.();
       }),
       invokeDismiss: () => onDismiss?.(),
@@ -535,7 +540,12 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
+      // Still on screen - `optionsFor` loses an id the moment it is
+      // dismissed - and nothing took it down on the way through.
       expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull();
+      expect(toastState.dismiss).not.toHaveBeenCalledWith(
+        MOVE_INVITATION_TOAST_ID,
+      );
       expect(toastState).not.toHaveBeenCalledWith(
         "You're all set",
         expect.anything(),
