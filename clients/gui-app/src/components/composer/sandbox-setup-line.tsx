@@ -45,14 +45,16 @@ import {
   couldntResumeLine,
   couldntStartLine,
   sandboxCreditShortLine,
-  openProvidersLabel,
   shapeNotOfferedLine,
   readyButNotSentLine,
   readySecondsLabel,
   idleRuleLine,
   SANDBOX_READY,
+  SANDBOX_AWAKE,
   agentNotOfferedOnSandboxesLine,
-  enableSandboxInferenceLine,
+  agentsCantRunOnSandboxLine,
+  traycerOffOnSandboxLine,
+  settingsDidntApplyOnLine,
   stepApplyingSettings,
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -166,7 +168,6 @@ export interface SandboxSetupLineActions {
    * refusal. `null` until the host can open one, or where the surface cannot.
    */
   readonly onOpenTerminal: (() => void) | null;
-  readonly onOpenProviders: (() => void) | null;
   readonly onChooseModel?: (() => void) | null;
 }
 
@@ -179,6 +180,15 @@ export interface SandboxSetupLineFacts {
   readonly shapeLabel: string;
   /** A cheaper shape the balance covers exists. */
   readonly smallerShapeAffordable: boolean;
+  /** The agents sandboxes run, which Choose a model opens on; `null` unknown. */
+  readonly offeredAgents: ReadonlyArray<string> | null;
+  /** Whether the stage's sandbox is awake now; `null` before its row is listed. */
+  readonly sandboxAwake: boolean | null;
+  /**
+   * The stage's sandbox is listed awake and no start or resume of it is
+   * under way: Stop is offered only then.
+   */
+  readonly sandboxStoppable: boolean;
 }
 
 /**
@@ -211,7 +221,10 @@ export function SandboxSetupLine(props: {
         }
       : {
           ...props.actions,
-          onStop: stage.createdSandboxId === null ? null : props.actions.onStop,
+          onStop:
+            stage.createdSandboxId !== null && props.facts.sandboxStoppable
+              ? props.actions.onStop
+              : null,
         };
   const failure = stage.failure;
   if (failure !== null && isRefusal(failure)) {
@@ -247,6 +260,7 @@ type RefusalFailure = Extract<
       | "unavailable"
       | "refused"
       | "no-provider"
+      | "traycer-off"
       | "agent-not-offered"
       | "agent-setup-failed"
       | "not-sent";
@@ -261,6 +275,7 @@ function isRefusal(failure: StagedSandboxFailure): failure is RefusalFailure {
     failure.kind === "unavailable" ||
     failure.kind === "refused" ||
     failure.kind === "no-provider" ||
+    failure.kind === "traycer-off" ||
     failure.kind === "agent-not-offered" ||
     failure.kind === "agent-setup-failed" ||
     failure.kind === "not-sent"
@@ -346,19 +361,17 @@ function SandboxRefusalLine(props: {
       remedies = null;
       break;
     case "no-provider":
+    case "traycer-off":
     case "agent-not-offered":
-    case "agent-setup-failed": {
-      const label = configurationLabel(stageConfigurationCopy(configuration));
-      sentence = agentRefusalSentence(failure, label);
+    case "agent-setup-failed":
+      sentence = agentRefusalSentence(failure, props.name);
       remedies = (
         <SandboxAgentRefusalRemedies
-          failure={failure}
-          label={label}
           actions={actions}
+          offeredAgents={props.facts.offeredAgents}
         />
       );
       break;
-    }
     case "not-sent":
       // Kept: the draft is still there, and Retry hands it to the sandbox.
       sentence = readyButNotSentLine(props.name);
@@ -392,56 +405,55 @@ function SandboxRefusalLine(props: {
 type AgentRefusalFailure = Extract<
   RefusalFailure,
   {
-    readonly kind: "no-provider" | "agent-not-offered" | "agent-setup-failed";
+    readonly kind:
+      | "no-provider"
+      | "traycer-off"
+      | "agent-not-offered"
+      | "agent-setup-failed";
   }
 >;
 
 function agentRefusalSentence(
   failure: AgentRefusalFailure,
-  label: string,
+  name: string,
 ): string {
   switch (failure.kind) {
     case "agent-not-offered":
       return agentNotOfferedOnSandboxesLine(
         sandboxAgentDisplayName(failure.harnessId),
       );
+    case "traycer-off":
+      return traycerOffOnSandboxLine(name);
     case "no-provider":
-      return enableSandboxInferenceLine(label);
+      return agentsCantRunOnSandboxLine(name);
     case "agent-setup-failed":
       return failure.detail;
   }
 }
 
-/** Remedies keep the sandbox and preserve the requested agent until the person chooses. */
+/**
+ * Remedies keep the sandbox and preserve the requested agent until the person
+ * chooses: every agent refusal leads with Choose a model on what sandboxes
+ * offer. Traycer Inference is that sandbox's own switch, and no Settings page
+ * reaches it, so no refusal links a Providers page.
+ */
 function SandboxAgentRefusalRemedies(props: {
-  readonly failure: AgentRefusalFailure;
-  readonly label: string;
   readonly actions: SandboxSetupLineActions;
+  readonly offeredAgents: ReadonlyArray<string> | null;
 }): ReactNode {
-  const { failure, actions, label } = props;
+  const { actions, offeredAgents } = props;
+  if (actions.onChooseModel === null) return null;
   return (
-    <>
-      {failure.kind === "agent-not-offered" &&
-      actions.onChooseModel !== null ? (
-        <LineButton
-          label="Choose a model"
-          testId="sandbox-refusal-choose-model"
-          onClick={
-            actions.onChooseModel ??
-            (() => {
-              openActiveModelPickerForHarness("traycer", null);
-            })
-          }
-        />
-      ) : null}
-      {failure.kind === "no-provider" && actions.onOpenProviders !== null ? (
-        <LineButton
-          label={openProvidersLabel(label)}
-          testId="sandbox-refusal-open-providers"
-          onClick={actions.onOpenProviders}
-        />
-      ) : null}
-    </>
+    <LineButton
+      label="Choose a model"
+      testId="sandbox-refusal-choose-model"
+      onClick={
+        actions.onChooseModel ??
+        (() => {
+          openActiveModelPickerForHarness("traycer", null, offeredAgents);
+        })
+      }
+    />
   );
 }
 
@@ -509,6 +521,8 @@ function SandboxProgressLine(props: {
     resuming,
     configuration,
     takingLonger,
+    sandboxAwake: props.facts.sandboxAwake,
+    sandboxStoppable: props.facts.sandboxStoppable,
   };
   return (
     <SandboxSetupLineFrame
@@ -547,6 +561,8 @@ interface ProgressView {
   readonly resuming: boolean;
   readonly configuration: string;
   readonly takingLonger: boolean;
+  readonly sandboxAwake: boolean | null;
+  readonly sandboxStoppable: boolean;
 }
 
 function isTakingLonger(
@@ -568,12 +584,12 @@ function progressTitle(view: ProgressView, name: string): string {
     return resuming ? couldntResumeLine(name) : couldntStartLine(name);
   }
   if (failure?.kind === "settings") {
-    return sandboxSettingsFailureLine(
-      name,
-      view.configuration,
-      sandboxSupportReference(failure.code) ?? "SBX-0520",
-    );
+    const reference = sandboxSupportReference(failure.code) ?? "SBX-0520";
+    return view.sandboxAwake === false
+      ? settingsDidntApplyOnLine(view.configuration, name, reference)
+      : sandboxSettingsFailureLine(name, view.configuration, reference);
   }
+  if (view.sandboxStoppable) return SANDBOX_AWAKE;
   if (view.takingLonger) {
     return resuming ? RESUMING_TAKING_LONGER : STARTING_TAKING_LONGER;
   }
@@ -653,7 +669,11 @@ function ProgressDetail(props: {
           configuration={configuration}
         />
       ) : null}
-      <FailureSentence failure={failure} resuming={resuming} />
+      <FailureSentence
+        failure={failure}
+        resuming={resuming}
+        sandboxAwake={props.view.sandboxAwake}
+      />
       {failure?.kind === "settings" ? (
         <>
           <p className="m-0">
@@ -686,6 +706,7 @@ function ProgressDetail(props: {
 function FailureSentence(props: {
   readonly failure: StagedSandboxFailure | null;
   readonly resuming: boolean;
+  readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
     // A sandbox that failed after it woke was charged while it was awake.
@@ -700,7 +721,7 @@ function FailureSentence(props: {
       </p>
     );
   }
-  if (props.failure?.kind === "settings") {
+  if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
     return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
   }
   return null;

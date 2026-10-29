@@ -1,6 +1,5 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import { Slot } from "radix-ui";
-import { Button } from "@/components/ui/button";
 import { HoverCard } from "@/components/ui/hover-card";
 import {
   Popover,
@@ -87,7 +86,7 @@ export function BotIdentityTrigger(props: {
 
 /**
  * The bot's card: its picture, name and owner, what it is doing now, and in
- * the full card the way into what it is doing and who may message it.
+ * the full card who may message it.
  */
 function BotCard(props: {
   readonly identity: BotIdentity;
@@ -119,19 +118,6 @@ function BotCard(props: {
           <span data-testid="bot-profile-access" className="text-foreground">
             {botAccessLine(identity.owner)}
           </span>
-        </div>
-      ) : null}
-      {full && identity.openActivity !== null ? (
-        <div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-testid="bot-profile-view-activity"
-            onClick={identity.openActivity}
-          >
-            View activity
-          </Button>
         </div>
       ) : null}
     </div>

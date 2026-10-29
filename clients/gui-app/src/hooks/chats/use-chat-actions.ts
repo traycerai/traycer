@@ -12,6 +12,7 @@ import type {
   ChatSessionState,
   EditUserMessageInput,
   InterviewDeliveryRetryIdentity,
+  QueuedSteerOrigin,
   SendChatSessionMessageInput,
   SentChatMessageAction,
   SubmitQueueEditInput,
@@ -90,6 +91,8 @@ export interface ChatActions {
   readonly queueSteerNow: (
     queueItemId: string,
     newSettings: ChatRunSettings | null,
+    restartConfirmed: boolean,
+    origin: QueuedSteerOrigin,
   ) => string | null;
   readonly queueAbortSteer: (queueItemId: string) => string | null;
   readonly approvalDecision: (
@@ -257,9 +260,11 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
             );
           },
         ),
-      queueSteerNow: (queueItemId, newSettings) =>
+      queueSteerNow: (queueItemId, newSettings, restartConfirmed, origin) =>
         tracked(
-          handle.store.getState().queueSteerNow(queueItemId, newSettings),
+          handle.store
+            .getState()
+            .queueSteerNow(queueItemId, newSettings, restartConfirmed, origin),
           () => {
             Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
               settings_changed: newSettings !== null,

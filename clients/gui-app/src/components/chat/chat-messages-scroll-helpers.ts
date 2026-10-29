@@ -161,6 +161,30 @@ export function chatTimelineNavigationLandedAtLocation(
   return Math.abs(actualOffset - location.viewOffset) <= epsilonPx;
 }
 
+/**
+ * `chatTimelineNavigationLandedAtLocation`, or the landing the browser clamps
+ * it to: a row in the last screenful cannot rise to its `viewOffset` and one
+ * in the first cannot drop to it, so the bottom, or the top, is where it
+ * lands. Re-issuing the same target cannot do better than that.
+ */
+export function chatTimelineNavigationSettledAtLocation(
+  state: ChatTimelineNavigationListState,
+  maxScroll: number,
+  location: ChatTimelineNavigationLocation,
+  epsilonPx: number,
+): boolean {
+  const position = state.positionAtIndex(location.index);
+  if (typeof position !== "number" || !Number.isFinite(position)) {
+    return false;
+  }
+  const target = position + state.topOffsetAdjustment - location.viewOffset;
+  if (Math.abs(state.scroll - target) <= epsilonPx) return true;
+  return (
+    (target > maxScroll && state.scroll >= maxScroll - epsilonPx) ||
+    (target < 0 && state.scroll <= epsilonPx)
+  );
+}
+
 function isHumanUserMessage(message: ChatMessageModel): boolean {
   return message.role === "user" && message.agentSenderInfo === null;
 }

@@ -31,6 +31,7 @@ import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/pl
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
+  hostLabelAtSentenceStart,
   useHostReachability,
   resolvedHostLabel,
   type HostReachability,
@@ -672,7 +673,7 @@ export function TerminalDeadState(props: {
 }): ReactNode {
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas p-4 text-center text-ui-sm text-muted-foreground">
-      {`${props.hostLabel} is offline. This terminal stays bound to that host.`}
+      {`${hostLabelAtSentenceStart(props.hostLabel)} is offline. This terminal stays bound to that host.`}
     </div>
   );
 }

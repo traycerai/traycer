@@ -3,6 +3,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rate-limit-views";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
@@ -41,10 +42,19 @@ export function ProviderRateLimitForProvider({
 /**
  * A live-fact card's heading: what it shows and the host that reported it.
  * A Personal page reads through the window's own host and offers no other, so
- * the heading carries no `Use another host`.
+ * the heading carries no `Use another host`. A build without environments
+ * (`unreleased-features.ts`) reads one host under the Host picker, which
+ * already names it, so the heading is `Usage limits` alone, as it was.
  */
 function RateLimitsHeading(): ReactNode {
   const hostName = usePersonalHostName() ?? "this computer";
+  if (!UNRELEASED_FEATURES_ENABLED) {
+    return (
+      <div className="text-ui-sm text-foreground">
+        <span className="font-medium">Usage limits</span>
+      </div>
+    );
+  }
   return (
     <div className="text-ui-sm text-foreground">
       <span className="font-medium">Rate limits</span>

@@ -58,6 +58,13 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     useHostScope,
     usePersonalHostScope: useHostScope,
     useAccountHostScope: useHostScope,
+    // The panel picks its SELECTION by build and reads one scope through it;
+    // this suite is about the panel, so every selection answers the same host.
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
   };
 });
 
@@ -165,9 +172,7 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
       within(policy).getByTestId("notifications-severity-done"),
     ).toBeTruthy();
     expect(
-      within(policy).getByText(
-        "Background host operations, including worktree cleanup.",
-      ),
+      within(policy).getByText("Updates that need nothing from you."),
     ).toBeTruthy();
     expect(within(policy).getByText("Approvals and interviews.")).toBeTruthy();
     expect(

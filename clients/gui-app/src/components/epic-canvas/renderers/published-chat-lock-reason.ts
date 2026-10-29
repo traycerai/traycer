@@ -5,8 +5,6 @@
  * file that exports both components and non-components breaks fast refresh for
  * everything importing it. Pure string builders.
  */
-import type { TaskSandboxEnd } from "@traycer/protocol/host/task-host-summary";
-import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
@@ -67,7 +65,7 @@ export function publishedChatLockReason(input: {
    * collaborator's shared chat, and it outranks both reachability arms: the
    * owner's machine can never appear in this account's host directory, so
    * "which is offline" asserts liveness this device cannot observe,
-   * `ownerLabel` has fallen back to a raw host id, and "sending resumes"
+   * `ownerLabel` names no machine of theirs, and "sending resumes"
    * promises a composer this viewer does not get. `true` when the owner is
    * unknown - only a positive mismatch may flip the sentence.
    */
@@ -79,7 +77,6 @@ export function publishedChatLockReason(input: {
    * name a machine and promise a resume this copy is not waiting on.
    */
   readonly environmentOwned: boolean;
-  readonly sandboxEnd?: TaskSandboxEnd | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -88,11 +85,7 @@ export function publishedChatLockReason(input: {
   /** What is happening about a newer publication, if anything. */
   readonly refresh: PublishedCopyRefresh;
 }): string {
-  const parts = [
-    input.sandboxEnd === undefined || input.sandboxEnd === null
-      ? publishedCopySentence(input)
-      : taskSandboxEndLine(input.ownerLabel, input.sandboxEnd),
-  ];
+  const parts = [publishedCopySentence(input)];
   if (input.publishedAt !== null) {
     parts.push(`Published ${formatAbsoluteDateTime(input.publishedAt)}.`);
   }
@@ -159,14 +152,10 @@ export function replicaChatLockReason(input: {
   readonly ownedByViewer: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly environmentOwned: boolean;
-  readonly sandboxEnd?: TaskSandboxEnd | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
-  const base =
-    input.sandboxEnd === undefined || input.sandboxEnd === null
-      ? replicaCopySentence(input)
-      : taskSandboxEndLine(input.ownerLabel, input.sandboxEnd);
+  const base = replicaCopySentence(input);
   if (input.unreadableCount > 0) {
     return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }

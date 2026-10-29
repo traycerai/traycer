@@ -14,6 +14,7 @@ import {
 } from "@/lib/sandboxes/team-sandbox-harness";
 import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
 import { TerminalAccountFirstMention } from "@/components/home/pickers/terminal-account-first-mention";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
@@ -63,6 +64,8 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly activeDescendant: string | undefined;
   readonly catalogHarnesses: ReadonlyArray<HarnessOption>;
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
+  /** See `VisibleRailEntriesInput.offeredAgents`. */
+  readonly offeredAgents: ReadonlyArray<string> | null;
   readonly profilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
@@ -258,6 +261,7 @@ export function HarnessModelPickerPanelBody(
     activeDescendant,
     catalogHarnesses,
     fallbackHarnesses,
+    offeredAgents,
     profilesByHarnessId,
     resolvedActiveProviderId,
     activeProfileId,
@@ -350,6 +354,7 @@ export function HarnessModelPickerPanelBody(
           onRefresh={onRefreshCatalog}
           refreshDisabledReason={hostUnavailableLabel ?? undefined}
           onOpenProviderSettings={onOpenProviderSettings}
+          offeredAgents={offeredAgents}
         />
         <div
           ref={bindProfileDropdownContainer}
@@ -388,12 +393,16 @@ export function HarnessModelPickerPanelBody(
                 runTargetHostId={runTargetHostId}
                 admissionByProfileId={profileAdmission}
               />
-              <TerminalAccountFirstMention
-                named={activeProviderProfiles.some(
-                  (profile) => profile.kind === "ambient",
-                )}
-                runTargetHostId={runTargetHostId}
-              />
+              {/* The Personal sign-in hint, absent in a build without
+                  environments (`unreleased-features.ts`). */}
+              {UNRELEASED_FEATURES_ENABLED ? (
+                <TerminalAccountFirstMention
+                  named={activeProviderProfiles.some(
+                    (profile) => profile.kind === "ambient",
+                  )}
+                  runTargetHostId={runTargetHostId}
+                />
+              ) : null}
             </div>
           ) : (
             <PickerProviderAuthLine

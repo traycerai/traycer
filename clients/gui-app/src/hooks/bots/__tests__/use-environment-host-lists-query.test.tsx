@@ -6,7 +6,7 @@
  *
  * Real hook over a mock messenger whose handler can refuse.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -25,6 +25,7 @@ import {
   useEnvironmentHostLists,
   type EnvironmentHostLists,
 } from "@/hooks/bots/use-environment-host-lists-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
@@ -38,6 +39,17 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
     };
   },
 }));
+
+// The lists are the signed-in viewer's, and are not read without one.
+beforeEach(() => {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-1", username: "Ada" },
+  });
+});
+afterEach(() => {
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+});
 
 const FLAKY = "env-flaky";
 const STEADY = "env-steady";

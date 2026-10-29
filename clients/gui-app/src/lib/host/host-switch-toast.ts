@@ -1,12 +1,13 @@
 import { toast } from "sonner";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 
 /**
- * The label a host announcement names, falling back to the id for an entry
- * the registry has not labelled yet.
+ * The label a host announcement names, or "the host" for an entry the
+ * registry has not named yet - never its id.
  */
 export function hostSwitchLabel(entry: HostDirectoryEntry): string {
-  return entry.label.length > 0 ? entry.label : entry.hostId;
+  return hostNameFromLabel(entry.label, entry.hostId);
 }
 
 /**

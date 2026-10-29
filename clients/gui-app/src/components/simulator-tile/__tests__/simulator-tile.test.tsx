@@ -8,11 +8,17 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
+  SimulatorHostInstance,
   SimulatorOpenRequest,
   SimulatorOpenResponse,
   SimulatorPackState,
+  SimulatorPowerOffRequest,
+  SimulatorPowerOffResponse,
+  SimulatorSession,
   SimulatorShutdownRequest,
   SimulatorShutdownResponse,
   SimulatorState,
@@ -58,14 +64,29 @@ type ShutdownOnHost = (
   variables: SimulatorShutdownRequest,
 ) => Promise<SimulatorShutdownResponse>;
 
+/** The host's side of `simulator.powerOff`; never answers by default. */
+type PowerOffOnHost = (
+  variables: SimulatorPowerOffRequest,
+) => Promise<SimulatorPowerOffResponse>;
+
 const fakes = vi.hoisted(() => ({
   reachability: "reachable",
+  /** What `simulator.open` negotiated: `@1.0` unless a case says otherwise. */
+  negotiated: { major: 1, minor: 0 } as SchemaVersion | false | null,
+  viewerUserId: "user-1" as string | null,
   sessions: null as SimulatorSessionsState | null,
+  /** What `simulator.instances` says is booted on the machine, host-wide. */
+  hostInstances: [] as SimulatorHostInstance[],
+  /** Whether that host-wide read has answered yet; false is its first frame. */
+  hostInstancesAnswered: true,
   configSet: vi.fn(),
   open: vi.fn<OpenOnHost>(() => new Promise<SimulatorOpenResponse>(() => {})),
   close: vi.fn(),
   shutdown: vi.fn<ShutdownOnHost>(
     () => new Promise<SimulatorShutdownResponse>(() => {}),
+  ),
+  powerOff: vi.fn<PowerOffOnHost>(
+    () => new Promise<SimulatorPowerOffResponse>(() => {}),
   ),
   action: vi.fn(),
   closeTile: vi.fn(),
@@ -85,7 +106,16 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => fakes.negotiated,
+}));
+vi.mock("@/hooks/host/use-request-context-user-id", () => ({
+  useRequestContextUserId: () => fakes.viewerUserId,
+}));
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => ({
     status: fakes.reachability,
     hostLabel: "Studio Mac",
@@ -126,7 +156,20 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
       }),
       supported: true,
     }),
+    useSimulatorPowerOffMutation: () => ({
+      mutation: useMutation({
+        mutationFn: (variables: SimulatorPowerOffRequest) =>
+          fakes.powerOff(variables),
+      }),
+      supported: true,
+    }),
     useSimulatorActionMutation: () => gated(fakes.action),
+    useSimulatorInstancesQuery: () => ({
+      data: fakes.hostInstancesAnswered
+        ? { instances: fakes.hostInstances }
+        : undefined,
+      isError: false,
+    }),
     useSimulatorScreenshotMutation: () => gated(vi.fn()),
     useSimulatorDetailQuery: () => ({
       data: undefined,
@@ -259,6 +302,13 @@ const SESSION = {
   openedAt: "2026-10-18T00:00:00.000Z",
 } as const;
 
+/**
+ * A host that has just started (or restarted): the stream is live and the
+ * tools are ready, and the inventory it publishes is empty until something
+ * runs `simulator.list`, which is what starts the hub.
+ */
+const FRESH_HOST_STATE: SimulatorState = { ...READY_STATE, simulators: [] };
+
 /** The tile with its own simulator booted, as the host lists it. */
 function withTargetBooted(state: SimulatorState): SimulatorState {
   return {
@@ -283,6 +333,7 @@ function renderTile(): () => void {
       simulatorId: UDID,
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     }),
   );
 }
@@ -340,7 +391,11 @@ const OPENED: SimulatorOpenResponse = {
 
 beforeEach(() => {
   fakes.reachability = "reachable";
+  fakes.negotiated = { major: 1, minor: 0 };
+  fakes.viewerUserId = "user-1";
   fakes.sessions = sessions({});
+  fakes.hostInstances = [];
+  fakes.hostInstancesAnswered = true;
   fakes.streamState = STREAMING;
 });
 
@@ -434,6 +489,45 @@ describe("SimulatorTile", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(fakes.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a fresh host for its inventory once the stream is live with the tools ready, and not again on a re-render", () => {
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    const rerender = renderTile();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks nothing while the tools are off, and asks as soon as they are ready", () => {
+    fakes.sessions = sessions({
+      state: {
+        ...FRESH_HOST_STATE,
+        packState: { kind: "off", reason: null, progress: null },
+      },
+    });
+    const rerender = renderTile();
+    expect(fakes.refresh).not.toHaveBeenCalled();
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again when the sessions stream comes back after a drop", () => {
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    const rerender = renderTile();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    // A host restart takes the stream down under a tile that never unmounted,
+    // and the hub it had started is gone with the host.
+    fakes.sessions = sessions({
+      state: FRESH_HOST_STATE,
+      lifecycle: "reconnecting",
+    });
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions({ state: FRESH_HOST_STATE });
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(2);
   });
 
   it("boots a cold simulator once when an explicit open placed the tile, and not when the tile is merely shown", async () => {
@@ -671,6 +765,7 @@ describe("SimulatorTile", () => {
         simulatorId: serial,
         platform: "android",
         name: avd,
+        instanceKey: null,
       }),
     );
     expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
@@ -828,5 +923,627 @@ describe("SimulatorTile", () => {
       screen.getByTestId("simulator-surface-overlay").textContent,
     ).toContain("This simulator was closed.");
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+  });
+});
+
+/**
+ * On a `@1.1` host the tile goes live only on the viewer's own person session
+ * on its instance, closes it by `sessionId` whoever sent the open, and powers
+ * off through `simulator.powerOff`.
+ */
+describe("SimulatorTile on a @1.1 host", () => {
+  const PERSON_SESSION: SimulatorSession = {
+    ...SESSION,
+    sessionId: "session-person",
+    instanceKey: UDID,
+    agentId: null,
+    requestId: "palette-request",
+  };
+  const AGENT_SESSION: SimulatorSession = {
+    ...SESSION,
+    sessionId: "session-agent",
+    instanceKey: UDID,
+    agentId: "agent-1",
+    requestId: null,
+  };
+
+  /**
+   * An Android device with one clone of its own. The host keys an instance by
+   * its AVD name and lists what runs under the serial its emulator took, so a
+   * clone's key and the serial its tile carries are two different strings -
+   * and the clone is never a device, only a row under its source's
+   * `instances`.
+   */
+  const SOURCE_SERIAL = "emulator-5554";
+  const SOURCE_AVD = "Pixel_8_API_35";
+  const CLONE_AVD = "Pixel_8_API_35_traycer_2";
+  const CLONE_SERIAL = "emulator-5556";
+  const SOURCE_OWN_INSTANCE = {
+    instanceKey: SOURCE_AVD,
+    name: SOURCE_AVD,
+    booted: true,
+    cloneOf: null,
+    drivenByAgent: false,
+    keepRunning: false,
+    idleUntil: null,
+  } as const;
+  const CLONE_INSTANCE = {
+    ...SOURCE_OWN_INSTANCE,
+    instanceKey: CLONE_AVD,
+    name: "Pixel_8_API_35 · 2",
+    cloneOf: SOURCE_AVD,
+    drivenByAgent: true,
+  } as const;
+  const CLONE_STATE: SimulatorState = {
+    ...READY_STATE,
+    platforms: [
+      { platform: "ios", available: true, reason: null },
+      { platform: "android", available: true, reason: null },
+    ],
+    simulators: [
+      ...READY_STATE.simulators,
+      {
+        simulatorId: SOURCE_SERIAL,
+        platform: "android",
+        name: SOURCE_AVD,
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+        instances: [SOURCE_OWN_INSTANCE, CLONE_INSTANCE],
+      },
+    ],
+  };
+  /** The same clone in the host-wide read, which names its serial beside its key. */
+  const CLONE_HOST_WIDE: SimulatorHostInstance = {
+    ...CLONE_INSTANCE,
+    drivenByAgent: false,
+    keepRunning: true,
+    simulatorId: CLONE_SERIAL,
+    platform: "android",
+    version: "Android 15.0",
+    cloneOfName: SOURCE_AVD,
+    bootedByTraycer: true,
+    tasks: [],
+    otherTaskCount: 0,
+  };
+  const onClone = (session: SimulatorSession): SimulatorSession => ({
+    ...session,
+    simulatorId: CLONE_SERIAL,
+    instanceKey: CLONE_AVD,
+    platform: "android",
+  });
+  /**
+   * A clone's tile as Boot another on the source device places it: that
+   * device's name, and - stored before the tile carried an instance, or
+   * placed from a device row - no instance of its own, so only a live read
+   * can tell it from the device it is named after.
+   */
+  function cloneTileNamedAfterSource(): SimulatorTileRef {
+    return makeSimulatorTileRef({
+      hostId: HOST,
+      simulatorId: CLONE_SERIAL,
+      platform: "android",
+      name: SOURCE_AVD,
+      instanceKey: null,
+    });
+  }
+
+  /** The same tile with the instance its open answered with recorded on it. */
+  function cloneTileNamingItsInstance(): SimulatorTileRef {
+    return makeSimulatorTileRef({
+      hostId: HOST,
+      simulatorId: CLONE_SERIAL,
+      platform: "android",
+      name: SOURCE_AVD,
+      instanceKey: CLONE_AVD,
+    });
+  }
+
+  beforeEach(() => {
+    fakes.negotiated = { major: 1, minor: 1 };
+  });
+
+  it("opens the new serial, with no instance, for an Android tile whose AVD re-booted under another serial", async () => {
+    const avd = "Pixel_8_API_35";
+    const rebooted = {
+      simulatorId: "emulator-5556",
+      platform: "android",
+      name: avd,
+      version: "Android 15.0",
+      booted: true,
+      physical: false,
+    } as const;
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        simulators: [...READY_STATE.simulators, rebooted],
+      },
+    });
+    renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: "emulator-5554",
+        platform: "android",
+        name: avd,
+        instanceKey: null,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
+    const sent = fakes.open.mock.calls[0][0];
+    expect(sent).toEqual({
+      epicId: EPIC,
+      simulatorId: "emulator-5556",
+      platform: "android",
+      boot: true,
+    });
+    expect("instance" in sent).toBe(false);
+    expect("requestId" in sent).toBe(false);
+  });
+
+  it("gets its own session beside an agent's reopened one: the agent's does not make the tile live", async () => {
+    fakes.sessions = sessions({
+      state: {
+        ...withTargetBooted(READY_STATE),
+        sessions: [AGENT_SESSION],
+      },
+    });
+    renderTile();
+
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+    const sent = fakes.open.mock.calls[0][0];
+    expect(sent).toEqual({
+      epicId: EPIC,
+      simulatorId: UDID,
+      platform: "ios",
+      boot: true,
+    });
+    expect("instance" in sent).toBe(false);
+  });
+
+  it("goes live on the viewer's own person session and ignores one owned by someone else", () => {
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        sessions: [{ ...PERSON_SESSION, ownerUserId: "user-2" }],
+      },
+    });
+    renderTile();
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+    cleanup();
+
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [AGENT_SESSION, PERSON_SESSION] },
+    });
+    renderTile();
+    expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
+  });
+
+  it("ends the person's session by its sessionId on close, though the palette sent the open", async () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [AGENT_SESSION, PERSON_SESSION] },
+    });
+    renderTile();
+    await flush();
+    // This tile sent no open: the palette did, before the tile was placed.
+    expect(fakes.open).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("simulator-close"));
+
+    expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    expect(fakes.close).toHaveBeenCalledTimes(1);
+    expect(fakes.close).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: UDID,
+      shutdown: false,
+      sessionId: "session-person",
+    });
+  });
+
+  it("waits for the handshake rather than reading an agent's session as the viewer's", async () => {
+    // The registry's third state: no handshake has completed, so neither
+    // version's session rule has been established for this host.
+    fakes.negotiated = null;
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [AGENT_SESSION] },
+    });
+    renderTile();
+
+    expect(await screen.findByTestId("simulator-loading")).toBeTruthy();
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+  });
+
+  it("offers Connect for a still-running clone whose own session ended while an agent's remains", async () => {
+    // A clone is never a device on a `@1.1` host: it exists only under its
+    // source's `instances`, so a tile on one has no row of its own to find.
+    const CLONE = "udid-1-clone-2";
+    const cloneState: SimulatorState = {
+      ...READY_STATE,
+      simulators: READY_STATE.simulators.map((simulator) =>
+        simulator.simulatorId === UDID
+          ? {
+              ...simulator,
+              instances: [
+                {
+                  instanceKey: CLONE,
+                  name: "iPhone 16 · 2",
+                  booted: true,
+                  cloneOf: UDID,
+                  drivenByAgent: true,
+                  keepRunning: false,
+                  idleUntil: null,
+                },
+              ],
+            }
+          : simulator,
+      ),
+    };
+    const onClone = (session: SimulatorSession): SimulatorSession => ({
+      ...session,
+      simulatorId: CLONE,
+      instanceKey: CLONE,
+    });
+    fakes.sessions = sessions({
+      state: { ...cloneState, sessions: [onClone(PERSON_SESSION)] },
+    });
+    const rerender = renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: CLONE,
+        platform: "ios",
+        name: "iPhone 16 · 2",
+        instanceKey: null,
+      }),
+    );
+    // Live first, so `wasLive` latches and the tile will not auto-attach when
+    // it comes back - the state the person is left in.
+    expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
+
+    // The person's session ends in another window; the agent's still holds it.
+    fakes.sessions = sessions({
+      state: { ...cloneState, sessions: [onClone(AGENT_SESSION)] },
+    });
+    rerender();
+
+    const inventory = await screen.findByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Connect",
+    );
+  });
+
+  it("offers Connect for a still-running Android clone, whose key is an AVD name and whose tile is a serial", async () => {
+    // The same case on Android, where the two identifiers differ: the host
+    // keys the clone by its AVD name and the tile carries the serial its
+    // emulator runs on, so the key alone can never find the instance.
+    fakes.sessions = sessions({
+      state: { ...CLONE_STATE, sessions: [onClone(PERSON_SESSION)] },
+    });
+    const rerender = renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: CLONE_SERIAL,
+        platform: "android",
+        name: "Pixel_8_API_35 · 2",
+        instanceKey: null,
+      }),
+    );
+    expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
+
+    fakes.sessions = sessions({
+      state: { ...CLONE_STATE, sessions: [onClone(AGENT_SESSION)] },
+    });
+    rerender();
+
+    const inventory = await screen.findByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Connect",
+    );
+
+    // The agent's session ends too, so nothing in this task's `sessions` ties
+    // the AVD-name key to the serial any more - and the clone is still booted,
+    // kept running past its idle deadline. The host-wide read names the pair,
+    // so the tile still offers Connect rather than calling the clone gone.
+    fakes.hostInstances = [CLONE_HOST_WIDE];
+    fakes.sessions = sessions({ state: { ...CLONE_STATE, sessions: [] } });
+    rerender();
+
+    const alone = await screen.findByTestId("simulator-inventory");
+    expect(alone.textContent).not.toContain("no longer lists");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Connect",
+    );
+  });
+
+  it("waits for the host-wide read before a clone's tile named after its source attaches to that device", async () => {
+    // Boot another on the source device names the clone's tile after THAT
+    // device, so a tile restored with no session has only a device of the
+    // same name to fall back to. Attaching to it would open a session on the
+    // wrong simulator and place its serial's tile beside this one.
+    fakes.hostInstancesAnswered = false;
+    fakes.sessions = sessions({ state: CLONE_STATE });
+    const rerender = renderTileFor(cloneTileNamedAfterSource());
+    await flush();
+
+    expect(fakes.open).not.toHaveBeenCalled();
+
+    // Answered, naming the clone's key beside this tile's serial: now the
+    // tile knows which instance it is and attaches to that one.
+    fakes.hostInstancesAnswered = true;
+    fakes.hostInstances = [CLONE_HOST_WIDE];
+    rerender();
+    await flush();
+
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: CLONE_SERIAL,
+      platform: "android",
+      boot: true,
+    });
+  });
+
+  /** The same device with its clone's emulator exited, its ledger row left. */
+  function cloneExited(): SimulatorState {
+    return {
+      ...CLONE_STATE,
+      simulators: CLONE_STATE.simulators.map((simulator) =>
+        simulator.simulatorId === SOURCE_SERIAL
+          ? {
+              ...simulator,
+              instances: [
+                SOURCE_OWN_INSTANCE,
+                { ...CLONE_INSTANCE, booted: false },
+              ],
+            }
+          : simulator,
+      ),
+    };
+  }
+
+  it("tells an exited clone's own tile the copy is gone, off the instance the tile names", async () => {
+    // The clone's emulator has exited: no session, and the host-wide read has
+    // ANSWERED with nothing booted, so neither read ties its key to this
+    // tile's serial any more and the AVD-name fallback is free to match the
+    // source device. The tile recorded that pair when its open answered, and
+    // the device rows still carry the clone's cold ledger row - so it is
+    // resolved as the clone it is, not as the device it is named after.
+    fakes.sessions = sessions({ state: cloneExited() });
+    renderTileFor(cloneTileNamingItsInstance());
+    await flush();
+
+    const inventory = await screen.findByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(inventory.textContent).toContain("Pixel_8_API_35 · 2");
+    // A clone dies with its last session, so there is no copy to power on
+    // again - the offer is another copy, and the words say which.
+    expect(inventory.textContent).toContain("This copy is gone");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Boot another copy",
+    );
+    expect(fakes.open).not.toHaveBeenCalled();
+  });
+
+  it("asks the source device for a new copy when an exited Android clone's tile boots", async () => {
+    // The serial this tile carries is the one its exited emulator held, and
+    // the host lists it nowhere once that emulator is gone: not as a device,
+    // not as any instance's key. The clone's own key is no address either -
+    // the host removes a clone with its last session. The device it was made
+    // from is the one identity that outlives the copy, so that is what the
+    // open names, and `new` is what it asks that device for.
+    fakes.sessions = sessions({ state: cloneExited() });
+    renderTileFor(cloneTileNamingItsInstance());
+    await flush();
+
+    fireEvent.click(await screen.findByTestId("simulator-connect"));
+    await flush();
+
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: SOURCE_SERIAL,
+      platform: "android",
+      boot: true,
+      instance: "new",
+    });
+  });
+
+  it("asks the source device for a new copy when an exited iOS clone's tile boots", async () => {
+    // An iOS clone's key IS the udid its tile carries, so the tile finds its
+    // own ledger row by id alone and never needed the recorded key. It needs
+    // the same open: the copy is gone, and a udid the host has deleted boots
+    // no more than a dead serial does.
+    const cloneUdid = "udid-1-clone-2";
+    const exitedClone = {
+      instanceKey: cloneUdid,
+      name: "iPhone 16 · 2",
+      booted: false,
+      cloneOf: UDID,
+      drivenByAgent: false,
+      keepRunning: false,
+      idleUntil: null,
+    } as const;
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        simulators: READY_STATE.simulators.map((simulator) =>
+          simulator.simulatorId === UDID
+            ? { ...simulator, instances: [exitedClone] }
+            : simulator,
+        ),
+      },
+    });
+    renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: cloneUdid,
+        platform: "ios",
+        name: "iPhone 16 · 2",
+        instanceKey: cloneUdid,
+      }),
+    );
+    await flush();
+
+    expect(
+      (await screen.findByTestId("simulator-inventory")).textContent,
+    ).toContain("This copy is gone");
+    fireEvent.click(screen.getByTestId("simulator-connect"));
+    await flush();
+
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: UDID,
+      platform: "ios",
+      boot: true,
+      instance: "new",
+    });
+  });
+
+  it("places the answer's own tile for the new copy, naming its instance", async () => {
+    // The copy the host makes is not the one this tile was on: a new serial
+    // or udid, and a new key. Class H records the pair on the tile it places,
+    // so the new copy's tile can resolve itself the way this one just did.
+    fakes.sessions = sessions({ state: cloneExited() });
+    const REBOOTED_SERIAL = "emulator-5560";
+    const REBOOTED_AVD = "Pixel_8_API_35_traycer_4";
+    fakes.open.mockResolvedValue({
+      session: {
+        ...onClone(PERSON_SESSION),
+        simulatorId: REBOOTED_SERIAL,
+        instanceKey: REBOOTED_AVD,
+      },
+      simulator: {
+        simulatorId: REBOOTED_SERIAL,
+        platform: "android",
+        name: "Pixel_8_API_35 · 4",
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+      },
+    });
+    renderTileFor(cloneTileNamingItsInstance());
+    await flush();
+
+    fireEvent.click(await screen.findByTestId("simulator-connect"));
+    await flush();
+
+    expect(fakes.openTile.mock.calls.at(-1)?.at(0)).toMatchObject({
+      node: {
+        type: "simulator",
+        hostId: HOST,
+        simulatorId: REBOOTED_SERIAL,
+        instanceKey: REBOOTED_AVD,
+      },
+    });
+  });
+
+  it("names a clone's instance from the host's own rows when no catalog record does", async () => {
+    // The tile carries the source device's name, and the task catalog lists
+    // nothing for the session - a pane that was never visible, a task host
+    // too old to relay the catalog, the read's own first frame. The session
+    // names its instance key, so the host's nested row answers for the
+    // header instead of the name the tile was placed with.
+    fakes.sessions = sessions({
+      state: { ...CLONE_STATE, sessions: [onClone(PERSON_SESSION)] },
+    });
+    renderTileFor(cloneTileNamedAfterSource());
+
+    const toolbar = await screen.findByTestId("simulator-toolbar");
+    expect(toolbar.textContent).toContain("Pixel_8_API_35 · 2");
+    expect(toolbar.textContent).toContain("Android 15.0");
+    expect(within(toolbar).getByText("Agent")).toBeTruthy();
+  });
+
+  it("sends no power off while the session names no instance to power off", async () => {
+    // `instanceKey` is a `@1.1` field, and the tile's own id is never read as
+    // one: on Android it is the serial its emulator runs on, and only on iOS
+    // does it happen to be the instance's key as well. So the control is
+    // inert rather than asking to power off something it cannot name.
+    const { instanceKey: _unnamed, ...noInstance } = onClone(PERSON_SESSION);
+    fakes.sessions = sessions({
+      state: { ...CLONE_STATE, sessions: [noInstance] },
+    });
+    renderTileFor(cloneTileNamedAfterSource());
+
+    expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+    await flush();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fakes.powerOff).not.toHaveBeenCalled();
+  });
+
+  it("asks before powering off, names what it reaches, then sends simulator.powerOff by instance key", async () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [PERSON_SESSION] },
+    });
+    fakes.powerOff.mockResolvedValueOnce({
+      kind: "powered-off",
+      instanceKey: UDID,
+    });
+    renderTile();
+
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("ends every task's session on it");
+    expect(dialog.textContent).toContain("A copy is deleted");
+    expect(fakes.powerOff).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Power off" }));
+
+    await waitFor(() => {
+      expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    });
+    expect(fakes.powerOff).toHaveBeenCalledWith({
+      instanceKey: UDID,
+      confirm: false,
+    });
+    expect(fakes.shutdown).not.toHaveBeenCalled();
+  });
+
+  it("asks a second time when the host answers confirm-required, and sends confirm: true only once the person agrees again", async () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [PERSON_SESSION] },
+    });
+    fakes.powerOff
+      .mockResolvedValueOnce({ kind: "confirm-required", instanceKey: UDID })
+      .mockResolvedValueOnce({ kind: "powered-off", instanceKey: UDID });
+    renderTile();
+
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Power off",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fakes.powerOff).toHaveBeenCalledTimes(1);
+    });
+    // The host's own refusal raises the agent question, which the tile's
+    // confirm does not answer.
+    const agentDialog = await waitFor(() => {
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).toContain("An agent is using it right now");
+      return dialog;
+    });
+    expect(fakes.closeTile).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(agentDialog).getByRole("button", { name: "Power off" }),
+    );
+
+    await waitFor(() => {
+      expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    });
+    expect(fakes.powerOff).toHaveBeenNthCalledWith(2, {
+      instanceKey: UDID,
+      confirm: true,
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -16,7 +17,99 @@ import { describe, expect, it } from "vitest";
  * the list silently drops the patch. This reads the installed web build, not
  * the patch file, so what it certifies is the code the renderer loads.
  */
-describe("@legendapp/list absolute scroll-adjust patch", () => {
+
+interface SizedItem {
+  type: string;
+}
+
+interface AverageEntry {
+  avg: number;
+  num: number;
+}
+
+/**
+ * `updateOneItemSize` of the installed build, evaluated on its own: it is not
+ * exported, and the two helpers it calls (`getItemSize`, `setSize`) are
+ * stubbed, so what runs is the build's own averaging. The list state is a
+ * proxy that answers a field the build adds to it (the patch records which
+ * type each key's measurement is averaged under) with an empty map, as the
+ * list's state creation does.
+ */
+function loadUpdateOneItemSize(
+  source: string,
+): (
+  ctx: unknown,
+  itemKey: string,
+  sizeObj: { height: number; width: number },
+  resolvedMeasurementItem: undefined,
+) => unknown {
+  const start = source.indexOf("function updateOneItemSize(");
+  const end = source.indexOf("\n}\n", start);
+  if (start === -1 || end === -1) {
+    throw new Error("updateOneItemSize is not in the installed build");
+  }
+  const body = source.slice(start, end + 2);
+  const factory: unknown = runInNewContext(
+    `(function (getItemSize, setSize) { ${body}\n return updateOneItemSize; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  const updateOneItemSize: unknown = Reflect.apply(factory, undefined, [
+    () => 0,
+    () => undefined,
+  ]);
+  if (typeof updateOneItemSize !== "function") {
+    throw new Error("no updateOneItemSize");
+  }
+  return (ctx, itemKey, sizeObj, resolvedMeasurementItem) => {
+    const result: unknown = Reflect.apply(updateOneItemSize, undefined, [
+      ctx,
+      itemKey,
+      sizeObj,
+      resolvedMeasurementItem,
+    ]);
+    return result;
+  };
+}
+
+/** A list of two rows, `a` and `k`, whose `k` changes item type as the chat's
+ *  transcript does when a placeholder hydrates. */
+function twoRowList() {
+  const data: SizedItem[] = [{ type: "assistant" }, { type: "assistant" }];
+  const averageSizes: Partial<Record<string, AverageEntry>> = {};
+  const state = {
+    indexByKey: new Map([
+      ["a", 0],
+      ["k", 1],
+    ]),
+    sizesKnown: new Map<string, number>(),
+    averageSizes,
+    props: {
+      data,
+      horizontal: false,
+      getItemType: (item: SizedItem) => item.type,
+      getFixedItemSize: undefined,
+    },
+  };
+  const extra = new Map<PropertyKey, unknown>();
+  const proxy = new Proxy(state, {
+    get(target, property) {
+      if (property in target) {
+        const present: unknown = Reflect.get(target, property);
+        return present;
+      }
+      let value = extra.get(property);
+      if (value === undefined) {
+        value = new Map();
+        extra.set(property, value);
+      }
+      return value;
+    },
+  });
+  return { ctx: { state: proxy }, data, averageSizes };
+}
+
+describe("@legendapp/list web patch", () => {
   const require = createRequire(import.meta.url);
   // The package's `exports` map hides `package.json` and has no main entry;
   // every entry point sits in the package root, so a subpath's directory is
@@ -42,6 +135,173 @@ describe("@legendapp/list absolute scroll-adjust patch", () => {
       expect(source).not.toContain(
         'target.scrollBy({ behavior: "auto", left: x, top: y });',
       );
+    });
+
+    // The chat restores a saved row with `viewPosition: 0`, its top at the
+    // viewport's top. Unpatched, any defined `viewPosition` on the last row
+    // added the footer's height, so each restore of a reading position on the
+    // last turn landed one footer lower than saved, and every remount moved
+    // it again.
+    it(`${file} adds the footer only when the last row aligns below the top`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "if (!isOutOfBounds && index === state.props.data.length - 1 && viewPosition > 0) {",
+      );
+      expect(source).not.toContain(
+        "if (!isOutOfBounds && index === state.props.data.length - 1) {",
+      );
+    });
+
+    // Unpatched, a re-measured row cut by the viewport's top edge moved the
+    // view by all of its growth: a card opened in a reply read from its middle
+    // threw its own header off screen, and a narrower window drifted the
+    // reading row. The patch holds the element at that edge instead.
+    it(`${file} anchors a re-measured row at the element on the top edge`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });\n  recordEdgeAnchor(ctx);",
+      );
+      expect(source).toContain("positionDiff += edgeAnchorShift;");
+    });
+
+    // The anchor looks for the element on the viewport's top edge inside the
+    // row. Markdown and component wrappers are `display: contents` and have no
+    // box, so the search stopped at the row's content wrapper and missed the
+    // element the reader was looking at; a re-measured row then drifted by
+    // whole lines. A child with no box is searched in its children's stead.
+    it(`${file} searches through a child with no box for the edge element`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain("function findEdgeChild(parent, edgeY) {");
+      expect(source).toContain(
+        "if (rect.height === 0) {\n      const inner = findEdgeChild(child, edgeY);",
+      );
+      expect(source).toContain("const next = findEdgeChild(node, edgeY);");
+    });
+
+    // A renderer that reuses an element for other content (blocks inserted
+    // above it, keyed by position) leaves a node whose movement says nothing
+    // about the reader's text, so the anchor remembers what the node held.
+    it(`${file} records what the anchored element held`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain("head: edgeAnchorHead(node)\n  };");
+    });
+
+    // The anchor is recorded on every scroll event, and the element on the
+    // edge can be a whole code block: reading its `textContent` built the
+    // block's entire text each frame to keep 64 characters of it. The head
+    // walks the text nodes and stops once it has them.
+    it(`${file} reads only the head of the anchored element's text`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);\n  let head = "";\n  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {\n    head += part.data;\n  }\n  return head.slice(0, 64);',
+      );
+      expect(source).not.toContain("const text = node.textContent;");
+    });
+
+    // ...and the list's own anchor decides once the element holds other text.
+    it(`${file} gives up an anchor whose element now holds other content`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "edgeAnchorHead(anchor.node) !== anchor.head) {\n    return void 0;",
+      );
+    });
+
+    // The chat cancels a restore's or navigation's command the list still
+    // holds when the reader scrolls: left alone, it lands after the reader's
+    // own scroll and undoes it. The cancel also drops the data change's anchor
+    // lock and lets the adjusts a scroll in flight deferred land, and reports
+    // false when nothing was held.
+    it(`${file} lets a held scroll command be cancelled and settled`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'cancelPendingScroll: () => {\n      state.mvcpAnchorLock = void 0;\n      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      cancelImperativeScroll(state);\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
+      );
+      expect(source).toContain(
+        "      return true;\n    },\n    setScrollProcessingEnabled:",
+      );
+    });
+
+    // A restore's first-paint scroll the list has issued and not finished is
+    // held in `scrollingTo` with `isInitialScroll`. Cancelling it for the
+    // reader's gesture used to clear that, so the next measurement re-issued
+    // the first-paint scroll over the reader and the list withheld its scroll
+    // reports until it finished: hiding then saved the restored row, not the
+    // one the reader had scrolled to. The cancel finishes the initial scroll
+    // at the observed offset instead; one not yet issued is left alone.
+    it(`${file} finishes an in-flight first-paint scroll where the reader is when it is cancelled`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      cancelImperativeScroll(state);",
+      );
+      expect(source).toContain(
+        "        clearBootstrapInitialScrollSession(state);\n        finishInitialScroll(ctx, {\n          recalculateItems: true,\n          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)\n        });\n      }\n      return true;",
+      );
+    });
+
+    // While an animated scroll runs, the list defers the visible-content
+    // adjusts into `pendingAdjust`. A new command replaces the one the list
+    // holds, and nothing committed them: the new end target was then computed
+    // from positions the screen had not taken, and landed short.
+    it(`${file} commits the adjusts a replaced scroll command deferred`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "const startImperativeScroll = (resolve) => {\n    // Patched: a new command replaces the one the list holds.",
+      );
+      expect(source).toContain(
+        'if (state.scrollingTo !== void 0) {\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n    }\n    state.scheduledWork.cancel("imperativeScrollReady");\n    const token = ++imperativeScrollToken;',
+      );
+    });
+
+    // A finished scroll re-estimates every unmeasured row, which can move the
+    // rows above the view by tens of thousands of pixels after a long jump.
+    // Anchoring that re-layout keeps the rows the scroll left on screen there,
+    // except at the end, where anchoring inflates the content for a frame.
+    // `react.*` alone holds the estimates above the view in an unanchored
+    // pass, and releases them there only after a scroll that asked for the end.
+    it(`${file} recalculates a settled scroll with MVCP unless it finished at the end`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;",
+      );
+      expect(source).toContain(
+        file.startsWith("react.")
+          ? "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true, refreshEstimatesAtEnd: finishedAtEnd && requestedEnd });"
+          : "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });",
+      );
+    });
+
+    // The latch records the list's last row by key to tell a moved end from a
+    // grown tail.
+    it(`${file} exposes the row key at an index in its state`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain("keyAtIndex: (index) => getId(state, index),");
+    });
+
+    // A placeholder row and the hydrated row that replaces it share a key and
+    // differ in item type. The list averaged the hydrated measurement against
+    // the placeholder's, in a type that never counted the key: measuring `k`
+    // as a 700px placeholder and then as a 100px row, with one 100px row in
+    // the type, left an average of -500, and every evict-and-rehydrate cycle
+    // took another turn's height off. Unmeasured rows of that type were then
+    // placed at negative sizes, over the rows on screen.
+    it(`${file} counts a key's size once, under the item type it was measured as`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const updateOneItemSize = loadUpdateOneItemSize(source);
+      const { ctx, data, averageSizes } = twoRowList();
+      const measure = (key: string, height: number) =>
+        updateOneItemSize(ctx, key, { height, width: 0 }, undefined);
+
+      measure("a", 100);
+      expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 1 });
+
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        data[1].type = "placeholder:assistant";
+        measure("k", 700);
+        data[1].type = "assistant";
+        measure("k", 100);
+        expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 2 });
+        expect(averageSizes["placeholder:assistant"]?.num ?? 0).toBe(0);
+      }
     });
   }
 });

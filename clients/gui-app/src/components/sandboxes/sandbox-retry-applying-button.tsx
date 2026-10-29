@@ -12,7 +12,6 @@ import {
 export function SandboxRetryApplyingButton(props: {
   readonly hostId: string;
   readonly guestSetupFailed: boolean | null;
-  readonly onApplied?: () => void;
 }) {
   const apply = useSandboxRepairGuestConfigurationOnHost(props.hostId);
   const operation = useSandboxSettingsOperation(props.hostId);
@@ -34,18 +33,8 @@ export function SandboxRetryApplyingButton(props: {
         size="sm"
         disabled={pending}
         onClick={() => {
-          if (!supported) {
-            repair.mutate({});
-            return;
-          }
-          apply.mutate(
-            {},
-            {
-              onSuccess: (outcome) => {
-                if (outcome.settingsApplied) props.onApplied?.();
-              },
-            },
-          );
+          if (supported) apply.mutate({});
+          else repair.mutate({});
         }}
       >
         {supported ? "Retry applying" : "Repair setup"}

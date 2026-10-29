@@ -54,7 +54,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => testState.entry,
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => testState.reachability,
   resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
     r.status === "checking" ? null : r.hostLabel,

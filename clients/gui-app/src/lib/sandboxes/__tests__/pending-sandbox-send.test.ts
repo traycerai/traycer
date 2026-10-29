@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -17,11 +17,19 @@ import {
   confirmPendingSandboxSendEpic,
   endPendingSandboxSend,
   handPendingSandboxSend,
+  pendingSandboxRecoveryDraftId,
   pickedRunSettings,
   requestedAgentReadiness,
+  resumePendingSandboxMessageReturn,
   returnPendingSandboxMessage,
   returnPendingSandboxSend,
+  returnPendingSandboxSendToSandbox,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import { takeReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   readStagedSandbox,
@@ -37,7 +45,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  type LandingDraftTab,
+} from "@/stores/home/landing-draft-store";
+import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
+import * as draftImageBytes from "@/lib/drafts/resolve-draft-image-bytes";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { recordMapStorageKey } from "@/lib/persist/keys";
@@ -1065,6 +1078,8 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
   });
 
   afterEach(() => {
+    // A case's overrides (the image byte resolver) end with it.
+    vi.restoreAllMocks();
     if (originalLocks === undefined) {
       Reflect.deleteProperty(navigator, "locks");
     } else {
@@ -1075,7 +1090,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
   it("gives the message back to that chat's composer, and opens no new-agent modal and saves no landing draft", async () => {
     const release = await ownedMessageSend();
 
-    const returned = await returnPendingSandboxMessage("send-1", false);
+    const returned = await returnPendingSandboxMessage("send-1", false, true);
 
     expect(returned).toMatchObject({ kind: "chat", chatId: CHAT_ID });
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
@@ -1102,7 +1117,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
     useComposerDraftStore.getState().replaceDraft(CHAT_ID, newer, null);
     const release = await ownedMessageSend();
 
-    const returned = await returnPendingSandboxMessage("send-1", false);
+    const returned = await returnPendingSandboxMessage("send-1", false, true);
 
     expect(returned.kind).toBe("landing-draft");
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
@@ -1120,6 +1135,398 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     release();
   });
+
+  describe("on the chat's sandbox, when the chat's composer holds a newer draft", () => {
+    const CHAT_SANDBOX: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+      kind: "existing",
+      hostId: "sandbox-host",
+      sandboxId: "sandbox-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    };
+
+    beforeEach(() => {
+      useComposerDraftStore.getState().replaceDraft(
+        CHAT_ID,
+        {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "keep my newer draft" }],
+            },
+          ],
+        },
+        null,
+      );
+    });
+
+    /** Words and one picture that names its bytes by hash. */
+    function imageDoc(hash: string) {
+      return {
+        type: "doc" as const,
+        content: [
+          {
+            type: "paragraph" as const,
+            content: [{ type: "text" as const, text: "fix the login bug" }],
+          },
+          {
+            type: "paragraph" as const,
+            content: [
+              {
+                type: "imageAttachment" as const,
+                attrs: {
+                  id: "img-1",
+                  fileName: "shot.png",
+                  hash,
+                  b64content: null,
+                  mimeType: "image/png",
+                  size: 32,
+                },
+              },
+            ],
+          },
+        ],
+      };
+    }
+
+    async function ownedMessageOnItsSandbox(
+      stopRequested: boolean,
+    ): Promise<() => void> {
+      const release = await ownedMessageSend();
+      const surfaceKey = pendingSendSurfaceKey("send-1");
+      const staged = useStagedSandboxStore.getState();
+      staged.stage(surfaceKey, CHAT_SANDBOX);
+      staged.report(surfaceKey, {
+        clientRequestId: "key-1",
+        createdSandboxId: CHAT_SANDBOX.sandboxId,
+        createdHostId: CHAT_SANDBOX.hostId,
+      });
+      if (stopRequested) {
+        const { sends } = usePendingSandboxSendStore.getState();
+        if (!Object.hasOwn(sends, "send-1"))
+          throw new Error("expected the send");
+        const send = sends["send-1"];
+        usePendingSandboxSendStore.setState({
+          sends: { ...sends, "send-1": { ...send, stopRequested } },
+        });
+      }
+      return release;
+    }
+
+    it("keeps the sandbox on the landing draft it saves", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+
+      const returned = await returnPendingSandboxMessage("send-1", false, true);
+
+      if (returned.kind !== "landing-draft")
+        throw new Error("expected a landing draft");
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.find((draft) => draft.id === returned.draftId)
+          ?.returnedSandbox,
+      ).toMatchObject({ target: CHAT_SANDBOX, clientRequestId: null });
+      release();
+    });
+
+    /**
+     * The window reloads in the middle of a return: the return has begun
+     * (recorded with its decision) and its picture is still being read, so
+     * no draft is written yet. Storage is kept as it was at that moment, and
+     * every live store is read back from it. The old window's return never
+     * finishes there: it is settled first, and its later writes are lost
+     * with the window.
+     */
+    async function reloadMidReturn(keepsSandbox: boolean): Promise<void> {
+      const { sends } = usePendingSandboxSendStore.getState();
+      if (!Object.hasOwn(sends, "send-1")) throw new Error("expected the send");
+      usePendingSandboxSendStore.setState({
+        sends: {
+          ...sends,
+          "send-1": { ...sends["send-1"], content: imageDoc("b".repeat(64)) },
+        },
+      });
+      const read = Promise.withResolvers<null>();
+      const bytes = vi
+        .spyOn(draftImageBytes, "resolveDraftImageBytes")
+        .mockReturnValue(read.promise);
+      vi.useFakeTimers();
+      const saved: Array<[string, string]> = [];
+      try {
+        const returning = returnPendingSandboxMessage(
+          "send-1",
+          false,
+          keepsSandbox,
+        );
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          const value = key === null ? null : localStorage.getItem(key);
+          if (key !== null && value !== null) saved.push([key, value]);
+        }
+        await vi.advanceTimersByTimeAsync(
+          HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50,
+        );
+        read.resolve(null);
+        await returning;
+      } finally {
+        vi.useRealTimers();
+        bytes.mockRestore();
+      }
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+      localStorage.clear();
+      for (const [key, value] of saved) localStorage.setItem(key, value);
+      await usePendingSandboxSendStore.persist.rehydrate();
+      await useStagedSandboxStore.persist.rehydrate();
+      await useLandingDraftStore.persist.rehydrate();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+      expect(
+        usePendingSandboxSendStore.getState().sends["send-1"]?.returnRequested,
+      ).toBeDefined();
+      vi.spyOn(draftImageBytes, "resolveDraftImageBytes").mockResolvedValue(
+        null,
+      );
+    }
+
+    function recoveredDraftRecord() {
+      return useLandingDraftStore
+        .getState()
+        .drafts.find(
+          (draft) => draft.id === pendingSandboxRecoveryDraftId("send-1"),
+        )?.returnedSandbox;
+    }
+
+    it("keeps Choose another host's no-sandbox decision when a return interrupted by a reload is replayed", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+      await reloadMidReturn(false);
+
+      // The replay the return driver and the retry item used to make: their
+      // own call keeps the sandbox. The recorded decision wins.
+      const returned = await returnPendingSandboxMessage("send-1", false, true);
+
+      expect(returned).toEqual({
+        kind: "landing-draft",
+        draftId: pendingSandboxRecoveryDraftId("send-1"),
+      });
+      expect(recoveredDraftRecord()).toBeNull();
+      release();
+    });
+
+    it("keeps the sandbox a return decided to keep when it is resumed after a reload interrupted it", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+      await reloadMidReturn(true);
+
+      const returned = await resumePendingSandboxMessageReturn("send-1");
+
+      expect(returned).toEqual({
+        kind: "landing-draft",
+        draftId: pendingSandboxRecoveryDraftId("send-1"),
+      });
+      expect(recoveredDraftRecord()).toMatchObject({
+        target: CHAT_SANDBOX,
+        clientRequestId: null,
+      });
+      release();
+    });
+
+    it("puts the sandbox on the landing draft as soon as it is listed, while its image read is still outstanding", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+      // A message with a picture whose bytes are slow to arrive: the read
+      // outlives the handoff's bound.
+      const hash = "a".repeat(64);
+      const { sends } = usePendingSandboxSendStore.getState();
+      if (!Object.hasOwn(sends, "send-1")) throw new Error("expected the send");
+      usePendingSandboxSendStore.setState({
+        sends: {
+          ...sends,
+          "send-1": { ...sends["send-1"], content: imageDoc(hash) },
+        },
+      });
+      const read = Promise.withResolvers<null>();
+      vi.spyOn(draftImageBytes, "resolveDraftImageBytes").mockReturnValue(
+        read.promise,
+      );
+      const recoveryId = pendingSandboxRecoveryDraftId("send-1");
+      const first: { stored: LandingDraftTab | null } = { stored: null };
+      const stopWatching = useLandingDraftStore.subscribe((state) => {
+        first.stored ??=
+          state.drafts.find((draft) => draft.id === recoveryId) ?? null;
+      });
+      vi.useFakeTimers();
+      const returning = returnPendingSandboxMessage("send-1", false, true);
+      try {
+        await vi.advanceTimersByTimeAsync(
+          HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50,
+        );
+
+        // Listed in Drafts as the text alone, already on the chat's sandbox:
+        // opened and sent from there, it goes to that sandbox.
+        expect(first.stored).not.toBeNull();
+        expect(first.stored?.returnedSandbox).toEqual({
+          target: CHAT_SANDBOX,
+          clientRequestId: null,
+          userId: "user-1",
+        });
+        // The pending copy and its image roots stay until the read settles.
+        expect(
+          usePendingSandboxSendStore.getState().sends["send-1"],
+        ).toBeDefined();
+      } finally {
+        vi.useRealTimers();
+        stopWatching();
+        read.resolve(null);
+        await returning;
+        vi.restoreAllMocks();
+        release();
+      }
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+
+    it.each([
+      ["after a Stop", true, true],
+      ["when the person chose another host", false, false],
+    ])(
+      "keeps no sandbox on the landing draft %s",
+      async (_label, stopRequested, keepsSandbox) => {
+        const release = await ownedMessageOnItsSandbox(stopRequested);
+
+        const returned = await returnPendingSandboxMessage(
+          "send-1",
+          false,
+          keepsSandbox,
+        );
+
+        if (returned.kind !== "landing-draft")
+          throw new Error("expected a landing draft");
+        expect(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((draft) => draft.id === returned.draftId)
+            ?.returnedSandbox,
+        ).toBeNull();
+        release();
+      },
+    );
+  });
+});
+
+/**
+ * A give-back writes only the record on the draft that takes the message:
+ * the composer showing that draft stages it. Nothing is staged or marked on
+ * the composer's surface; an awake sandbox is also the task composer's host.
+ */
+describe("a message given back to its task's composer on its sandbox", () => {
+  const TASK_SURFACE = newConversationSurfaceKey("epic-1");
+  const SANDBOX: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+    kind: "existing",
+    hostId: "sandbox-host",
+    sandboxId: "sandbox-1",
+    name: "build-box",
+    configuration: { kind: "personal" },
+    verb: "resume",
+  };
+  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+
+  beforeEach(() => {
+    useNewConversationModalStore.getState().resetForTests();
+    useSurfaceHostSelectionStore.setState({ selections: {} });
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (originalLocks === undefined) {
+      Reflect.deleteProperty(navigator, "locks");
+    } else {
+      Object.defineProperty(navigator, "locks", originalLocks);
+    }
+  });
+
+  async function owned(): Promise<() => void> {
+    usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+    const owner = holdPendingSandboxSendOwnership("send-1");
+    expect(await owner.ready).toBe(true);
+    return owner.release;
+  }
+
+  function taskRecord() {
+    return useNewConversationModalStore.getState().draftPatchesByEpicId[
+      "epic-1"
+    ]?.returnedSandbox;
+  }
+
+  it("records an awake sandbox on the task draft and makes it the composer's host, staging nothing", async () => {
+    const release = await owned();
+
+    expect(
+      returnPendingSandboxSendToSandbox("send-1", {
+        kind: "host",
+        target: SANDBOX,
+      }).kind,
+    ).toBe("task");
+
+    expect(taskRecord()).toMatchObject({
+      target: SANDBOX,
+      clientRequestId: null,
+    });
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[TASK_SURFACE],
+    ).toBe(SANDBOX.hostId);
+    expect(readStagedSandbox(TASK_SURFACE)).toBeNull();
+    release();
+  });
+
+  it.each([
+    ["a resting sandbox", { target: SANDBOX, clientRequestId: null }],
+    [
+      "a create the server may have accepted",
+      {
+        target: NEW_TARGET,
+        clientRequestId: "key-1",
+      },
+    ],
+  ])(
+    "records %s on the task draft, and stages, marks and pins nothing",
+    async (_label, destination) => {
+      const release = await owned();
+
+      expect(
+        returnPendingSandboxSendToSandbox("send-1", {
+          kind: "stage",
+          ...destination,
+        }).kind,
+      ).toBe("task");
+
+      expect(taskRecord()).toMatchObject(destination);
+      expect(readStagedSandbox(TASK_SURFACE)).toBeNull();
+      expect(takeReturnedSandboxRestored(TASK_SURFACE, destination)).toBe(
+        false,
+      );
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[TASK_SURFACE],
+      ).toBeUndefined();
+      release();
+    },
+  );
 });
 
 describe("runSilentCapableEpicTerminalCreate", () => {

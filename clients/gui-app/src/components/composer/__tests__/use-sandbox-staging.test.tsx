@@ -72,6 +72,12 @@ import {
   useStagedSandboxStore,
 } from "@/stores/composer/staged-sandbox-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
+import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 
 const mocks = vi.hoisted(() => ({
   user: null as AuthenticatedUser | null,
@@ -780,6 +786,177 @@ describe("useSandboxStaging sandbox rows' lines", () => {
   });
 });
 
+describe("a returned sandbox on the open landing draft", () => {
+  const DRAFT_ID = "draft-returned";
+  const RETURNED: ReturnedSandbox = {
+    target: {
+      kind: "existing",
+      hostId: "box-suspended",
+      sandboxId: "sbx-box-suspended",
+      name: "box-suspended",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    },
+    clientRequestId: null,
+  };
+
+  function ReturnedDraft(): null {
+    useLandingReturnedSandbox(SURFACE, DRAFT_ID, true);
+    return null;
+  }
+
+  beforeEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.getState().installLandingDraft({
+      id: DRAFT_ID,
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: null,
+      durability: "saved",
+    });
+    useLandingDraftStore.getState().setDraftReturnedSandbox(DRAFT_ID, RETURNED);
+  });
+
+  afterEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  it("gives way to the person's awake-host pick, and is never staged over it", () => {
+    // The window already holds another stage when the draft opens.
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: "box-stopped",
+      sandboxId: "sbx-box-stopped",
+      name: "box-stopped",
+      configuration: { kind: "personal" },
+      verb: "start",
+    });
+    render(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ReturnedDraft />
+      </>,
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      sandboxId: "sbx-box-stopped",
+    });
+
+    act(() => staging().composer.onPickHost(AWAKE));
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === DRAFT_ID)?.returnedSandbox,
+    ).toBeNull();
+  });
+
+  it("keeps the person's pick when they move to another draft with its own returned sandbox", () => {
+    const otherDraft: ReturnedSandbox = {
+      target: {
+        kind: "existing",
+        hostId: "box-other",
+        sandboxId: "sbx-box-other",
+        name: "box-other",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      },
+      clientRequestId: null,
+    };
+    const drafts = useLandingDraftStore.getState();
+    drafts.installLandingDraft({
+      id: "draft-other",
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: null,
+      durability: "saved",
+    });
+    drafts.setDraftReturnedSandbox("draft-other", otherDraft);
+    function ShownDraft(props: { readonly draftId: string }): null {
+      useLandingReturnedSandbox(SURFACE, props.draftId, true);
+      return null;
+    }
+    const view = render(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ShownDraft draftId={DRAFT_ID} />
+      </>,
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+
+    act(() => staging().composer.onPickHost(STOPPED));
+    view.rerender(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ShownDraft draftId="draft-other" />
+      </>,
+    );
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      sandboxId: "sbx-box-stopped",
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === "draft-other")?.returnedSandbox,
+    ).toEqual({ ...otherDraft, userId: "u1" });
+  });
+
+  it("never releases the person's pick of the same sandbox a draft had returned", () => {
+    useLandingDraftStore.getState().installLandingDraft({
+      id: "draft-plain",
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: null,
+      durability: "saved",
+    });
+    function ShownDraft(props: { readonly draftId: string }): null {
+      useLandingReturnedSandbox(SURFACE, props.draftId, true);
+      return null;
+    }
+    const show = (draftId: string): void =>
+      view.rerender(
+        <>
+          <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+          <ShownDraft draftId={draftId} />
+        </>,
+      );
+    const view = render(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ShownDraft draftId={DRAFT_ID} />
+      </>,
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+    show("draft-plain");
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+
+    // On the plain draft, the person picks the sandbox the first draft had.
+    act(() => staging().composer.onPickHost(SUSPENDED));
+    show(DRAFT_ID);
+    show("draft-plain");
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      sandboxId: "sbx-box-suspended",
+    });
+  });
+});
+
 describe("useSandboxStaging host picks", () => {
   it("stages a suspended sandbox of the person's to resume, with no create", () => {
     const { composer } = mount([LAPTOP, SUSPENDED]);
@@ -829,6 +1006,51 @@ describe("useSandboxStaging host picks", () => {
     act(() => store.report(SURFACE, { phase: "handoff", step: "delivering" }));
 
     expect(staging().composer.stagedLabel).toBe("box-stopped · awake");
+  });
+
+  // A draft's returned sandbox comes back with the verb its give-back knew;
+  // the chip says what the sandbox is now.
+  it.each([
+    { row: AWAKE, label: "box-awake · awake" },
+    { row: STOPPED, label: "box-stopped · stopped, starts on send" },
+    { row: SUSPENDED, label: "box-suspended · suspended, resumes on send" },
+  ])(
+    "labels a restored sandbox by its row's state: $label",
+    ({ row, label }) => {
+      mount([LAPTOP, row]);
+
+      act(() =>
+        useStagedSandboxStore.getState().stage(SURFACE, {
+          kind: "existing",
+          hostId: row.hostId,
+          sandboxId: `sbx-${row.hostId}`,
+          name: row.hostId,
+          configuration: { kind: "personal" },
+          verb: "resume",
+        }),
+      );
+
+      expect(staging().composer.stagedLabel).toBe(label);
+    },
+  );
+
+  it("labels a restored sandbox by its verb while no row is listed for it", () => {
+    mount([LAPTOP]);
+
+    act(() =>
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "existing",
+        hostId: "box-unlisted",
+        sandboxId: "sbx-box-unlisted",
+        name: "box-unlisted",
+        configuration: { kind: "personal" },
+        verb: "start",
+      }),
+    );
+
+    expect(staging().composer.stagedLabel).toBe(
+      "box-unlisted · stopped, starts on send",
+    );
   });
 
   it("stages a stopped sandbox to start", () => {

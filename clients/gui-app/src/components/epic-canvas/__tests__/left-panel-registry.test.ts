@@ -25,6 +25,8 @@ const BASE_CONTEXT: LeftPanelAvailabilityContext = {
   commentsPanelRevealed: false,
   hasActiveCommentableArtifact: false,
   hasPullRequests: false,
+  localHostRunsSimulators: false,
+  hasSimulatorRecords: false,
   visibilityOverrideById: {},
 };
 
@@ -55,6 +57,7 @@ describe("epic left panel registry", () => {
       "chats",
       "terminals",
       "browsers",
+      "simulators",
       "artifacts",
       "git-diff",
       "pull-requests",
@@ -100,6 +103,20 @@ describe("epic left panel registry", () => {
     expect(isVisible("pull-requests", { hasPullRequests: true })).toBe(true);
   });
 
+  it("shows Mobile simulators when this machine runs them or the task holds a record", () => {
+    expect(isVisible("simulators", {})).toBe(false);
+    expect(isVisible("simulators", { localHostRunsSimulators: true })).toBe(
+      true,
+    );
+    expect(isVisible("simulators", { hasSimulatorRecords: true })).toBe(true);
+    expect(
+      isVisible("simulators", {
+        localHostRunsSimulators: true,
+        visibilityOverrideById: { simulators: false },
+      }),
+    ).toBe(false);
+  });
+
   describe("visibility overrides", () => {
     it("reveals a presence-gated panel the user checked", () => {
       expect(
@@ -138,6 +155,8 @@ describe("epic left panel registry", () => {
       const contexts = [
         context({}),
         context({ hasPullRequests: true }),
+        context({ localHostRunsSimulators: true }),
+        context({ hasSimulatorRecords: true }),
         context({
           commentsPanelRevealed: true,
           hasActiveCommentableArtifact: true,

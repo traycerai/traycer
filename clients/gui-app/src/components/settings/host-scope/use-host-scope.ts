@@ -13,6 +13,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
+import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
   type HostScopeStatus,
@@ -20,6 +21,7 @@ import {
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   findHostOption,
   resolveScopedHost,
@@ -134,7 +136,7 @@ export function useHostScope(): HostScope {
  * A team, and Personal on a window whose host does not run it, read the
  * cloud instead (`PersonalPageFrame`).
  */
-const WINDOW_HOST_SELECTION: HostScopeSelection = {
+export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: () => undefined,
 };
@@ -145,7 +147,16 @@ function noScopedHostWrite(): void {
 
 export function usePersonalHostScope(): HostScope {
   const pick = useEnvironmentPick();
-  const localHostId = pick.kind === "local" ? pick.hostId : null;
+  // A build without environments (`unreleased-features.ts`) has no
+  // Environment dropdown: its pages sit under the Host picker and read the
+  // host it names, as they did before the feature, the picker's own
+  // selection included, so a vanished pick stays vanished there too instead
+  // of following the active host. The pages still cannot re-point it.
+  const pickedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
+  let localHostId: string | null = pickedHostId;
+  if (UNRELEASED_FEATURES_ENABLED) {
+    localHostId = pick.kind === "local" ? pick.hostId : null;
+  }
   const selection = useMemo(
     (): HostScopeSelection => ({
       scopedHostId: localHostId,
@@ -268,7 +279,10 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     hosts,
     host,
     hostId: host?.hostId ?? null,
-    hostLabel: host?.name ?? resolved.vanishedHostId ?? "No host",
+    // A vanished pick is a host nothing lists any more: nothing names it.
+    hostLabel:
+      host?.name ??
+      (resolved.vanishedHostId === null ? "No host" : UNNAMED_HOST_LABEL),
     vanishedHostId: resolved.vanishedHostId,
     returnToActive: () => setScopedHostId(null),
     activeHostId,

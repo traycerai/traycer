@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPrestartRuntimeRequest } from "@traycer/protocol/host/agent/gui/prestart-runtime";
 
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { ChatComposer } from "../chat-composer";
 
 /**
@@ -46,6 +48,8 @@ const captured = vi.hoisted(() => ({
   paneFocused: true,
   draftHasText: false,
   stagedWorktree: false,
+  /** The sandbox this chat's next message wakes, while it rests. */
+  resting: null as RestingChatSandbox | null,
   toolbarStore: null as {
     readonly getState: () => {
       readonly setSelection: (next: {
@@ -71,13 +75,21 @@ const captured = vi.hoisted(() => ({
 }));
 
 // A chat composer on a sandbox host refuses an unrunnable agent at Send;
-// nothing in this suite sits on one.
+// nothing in this suite sits on one, nor on a resting sandbox's chat.
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => ({
     blocked: captured.agentNotice !== null,
     hint: captured.agentNotice === null ? null : captured.agentNotice.message,
     notice: captured.agentNotice,
   }),
+  useRestingSandboxAgentGate: () => ({
+    blocked: false,
+    hint: null,
+    notice: null,
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: { sandboxes: [] } }),
 }));
 
 vi.mock("@/hooks/chats/use-chat-prestart-runtime", () => ({
@@ -138,6 +150,7 @@ vi.mock("@/lib/layout-overrides", () => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ fileDrops: {} }),
+  useRunnerHostOrNull: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({}),
@@ -285,9 +298,6 @@ vi.mock("../profile-disabled-banner", () => ({
 vi.mock("../provider-reauth-banner", () => ({
   ProviderReauthBanner: () => null,
 }));
-vi.mock("../chat-secret-export-notices", () => ({
-  ChatSecretExportNotices: () => null,
-}));
 vi.mock("@/components/onboarding/first-task-guide", () => ({
   FirstTaskChatGuide: () => null,
 }));
@@ -327,6 +337,7 @@ beforeEach(async () => {
   captured.paneFocused = true;
   captured.draftHasText = false;
   captured.stagedWorktree = false;
+  captured.resting = null;
   captured.agentNotice = null;
   captured.packHint = null;
 });
@@ -372,6 +383,7 @@ function composerElement() {
       topSpacing="normal"
       topSlot={null}
       suggestedPrompt={undefined}
+      restingSandbox={captured.resting}
     />
   );
 }
@@ -462,6 +474,25 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
     expect(captured.mutate).not.toHaveBeenCalled();
   });
 
+  it("not for a resting sandbox's chat: the tab's host only serves its copy, and the turn runs on the sandbox", () => {
+    captured.resting = {
+      kind: "resting",
+      sandbox: sandboxSummaryFixture({
+        id: "sbx-rest",
+        hostId: "host-rest",
+        state: "suspended",
+        displayName: "e2e-sbx-rest",
+      }),
+      configuration: { kind: "personal" },
+      wakeChangesPayer: false,
+    };
+    mountComposer();
+
+    userInput(true);
+
+    expect(captured.mutate).not.toHaveBeenCalled();
+  });
+
   it("on a toolbar settings change by the person while the draft is non-empty", () => {
     captured.draftHasText = true;
     mountComposer();
@@ -512,9 +543,9 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
   });
 });
 
-describe("ChatComposer on a sandbox host without Traycer Inference", () => {
+describe("ChatComposer on a sandbox host whose Traycer Inference setup failed", () => {
   const SENTENCE =
-    "Turn on Traycer Inference in Personal's Providers to run agents on sandboxes.";
+    "Traycer Inference setup failed - not enough disk space. Free some space, then retry.";
 
   function refusal(message: string, onAction: () => void) {
     return {
@@ -560,13 +591,15 @@ describe("ChatComposer on a sandbox host without Traycer Inference", () => {
     view.rerender(composerElement());
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
 
-    captured.agentNotice = refusal(
-      "Turn on Traycer Inference in Acme's Providers to run agents on sandboxes.",
-      vi.fn(),
-    );
+    captured.agentNotice = {
+      kind: "refused",
+      message:
+        "Traycer Inference is off on this sandbox, so agents can't run on it.",
+      action: null,
+    };
     view.rerender(composerElement());
     expect(screen.getByTestId("composer-host-notice").textContent).toContain(
-      "in Acme's Providers",
+      "Traycer Inference is off on this sandbox",
     );
   });
 });

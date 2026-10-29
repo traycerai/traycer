@@ -1,7 +1,10 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 import type { SimulatorSummary } from "@traycer/protocol/host/simulator/schemas";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  hostLabelAtSentenceStart,
+  useHostReachability,
+} from "@/hooks/agent/use-host-reachability";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { requestSimulatorConnect } from "@/lib/simulator-view/simulator-connect-requests";
@@ -44,7 +47,9 @@ export function useOpenSimulatorTile(args: {
     (simulator: SimulatorSummary, place: (ref: SimulatorTileRef) => void) => {
       if (hostId === null) return;
       if (reachability.status === "unreachable") {
-        toast.error(`${reachability.hostLabel} is unreachable right now.`);
+        toast.error(
+          `${hostLabelAtSentenceStart(reachability.hostLabel)} is unreachable right now.`,
+        );
         return;
       }
       const ref = makeSimulatorTileRef({
@@ -52,6 +57,10 @@ export function useOpenSimulatorTile(args: {
         simulatorId: simulator.simulatorId,
         platform: simulator.platform,
         name: simulator.name,
+        // A device row names no instance; the tile's own open answers with one
+        // and places that instance's tile itself when the id turns out to
+        // differ.
+        instanceKey: null,
       });
       // Filed before the tile exists: the gate reads it on mount, or at once
       // when the row's tile is already open and showing its inventory.

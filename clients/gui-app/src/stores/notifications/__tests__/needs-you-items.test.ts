@@ -50,7 +50,6 @@ function buildRow(
     resolvedAt: null,
     sourceRef: "approval-1",
     originHostId: "host-a",
-    providerPackAttribution: null,
     category: "task",
     ...overrides,
   };

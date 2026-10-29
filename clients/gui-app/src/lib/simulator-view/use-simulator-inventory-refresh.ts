@@ -4,7 +4,9 @@ import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sess
 
 /**
  * One inventory refresh per live episode of the sessions stream, for a
- * surface that lists simulators.
+ * surface that reads the host's inventory from the published state: the
+ * simulator tile, whose restored copy has nothing to attach to until the
+ * inventory arrives. Every other surface reads `simulator.list` itself.
  *
  * Subscribing to `simulator.sessions` alone never starts the hub: on a fresh
  * host the published state says "no simulators" until something runs
@@ -13,7 +15,7 @@ import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sess
  * answers it with that same `list`. So a surface asks once when the stream is
  * live on a host that can serve the list, with simulators turned on and the
  * tools installed - and asks again after every drop and resubscribe (a host
- * restart takes the stream down and brings it back under a panel that never
+ * restart takes the stream down and brings it back under a tile that never
  * remounted), because the hub it started is gone with the host - and again
  * whenever the pack stops being ready and becomes ready once more during one
  * live episode (simulators turned off and on, the tools reinstalled): the

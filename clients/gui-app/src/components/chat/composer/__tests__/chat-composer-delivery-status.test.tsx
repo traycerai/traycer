@@ -15,7 +15,7 @@ function renderStatus(overrides: Partial<QueuedMessageStages>) {
     <QueuedMessageStagesContext
       value={{ ...NO_QUEUED_MESSAGE_STAGES, ...overrides }}
     >
-      <ChatComposerDeliveryStatus />
+      <ChatComposerDeliveryStatus hideReconnecting={false} />
     </QueuedMessageStagesContext>,
   );
 }

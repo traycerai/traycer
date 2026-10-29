@@ -707,7 +707,10 @@ export type BotCheckinSections = z.infer<typeof botCheckinSectionsSchema>;
  */
 export const botTaskLastCheckinSchema = lazySchema(() =>
   z.object({
-    /** When the trunk's queue settled the check-in as delivered. */
+    /**
+     * When the bound host received the report: the moment the check-in
+     * became the bot's, before its trunk reads it.
+     */
     deliveredAt: z.number().int(),
     since: z.number().int(),
     through: z.number().int(),
@@ -715,6 +718,54 @@ export const botTaskLastCheckinSchema = lazySchema(() =>
   }),
 );
 export type BotTaskLastCheckin = z.infer<typeof botTaskLastCheckinSchema>;
+
+/** The turn of the bot's chat that read a check-in: a session chat and its turn. */
+export const botCheckinTurnSchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    turnId: z.string().min(1),
+  }),
+);
+export type BotCheckinTurn = z.infer<typeof botCheckinTurnSchema>;
+
+/**
+ * One entry of a task's check-in history (`bot.subscribe@1.4`, T86), newest
+ * first, as the bot's bound host kept it:
+ *
+ *  - `received` - a host's report: when the bound host received it, the
+ *    host that composed it (`hostId` `null` for a report from before T83,
+ *    which names none), what it said in counts (`agentsStarted` `null` when
+ *    the host could not read its agents), and the turn of the bot's chat
+ *    that read it, `null` until one has;
+ *  - `missed` - no host reported for at least one whole period past a due
+ *    time: `dueAt` the first due time missed, `missedThrough` the latest,
+ *    `reason` why (`no-host-reported`: no report arrived from any host), and
+ *    `caughtUpAt` when the next report was received, `null` until one is.
+ */
+export const botTaskCheckinRecordSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("received"),
+      receivedAt: z.number().int(),
+      hostId: hostIdSchema.nullable(),
+      hostName: z.string().min(1),
+      outcome: z.enum(["idle", "still-running", "deleted", "deleted-owner"]),
+      agentsStarted: z.number().int().nonnegative().nullable(),
+      ticketsOpened: z.number().int().nonnegative(),
+      ticketsClosed: z.number().int().nonnegative(),
+      backgroundEvents: z.number().int().nonnegative(),
+      turn: botCheckinTurnSchema.nullable(),
+    }),
+    z.object({
+      kind: z.literal("missed"),
+      dueAt: z.number().int(),
+      missedThrough: z.number().int(),
+      reason: z.enum(["no-host-reported"]),
+      caughtUpAt: z.number().int().nullable(),
+    }),
+  ]),
+);
+export type BotTaskCheckinRecord = z.infer<typeof botTaskCheckinRecordSchema>;
 
 /**
  * One task the bot created, as the stream lists it (the bot row's task list,
@@ -759,6 +810,34 @@ export const botTaskEntrySchema = lazySchema(() =>
        * predates the field serves an entry without it.
        */
       createdByUserId: z.string().min(1).max(36).nullable().default(null),
+      /**
+       * Whether the bot spun the task (its creator is the bot); `false` for a
+       * task the bot adopted, one a member made. This and the three fields
+       * below are `bot.subscribe@1.3` (T82), where the task came from as the
+       * bot's task list recorded it, and `null` from a host that predates
+       * them.
+       */
+      spun: z.boolean().nullable().default(null),
+      /** What the task is for, as the bot named it; `null` for no name. */
+      label: z.string().min(1).max(64).nullable().default(null),
+      /**
+       * The request in the bot's channel the bot was acting on when it set
+       * the task up: a member's post. `null` when it acted on none.
+       */
+      originRequestId: z.string().min(1).max(64).nullable().default(null),
+      /**
+       * The thread whose session set the task up, by its thread id
+       * (`BotThreadSummary.threadId`); `null` for a task the trunk set up.
+       */
+      createdByChatId: z.string().min(1).max(36).nullable().default(null),
+      /**
+       * The task's check-in history (`bot.subscribe@1.4`, T86), newest
+       * first, kept by the bot's bound host and mirrored into its
+       * environment room like `lastCheckin`. `null` from a host that
+       * predates it, where `lastCheckin` is all there is, and wherever
+       * `lastCheckin` is `null` for want of the room.
+       */
+      checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
@@ -778,6 +857,83 @@ export const botTaskEntrySchema = lazySchema(() =>
     }),
 );
 export type BotTaskEntry = z.infer<typeof botTaskEntrySchema>;
+
+/**
+ * The task entry of `bot.subscribe@1.3`, frozen by hand: with the provenance
+ * and without the `@1.4` check-in history, so a 1.3 peer's re-parse strips it.
+ */
+const botTaskEntrySchemaV13 = lazySchema(() =>
+  z
+    .object({
+      taskId: z.string().min(1),
+      cadence: botTaskCadenceSchema,
+      lastCheckinAt: z.number().int().nullable(),
+      lastCheckin: botTaskLastCheckinSchema.nullable(),
+      nextAt: z.number().int().nullable(),
+      state: z.enum(["tracking", "ended"]),
+      endedReason: z
+        .enum(["by-bot", "deleted", "archived", "completed"])
+        .nullable(),
+      createdByUserId: z.string().min(1).max(36).nullable().default(null),
+      spun: z.boolean().nullable().default(null),
+      label: z.string().min(1).max(64).nullable().default(null),
+      originRequestId: z.string().min(1).max(64).nullable().default(null),
+      createdByChatId: z.string().min(1).max(36).nullable().default(null),
+    })
+    .superRefine((entry, ctx) => {
+      if ((entry.state === "ended") !== (entry.endedReason !== null)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["endedReason"],
+          message: "endedReason is set exactly when state is ended",
+        });
+      }
+      if (entry.nextAt !== null && entry.cadence.kind !== "every") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["nextAt"],
+          message: "nextAt is null unless the cadence is every",
+        });
+      }
+    }),
+);
+
+/**
+ * The task entry up to `bot.subscribe@1.2`, frozen by hand: without the
+ * `@1.3` provenance, so an older peer's re-parse strips it. Every earlier
+ * minor's snapshot binds it.
+ */
+const botTaskEntrySchemaV12 = lazySchema(() =>
+  z
+    .object({
+      taskId: z.string().min(1),
+      cadence: botTaskCadenceSchema,
+      lastCheckinAt: z.number().int().nullable(),
+      lastCheckin: botTaskLastCheckinSchema.nullable(),
+      nextAt: z.number().int().nullable(),
+      state: z.enum(["tracking", "ended"]),
+      endedReason: z
+        .enum(["by-bot", "deleted", "archived", "completed"])
+        .nullable(),
+      createdByUserId: z.string().min(1).max(36).nullable().default(null),
+    })
+    .superRefine((entry, ctx) => {
+      if ((entry.state === "ended") !== (entry.endedReason !== null)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["endedReason"],
+          message: "endedReason is set exactly when state is ended",
+        });
+      }
+      if (entry.nextAt !== null && entry.cadence.kind !== "every") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["nextAt"],
+          message: "nextAt is null unless the cadence is every",
+        });
+      }
+    }),
+);
 
 export const botSubscribeOpenRequestSchema = lazySchema(() =>
   z.object({ botId: botIdSchema }),
@@ -873,22 +1029,34 @@ export type BotActivityTarget = z.infer<typeof botActivityTargetSchema>;
  * One of the bot's chats subscribed to its person's notification feed
  * (`bot.subscribe@1.2`, Tracy Bots T84): the trunk or a thread's session,
  * keyed as {@link botActivityTargetSchema} keys activity. `everySeconds` is
- * the digest interval, `null` for a digest on each burst of rows.
+ * the digest interval, `null` for a digest on each burst of rows. `since`
+ * (`bot.subscribe@1.4`, T86) is when the chat started watching, `null` from
+ * a host that predates it.
  */
 export const botNotificationSubscriptionSchema = lazySchema(() =>
   z.object({
     target: botActivityTargetSchema,
     attentionOnly: z.boolean(),
     everySeconds: z.number().int().positive().nullable(),
+    since: z.number().int().nullable().default(null),
   }),
 );
 export type BotNotificationSubscription = z.infer<
   typeof botNotificationSubscriptionSchema
 >;
 
+/** The subscription of `bot.subscribe@1.2` and `@1.3`, frozen without `since`. */
+const botNotificationSubscriptionSchemaV13 = lazySchema(() =>
+  z.object({
+    target: botActivityTargetSchema,
+    attentionOnly: z.boolean(),
+    everySeconds: z.number().int().positive().nullable(),
+  }),
+);
+
 /**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
- * re-sent whole whenever the bot row, its task list, a task's last check-in,
+ * re-sent whole whenever the bot row, its task list, a task's check-ins,
  * its open-request count, its conversations' rows or its chats' notification
  * subscriptions change (on the bound host, or in the bot's environment room
  * on any other);
@@ -974,6 +1142,93 @@ export type BotSubscribeServerFrame = z.infer<
   typeof botSubscribeServerFrameSchema
 >;
 
+// ---- bot.subscribe@1.3, frozen ------------------------------------------ //
+//
+// A hand-written copy of the 1.3 snapshot frame, its task entries without the
+// `@1.4` check-in history and its subscriptions without `since`, so a 1.3
+// peer's re-parse strips them. The frames that did not change at 1.4 are the
+// live ones.
+
+export const botSubscribeServerFrameSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      bot: botRecordSchema,
+      tasks: z.array(botTaskEntrySchemaV13),
+      openRequestCount: z.number().int().nonnegative().nullable(),
+      conversationsRevision: z.number().int().nonnegative().nullable(),
+      boundHost: z.object({
+        hostId: hostIdSchema.nullable(),
+        epoch: z.number().int().nonnegative(),
+        isThisHost: z.boolean(),
+      }),
+      activity: botActivitySchema.nullable(),
+      notificationSubscriptions: z
+        .array(botNotificationSubscriptionSchemaV13)
+        .nullable()
+        .default(null),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("deleted"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
+// ---- bot.subscribe@1.2, frozen ------------------------------------------ //
+//
+// A hand-written copy of the 1.2 snapshot frame, its task entries without the
+// `@1.3` provenance, so an older peer's re-parse strips it. The frames that
+// did not change at 1.3 are the live ones.
+
+export const botSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      bot: botRecordSchema,
+      tasks: z.array(botTaskEntrySchemaV12),
+      openRequestCount: z.number().int().nonnegative().nullable(),
+      conversationsRevision: z.number().int().nonnegative().nullable(),
+      boundHost: z.object({
+        hostId: hostIdSchema.nullable(),
+        epoch: z.number().int().nonnegative(),
+        isThisHost: z.boolean(),
+      }),
+      activity: botActivitySchema.nullable(),
+      notificationSubscriptions: z
+        .array(botNotificationSubscriptionSchemaV13)
+        .nullable()
+        .default(null),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("deleted"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
 // ---- bot.subscribe@1.1, frozen ------------------------------------------ //
 //
 // A hand-written copy of the 1.1 snapshot frame, without
@@ -985,7 +1240,7 @@ export const botSubscribeServerFrameSchemaV11 = lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
       bot: botRecordSchema,
-      tasks: z.array(botTaskEntrySchema),
+      tasks: z.array(botTaskEntrySchemaV12),
       openRequestCount: z.number().int().nonnegative().nullable(),
       conversationsRevision: z.number().int().nonnegative().nullable(),
       boundHost: z.object({
@@ -1040,7 +1295,7 @@ export const botSubscribeServerFrameSchemaV10 = lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
       bot: botRecordSchema,
-      tasks: z.array(botTaskEntrySchema),
+      tasks: z.array(botTaskEntrySchemaV12),
       openRequestCount: z.number().int().nonnegative().nullable(),
       conversationsRevision: z.number().int().nonnegative().nullable(),
       boundHost: z.object({

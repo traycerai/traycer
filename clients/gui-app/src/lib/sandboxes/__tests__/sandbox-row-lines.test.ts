@@ -14,6 +14,7 @@ import {
   SANDBOX_ROW_FILTER_NONE,
   sandboxClockLine,
   sandboxDestroyAllIdleOffered,
+  sandboxReleasedChatLine,
   sandboxFilterCount,
   sandboxFrozenClock,
   sandboxIdleRefusal,
@@ -431,17 +432,19 @@ describe("sandboxClockLine", () => {
 
     it("reads by its support reference, never its raw code", () => {
       const line = failedLine("create:kube-create-service-account");
-      expect(line).toMatch(
-        /^Failed to start \(SBX-0412\) at \d{1,2}:\d{2}.* · Nothing is billed for a sandbox that never woke · support reference in Details$/,
+      expect(line).toBe(
+        "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
       );
-      expect(line).not.toContain("create:");
     });
 
-    it("drops the parentheses for a code with no support reference", () => {
-      const line = failedLine("zzz");
-      expect(line).toMatch(/^Failed to start at /);
-      expect(line).not.toContain("(");
-    });
+    it.each(["zzz", null])(
+      "omits the support-reference segment cleanly for %s",
+      (code) => {
+        expect(failedLine(code)).toBe(
+          "Couldn't start build-box at 11:01 · nothing was charged",
+        );
+      },
+    );
   });
 
   it("copies the support reference with the sandbox id, or the id alone with none", () => {
@@ -481,6 +484,29 @@ describe("sandboxClockLine", () => {
       });
     expect(line(0)).toBe("Running, but Traycer can't connect");
     expect(line(NOW - 360_000)).toMatch(/last contact 6 min ago$/);
+  });
+});
+
+describe("a released sandbox's line in its chat", () => {
+  it("says the released Automations row's own line with the sandbox as its subject", () => {
+    const row = sandboxClockLine({
+      summary: sandboxSummaryFixture({
+        kind: "automation",
+        displayName: "e2e-auto",
+        state: "released",
+      }),
+      configuration: { kind: "personal" },
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      reachability: { unreachable: false, lastContactAt: null },
+      now: NOW,
+    });
+
+    expect(sandboxReleasedChatLine("e2e-auto")).toBe(
+      `e2e-auto is s${row.slice(1)}`,
+    );
+    expect(row).toBe("Suspended · files kept · the next shell starts it");
   });
 });
 
@@ -558,6 +584,44 @@ describe("sandboxClockLine, a resting row", () => {
     expect(line({ destroyAt: DESTROY_AT }, 3)).toMatch(
       / · under \$0\.01 today$/,
     );
+  });
+
+  describe("across midnight", () => {
+    // Tuesday 23:53, local.
+    const TUESDAY_NIGHT = new Date(2026, 9, 27, 23, 53).getTime();
+    const sinceAt = (now: number): string =>
+      sandboxClockLine({
+        summary: sandboxSummaryFixture({
+          state: "suspended",
+          restingSince: TUESDAY_NIGHT,
+          destroyAt: null,
+          destroyAfterRestingMinutes: null,
+        }),
+        configuration: { kind: "personal" },
+        cost: cost(0),
+        wakeString: "Suspend keeps memory",
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now,
+      }).split(" · ")[0];
+
+    it("keeps the clock time within the last 24 hours, past midnight", () => {
+      expect(sinceAt(new Date(2026, 9, 28, 0, 0, 22).getTime())).toBe(
+        "Suspended since 23:53",
+      );
+    });
+
+    it("names the day with the time beyond 24 hours", () => {
+      expect(sinceAt(new Date(2026, 9, 29, 0, 10).getTime())).toBe(
+        "Suspended since Tue 23:53",
+      );
+    });
+
+    it("dates it with the time from six days on", () => {
+      expect(sinceAt(new Date(2026, 10, 3, 0, 10).getTime())).toBe(
+        "Suspended since Oct 27 23:53",
+      );
+    });
   });
 });
 
@@ -908,7 +972,7 @@ describe("team payer copy", () => {
       "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake",
     );
     expect(sandboxPaidByLabel(summary, team, "other")).toBe("Paid by Priya");
-    expect(sandboxPaidByLabel(summary, team, "payer")).toBe("Paid by Priya");
+    expect(sandboxPaidByLabel(summary, team, "payer")).toBe("Paid by you");
   });
   it("warns a non-payer before a resting sandbox is woken", () => {
     expect(

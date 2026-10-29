@@ -299,12 +299,7 @@ const secretGrantRequestedEntryArm = lazySchema(() =>
   }),
 );
 
-/**
- * An agent minted a short-lived export of a secret (`traycer_secret_export`):
- * a presigned URL or a short-lived credential set that works until its expiry
- * wherever it is copied. Informational - the user's export policy already
- * allowed it - so it is a completed event with nothing to resolve.
- */
+/** `secret.export.minted`: The server no longer writes this kind; readers drop it. */
 const secretExportMintedEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
@@ -314,13 +309,7 @@ const secretExportMintedEntryArm = lazySchema(() =>
   }),
 );
 
-/**
- * A secret's value was replaced and its rotation reached a state the owner
- * (or, for a team, every admin) is told about: stalled with Stop offered,
- * enforced with what each producer proved, or failed. `failure`/`errored` for
- * a failed rotation, `done`/`completed` otherwise; the state itself is in the
- * payload, so a state newer than this build still renders.
- */
+/** `secret.rotated`: The server no longer writes this kind; readers drop it. */
 const secretRotatedEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
@@ -330,11 +319,7 @@ const secretRotatedEntryArm = lazySchema(() =>
   }),
 );
 
-/**
- * The team kinds, addressed to a team's admins (and `team.member.joined`
- * also to the newcomer): informational, nothing to resolve. Every fact the
- * row shows is in the payload.
- */
+/** The seven team kinds below: The server no longer writes this kind; readers drop it. */
 const teamMemberRemovedEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
@@ -429,11 +414,9 @@ export type HostNotificationEntryV23 = z.infer<
 >;
 
 /**
- * The environments redesign's kinds:
- * a computer's move stalled, a host could not apply an item, the reader's
- * team role changed, a computer went back from a team, a secret was removed.
- * `errored` for stalled moves and failed applies, `completed` otherwise.
- * An actionable failed apply can be resolved independently of reading it.
+ * The environments redesign's kinds: `environment.move.stalled`,
+ * `environment.apply.failed`, `team.role.changed`, `team.host.returned` and
+ * `secret.removed`. The server no longer writes this kind; readers drop it.
  */
 const environmentMoveStalledEntryArm = lazySchema(() =>
   z.object({
@@ -515,19 +498,11 @@ export type HostNotificationEntryV24 = z.infer<
   typeof hostNotificationEntrySchemaV24
 >;
 
-/**
- * A sandbox notice the control plane wrote into the person's cloud feed: a
- * resting or frozen clock is about to destroy the sandbox (or has), it froze,
- * its create failed, the provider lost it, or a member destroyed, suspended
- * or stopped it. Every fact the row shows is in the payload
- * (`sandbox_notice`). An actionable notice stays pending until resolved.
- */
+/** `sandbox.notice`: The server no longer writes this kind; readers drop it. */
 const sandboxNoticeEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
     kind: z.literal("sandbox.notice"),
-    // Additive within cloudFeed @1.5: older relays omit the marker and older
-    // readers strip it. Read acknowledgement is independent of retirement.
     resolvedAt: z.number().int().nonnegative().nullable().optional(),
     outcome: z.literal("completed"),
     payload: hostNotificationPayloadSchema,
@@ -537,7 +512,7 @@ const sandboxNoticeEntryArm = lazySchema(() =>
 /**
  * `@2.4`'s arms plus `sandbox.notice`; cloudFeed `@1.5`.
  *
- * Cloud feed only: the control plane writes these rows into the cloud store,
+ * Cloud feed only: the control plane wrote these rows into the cloud store,
  * and no host's origin store ever holds one, so the list and the local feed
  * keep their `@2.4` / `@1.6` unions. A NEW minor because cloudFeed `@1.4` is
  * on staging desktops, and their row parser rejects an unknown arm.
@@ -569,7 +544,10 @@ export type HostNotificationEntryV25 = z.infer<
   typeof hostNotificationEntrySchemaV25
 >;
 
-/** Removal notices contain no removed configuration or hook identities. */
+/**
+ * `notification.hooks.removed`: The server no longer writes this kind; readers
+ * drop it. Removal notices contain no removed configuration or hook identities.
+ */
 const notificationHooksRemovedEntryArm = lazySchema(() =>
   z.object({
     ...hostNotificationEntryBaseFields,
@@ -838,17 +816,46 @@ export function streamCarriesChannelEmissionFrame(
 }
 
 /**
- * The complement of {@link visibleHostNotificationKinds}. Read paths filter on
- * this rather than on the visible set so a fully-capable caller produces an
- * EMPTY exclusion - and therefore byte-identical SQL to before this projection
- * existed, which is what keeps the attention/recent partial indexes selected.
+ * Kinds no notification surface shows any more: the notification center
+ * carries agent states only. The server no longer writes them, and a read
+ * leaves out any row a store still holds. Released contracts already exclude
+ * every one, so no released caller's exclusion changes.
+ */
+export const RETIRED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
+  [
+    "environment.apply.failed",
+    "sandbox.notice",
+    "environment.move.stalled",
+    "team.pods.full",
+    "team.member.removed",
+    "team.member.joined",
+    "team.policy.unapplied",
+    "team.policy.authority_expired",
+    "team.installing_admin.gone",
+    "team.plan.unlinked",
+    "team.role.changed",
+    "team.host.returned",
+    "secret.export.minted",
+    "secret.rotated",
+    "secret.removed",
+    "notification.hooks.removed",
+  ];
+
+/**
+ * The complement of {@link visibleHostNotificationKinds}, plus the
+ * {@link RETIRED_HOST_NOTIFICATION_KINDS} at every version. Read paths filter
+ * on this rather than on the visible set, so the retired kinds leave pages,
+ * cursors and summaries alike.
  */
 export function hiddenHostNotificationKinds(
   surface: HostNotificationsSurface,
   schemaVersion: { readonly major: number; readonly minor: number },
 ): readonly HostNotificationKind[] {
   const visible = new Set(visibleHostNotificationKinds(surface, schemaVersion));
-  return ALL_HOST_NOTIFICATION_KINDS.filter((kind) => !visible.has(kind));
+  return ALL_HOST_NOTIFICATION_KINDS.filter(
+    (kind) =>
+      !visible.has(kind) || RETIRED_HOST_NOTIFICATION_KINDS.includes(kind),
+  );
 }
 
 export const hostNotificationCursorSchemaV10 = lazySchema(() =>

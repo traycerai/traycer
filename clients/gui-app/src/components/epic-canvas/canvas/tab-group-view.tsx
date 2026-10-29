@@ -18,10 +18,12 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
-import { chatTileHostLabel } from "@/components/epic-canvas/renderers/chat-pre-content";
 import {
-  ChatCatchingUpBanner,
+  ChatDeadTileBannerContainer,
+  SubstitutedCatchingUpBanner,
+} from "@/components/epic-canvas/renderers/chat-tile";
+import { useChatTileHostLabel } from "@/components/epic-canvas/renderers/use-chat-tile-host-label";
+import {
   ChatDeadTileBanner,
   type ChatDeadTileBannerReason,
 } from "@/components/epic-canvas/renderers/dead-tile-banner";
@@ -105,11 +107,6 @@ import {
   TILE_KIND_SIMULATOR,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
-import {
-  tabSurfaceKey,
-  useSurfaceHostSelectionStore,
-} from "@/stores/host/surface-host-selection-store";
-
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -151,8 +148,7 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
-  // Mobile simulators are listed as a group inside the Browsers panel.
-  if (tabType === TILE_KIND_SIMULATOR) return "browsers";
+  if (tabType === TILE_KIND_SIMULATOR) return "simulators";
   return "artifacts";
 }
 
@@ -404,16 +400,6 @@ export const TabGroupView = memo(function TabGroupView(
         tab === undefined ? null : sidebarRevealNodeIdForTab(tab);
       if (sidebarNodeId !== null) {
         requestSidebarNodeReveal(tabId, sidebarNodeId);
-      }
-      // The Browsers panel lists one host's sessions and simulators, so it is
-      // pinned to the tab's host or the row to reveal may not be listed.
-      if (
-        tab?.type === TILE_KIND_BROWSER_SESSION ||
-        tab?.type === TILE_KIND_SIMULATOR
-      ) {
-        useSurfaceHostSelectionStore
-          .getState()
-          .setSelection(tabSurfaceKey("browsers", tabId), tab.hostId);
       }
       setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },
@@ -855,6 +841,7 @@ function usePublishedChatFallbackRef(args: {
   const reachability = useHostReachability(
     isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
+  const ownerHostLabel = useChatTileHostLabel(reachability, activeTab.hostId);
   const tabServing = useChatTabServing(activeTab, epicId);
   // The tab's OWN bound host (`activeTab.hostId`), which is exactly the host
   // `chat-tile.tsx` opened the session under - peeking any other host's
@@ -952,7 +939,7 @@ function usePublishedChatFallbackRef(args: {
   );
   return {
     fallbackRef,
-    ownerHostLabel: chatTileHostLabel(reachability, activeTab.hostId),
+    ownerHostLabel,
     bannerReason,
     isCloudKnown: cloudChatRecord !== null,
     cloudListAuthorizesChatAbsence: cloudChatListAuthorizesRecordSweep(
@@ -1184,7 +1171,9 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           />
         ) : null}
         {catchingUp !== null ? (
-          <ChatCatchingUpBanner
+          <SubstitutedCatchingUpBanner
+            epicId={epicId}
+            ownerHostId={publishedFallbackRef.ownerHostId}
             reason={catchingUp}
             testId={`chat-catching-up-${activeTab.id}`}
           />

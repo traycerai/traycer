@@ -8,6 +8,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
+import { useChatSandboxRowLine } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -147,6 +148,8 @@ export function EpicSidebarCloudChatRow(
   // agents here cannot work with it. Independent of the lock - a host can be
   // online and out of reach, or offline and not.
   const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
+  // A sandbox owner's own line replaces the offline wording on the lock.
+  const sandboxLine = useChatSandboxRowLine(chat.ownerHostId, !ownerReachable);
   // Openable-live = the owner answers. Host ids are unique (2026-08-07
   // ruling), so a reachable owner IS the machine that holds this chat, and
   // the click opens the ordinary live surface bound to it - the tile
@@ -246,7 +249,7 @@ export function EpicSidebarCloudChatRow(
   );
 
   const ownerLabel = ownerReachability.hostLabel;
-  const lockCopy = lockedRowCopy(ownerLabel);
+  const lockCopy = lockedRowCopy(ownerLabel, sandboxLine);
   return (
     <li
       role="treeitem"
@@ -450,10 +453,19 @@ function cloudRowAriaLabel(
   return `${title}${lock}${reach}`;
 }
 
-function lockedRowCopy(ownerLabel: string): {
+function lockedRowCopy(
+  ownerLabel: string,
+  sandboxLine: string | null,
+): {
   readonly tooltip: string;
   readonly ariaLabel: string;
 } {
+  if (sandboxLine !== null) {
+    return {
+      tooltip: `${sandboxLine} Opens read-only from the last published copy.`,
+      ariaLabel: sandboxLine,
+    };
+  }
   return {
     tooltip: `Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`,
     ariaLabel: `On ${ownerLabel}, offline`,

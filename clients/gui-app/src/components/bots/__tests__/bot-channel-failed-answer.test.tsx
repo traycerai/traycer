@@ -128,7 +128,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.threads },
+    data: { threads: mocks.threads, threadAnchors: null },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -147,6 +147,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: () => null,
+  useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
 // Opening Settings is the router's; the providers focus it sets is real.
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -190,6 +191,7 @@ const activityStore = create<{ activity: BotActivity | null }>()(() => ({
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -400,13 +402,18 @@ function mountChannelWith(
               botId={BOT_ID}
               hostId={HOST_ID}
               boundHostId={boundHostId}
+              boundHostEpoch={1}
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}
+              trunkChatId="trunk-chat"
+              openTurn={null}
+              onOpenTurn={vi.fn()}
               resolveMember={resolveMember}
+              tasks={[]}
               openThread={openThread}
               onOpenThread={onOpenThread}
-              onOpenUnderTheHood={vi.fn()}
+              onOpenActivity={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
@@ -439,6 +446,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   resetBotFailedRequestSupport();
   mocks.channelHandle = null;
@@ -466,6 +475,7 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: POST_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -667,7 +677,6 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       "bot-channel-composer-send-failed",
     );
     expect(notice.textContent).toBe("Couldn't send. Try again.");
-    expect(notice.textContent).not.toContain("Edit");
     expect(channelBox().value).toBe("");
   });
 
@@ -680,7 +689,12 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, sent: null },
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        answer: false,
+        sent: null,
+      },
       memberPost(TEAMMATE_USER_ID),
     );
 
@@ -734,6 +748,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: POST_REQUEST,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -832,7 +847,12 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, sent: null },
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        answer: false,
+        sent: null,
+      },
       memberPost(VIEWER_USER_ID),
     );
 
@@ -1089,7 +1109,12 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       },
     });
     mountChannel(
-      { anchorMessageId: POST_ID, announcement: false, sent: null },
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        answer: false,
+        sent: null,
+      },
       memberPost(VIEWER_USER_ID),
     );
 

@@ -410,6 +410,12 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
       data-source-owner={props.sourceOwnerUserId}
     />
   ),
+  // Whether a sandbox's own line replaces it is the chat tile's suite's to
+  // pin; here the substitution only has to mount it.
+  SubstitutedCatchingUpBanner: (props: {
+    readonly testId: string;
+    readonly reason: string;
+  }) => <div data-testid={props.testId} data-reason={props.reason} />,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
@@ -567,7 +573,8 @@ function seedCanvasWithActivePane(
   });
 }
 
-// The chat tab's routing menu mounts a mutation hook, which needs a client.
+// The chat tab's routing menu mounts a mutation hook, and the banner's host
+// name a query, so every tree needs a client.
 const routingMenuQueryClient = new QueryClient();
 
 function groupView(
@@ -611,20 +618,22 @@ function hostedGroupView(
   onPointerDownCapture: (() => void) | undefined,
 ): ReactNode {
   return (
-    <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
-      <TooltipProvider>
-        <PaneVisibilityContext.Provider value>
-          <div onPointerDownCapture={onPointerDownCapture}>
-            <TabGroupView
-              epicId="epic-1"
-              tabId={VIEW_TAB_ID}
-              pane={pane([CHAT], CHAT.instanceId)}
-            />
-            <StableTileSurfaceHost renderRecordBody={renderRecordBody} />
-          </div>
-        </PaneVisibilityContext.Provider>
-      </TooltipProvider>
-    </EpicSessionContext.Provider>
+    <QueryClientProvider client={routingMenuQueryClient}>
+      <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
+        <TooltipProvider>
+          <PaneVisibilityContext.Provider value>
+            <div onPointerDownCapture={onPointerDownCapture}>
+              <TabGroupView
+                epicId="epic-1"
+                tabId={VIEW_TAB_ID}
+                pane={pane([CHAT], CHAT.instanceId)}
+              />
+              <StableTileSurfaceHost renderRecordBody={renderRecordBody} />
+            </div>
+          </PaneVisibilityContext.Provider>
+        </TooltipProvider>
+      </EpicSessionContext.Provider>
+    </QueryClientProvider>
   );
 }
 
@@ -1114,22 +1123,24 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
 
     const snapshots: OwnershipSnapshot[] = [];
     const tree = (): ReactNode => (
-      <TooltipProvider>
-        <PaneVisibilityContext.Provider value>
-          <TabGroupView
-            epicId="epic-1"
-            tabId={VIEW_TAB_ID}
-            pane={pane(tabs, CHAT.instanceId)}
-          />
-          <StableTileSurfaceHost
-            renderRecordBody={() => <div data-testid="hosted-body-stub" />}
-          />
-          <LayoutPhaseOwnershipProbe
-            instanceId={CHAT.instanceId}
-            onSnapshot={(snapshot) => snapshots.push(snapshot)}
-          />
-        </PaneVisibilityContext.Provider>
-      </TooltipProvider>
+      <QueryClientProvider client={routingMenuQueryClient}>
+        <TooltipProvider>
+          <PaneVisibilityContext.Provider value>
+            <TabGroupView
+              epicId="epic-1"
+              tabId={VIEW_TAB_ID}
+              pane={pane(tabs, CHAT.instanceId)}
+            />
+            <StableTileSurfaceHost
+              renderRecordBody={() => <div data-testid="hosted-body-stub" />}
+            />
+            <LayoutPhaseOwnershipProbe
+              instanceId={CHAT.instanceId}
+              onSnapshot={(snapshot) => snapshots.push(snapshot)}
+            />
+          </PaneVisibilityContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>
     );
 
     const { rerender } = render(tree());
@@ -2317,7 +2328,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toBe("artifacts");
   });
 
-  it("targets the browser row, panel, and host for an independent browser tab", () => {
+  it("targets the browser row and panel for a browser tab, leaving the Open links on device as it was", () => {
     const tabs = [SPEC, BROWSER_TAB];
     seedCanvas(tabs, BROWSER_TAB.instanceId);
     render(groupView(tabs, BROWSER_TAB.instanceId, true));
@@ -2335,19 +2346,22 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
       "browsers",
     );
+    // The panel lists every device's browsers, so the row is listed whatever
+    // the pin says, and the pin also picks where links open.
     expect(
       useSurfaceHostSelectionStore.getState().selections[
         tabSurfaceKey("browsers", VIEW_TAB_ID)
       ],
-    ).toBe(BROWSER_TAB.hostId);
+    ).toBeUndefined();
   });
 
-  it("targets the simulator row, the Browsers panel, and the tile's host for a simulator tab", () => {
+  it("targets the simulator row in the Mobile simulators panel and writes no Browsers pin for a simulator tab", () => {
     const simulatorTab = makeSimulatorTileRef({
       hostId: "host-C",
       simulatorId: "udid-1",
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     });
     // The spec tab stays active so the simulator tile's renderer never mounts.
     const tabs = [SPEC, simulatorTab];
@@ -2365,13 +2379,15 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
       useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
     ).toEqual({ nodeId: simulatorTab.id, nonce: 1 });
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
-      "browsers",
+      "simulators",
     );
+    // The panel lists every device's sessions, so the tile's host is not
+    // written over the pin that picks where links open.
     expect(
       useSurfaceHostSelectionStore.getState().selections[
         tabSurfaceKey("browsers", VIEW_TAB_ID)
       ],
-    ).toBe("host-C");
+    ).toBeUndefined();
   });
 
   it("writes a node reveal request for an agent tab", () => {

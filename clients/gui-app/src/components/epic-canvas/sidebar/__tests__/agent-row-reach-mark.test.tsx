@@ -13,8 +13,10 @@
  * (`openStoreForTest`, the harness `sidebar-chat-row-node-churn.test.tsx`
  * proves), with exactly three seams replaced: the task's hosts view, host
  * reachability and the agent hover card (replaced by a stand-in that renders
- * `extraContent` inline, because the real card opens on hover only).
+ * `extraContent` inline, because the real card opens on hover only). A case
+ * that hands in a host directory runs the REAL reachability hook over it.
  */
+import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import {
   act,
   cleanup,
@@ -29,6 +31,7 @@ import type { ReactElement, ReactNode } from "react";
 import * as Y from "yjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { AgentReach } from "@traycer/protocol/host/agent/shared";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -73,11 +76,37 @@ const hostState = vi.hoisted(() => {
   // Annotated, not inferred: an inferred `{ kind: "none" }` widens `kind` to
   // `string`, which no `TaskHostsView` arm accepts.
   const view: { current: TaskHostsView } = { current: { kind: "none" } };
+  // A directory to run the real reachability hook over; `null` keeps the
+  // stand-in, which answers from `reachability`.
+  const directory: { current: HostDirectoryEntry[] | null } = {
+    current: null,
+  };
   return {
     reachability: new Map<string, "reachable" | "unreachable">(),
     view,
+    directory,
   };
 });
+
+vi.mock(
+  "@/hooks/host/use-host-directory-list-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/host/use-host-directory-list-query")
+      >();
+    return {
+      ...actual,
+      useHostDirectoryList: () => {
+        const real = actual.useHostDirectoryList();
+        const entries = hostState.directory.current;
+        return entries === null
+          ? real
+          : { ...real, data: entries, fetchStatus: "idle" as const };
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
   const actual =
@@ -87,11 +116,13 @@ vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
   return {
     ...actual,
     useHostReachability: (hostId: string): HostReachability => {
+      const real = actual.useHostReachability(hostId);
+      if (hostState.directory.current !== null) return real;
       const status: HostReachabilityStatus =
         hostState.reachability.get(hostId) ?? "reachable";
       return {
         status,
-        hostLabel: hostId,
+        hostLabel: actual.UNNAMED_HOST_LABEL,
         unavailability: null,
         basis: "directory",
         hostKind: "unknown",
@@ -188,6 +219,7 @@ afterEach(() => {
   cleanup();
   hostState.reachability.clear();
   hostState.view.current = { kind: "none" };
+  hostState.directory.current = null;
 });
 
 describe("otherPrincipalHostIds", () => {
@@ -358,12 +390,16 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
+/** A host of the viewer's that the directory no longer lists. */
+const UNLISTED_HOST_ID = "53c608e1-8995-4c65-b386-3ae939d4ad32";
+
 /** Local chats by id, each on the host its row is owned by. */
 const LOCAL_CHAT_HOSTS: ReadonlyMap<string, string> = new Map([
   ["chat-foreign", "host-foreign"],
   ["chat-offline", "host-offline"],
   ["chat-both", "host-both"],
   ["chat-plain", "host-plain"],
+  ["chat-unlisted", UNLISTED_HOST_ID],
 ]);
 
 function chatEntry(id: string, hostId: string): Y.Map<unknown> {
@@ -455,12 +491,24 @@ function renderCloudRow(
       selectionMode={false}
     />
   );
+  // The panel provides the reach set and the task's hosts it came from
+  // together; the row names a person's host only from that answer.
   renderUnderSession(
     reachSet === null ? (
       row
     ) : (
       <TaskHostReachContext.Provider value={reachSet}>
-        {row}
+        <TaskHostsViewContext
+          value={hostsView([
+            hostRow(
+              ownerHostId,
+              reachSet.has(ownerHostId) ? "other_principal" : "same_principal",
+              VIEWER,
+            ),
+          ])}
+        >
+          {row}
+        </TaskHostsViewContext>
       </TaskHostReachContext.Provider>
     ),
   );
@@ -607,6 +655,24 @@ describe("the Agents tree's local rows: the reach mark comes from reach alone", 
     ).toBeNull();
   });
 
+  it("says an offline sandbox owner's own line in the row's name, never offline", () => {
+    hostState.view.current = hostsView([
+      {
+        ...hostRow("host-offline", "same_principal", VIEWER),
+        label: "e2e-sbx-p1",
+      },
+    ]);
+    hostState.reachability.set("host-offline", "unreachable");
+    renderLocalPanel();
+
+    expect(
+      screen.getByTestId("epic-sidebar-tree-lock-chat-offline"),
+    ).toBeTruthy();
+    expect(localRowLabel("chat-offline")).toBe(
+      "Chat chat-offline, e2e-sbx-p1 isn't available — this chat stays readable.",
+    );
+  });
+
   it("carries both on a foreign, offline owner's row", () => {
     hostState.view.current = hostsView([
       hostRow("host-both", "other_principal", TEAM),
@@ -646,5 +712,93 @@ describe("the Agents tree's local rows: the reach mark comes from reach alone", 
         screen.queryByTestId(`epic-sidebar-tree-reach-${nodeId}`),
       ).toBeNull();
     }
+  });
+});
+
+/**
+ * A host the directory does not list, through the REAL reachability hook:
+ * the row names it in words, never by its id, in its accessible name and in
+ * its lock's tooltip.
+ */
+describe("an owner host the directory does not list", () => {
+  const LISTED_HOST: HostDirectoryEntry = {
+    hostId: "host-plain",
+    label: "Ada's Mac",
+    kind: "remote",
+    websocketUrl: "wss://relay.example/attach",
+    version: "1.0.0",
+    transportDialability: "dialable",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    hostState.directory.current = [LISTED_HOST];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * What a person reads or hears: the text, every `aria-*` attribute and every
+   * `title`. A `data-*` attribute that carries the id is wiring, not copy.
+   */
+  function readableCopy(): string {
+    const parts = [document.body.textContent];
+    for (const element of document.body.querySelectorAll("*")) {
+      for (const attribute of element.attributes) {
+        if (attribute.name.startsWith("aria-") || attribute.name === "title") {
+          parts.push(attribute.value);
+        }
+      }
+    }
+    return parts.join("\n");
+  }
+
+  async function hoverTooltip(trigger: HTMLElement): Promise<string[]> {
+    const user = userEvent.setup({
+      delay: null,
+      advanceTimers: vi.advanceTimersByTimeAsync,
+    });
+    const hovered = user.hover(trigger);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await hovered;
+    return screen
+      .queryAllByRole("tooltip")
+      .map((element) => element.textContent);
+  }
+
+  it("says the Agents tree row is on the host, in its name and its lock's tooltip", async () => {
+    hostState.view.current = hostsView([
+      hostRow(UNLISTED_HOST_ID, "same_principal", VIEWER),
+    ]);
+    renderLocalPanel();
+
+    expect(localRowLabel("chat-unlisted")).toBe(
+      "Chat chat-unlisted, on the host, offline, opens read-only",
+    );
+    const tooltips = await hoverTooltip(
+      screen.getByTestId("epic-sidebar-tree-lock-chat-unlisted"),
+    );
+    expect(tooltips).toContain(
+      "Lives on the host, which is offline. Opens read-only from the last published copy.",
+    );
+    expect(readableCopy()).not.toContain(UNLISTED_HOST_ID);
+  });
+
+  it("says another member's cloud row is on the host, in its name and its lock's tooltip", async () => {
+    renderCloudRow(UNLISTED_HOST_ID, new Set(["some-other-host"]));
+
+    expect(cloudRowLabel()).toContain("On the host, offline");
+    const tooltips = await hoverTooltip(screen.getByTestId(CLOUD_LOCK_TESTID));
+    expect(tooltips).toContain(
+      "Lives on the host, which is offline. Opens read-only from the last published copy.",
+    );
+    expect(readableCopy()).not.toContain(UNLISTED_HOST_ID);
   });
 });

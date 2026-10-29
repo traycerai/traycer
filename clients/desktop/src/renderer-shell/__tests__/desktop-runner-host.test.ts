@@ -143,6 +143,10 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    getTraycerModels: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     createSandbox: async () => ({
       kind: "network-error" as const,
       detail: "test",

@@ -65,16 +65,14 @@ import {
   useMergedNotificationsActions,
   useNotificationCenterHostState,
   useRecentNotificationIds,
-  sandboxIdOfNotificationRow,
+  useShownHostNotificationUnreadCount,
 } from "@/stores/notifications/merged-notifications";
-import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import {
   type CloudNotificationsConnectionState,
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useAppLocalNotificationUnreadCount } from "@/stores/notifications/app-local-notifications-store";
-import { useHostNotificationUnreadCount } from "@/stores/notifications/host-notifications-store";
 import { useNotificationUnreadCount } from "@/stores/notifications/notifications-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -331,10 +329,11 @@ export function NotificationsPopover(
   const recentIds = useWithoutNeedsYouRows(allRecentIds, needsYouItems);
   const unreadCount = useMergedNotificationUnreadCount();
   const appLocalUnreadCount = useAppLocalNotificationUnreadCount();
-  // The cloud-independent planes, read raw for the Mark-all gate: the merged
+  // The cloud-independent planes, read for the Mark-all gate: the merged
   // count deliberately reads 0 while either summary is null, which must not
   // disable a button whose host/global/app-local legs are fully actionable.
-  const hostUnreadCount = useHostNotificationUnreadCount();
+  // The host leg is the same adjusted count the merged count reads.
+  const hostUnreadCount = useShownHostNotificationUnreadCount();
   const globalUnreadCount = useNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
@@ -478,16 +477,8 @@ export function NotificationsPopover(
     revealArrivals();
   }, [scrollToTop, revealArrivals, newArrivalCount]);
 
-  const openSandboxesPage = useOpenSandboxesPage();
   const handleActivate = useCallback(
     (row: MergedNotificationRow) => {
-      const sandboxId = sandboxIdOfNotificationRow(row);
-      if (sandboxId !== null) {
-        actions.markAsRead(row);
-        openSandboxesPage(sandboxId);
-        onNavigate();
-        return;
-      }
       if (row.payload === null) return;
       activate({
         payload: row.payload,
@@ -508,7 +499,7 @@ export function NotificationsPopover(
         }),
       });
     },
-    [actions, activate, onNavigate, openSandboxesPage],
+    [actions, activate, onNavigate],
   );
 
   const handleAcknowledge = useCallback(

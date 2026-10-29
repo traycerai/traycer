@@ -13,6 +13,7 @@ import type {
   ToolCallArtifactStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import {
   a2aSendDeliveryView,
@@ -715,6 +716,40 @@ function BackgroundOutputPanels(props: {
   );
 }
 
+/**
+ * The send's receiver in the card's header, named and linked as the open
+ * epic resolves it. A turn read outside an open epic - a bot's session, in
+ * the bot's rail - has no epic to resolve the receiver in or open it into:
+ * the card names it by its id, with nothing to open.
+ */
+function A2ASendReceiverLink(props: {
+  readonly send: AgentMessageSend;
+  readonly receipt: AgentMessageReceipt | null;
+}): ReactNode {
+  const { send, receipt } = props;
+  if (useMaybeOpenEpicHandle() === null) {
+    return (
+      <AgentHeaderLink
+        name={shortAgentName(send.receiverAgentId)}
+        onOpen={null}
+      />
+    );
+  }
+  return <EpicA2ASendReceiverLink send={send} receipt={receipt} />;
+}
+
+function EpicA2ASendReceiverLink(props: {
+  readonly send: AgentMessageSend;
+  readonly receipt: AgentMessageReceipt | null;
+}): ReactNode {
+  const { name, onOpen } = useA2ASendReceiver(props.send, props.receipt);
+  return <AgentHeaderLink name={name} onOpen={onOpen} />;
+}
+
+function shortAgentName(agentId: string): string {
+  return `${agentId.slice(0, 8)}...`;
+}
+
 function useA2ASendReceiver(
   send: AgentMessageSend,
   receipt: AgentMessageReceipt | null,
@@ -725,8 +760,7 @@ function useA2ASendReceiver(
   );
   const openPeer = useOpenA2AMessagePeer();
   const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
-  const receiverName =
-    receiver?.title ?? `${send.receiverAgentId.slice(0, 8)}...`;
+  const receiverName = receiver?.title ?? shortAgentName(send.receiverAgentId);
   const openReceiverTab = () => {
     if (receiver === null) return;
     openPeer(receiver, receiverName);
@@ -794,10 +828,6 @@ function A2ASendToolSegment(
   });
   const refusalLine =
     refusal === null ? null : <A2ASendRefusalLine sentence={refusal} />;
-  const { name: receiverName, onOpen: openReceiver } = useA2ASendReceiver(
-    send,
-    receipt,
-  );
   const delivery = useA2ASendDeliveryPresentation(
     props.agentMessageDelivery,
     showsFault,
@@ -818,7 +848,7 @@ function A2ASendToolSegment(
       <span className="sr-only">{delivery.srLabel}</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">to</span>
-        <AgentHeaderLink name={receiverName} onOpen={openReceiver} />
+        <A2ASendReceiverLink send={send} receipt={receipt} />
         {send.expectReply ? <ReplyExpectedIcon /> : null}
       </span>
       {delivery.badge}

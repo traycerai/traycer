@@ -1,6 +1,6 @@
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  simulatorSessionsServerFrameSchemaV10,
+  simulatorSessionsServerFrameSchemaV11,
   type SimulatorSessionsClientFrame,
   type SimulatorSessionsOpenRequest,
   type SimulatorSessionsServerFrame,
@@ -35,10 +35,10 @@ export type SimulatorSessionsStreamClientOptions =
 
 /**
  * Typed wrapper over one `simulator.sessions` subscription: one epic's view
- * of the host's simulators, pack and hub state, and sessions. Served on the
- * `@1.0` line only, whose server frames this parses with
- * `simulatorSessionsServerFrameSchemaV10`; a later minor moves that pin
- * (`protocol/README.md`, "Opening a new minor on a stream").
+ * of the host's simulators, pack and hub state, and sessions. Parses with
+ * the `@1.1` line's `simulatorSessionsServerFrameSchemaV11`, which also reads
+ * a `@1.0` host's frames (its new keys are optional); a later minor moves
+ * that pin (`protocol/README.md`, "Opening a new minor on a stream").
  */
 export class SimulatorSessionsStreamClient {
   private readonly session: IStreamSession;
@@ -71,7 +71,7 @@ export class SimulatorSessionsStreamClient {
   }
 
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
-    const parsed = simulatorSessionsServerFrameSchemaV10.safeParse(envelope);
+    const parsed = simulatorSessionsServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) {
       // Issue paths only: the inventory carries simulator names and the
       // pack's failure reason, neither of which belongs in a console line.

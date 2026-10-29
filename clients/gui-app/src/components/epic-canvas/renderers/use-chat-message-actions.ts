@@ -1,4 +1,10 @@
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
@@ -20,6 +26,7 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
+import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type {
   ChatSessionState,
@@ -155,22 +162,35 @@ function unstartedDeliveryPhase(
 }
 
 /**
- * Where the fork dialog's host picker starts and what it lists: `initialHostId`
- * preselects (`null` is the source chat's own host), `onlyHostIds` narrows
- * the list (a team's hosts; `null` is every host), and `stagedSandbox` is a
- * New sandbox picked in the chat's host chip, which the fork lands on.
+ * How the fork dialog opens. Where its host picker starts and what it lists:
+ * `initialHostId` preselects (`null` is the source chat's own host),
+ * `onlyHostIds` narrows the list (a team's hosts; `null` is every host), and
+ * `stagedSandbox` is a New sandbox picked in the chat's host chip, which the
+ * fork lands on. `carriesComposerDraft` moves the source composer's unsent
+ * draft to the clone once the clone exists.
  */
-export interface ForkDialogHosts {
+export interface ForkDialogOpening {
   readonly initialHostId: string | null;
   readonly onlyHostIds: ReadonlySet<string> | null;
   readonly stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }> | null;
+  readonly carriesComposerDraft: boolean;
 }
 
 /** Every per-message fork: the source chat's host, every host listed. */
-export const FORK_ON_SOURCE_HOST: ForkDialogHosts = {
+export const FORK_ON_SOURCE_HOST: ForkDialogOpening = {
   initialHostId: null,
   onlyHostIds: null,
   stagedSandbox: null,
+  carriesComposerDraft: false,
+};
+
+/**
+ * A sandbox refusal's "Choose another host": the whole chat, its host picked
+ * in the dialog, and the refused message moved to the clone's composer unsent.
+ */
+const CLONE_CARRYING_DRAFT: ForkDialogOpening = {
+  ...FORK_ON_SOURCE_HOST,
+  carriesComposerDraft: true,
 };
 
 export interface ChatMessageActionsInput {
@@ -279,7 +299,7 @@ export interface ChatMessageActionsResult {
     assistantMessageId: string | null,
     mode: ChatForkMode,
     interviewBlockId: string | null,
-    hosts: ForkDialogHosts,
+    hosts: ForkDialogOpening,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
@@ -915,7 +935,7 @@ export function useChatMessageActions(
       assistantMessageId: string | null,
       mode: ChatForkMode,
       interviewBlockId: string | null,
-      hosts: ForkDialogHosts,
+      hosts: ForkDialogOpening,
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
@@ -964,6 +984,7 @@ export function useChatMessageActions(
         initialHostId: hosts.initialHostId,
         onlyHostIds: hosts.onlyHostIds,
         stagedSandbox: hosts.stagedSandbox,
+        carriesComposerDraft: hosts.carriesComposerDraft,
       });
     },
     [
@@ -1143,6 +1164,14 @@ export function useChatMessageActions(
   );
 
   const revertOnEditArtifactCount = revertPromptArtifactCount(revertScope);
+
+  useEffect(
+    () =>
+      registerChatCloneOpener(node.id, () => {
+        forkAtAssistantMessage(null, "plain", null, CLONE_CARRYING_DRAFT);
+      }),
+    [forkAtAssistantMessage, node.id],
+  );
 
   return {
     messageActionsFor,

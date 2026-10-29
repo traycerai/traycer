@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
+import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
@@ -20,8 +20,12 @@ type ChannelPostProps = {
    * entry.
    */
   readonly fetchCold: boolean;
-  /** Renders with the post's row, `null` while the channel has none for it. */
-  readonly children: (post: OpenMessage | null) => ReactNode;
+  /**
+   * Renders with the post's row, `null` while the channel has none for it;
+   * `missing` once a cold fetch has ended without it (the host has no such
+   * row, or could not be asked), after which nothing more arrives.
+   */
+  readonly children: (post: OpenMessage | null, missing: boolean) => ReactNode;
 };
 
 /**
@@ -37,7 +41,7 @@ export function ChannelPost(props: ChannelPostProps): ReactNode {
     props.hostId,
     true,
   );
-  if (handle === null) return props.children(null);
+  if (handle === null) return props.children(null, false);
   return <ChannelPostFromStore store={handle.store} {...props} />;
 }
 
@@ -63,16 +67,17 @@ function ChannelPostFromStore(
     () => (cold ? { kind: "message", messageId } : null),
     [cold, messageId],
   );
-  const located = useChatLocateRow({
+  const answer = useChatLocateRowAnswer({
     client,
     epicId: botId,
     chatId: conversationId,
     target,
     epoch,
   });
+  const located = answer.status === "found" ? answer.ordinal : null;
   useEffect(() => {
     if (located === null) return undefined;
     return holdTranscriptOrdinal(located);
   }, [holdTranscriptOrdinal, located]);
-  return props.children(post);
+  return props.children(post, post === null && answer.status === "missing");
 }

@@ -58,6 +58,7 @@ const SEND: BotConversationSendRequest = {
   announcementId: null,
   redeliver: null,
   supersedes: null,
+  answer: null,
 };
 
 function hostOver(
@@ -176,6 +177,7 @@ describe("useBotConversationSendMutation", () => {
 describe("useBotConversationSendMutation's dispatch-time version floor", () => {
   const V10: SchemaVersion = { major: 1, minor: 0 };
   const V11: SchemaVersion = { major: 1, minor: 1 };
+  const V12: SchemaVersion = { major: 1, minor: 2 };
 
   function floorFixture(negotiated: SchemaVersion): {
     readonly messenger: FloorEnforcingMessenger<HostRpcRegistry>;
@@ -247,6 +249,7 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
   const EDIT: BotConversationSendRequest = {
     ...SEND,
     supersedes: "req-failed",
+    answer: null,
   };
 
   it.each([
@@ -284,6 +287,40 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
       });
     },
   );
+
+  const ANSWER: BotConversationSendRequest = {
+    ...SEND,
+    text: "Now",
+    answer: {
+      questionMessageId: "bot-question:req-q",
+      questionIndex: 0,
+      skipped: false,
+    },
+  };
+
+  it("refuses a question card's answer on a host that negotiated 1.1 before it leaves, so it is never taken as a plain post", async () => {
+    const f = floorFixture(V11);
+
+    const failure = await act(() => f.send(ANSWER));
+
+    expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(f.handled).toEqual([]);
+    expect(f.messenger.dispatched).toEqual([]);
+    expect(f.messenger.calls).toEqual([]);
+  });
+
+  it("sends a question card's answer, floor attached, to a host that negotiated 1.2", async () => {
+    const f = floorFixture(V12);
+
+    const failure = await act(() => f.send(ANSWER));
+
+    expect(failure).toBeNull();
+    expect(f.handled).toEqual([ANSWER]);
+    expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "bot.conversation.send",
+      version: { major: 1, minor: 2 },
+    });
+  });
 
   it("sends a plain post to a 1.0 host with no floor, which has always been allowed to take it", async () => {
     const f = floorFixture(V10);
