@@ -621,6 +621,30 @@ describe("what the bot knows, in the rail", () => {
     expect(within(pane).queryAllByRole("textbox")).toEqual([]);
   });
 
+  it("shows what it last read when opened again, then what the host says now", async () => {
+    const user = userEvent.setup();
+    render(<MountedKnowingChannel />);
+    const pane = await openPane(user, MEMORY);
+    await user.click(within(pane).getByTestId("bot-memory-close"));
+    expect(screen.queryByTestId("bot-memory-pane")).toBeNull();
+    const opened = streamClient().subscribeCallCount;
+
+    // Nothing reads the memory now; the card asks the host again, and counts
+    // what it last read before the host answers.
+    const card = await openCard(user);
+    expect(streamClient().subscribeCallCount).toBeGreaterThan(opened);
+    const row = within(card).getByTestId("bot-profile-memory");
+    expect(row.textContent).toBe("4 memories ›");
+    await user.click(row);
+    expect(rowsOf(memoryPane())).toHaveLength(4);
+
+    sendMemory(memoryOf([NEVER_CONFIRMED]));
+
+    await waitFor(() =>
+      expect(textsOf(memoryPane())).toEqual([NEVER_CONFIRMED.text]),
+    );
+  });
+
   it("says when it could not load, and asks again on retry", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);

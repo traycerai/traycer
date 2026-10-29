@@ -1,10 +1,13 @@
 import { useCallback, useMemo } from "react";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   botMemorySubscribeServerFrameSchema,
   type BotMemory,
 } from "@traycer/protocol/host/bot/schemas";
+import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -22,7 +25,8 @@ export type { BotMemory };
  * What a bot knows, as one reader sees it:
  *
  *  - `loading` until the first answer;
- *  - `ready` with the entries the bot reads before every reply, kept live;
+ *  - `ready` with the entries the bot reads before every reply, kept live
+ *    (the last ones read, until a reopened view hears from the host);
  *  - `failed` when the host could not read them, or the live view closed,
  *    with a retry that opens it again;
  *  - `unsupported` on a host without the read, which draws no memory.
@@ -39,9 +43,18 @@ type MemoryEvent =
 
 type StreamClient = IHostStreamClient<HostStreamRpcRegistry>;
 
+interface MemorySlot {
+  readonly hostId: string;
+  readonly botId: string;
+  readonly environmentId: string;
+}
+
 /**
  * One session per client, host, bot and environment, however many readers
- * mount: the profile card's count and the memory pane share it.
+ * mount: the profile card's count and the memory pane share it. Each memory
+ * it reads lands in the host's query cache, which keeps the last one after
+ * the session closes, so a reader opened again shows it while a new session
+ * asks the host.
  */
 const sessions: SharedStreamSubscriptionRegistry<MemoryEvent> = new Map();
 
@@ -63,6 +76,11 @@ export function useBotMemory(args: {
   readonly enabled: boolean;
 }): BotMemoryReading {
   const { hostId, botId, environmentId, enabled } = args;
+  const queryClient = useQueryClient();
+  const slot: MemorySlot = useMemo(
+    () => ({ hostId, botId, environmentId }),
+    [hostId, botId, environmentId],
+  );
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(target, auth);
@@ -77,8 +95,19 @@ export function useBotMemory(args: {
       if (client === null) {
         throw new Error("A bot's memory needs a client.");
       }
-      return openSession(client, botId, environmentId);
-    }, [client, botId, environmentId]);
+      return openSession(client, queryClient, slot);
+    }, [client, queryClient, slot]);
+
+  const onConsumerJoined = useCallback(
+    (shared: SharedStreamSubscription<MemoryEvent>): void => {
+      const last = shared.lastEvent;
+      if (last?.kind !== "snapshot" || last.memory === null) return;
+      const key = botQueryKeys.memory(slot);
+      if (queryClient.getQueryData(key) !== undefined) return;
+      queryClient.setQueryData(key, last.memory);
+    },
+    [queryClient, slot],
+  );
 
   const { lastEvent, sendRefresh } = useSharedStreamSubscription({
     registry: sessions,
@@ -88,7 +117,16 @@ export function useBotMemory(args: {
     enabled: enabled && support !== "unsupported",
     consumerLabel: "bot-memory-consumer",
     createSession,
-    onConsumerJoined: noop,
+    onConsumerJoined,
+  });
+
+  const { data: cached } = useQuery({
+    ...queryOptions({
+      queryKey: botQueryKeys.memory(slot),
+      queryFn: (): Promise<BotMemory | null> => Promise.resolve(null),
+      staleTime: Infinity,
+    }),
+    enabled: false,
   });
 
   const retry = useCallback(() => {
@@ -104,24 +142,26 @@ export function useBotMemory(args: {
 
   return useMemo((): BotMemoryReading => {
     if (support === "unsupported") return { kind: "unsupported" };
-    if (lastEvent === null) return { kind: "loading" };
-    if (lastEvent.kind === "closed" || lastEvent.memory === null) {
+    if (
+      lastEvent !== null &&
+      (lastEvent.kind === "closed" || lastEvent.memory === null)
+    ) {
       return { kind: "failed", retry };
     }
-    return { kind: "ready", memory: lastEvent.memory };
-  }, [lastEvent, retry, support]);
+    const memory = cached ?? null;
+    if (memory === null) return { kind: "loading" };
+    return { kind: "ready", memory };
+  }, [cached, lastEvent, retry, support]);
 }
-
-function noop(): void {}
 
 function openSession(
   client: StreamClient,
-  botId: string,
-  environmentId: string,
+  queryClient: QueryClient,
+  slot: MemorySlot,
 ): SharedStreamSubscription<MemoryEvent> {
   const session = client.subscribe("bot.memory.subscribe", {
-    botId,
-    environmentId,
+    botId: slot.botId,
+    environmentId: slot.environmentId,
   });
   let closed = false;
   const shared: SharedStreamSubscription<MemoryEvent> = {
@@ -144,7 +184,11 @@ function openSession(
     if (closed) return;
     const parsed = botMemorySubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success || parsed.data.kind !== "snapshot") return;
-    publish({ kind: "snapshot", memory: parsed.data.memory });
+    const { memory } = parsed.data;
+    if (memory !== null) {
+      queryClient.setQueryData(botQueryKeys.memory(slot), memory);
+    }
+    publish({ kind: "snapshot", memory });
   });
   session.onStatusChange((status, reason) => {
     if (closed || status !== "closed") return;
