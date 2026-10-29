@@ -7,6 +7,10 @@ import {
   shouldGroupByHost,
 } from "@/lib/home-focus/focus-host-groups";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
+import {
+  hostLabelAtSentenceStart,
+  hostNameFromLabel,
+} from "@/hooks/agent/use-host-reachability";
 
 const FIELD_SEPARATOR = "\u0000";
 const ENTRY_SEPARATOR = "\u0001";
@@ -75,7 +79,9 @@ export function useHomeHostGroups(model: FocusModel): HomeHostGrouping {
       labelOf: (hostId: string) =>
         isUnknownHostId(hostId)
           ? UNKNOWN_HOST_LABEL
-          : (labels.get(hostId) ?? hostId),
+          : hostLabelAtSentenceStart(
+              hostNameFromLabel(labels.get(hostId) ?? null, hostId),
+            ),
     };
   }, [model, activeHostId, registryKey]);
 }

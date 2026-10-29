@@ -468,6 +468,7 @@ describe("<BotActivityPage /> running now", () => {
       announcementId: null,
       redeliver: { requestId: "req-trunk" },
       supersedes: null,
+      answer: null,
     });
 
     await user.click(screen.getByTestId("bot-activity-stopped-open"));

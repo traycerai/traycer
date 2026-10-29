@@ -67,9 +67,11 @@ export function tabHostIdModule(): { useTabHostId: () => string } {
 }
 
 export function hostDirectoryEntryModule(): {
-  useHostDirectoryEntry: () => { hostId: string };
+  useHostDirectoryEntry: () => { hostId: string; label: string };
 } {
-  return { useHostDirectoryEntry: () => ({ hostId: "host-test" }) };
+  return {
+    useHostDirectoryEntry: () => ({ hostId: "host-test", label: "Studio Mac" }),
+  };
 }
 
 /**

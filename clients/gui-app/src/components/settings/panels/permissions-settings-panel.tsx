@@ -50,6 +50,7 @@ import { useConfigurationSource } from "@/components/settings/environment/config
 import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
+import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened,
@@ -108,7 +109,10 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const hostId = intent?.hostId ?? null;
   const hostName =
-    scope.hosts.find((host) => host.hostId === hostId)?.name ?? hostId;
+    hostId === null
+      ? null
+      : (scope.hosts.find((host) => host.hostId === hostId)?.name ??
+        UNNAMED_HOST_LABEL);
   // Under a team pick the scope is this window's own machine.
   const windowHostId = scope.hostId;
   useLayoutEffect(() => {

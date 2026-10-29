@@ -63,6 +63,7 @@ import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 type ThreadTranscriptState = Pick<
@@ -467,6 +468,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   resetBotFailedRequestSupport();
   mocks.handle = null;
@@ -508,6 +511,7 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
         announcementId: "question-1",
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -578,6 +582,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
         announcementId: "answer-1",
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -793,6 +798,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -935,6 +941,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -1007,6 +1014,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
           announcementId: null,
           redeliver: null,
           supersedes: null,
+          answer: null,
         },
       ]);
     });
@@ -1445,6 +1453,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: REPLY_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -1490,6 +1499,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -1548,6 +1558,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
   });
@@ -1570,6 +1581,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: "answer-1",
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
   });
@@ -1658,6 +1670,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: POST_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
   });

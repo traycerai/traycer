@@ -56,6 +56,7 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type { EpicPipGeometry } from "@/stores/epics/canvas/types";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 const PIP_DRAG_CLICK_SLOP_PX = 4;
 
@@ -573,7 +574,7 @@ function resolvePipHostLabel(
   ) {
     return null;
   }
-  return label ?? target.hostId;
+  return hostNameFromLabel(label, target.hostId);
 }
 
 function resolvePipTabMeta(tab: BrowserTabInfo | undefined): {

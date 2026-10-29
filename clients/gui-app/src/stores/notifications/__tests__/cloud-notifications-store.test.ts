@@ -681,7 +681,7 @@ describe("cloud notifications store", () => {
     close();
   });
 
-  it("lands a snapshot carrying an environments-redesign kind instead of rejecting the feed", () => {
+  it("lands a snapshot carrying a dropped environments kind, without its row, instead of rejecting the feed", () => {
     const client = new ControlledWsStreamClient();
     const close = openCloudNotificationsStream(
       reconnectEngine,
@@ -712,9 +712,7 @@ describe("cloud notifications store", () => {
     });
 
     const state = useCloudNotificationsStore.getState();
-    expect(state.rows).toEqual({
-      [cloudNotificationFeedId("entry-stalled")]: row,
-    });
+    expect(state.rows).toEqual({});
     expect(state.connectionState).toBe("connected");
     close();
   });

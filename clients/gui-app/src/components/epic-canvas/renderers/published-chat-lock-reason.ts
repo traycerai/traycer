@@ -65,7 +65,7 @@ export function publishedChatLockReason(input: {
    * collaborator's shared chat, and it outranks both reachability arms: the
    * owner's machine can never appear in this account's host directory, so
    * "which is offline" asserts liveness this device cannot observe,
-   * `ownerLabel` has fallen back to a raw host id, and "sending resumes"
+   * `ownerLabel` names no machine of theirs, and "sending resumes"
    * promises a composer this viewer does not get. `true` when the owner is
    * unknown - only a positive mismatch may flip the sentence.
    */

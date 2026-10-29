@@ -1,5 +1,6 @@
 import { createContext } from "react";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
+import type { QuestionCardAnswer } from "@/components/chat/question-card";
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
@@ -44,6 +45,35 @@ export interface ChatBotFailedRequest {
    * Retry is `null`.
    */
   readonly edit: ((text: string) => void) | null;
+}
+
+/**
+ * What the question card under a bot's row that asks without waiting
+ * (decision 121) can do on this surface, and how it names who answered.
+ */
+export interface ChatBotQuestions {
+  /** The bot whose card it is: the person's unsent answers are kept under it. */
+  readonly botId: string;
+  /** Who is viewing, so their own answer landing reads as theirs; `null` when nobody is signed in. */
+  readonly viewerUserId: string | null;
+  /** A member's name, as the surface shows it, for who answered. */
+  readonly memberName: (userId: string) => string;
+  /**
+   * Sends the person's answer or Skip to the question on the row
+   * `questionMessageId`: resolves once the host takes it - written, or
+   * queued for a bot's host that is away - and rejects when it does not.
+   * Either way the card holds the answer until the question shows settled,
+   * or, on a rejection, gives it back to edit. `null` where nothing can send
+   * it, and the card offers no actions.
+   */
+  readonly answer:
+    | ((questionMessageId: string, answer: QuestionCardAnswer) => Promise<void>)
+    | null;
+  /**
+   * Opens the question's discussion - its thread, or the thread it was asked
+   * in - with `draft` in the box, unsent; `null` where there is none.
+   */
+  readonly discuss: ((questionMessageId: string, draft: string) => void) | null;
 }
 
 /**
@@ -107,6 +137,11 @@ export interface ChatBotPresentation {
    * nothing can post it.
    */
   readonly chooseOption: ((choice: string) => void) | null;
+  /**
+   * The question card under a bot's row that asks; `null` draws the row as an
+   * older client does, its text and its first question's options.
+   */
+  readonly questions: ChatBotQuestions | null;
   /**
    * A member's message the bot failed to answer, by its request id and its
    * writer: why, and its actions, while the session that failed or parked on

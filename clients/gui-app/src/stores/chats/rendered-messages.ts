@@ -12,7 +12,10 @@ import type {
   AssistantTurnProfile,
   ChatSessionAnchor,
 } from "@traycer/protocol/persistence/epic/schemas";
-import type { BotAnnouncement } from "@traycer/protocol/persistence/epic/messages";
+import type {
+  BotAnnouncement,
+  BotQuestion,
+} from "@traycer/protocol/persistence/epic/messages";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -2385,6 +2388,8 @@ interface AssistantTurnAccumulator {
   announcement: BotAnnouncement | null;
   /** The choices a bot reply offers; `null` on every other turn. */
   options: ReadonlyArray<string> | null;
+  /** The questions a bot's row asks and their settlements; `null` on every other turn. */
+  question: BotQuestion | null;
   /** The member's post a bot's direct reply answers; `null` on every other turn. */
   repliesTo: string | null;
   imageResolutionsByBlockId: Map<
@@ -2907,6 +2912,7 @@ function renderPersistedAssistantMessageTurn(
     acc.envCredentialVar ?? "envcred:none",
     turnPauseSignature(pause),
     stoppedSignature(stopped),
+    questionSignature(acc.question),
   ].join(":");
   const cached = turnCache.get(turnKey);
   if (cached !== undefined && cached.cacheKey === cacheKey) {
@@ -2938,9 +2944,17 @@ function renderPersistedAssistantMessageTurn(
 }
 
 /**
- * A bot row's announcement, options and the post it answers, first non-null:
- * the host writes them on the one record a bot row is, and a sibling record
- * never unsets them.
+ * A bot row's questions as the turn cache keys them: a settlement lands on
+ * the row without touching its blocks, so nothing else in the key sees it.
+ */
+function questionSignature(question: BotQuestion | null): string {
+  return question === null ? "question:none" : JSON.stringify(question);
+}
+
+/**
+ * A bot row's announcement, options, question and the post it answers, first
+ * non-null: the host writes them on the one record a bot row is, and a
+ * sibling record never unsets them.
  */
 function mergeBotRowFields(
   existing: AssistantTurnAccumulator,
@@ -2948,6 +2962,7 @@ function mergeBotRowFields(
 ): void {
   existing.announcement = existing.announcement ?? message.announcement ?? null;
   existing.options = existing.options ?? message.options ?? null;
+  existing.question = existing.question ?? message.question ?? null;
   existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
 }
 
@@ -3022,6 +3037,7 @@ function addAssistantMessageToAccumulator(
     costUsd: message.usage?.costUsd ?? null,
     announcement: message.announcement ?? null,
     options: message.options ?? null,
+    question: message.question ?? null,
     repliesTo: message.repliesTo ?? null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -3818,6 +3834,8 @@ function renderAssistantTurnSlice(
       : { announcement: input.acc.announcement }),
     // Only a bot reply that asks carries them; absent everywhere else.
     ...(input.acc.options === null ? {} : { options: input.acc.options }),
+    // Only a bot's row that asks without waiting carries it; absent everywhere else.
+    ...(input.acc.question === null ? {} : { question: input.acc.question }),
     // Only a bot's direct reply in its channel carries it; absent everywhere else.
     ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
@@ -4196,6 +4214,7 @@ function renderLiveAssistant(
     // never a streamed turn.
     announcement: null,
     options: null,
+    question: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),

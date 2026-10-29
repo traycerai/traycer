@@ -23,6 +23,7 @@ import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   BotChatTranscript,
   type BotTranscriptSurface,
+  type QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import {
   BotMessageComposer,
@@ -42,6 +43,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import {
   failedOnRequest,
@@ -61,6 +63,7 @@ import {
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
@@ -207,8 +210,11 @@ export function BotChannelView(props: {
   // A direct reply's option, clicked, is the person's next post: offered
   // only while no earlier pick is still being sent. A pick that fails says so
   // where a failed message does.
-  const { mutate: send, isPending: sending } =
-    useBotConversationSendMutation(client);
+  const {
+    mutate: send,
+    mutateAsync: sendAsync,
+    isPending: sending,
+  } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
   const channelId = channel?.conversationId ?? null;
@@ -225,11 +231,42 @@ export function BotChannelView(props: {
           announcementId: null,
           redeliver: null,
           supersedes: null,
+          answer: null,
         },
         { onError: failSend },
       );
     },
     [botId, channelId, clearSendFailure, failSend, send],
+  );
+  // A question card's answer or Skip, on a question the bot asked at the
+  // channel's top level: the person's message goes to the bot itself and
+  // opens no thread. A send that fails says so where a failed message does,
+  // and the card keeps the person's draft. A host that cannot take the
+  // answer gets a card without actions.
+  const answersTaken = useBotSendTakesAnswers(hostId);
+  const answerQuestion = useCallback<QuestionAnswerSend>(
+    async (questionMessageId, given) => {
+      if (channelId === null) return;
+      clearSendFailure();
+      await sendAsync(
+        {
+          botId,
+          conversationId: channelId,
+          text: given.text,
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: {
+            questionMessageId,
+            questionIndex: given.questionIndex,
+            skipped: given.skipped,
+          },
+        },
+        { onError: failSend },
+      );
+    },
+    [botId, channelId, clearSendFailure, failSend, sendAsync],
   );
 
   // A post the bot failed to answer, in a thread or at the top level, is
@@ -272,6 +309,21 @@ export function BotChannelView(props: {
         sent: null,
       }),
     [onOpenThread],
+  );
+  // A member whose answer someone else's overtook takes it to the question's
+  // thread: the thread opens with their draft in its box, unsent, kept under
+  // the bot until it is sent. A host without the thread list has no thread
+  // to discuss in.
+  const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
+  const discussQuestion = useMemo(
+    () =>
+      threadListSupported
+        ? (questionMessageId: string, draft: string) => {
+            seedThreadBox(botId, questionMessageId, draft);
+            openAnnouncementThread(questionMessageId, false);
+          }
+        : null,
+    [botId, openAnnouncementThread, seedThreadBox, threadListSupported],
   );
 
   // A post whose answer lands in a thread (reply mode `threaded`) opens that
@@ -332,15 +384,20 @@ export function BotChannelView(props: {
         : null,
       answerThreads,
       chooseOption: sending ? null : chooseOption,
+      answerQuestion: answersTaken ? answerQuestion : null,
+      discussQuestion,
       failedRequest,
       intro: { botTitle, directive },
     }),
     [
       answerThreads,
+      answerQuestion,
+      answersTaken,
       botTitle,
       activity?.threads,
       chooseOption,
       directive,
+      discussQuestion,
       failedRequest,
       isUnread,
       unreadCountOf,
@@ -488,6 +545,8 @@ export function BotChannelView(props: {
             failure={sendFailure}
             edit={edit}
             onEditEnd={endEdit}
+            seed={null}
+            keptDraft={null}
             onSent={openPostedThread}
           />
         </section>

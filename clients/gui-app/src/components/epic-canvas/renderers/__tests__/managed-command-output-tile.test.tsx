@@ -66,7 +66,10 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
   };
 });
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => ({
     status: reachability.value,
     hostLabel: "Work laptop",
