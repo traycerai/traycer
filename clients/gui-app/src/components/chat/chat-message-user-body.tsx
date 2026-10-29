@@ -822,7 +822,7 @@ function InlineUserMessageEditor({
     const scrollSnapshot = captureScrollSnapshot(containerRef.current);
     let attempt = 0;
     const focusWhenReady = (): void => {
-      editorRef.current?.focusAtEnd();
+      editorRef.current?.focusAtEnd("hold-view");
       restoreScrollSnapshot(scrollSnapshot);
       attempt += 1;
       if (attempt >= 4) {

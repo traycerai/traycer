@@ -165,7 +165,7 @@ vi.mock(
       getEditorIncarnation: () => instance.getEditorIncarnation(),
       hasFocus: () => false,
       focus: () => instance.focus(),
-      focusAtEnd: () => instance.focusAtEnd(),
+      focusAtEnd: (scroll) => instance.focusAtEnd(scroll),
       getJSON: () => instance.getJSON(),
       isEmpty: () => instance.isEmpty(),
       clear: () => instance.clear(),

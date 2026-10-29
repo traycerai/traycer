@@ -1694,8 +1694,10 @@ export function useChatTimelineFollowLatch(
     };
     // A wheel or swipe over an agent page or MCP App happens in the frame's
     // document, so the listeners above never see it, yet it chains to this
-    // node. The frame relays its direction; without it that scroll reads as
-    // layout-owned and is corrected straight back to the tail.
+    // node. The frame relays its direction, which arms the wheel rules. A
+    // scroll chained out of a frame with no relayed gesture is the reader's
+    // (only their input can chain one out; the frame's own programmatic
+    // scrolls are contained in the frame); it departs like any pan.
     const handleFrameScrollGesture = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return;
       const direction: unknown = event.detail;

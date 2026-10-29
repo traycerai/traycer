@@ -54,6 +54,13 @@ import "@/index.css";
  * the bootstrap telling it it is fullscreen (`body[data-app-fullscreen]`);
  * `window.blockingLayerClaimed` reads the shell's blocking claim.
  * `browser-tests/mcp-app-fullscreen.spec.ts` drives it.
+ *
+ * `?scenario=self-scroll` puts the row at the top of a scroller with 3000px
+ * below it, and its app scrolls its OWN document when `body[data-command]`
+ * names a call (`scroll-into-view`, `scroll-into-view-if-needed`, `focus`)
+ * on an element at the bottom of its page, taller than the row's cap, then
+ * reports it on `body[data-did]` with its own scroll offset on
+ * `body[data-app-scroll-y]`. `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
 <script>
@@ -107,11 +114,45 @@ ${askFullscreen ? 'ask("ui/request-display-mode", { mode: "fullscreen" });' : ""
 </script>`;
 }
 
+const SELF_SCROLLING_APP = `<main style="height:5000px;padding:16px"><p>log</p></main>
+<input id="last" aria-label="Last line" value="text">
+<script>
+let next = 0;
+const waiting = new Map();
+function ask(method, params) {
+  const id = "app-" + (++next);
+  parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+  return new Promise((resolve) => waiting.set(id, resolve));
+}
+addEventListener("message", (event) => {
+  const data = event.data;
+  if (data && waiting.has(data.id)) {
+    waiting.get(data.id)(data);
+    waiting.delete(data.id);
+  }
+});
+const done = new Set();
+setInterval(async () => {
+  const answer = await ask("resources/read", { uri: "ui://command" });
+  const command = answer.result && answer.result.contents[0].text;
+  if (!command || done.has(command)) return;
+  done.add(command);
+  const last = document.getElementById("last");
+  if (command === "scroll-into-view") last.scrollIntoView({ block: "nearest" });
+  if (command === "scroll-into-view-if-needed") last.scrollIntoViewIfNeeded();
+  if (command === "focus") last.focus();
+  void ask("resources/read", {
+    uri: "ui://did/" + command + "/" + Math.round(scrollY),
+  });
+}, 30);
+</script>`;
+
 const scenario = new URLSearchParams(window.location.search).get("scenario");
 
 function appHtml(): string {
   if (scenario === "escape") return calmApp(true);
   if (scenario === "inline-escape") return calmApp(false);
+  if (scenario === "self-scroll") return SELF_SCROLLING_APP;
   return HOSTILE_APP;
 }
 
@@ -187,6 +228,11 @@ const mcpRpc: McpAppRpc = {
       body.dataset.escapes = String(Number(body.dataset.escapes ?? "0") + 1);
     }
     if (params.uri === "ui://fullscreen") body.dataset.appFullscreen = "true";
+    if (params.uri.startsWith("ui://did/")) {
+      const [did, scrollY] = params.uri.slice("ui://did/".length).split("/");
+      body.dataset.did = did;
+      body.dataset.appScrollY = scrollY;
+    }
     body.dataset.reads = String(Number(body.dataset.reads ?? "0") + 1);
     return Promise.resolve({
       kind: "result",
@@ -276,13 +322,29 @@ if (container !== null) {
                 >
                   <McpAppRpcContext.Provider value={mcpRpc}>
                     {scenario === "dialog" ? <AlreadyOpenDialog /> : null}
-                    <div className="mx-auto w-full max-w-2xl p-6">
-                      <McpAppRow
-                        id="block-1"
-                        app={STAMP}
-                        fallback={<div>no app</div>}
-                      />
-                    </div>
+                    {scenario === "self-scroll" ? (
+                      <div
+                        data-testid="outer-scroller"
+                        style={{ height: "100%", overflowY: "auto" }}
+                      >
+                        <div className="mx-auto w-full max-w-2xl p-6">
+                          <McpAppRow
+                            id="block-1"
+                            app={STAMP}
+                            fallback={<div>no app</div>}
+                          />
+                        </div>
+                        <div style={{ height: 3000 }} />
+                      </div>
+                    ) : (
+                      <div className="mx-auto w-full max-w-2xl p-6">
+                        <McpAppRow
+                          id="block-1"
+                          app={STAMP}
+                          fallback={<div>no app</div>}
+                        />
+                      </div>
+                    )}
                   </McpAppRpcContext.Provider>
                 </ChatAttachmentScopeContext.Provider>
               </TooltipProvider>
