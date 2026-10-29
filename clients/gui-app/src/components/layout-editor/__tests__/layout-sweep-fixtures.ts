@@ -147,6 +147,7 @@ export const harnessMessengerFactory: MessengerFactory<HostRpcRegistry> = ({
         processMemory: null,
         crossHostMessaging: null,
         sessions: null,
+        updatesExternallyManaged: null,
       }),
       "host.notifications.indicatorState":
         (): HostNotificationsIndicatorStateResponse => ({

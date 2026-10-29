@@ -58,6 +58,13 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     useHostScope,
     usePersonalHostScope: useHostScope,
     useAccountHostScope: useHostScope,
+    // The panel picks its SELECTION by build and reads one scope through it;
+    // this suite is about the panel, so every selection answers the same host.
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
   };
 });
 

@@ -11,6 +11,7 @@ import {
   hostStatusUpgradeV16ToV17,
   hostStatusUpgradeV17ToV18,
   hostStatusUpgradeV18ToV19,
+  hostStatusUpgradeV19ToV110,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
@@ -21,6 +22,7 @@ import {
   hostStatusV17,
   hostStatusV18,
   hostStatusV19,
+  hostStatusV110,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -387,10 +389,10 @@ describe("host.status registry membership", () => {
     expect(hostStatusV18.requestSchema).toBe(hostStatusV17.requestSchema);
   });
 
-  it("installs @1.0 through @1.9 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.10 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(9);
+    expect(entry[1].latestMinor).toBe(10);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -424,6 +426,10 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[9].contract).toBe(hostStatusV19);
     expect(entry[1].versions[9].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV18ToV19,
+    );
+    expect(entry[1].versions[10].contract).toBe(hostStatusV110);
+    expect(entry[1].versions[10].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV19ToV110,
     );
   });
 });
@@ -570,5 +576,46 @@ describe("hostStatusUpgradeV17ToV18", () => {
       },
     });
     expect("crossHostMessaging" in parsed).toBe(false);
+  });
+});
+
+const V19_RESPONSE = {
+  ...V17_RESPONSE,
+  crossHostMessaging: null,
+  sessions: null,
+};
+
+describe("hostStatusUpgradeV19ToV110", () => {
+  it("upgrades a v1.9 response with updatesExternallyManaged: null, NOT a fabricated false", () => {
+    const parsed = hostStatusV19.responseSchema.parse(V19_RESPONSE);
+    const upgraded = hostStatusUpgradeV19ToV110.upgradeResponse(parsed);
+    expect(upgraded.updatesExternallyManaged).toBeNull();
+    expect(upgraded.updatesExternallyManaged).not.toBe(false);
+    expect(() => hostStatusV110.responseSchema.parse(upgraded)).not.toThrow();
+  });
+
+  it("leaves the request identity-mapped", () => {
+    expect(hostStatusUpgradeV19ToV110.upgradeRequest({})).toEqual({});
+  });
+
+  it("requires the key at 1.10 and keeps a reported answer either way", () => {
+    expect(hostStatusV110.responseSchema.safeParse(V19_RESPONSE).success).toBe(
+      false,
+    );
+    for (const reported of [true, false]) {
+      const parsed = hostStatusV110.responseSchema.parse({
+        ...V19_RESPONSE,
+        updatesExternallyManaged: reported,
+      });
+      expect(parsed.updatesExternallyManaged).toBe(reported);
+    }
+  });
+
+  it("strips updatesExternallyManaged when a v1.9 caller re-parses the reply", () => {
+    const parsed = hostStatusV19.responseSchema.parse({
+      ...V19_RESPONSE,
+      updatesExternallyManaged: true,
+    });
+    expect("updatesExternallyManaged" in parsed).toBe(false);
   });
 });

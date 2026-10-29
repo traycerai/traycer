@@ -10,9 +10,12 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
 //   A: at the start of frame N, before the rendering update (what a rAF-time
 //      probe sees; tasks since the last frame, e.g. a stream token's React
 //      commit, are applied but the frame's observer callbacks have not run);
-//   B: from a message task posted in the rAF callback, i.e. after the
-//      rendering update of frame N (its layout, observer callbacks and
-//      paint). B is what the screen showed for frame N.
+//   B: in a ResizeObserver callback the rAF callback arms by resizing a
+//      marker, i.e. after frame N's layout and the page's own observer
+//      callbacks, right before paint. B is what the screen showed for frame
+//      N. (A message task posted from the rAF callback is not: under load a
+//      stream token's timer task runs first, and its commit reads as painted
+//      though the next rendering update corrects it before paint.)
 
 test.use({ viewport: { width: 900, height: 700 }, colorScheme: "light" });
 
@@ -135,19 +138,24 @@ const INIT = `(() => {
       }
     };
     const t0 = performance.now();
-    const mc = new MessageChannel();
+    const marker = document.createElement("div");
+    marker.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;visibility:hidden;pointer-events:none";
+    document.body.append(marker);
     const pending = [];
-    mc.port1.onmessage = () => {
+    new NRO(() => {
       const i = pending.shift();
       if (i !== undefined) frames[i].B = read();
-    };
+    }).observe(marker);
+    let wide = false;
     const tick = () => {
       if (!running) return;
       window.__ofFrame += 1;
       rescan();
       frames.push({ f: window.__ofFrame, t: Math.round(performance.now() - t0), step: window.__ofStep, A: read(), B: null });
+      pending.length = 0;
       pending.push(frames.length - 1);
-      mc.port2.postMessage(0);
+      wide = !wide;
+      marker.style.width = wide ? "2px" : "1px";
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);

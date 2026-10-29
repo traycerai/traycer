@@ -157,6 +157,27 @@ describe("applySimulatorStatePatch", () => {
     expect(next.packState).toBe(SNAPSHOT.packState);
   });
 
+  it("carries the opens in flight, and keeps the list a patch does not mention", () => {
+    const opening = [{ requestId: "request-1" }];
+    const withOpening = applySimulatorStatePatch(SNAPSHOT, 4, { opening });
+    expect(withOpening.opening).toEqual(opening);
+
+    // A later patch that moves something else leaves the opens alone.
+    const other = applySimulatorStatePatch(withOpening, 5, {
+      booting: ["udid-cold"],
+    });
+    expect(other.opening).toBe(opening);
+
+    // An empty list is the host saying the open ended, not "absent".
+    expect(applySimulatorStatePatch(other, 6, { opening: [] }).opening).toEqual(
+      [],
+    );
+    // A `@1.0` host never sends it, so it stays absent.
+    expect(
+      applySimulatorStatePatch(SNAPSHOT, 4, { booting: [] }).opening,
+    ).toBeUndefined();
+  });
+
   it("lists booted simulators first", () => {
     expect(
       orderSimulators(SNAPSHOT.simulators).map((s) => s.simulatorId),

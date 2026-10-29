@@ -25,6 +25,7 @@ import {
   useEnvironmentStatusRead,
 } from "@/hooks/environment/use-environment-reads";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -99,8 +100,11 @@ export function FirstTaskChatGuide(props: {
 function GettingStartedToast() {
   const computer = useThisComputer();
   const completedAt = useOnboardingStore((state) => state.completedAt);
-  const held = useHeldOnThisComputer(computer, completedAt !== null);
-  const notMoved = useNotMovedOnThisComputer(computer, completedAt !== null);
+  // Neither move reminder in a build without environments
+  // (`unreleased-features.ts`): there is no Personal to move settings to.
+  const remindersOn = UNRELEASED_FEATURES_ENABLED && completedAt !== null;
+  const held = useHeldOnThisComputer(computer, remindersOn);
+  const notMoved = useNotMovedOnThisComputer(computer, remindersOn);
   // Neither toast until the review and the status answer, so the reminder
   // never shows for a moment before another toast replaces it.
   if (held === "pending" || notMoved === "pending") return null;

@@ -4,19 +4,23 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { simulatorOrientationSchema } from "./actions";
 import {
   simulatorHubStateSchema,
+  simulatorOpeningSchema,
   simulatorPackStateSchema,
   simulatorPlatformAvailabilitySchema,
   simulatorPlatformSchema,
   simulatorSessionSchema,
+  simulatorSessionSchemaV10,
   simulatorStateSchema,
+  simulatorStateSchemaV10,
   simulatorSummarySchema,
+  simulatorSummarySchemaV10,
 } from "./schemas";
 
 /**
- * `simulator.sessions@1.0` and `simulator.stream@1.0`: the two `/stream`
+ * `simulator.sessions@1.1` and `simulator.stream@1.0`: the two `/stream`
  * methods of the simulator domain. Both are new names (never `browser.*`,
- * whose namespace is frozen), registered at major 1 minor 0 and accepted by
- * the released-stream-surface tests under the subset rule.
+ * whose namespace is frozen), registered at major 1 and accepted by the
+ * released-stream-surface tests under the subset rule.
  *
  * `simulator.sessions` publishes the service's inventory for one epic: a
  * `snapshot` on subscribe, then a `stateChanged` carrying only the fields
@@ -55,19 +59,54 @@ export type SimulatorSessionsOpenRequest = z.infer<
  * `revision` and `hostId` never ride a patch (the former is on the frame,
  * the latter never changes for one host).
  */
-export const simulatorStatePatchSchema = lazySchema(() =>
+export const simulatorStatePatchSchemaV10 = lazySchema(() =>
   z.object({
     platforms: z.array(simulatorPlatformAvailabilitySchema).optional(),
     packState: simulatorPackStateSchema.optional(),
     hubState: simulatorHubStateSchema.optional(),
+    simulators: z.array(simulatorSummarySchemaV10).optional(),
+    sessions: z.array(simulatorSessionSchemaV10).optional(),
+    booting: z.array(z.string().min(1)).optional(),
+  }),
+);
+
+/** `@1.1`: the live summaries and sessions, and the opens in flight. */
+export const simulatorStatePatchSchema = lazySchema(() =>
+  simulatorStatePatchSchemaV10.extend({
     simulators: z.array(simulatorSummarySchema).optional(),
     sessions: z.array(simulatorSessionSchema).optional(),
-    booting: z.array(z.string().min(1)).optional(),
+    opening: z.array(simulatorOpeningSchema).optional(),
   }),
 );
 export type SimulatorStatePatch = z.infer<typeof simulatorStatePatchSchema>;
 
 export const simulatorSessionsServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("snapshot"),
+        ...textFrameFields,
+        state: simulatorStateSchemaV10,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("stateChanged"),
+        ...textFrameFields,
+        revision: z.number().int().nonnegative(),
+        patch: simulatorStatePatchSchemaV10,
+      })
+      .strict(),
+  ]),
+);
+
+/**
+ * `@1.1`: the `@1.1` state. Clone summaries are filtered from `simulators`
+ * while sessions on a clone stay in `sessions`; ended sessions are in
+ * neither. A `@1.0` subscriber is served the unfiltered `@1.0` shape by the
+ * resolver, since there is no same-major downgrade bridge.
+ */
+export const simulatorSessionsServerFrameSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z
       .object({
@@ -86,9 +125,9 @@ export const simulatorSessionsServerFrameSchemaV10 = lazySchema(() =>
       .strict(),
   ]),
 );
-/** The live line's server frames; the same object as the `@1.0` schema. */
+/** The live line's server frames; the same object as the `@1.1` schema. */
 export const simulatorSessionsServerFrameSchema =
-  simulatorSessionsServerFrameSchemaV10;
+  simulatorSessionsServerFrameSchemaV11;
 export type SimulatorSessionsServerFrame = z.infer<
   typeof simulatorSessionsServerFrameSchema
 >;
@@ -113,6 +152,14 @@ export const simulatorSessionsV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: simulatorSessionsOpenRequestSchema,
   serverFrameSchema: simulatorSessionsServerFrameSchemaV10,
+  clientFrameSchema: simulatorSessionsClientFrameSchema,
+});
+
+export const simulatorSessionsV11 = defineStreamRpcContract({
+  method: "simulator.sessions",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: simulatorSessionsOpenRequestSchema,
+  serverFrameSchema: simulatorSessionsServerFrameSchemaV11,
   clientFrameSchema: simulatorSessionsClientFrameSchema,
 });
 

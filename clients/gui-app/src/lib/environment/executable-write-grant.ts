@@ -2,6 +2,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type { HostRpcRegistry } from "@/lib/host";
 import { appLogger } from "@/lib/logger";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The executable-write grant, minted here and nowhere else in the app.
@@ -90,6 +91,9 @@ export async function resolveExecutableWriteGrant(
   client: HostRequester<HostRpcRegistry>,
   now: () => number,
 ): Promise<string | null> {
+  // A build without environments (`unreleased-features.ts`) authorizes
+  // nothing: no host forwards its writes, so none asks or mints.
+  if (!UNRELEASED_FEATURES_ENABLED) return null;
   const hostId = client.getActiveHostId();
   if (hostId === null) return null;
   if (!(await hostHasEnvironment(client))) return null;

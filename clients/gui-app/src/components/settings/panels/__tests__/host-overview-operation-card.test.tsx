@@ -253,6 +253,7 @@ function statusWith(
     processMemory: null,
     crossHostMessaging: null,
     sessions: null,
+    updatesExternallyManaged: null,
   };
 }
 
@@ -324,6 +325,7 @@ function statusWithBusy(
     processMemory: null,
     crossHostMessaging: null,
     sessions: null,
+    updatesExternallyManaged: null,
   };
 }
 
@@ -348,6 +350,7 @@ function statusOperationNull(
     processMemory: null,
     crossHostMessaging: null,
     sessions: null,
+    updatesExternallyManaged: null,
   };
 }
 

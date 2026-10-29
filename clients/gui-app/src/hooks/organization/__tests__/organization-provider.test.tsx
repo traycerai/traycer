@@ -87,6 +87,9 @@ const state = vi.hoisted(() => {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => state.client,
+  useAuthService: () => ({
+    revalidateCurrentContextAfterInvalidation: () => Promise.resolve(null),
+  }),
 }));
 
 // The no-pool plan's answer: the surface client itself. These suites test the
