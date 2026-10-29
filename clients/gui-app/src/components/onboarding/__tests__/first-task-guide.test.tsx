@@ -22,6 +22,7 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
+import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
@@ -30,18 +31,18 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+interface ToastButton {
+  readonly label: string;
+  readonly onClick: () => void;
+}
+
+/** The options this app passes `toast()`, as the double reads them back. */
 interface ToastOptions {
-  readonly id?: string;
-  readonly description?: ReactNode;
-  readonly action?: {
-    readonly label: string;
-    readonly onClick: () => void;
-  };
-  readonly cancel?: {
-    readonly label: string;
-    readonly onClick: () => void;
-  };
-  readonly onDismiss?: () => void;
+  readonly id: string | undefined;
+  readonly description: ReactNode | undefined;
+  readonly action: ToastButton | undefined;
+  readonly cancel: ToastButton | undefined;
+  readonly onDismiss: (() => void) | undefined;
 }
 
 const toastState = vi.hoisted(() => {
@@ -260,6 +261,9 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
   afterEach(() => {
     cleanup();
+    // The app's own teardown: it is what clears an outstanding invitation,
+    // which outlives any one mount by design.
+    retireOnboardingReminder();
     resetNegotiatedManifests();
     thisComputer.current = {
       hostId: null,
@@ -488,6 +492,54 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
     });
 
+    it("is still the thing being asked when the Start page is left and comes back", async () => {
+      // The invitation outlives this surface: the person leaves Start, the
+      // move is accepted from the Getting started card or another window, and
+      // they come back. The toast is still up, unanswered, so no reminder may
+      // take its turn beside it.
+      let answer = NOT_MOVED_STATUS;
+      computerWhoseStatusChanges(() => answer);
+      const first = mountGuide();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+
+      first.view.unmount();
+      answer = environmentStatusFixture({});
+      mountGuide();
+
+      await waitFor(() =>
+        expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull(),
+      );
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+    });
+
+    it("stops the Start page nudging for good once the person answers it", async () => {
+      // One dismissal covers the Start page, as it did when both wordings
+      // shared one toast: Not now is an answer to being nudged here, not only
+      // to the move, so the reminder does not take the invitation's turn.
+      let answer = NOT_MOVED_STATUS;
+      computerWhoseStatusChanges(() => answer);
+      const { queryClient } = mountGuide();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+
+      act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
+      answer = environmentStatusFixture({});
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+    });
+
     async function mountedMoveToast(): Promise<RenderResult> {
       computerWithStatus(NOT_MOVED_STATUS);
       const mounted = mountGuide();
@@ -570,11 +622,64 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
           MOVE_INVITATION_TOAST_ID,
         ),
       );
+      // Both ids go: the retire does not have to know which one was up.
+      expect(toastState.dismiss).toHaveBeenCalledWith(SETUP_REMINDER_TOAST_ID);
 
       act(() => toastState.invokeAction());
       expect(useMoveSheetStore.getState().target).toBeNull();
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
       view.unmount();
+    });
+
+    it("lets the reminder show again for whoever signs in next", async () => {
+      // The retire takes the invitation down without the person answering it,
+      // so it also has to forget that one was outstanding. Left standing, the
+      // next identity's Start page would hold its reminder back for ever,
+      // waiting on an answer to a toast nobody can see.
+      computerWithStatus(NOT_MOVED_STATUS);
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "user-a",
+          userName: "alice@example.test",
+          email: "alice@example.test",
+        },
+        contextMetadata: {
+          userId: "user-a",
+          username: "alice@example.test",
+        },
+      });
+      const { view } = mountGuideWithLifecycleBridge();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+      act(() => {
+        useAuthStore.setState({
+          status: "signed-out",
+          profile: null,
+          contextMetadata: null,
+        });
+      });
+      await waitFor(() =>
+        expect(toastState.dismiss).toHaveBeenCalledWith(
+          MOVE_INVITATION_TOAST_ID,
+        ),
+      );
+      view.unmount();
+
+      // Whoever signs in next is on a computer that has moved: no invitation
+      // to make, so the reminder is the toast this Start page owes them.
+      toastState.reset();
+      toastState.mockClear();
+      computerWithStatus(environmentStatusFixture({}));
+      mountGuide();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(
+          "You're all set",
+          expect.anything(),
+        ),
+      );
     });
   });
 });

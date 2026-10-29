@@ -936,7 +936,11 @@ describe("useHostQuery condition cadence wiring", () => {
     expect(appliedDelay(query)).toBe(1_500);
   });
 
-  it("omits branded cadence when poll:false while still stamping and forcing retry:false", async () => {
+  it("omits branded cadence when poll:false, leaving the client's own retry in place", async () => {
+    // `retry: false` belongs to the branded poller, whose episode re-asks on
+    // its error lanes. A reader that opts out owns no episode, so no lane can
+    // recover it: it keeps the app client's ordinary retry, the only recovery
+    // it has left.
     const fixture = createConditionHostQueryFixture();
     renderHook(
       () =>
@@ -958,7 +962,10 @@ describe("useHostQuery condition cadence wiring", () => {
     expect(query.options.meta).toMatchObject({
       hostRpcMethod: "speech.getModelStatus",
     });
-    expect(query.options.retry).toBe(false);
+    const clientRetry = fixture.queryClient.getDefaultOptions().queries?.retry;
+    // Not `undefined`, or the comparison below would hold of any override.
+    expect(clientRetry).not.toBeUndefined();
+    expect(query.options.retry).toBe(clientRetry);
     expect(refetchIntervalFor(query)).toBe(false);
   });
 });

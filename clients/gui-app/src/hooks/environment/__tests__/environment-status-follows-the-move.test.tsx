@@ -30,11 +30,18 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 const HOST_ID = "old";
 const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
 /**
- * The span each assertion is given: longer than a move's own reads, shorter
- * than the cadence every other status read keeps. A claim inside it is a
- * claim about the move's pace and not about the steady one.
+ * The span a progress claim is given: longer than a move's own first reads
+ * (500 ms, then 1 s), shorter than the cadence every other status read keeps.
+ * A claim inside it is a claim about the move's pace, not the steady one.
  */
 const WITHIN_THE_MOVE_MS = 4_000;
+/**
+ * The span a "nothing was re-read" claim is held open for. Well short of the
+ * steady 5 s, so a slow machine has to fall more than two seconds behind
+ * before a legitimate steady read could land inside it and read as the move
+ * lane's work.
+ */
+const BEFORE_THE_STEADY_READ_MS = 2_500;
 
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
@@ -192,7 +199,7 @@ describe("the status read while this computer's move runs", () => {
       ),
     );
 
-    await holdFor(WITHIN_THE_MOVE_MS);
+    await holdFor(BEFORE_THE_STEADY_READ_MS);
 
     // A computer resting at `moving_settings`/`awaiting_consent` is the
     // ordinary un-moved computer, not a move under way: the one read so far.
@@ -216,7 +223,7 @@ describe("the status read while this computer's move runs", () => {
       ).toBe("Moving stopped: it couldn't finish. 1 item left."),
     );
 
-    await holdFor(WITHIN_THE_MOVE_MS);
+    await holdFor(BEFORE_THE_STEADY_READ_MS);
 
     expect(reads()).toBe(1);
   });

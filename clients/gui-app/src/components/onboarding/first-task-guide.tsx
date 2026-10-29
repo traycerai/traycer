@@ -1,7 +1,10 @@
-import { lazy, Suspense, useEffect, useRef, type RefObject } from "react";
+import { lazy, Suspense, useEffect, type RefObject } from "react";
 import { toast } from "sonner";
 import {
   captureOnboardingReminderIdentity,
+  markMoveInvitationAnswered,
+  markMoveInvitationShown,
+  moveInvitationIsOutstanding,
   MOVE_INVITATION_TOAST_ID,
   ONBOARDING_REMINDER_TOAST_ID,
 } from "@/lib/toast/onboarding-reminder-toast";
@@ -125,7 +128,10 @@ function GettingStartedToast() {
  * without the planes, a move accepted elsewhere - is not an answer from the
  * person: it neither withdraws the invitation nor lets the reminder take its
  * place. Both effects live here, the invitation's first, so the reminder's
- * reads an invitation shown on an earlier render.
+ * reads an invitation shown on an earlier render - and the fact that one is
+ * outstanding lives with the toast's identity rather than here, because the
+ * toast outlives this component: the Start page is left and comes back while
+ * the invitation stays up.
  */
 function StartToast(props: {
   readonly completedAt: number | null;
@@ -146,11 +152,9 @@ function StartToast(props: {
     onboardingCompletedCount(state, shell),
   );
   const remaining = onboardingGuideCount(shell) - complete;
-  /** An invitation is on screen with no answer from the person yet. */
-  const invitationStands = useRef(false);
   useEffect(() => {
     if (dismissed || hostId === null || hostName === null) return;
-    invitationStands.current = true;
+    markMoveInvitationShown();
     const identityIsCurrent = captureOnboardingReminderIdentity();
     // The invitation's shape is the import announcement's
     // (`session-import-announcement-controller.tsx`): it does not time out,
@@ -165,12 +169,15 @@ function StartToast(props: {
       duration: Infinity,
       closeButton: true,
       onDismiss: () => {
-        if (identityIsCurrent()) dismiss();
+        if (!identityIsCurrent()) return;
+        markMoveInvitationAnswered();
+        dismiss();
       },
       action: {
         label: "Show me what moves",
         onClick: () => {
           if (!identityIsCurrent()) return;
+          markMoveInvitationAnswered();
           dismiss();
           openMoveSheet({ hostId, hostName });
         },
@@ -178,7 +185,9 @@ function StartToast(props: {
       cancel: {
         label: "Not now",
         onClick: () => {
-          if (identityIsCurrent()) dismiss();
+          if (!identityIsCurrent()) return;
+          markMoveInvitationAnswered();
+          dismiss();
         },
       },
     });
@@ -187,8 +196,9 @@ function StartToast(props: {
     if (completedAt === null || dismissed) return;
     if (remaining === 0) return;
     // An invitation on screen is the thing being asked; the reminder waits
-    // for it to be answered, whatever the status says by now.
-    if (hostId !== null || invitationStands.current) return;
+    // for it to be answered, whatever the status says by now and whether or
+    // not this instance is the one that published it.
+    if (hostId !== null || moveInvitationIsOutstanding()) return;
     let mounted = true;
     const id = ONBOARDING_REMINDER_TOAST_ID;
     const identityIsCurrent = captureOnboardingReminderIdentity();
