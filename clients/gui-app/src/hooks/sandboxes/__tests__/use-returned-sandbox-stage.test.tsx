@@ -141,6 +141,33 @@ describe("useNewConversationReturnedSandbox", () => {
   });
 });
 
+describe("a restored stage leaves with its draft", () => {
+  it("clears the task composer's restored stage when it closes, and restores it with its key when it reopens", () => {
+    const keyed: ReturnedSandbox = { ...RETURNED, clientRequestId: "key-1" };
+    act(() => {
+      const drafts = useNewConversationModalStore.getState();
+      drafts.setContent(EPIC_ID, MESSAGE);
+      drafts.setReturnedSandbox(EPIC_ID, keyed);
+    });
+    const composer = renderHook(() =>
+      useNewConversationReturnedSandbox(EPIC_ID, null),
+    );
+    expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe("key-1");
+
+    composer.unmount();
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(returnedOnDraft()).toEqual(keyed);
+
+    mountComposer();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      target: keyed.target,
+      clientRequestId: "key-1",
+    });
+  });
+});
+
 describe("useLandingReturnedSandbox", () => {
   const WINDOW_SURFACE = "landing:window-test";
 
@@ -191,4 +218,95 @@ describe("useLandingReturnedSandbox", () => {
 
     expect(readStagedSandbox(WINDOW_SURFACE)?.target).toEqual(shown.target);
   });
+
+  // The landing composer either changes its draft, or a retained composer
+  // hides while another shows.
+  it.each<LandingShape>([
+    "one composer changing its draft",
+    "two composers trading places",
+  ])(
+    "stages each draft's own sandbox as the shown draft changes: %s",
+    (shape) => {
+      const first: ReturnedSandbox = { ...RETURNED, clientRequestId: "key-a" };
+      const second: ReturnedSandbox = {
+        target: {
+          kind: "existing",
+          hostId: "sbx-b-host",
+          sandboxId: "sbx-b",
+          name: "b-box",
+          configuration: { kind: "personal" },
+          verb: "start",
+        },
+        clientRequestId: null,
+      };
+      installReturnedDraft("draft-a", first);
+      installReturnedDraft("draft-b", second);
+      const show = mountLanding(shape, WINDOW_SURFACE);
+
+      show("draft-a");
+      expect(readStagedSandbox(WINDOW_SURFACE)).toMatchObject({
+        target: first.target,
+        clientRequestId: "key-a",
+      });
+
+      show("draft-b");
+      expect(readStagedSandbox(WINDOW_SURFACE)).toMatchObject({
+        target: second.target,
+        clientRequestId: null,
+      });
+      expect(landingReturned("draft-a")).toEqual(first);
+      expect(landingReturned("draft-b")).toEqual(second);
+
+      show("draft-a");
+      expect(readStagedSandbox(WINDOW_SURFACE)).toMatchObject({
+        target: first.target,
+        clientRequestId: "key-a",
+      });
+      expect(landingReturned("draft-b")).toEqual(second);
+    },
+  );
 });
+
+/**
+ * Mounts the window's landing composer(s) and returns a way to show a draft:
+ * one composer whose draft changes, or one retained composer per draft with
+ * only the shown one active.
+ */
+type LandingShape =
+  | "one composer changing its draft"
+  | "two composers trading places";
+
+function mountLanding(
+  shape: LandingShape,
+  surfaceKey: string,
+): (draftId: "draft-a" | "draft-b") => void {
+  if (shape === "one composer changing its draft") {
+    const composer = renderHook<void, { readonly draftId: string | null }>(
+      (props) => useLandingReturnedSandbox(surfaceKey, props.draftId, true),
+      { initialProps: { draftId: null } },
+    );
+    return (draftId) => composer.rerender({ draftId });
+  }
+  const composers = renderHook<void, { readonly shown: string | null }>(
+    (props) => {
+      useLandingReturnedSandbox(
+        surfaceKey,
+        "draft-a",
+        props.shown === "draft-a",
+      );
+      useLandingReturnedSandbox(
+        surfaceKey,
+        "draft-b",
+        props.shown === "draft-b",
+      );
+    },
+    { initialProps: { shown: null } },
+  );
+  return (draftId) => composers.rerender({ shown: draftId });
+}
+
+function landingReturned(draftId: string): ReturnedSandbox | null | undefined {
+  return useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === draftId)?.returnedSandbox;
+}

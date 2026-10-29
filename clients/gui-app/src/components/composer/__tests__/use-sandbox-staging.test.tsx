@@ -853,6 +853,60 @@ describe("a returned sandbox on the open landing draft", () => {
         .drafts.find((draft) => draft.id === DRAFT_ID)?.returnedSandbox,
     ).toBeNull();
   });
+
+  it("keeps the person's pick when they move to another draft with its own returned sandbox", () => {
+    const otherDraft: ReturnedSandbox = {
+      target: {
+        kind: "existing",
+        hostId: "box-other",
+        sandboxId: "sbx-box-other",
+        name: "box-other",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      },
+      clientRequestId: null,
+    };
+    const drafts = useLandingDraftStore.getState();
+    drafts.installLandingDraft({
+      id: "draft-other",
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+    });
+    drafts.setDraftReturnedSandbox("draft-other", otherDraft);
+    function ShownDraft(props: { readonly draftId: string }): null {
+      useLandingReturnedSandbox(SURFACE, props.draftId, true);
+      return null;
+    }
+    const view = render(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ShownDraft draftId={DRAFT_ID} />
+      </>,
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+
+    act(() => staging().composer.onPickHost(STOPPED));
+    view.rerender(
+      <>
+        <Harness surfaceKey={SURFACE} hosts={[AWAKE, SUSPENDED, STOPPED]} />
+        <ShownDraft draftId="draft-other" />
+      </>,
+    );
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      sandboxId: "sbx-box-stopped",
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === "draft-other")?.returnedSandbox,
+    ).toEqual(otherDraft);
+  });
 });
 
 describe("useSandboxStaging host picks", () => {

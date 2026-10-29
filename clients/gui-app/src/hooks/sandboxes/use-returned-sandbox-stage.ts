@@ -79,7 +79,10 @@ export function useLandingReturnedSandbox(
  * Send goes to that sandbox again, with the same create key. A stage of the
  * composer's own always wins. Any pick in the composer's picker forgets the
  * returned sandbox, and so does its stage leaving the composer (sent, or
- * replaced). `surfaceKey` is null while the composer is inactive.
+ * replaced). The restored stage leaves with its draft: when the composer
+ * stops showing the draft, it takes the stage off the surface and the draft
+ * keeps it, to restore when it is shown again. `surfaceKey` is null while
+ * the composer is inactive.
  */
 function useReturnedSandboxStage(
   surfaceKey: string | null,
@@ -91,6 +94,20 @@ function useReturnedSandboxStage(
     if (surfaceKey === null) return;
     return onReturnedSandboxSuperseded(surfaceKey, forget);
   }, [forget, surfaceKey]);
+
+  useEffect(() => {
+    if (surfaceKey === null) return;
+    return () => {
+      // Runs before the next shown draft installs its own. A stage the
+      // person picked has already superseded this draft's, so never matches.
+      const live = read();
+      if (
+        live !== null &&
+        stageIsReturnedSandbox(readStagedSandbox(surfaceKey), live)
+      )
+        useStagedSandboxStore.getState().clear(surfaceKey);
+    };
+  }, [read, surfaceKey]);
 
   useEffect(() => {
     if (surfaceKey === null || returned === null) return;
