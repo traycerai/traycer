@@ -708,10 +708,14 @@ for (const line of ["legacy", "windowed"] as const) {
         if (afterAppendMs > 0) await page.waitForTimeout(afterAppendMs);
       }
       await armWheelPin(page);
-      for (let i = 0; i < ticks; i += 1) {
-        await page.mouse.wheel(0, -delta);
-        if (gapFrames > 0) await nextFrames(page, gapFrames);
-      }
+      // The reader's view is sampled below as the one the burst left them at,
+      // so every wheel must have landed first.
+      await wheelsDelivered(
+        page,
+        Array.from({ length: ticks }, () => ({ deltaX: 0, deltaY: -delta })),
+        gapFrames,
+      );
+      if (gapFrames > 0) await nextFrames(page, gapFrames);
       await nextFrames(page, 2);
       const startedAt = Date.now();
       const reader = await sample(page, startedAt);
