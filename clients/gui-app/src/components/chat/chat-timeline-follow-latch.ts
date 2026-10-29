@@ -195,6 +195,10 @@ interface ActiveEndCorrection {
 interface ListRowTop {
   readonly key: string;
   readonly top: number;
+  /** How many rows the list held. A row the list no longer names is still
+   *  the row standing last when the count has not changed - a turn re-keyed
+   *  in place - and is a row the list has replaced when it has. */
+  readonly rowCount: number;
 }
 
 interface ReaderEndCandidate {
@@ -497,7 +501,9 @@ function lastListRowTop(list: LegendListRef | null): ListRowTop | null {
   const last = state.data.length - 1;
   if (last < 0) return null;
   const top = state.positionAtIndex(last);
-  return typeof top === "number" ? { key: state.keyAtIndex(last), top } : null;
+  return typeof top === "number"
+    ? { key: state.keyAtIndex(last), top, rowCount: state.data.length }
+    : null;
 }
 
 function readerMomentumEndFor(
@@ -537,16 +543,30 @@ function readerMomentumEndMovedOn(
 }
 
 /** How far the list has moved a row since its recorded top, and null when
- *  there is no row to read it from - the list dropped the one recorded, or
- *  none was. What the list moved is then unknown, never zero: read as zero
- *  it is the reader's own movement, which is what follows them. */
+ *  the list has moved it by an amount nothing left can tell. Read as zero,
+ *  a move the list made is the reader's own movement, which is what
+ *  follows them.
+ *
+ *  A row the list no longer names is still read when the list holds the
+ *  same rows: a turn re-keyed in place - an optimistic row taking the
+ *  server's id - leaves the row standing last where the recorded one was,
+ *  and what moved the view is still there to read. Only a list that has
+ *  gained or lost rows under the view moved its end for reasons of its own
+ *  that no row left can account for.
+ *
+ *  With no row recorded at all there is nothing the list can have moved
+ *  since, and the answer is zero, as it is for a row that has not moved. */
 function listRowShift(
   list: LegendListRef | null,
   row: ListRowTop | null,
 ): number | null {
-  if (list === null || row === null) return null;
+  if (list === null || row === null) return 0;
   const top = list.getState().positionByKey(row.key);
-  return top === undefined ? null : top - row.top;
+  if (top !== undefined) return top - row.top;
+  const standingLast = lastListRowTop(list);
+  return standingLast !== null && standingLast.rowCount === row.rowCount
+    ? standingLast.top - row.top
+    : null;
 }
 
 /** The first row whose top is below the viewport's top edge; the last row
@@ -566,7 +586,11 @@ function touchReferenceRow(
   ) {
     const top = state.positionAtIndex(index);
     if (top > geometry.scrollTop) {
-      return { key: state.keyAtIndex(index), top };
+      return {
+        key: state.keyAtIndex(index),
+        top,
+        rowCount: state.data.length,
+      };
     }
   }
   return lastListRowTop(list);
