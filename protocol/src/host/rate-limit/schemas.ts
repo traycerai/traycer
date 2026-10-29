@@ -483,11 +483,12 @@ const antigravityRateLimitWindowSchema = lazySchema(() =>
 // Gemini pool first as "Gemini Models" with that one 5-hour window.
 //
 // Otherwise nested exactly as Google groups it, so a group Google adds or
-// renames needs no protocol change. Every window is account usage - none is
-// scoped to the models Traycer runs - so all of them feed the shared severity
-// rollup. `planName` is the subscription Google names for the account ("Google
-// AI Pro"), null when it names none. A group may legitimately carry no windows
-// (Google marks such a group purely informational).
+// renames needs no protocol change. Every window feeds the shared severity
+// rollup. Each group is its own pool for its own models, so the host's
+// per-model scopes (`providerProfileRateLimitScopeSchema`) name a window's
+// group as its family. `planName` is the subscription Google names for the
+// account ("Google AI Pro"), null when it names none. A group may legitimately
+// carry no windows (Google marks such a group purely informational).
 //
 // ORDER: groups keep Google's order (Gemini first). A group's windows are
 // shortest first, unknown lengths last - the host sorts them, because Google
