@@ -3,12 +3,13 @@
  *
  * THE INVARIANT, for every surface and not only this file: a mapping between
  * a tile's `simulatorId`, the host's `instanceKey` and a clone's `cloneOf` is
- * resolved only through a read that names the pair together - this task's
- * `sessions`, the host-wide `simulator.instances`, or the task catalog's
- * records - never through a string equality that holds only where the udid IS
- * the key, never from a read that cannot carry the pair (`simulator.list`'s
- * nested instances have no `simulatorId`), and never by letting a root device
- * of the same name stand in for a clone.
+ * resolved only from something that NAMED that pair - a read carrying both
+ * (this task's `sessions`, the host-wide `simulator.instances`, the task
+ * catalog's records) or a tile's own record of the answer that placed it -
+ * except where the protocol makes the two one string, which is an iOS udid
+ * and never an Android serial. Never from a read that cannot carry the pair
+ * (`simulator.list`'s nested instances have no `simulatorId`), and never by
+ * letting a root device of the same name stand in for a clone.
  */
 import type {
   SimulatorHostInstance,
