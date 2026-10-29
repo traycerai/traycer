@@ -97,7 +97,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  hostLabelAtSentenceStart,
+  useHostReachability,
+} from "@/hooks/agent/use-host-reachability";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
@@ -685,7 +688,7 @@ function WorktreesBody(props: {
   } else if (!reachable) {
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>
-        {`${reachability.hostLabel} is offline. Worktrees can only be managed on a reachable host.`}
+        {`${hostLabelAtSentenceStart(reachability.hostLabel)} is offline. Worktrees can only be managed on a reachable host.`}
       </WorktreesStateMessage>
     );
   } else if (client === null) {

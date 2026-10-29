@@ -76,8 +76,20 @@ export type HostReachabilityBasis = "directory" | "starting-deadline";
  */
 export type HostReachabilityHostKind = HostKind | "unknown";
 
+/**
+ * What copy calls a host the directory has no name for: before it resolves, a
+ * host it does not list, a listed one with an empty label. Never the host id,
+ * which names nothing a person can act on; keys and diagnostics use `hostId`.
+ */
+export const UNNAMED_HOST_LABEL = "the host";
+
 export interface HostReachability {
   readonly status: HostReachabilityStatus;
+  /**
+   * The directory's name for the host, or {@link UNNAMED_HOST_LABEL}. Copy
+   * that opens a sentence with it reads {@link hostLabelAtSentenceStart}, and
+   * copy that quotes it reads {@link quotedHostReference}.
+   */
   readonly hostLabel: string;
   /** Why, when `status` is `unreachable`. `null` for every other status. */
   readonly unavailability: HostUnavailability | null;
@@ -162,7 +174,7 @@ export function useHostReachability(hostId: string): HostReachability {
       if (list.fetchStatus === "idle") {
         return {
           status: "reachable",
-          hostLabel: hostId,
+          hostLabel: UNNAMED_HOST_LABEL,
           unavailability: null,
           basis: "directory",
           hostKind: "unknown",
@@ -170,7 +182,7 @@ export function useHostReachability(hostId: string): HostReachability {
       }
       return {
         status: "checking",
-        hostLabel: hostId,
+        hostLabel: UNNAMED_HOST_LABEL,
         unavailability: null,
         basis: "directory",
         hostKind: "unknown",
@@ -179,7 +191,7 @@ export function useHostReachability(hostId: string): HostReachability {
     if (isUnknownHost(hostId)) {
       return {
         status: "reachable",
-        hostLabel: hostId,
+        hostLabel: UNNAMED_HOST_LABEL,
         unavailability: null,
         basis: "directory",
         hostKind: "unknown",
@@ -198,7 +210,7 @@ export function useHostReachability(hostId: string): HostReachability {
     if (list.data.length === 0) {
       return {
         status: "host-starting",
-        hostLabel: hostId,
+        hostLabel: UNNAMED_HOST_LABEL,
         unavailability: null,
         basis: "directory",
         hostKind: "unknown",
@@ -212,7 +224,7 @@ export function useHostReachability(hostId: string): HostReachability {
       // not the local host" would be a guess dressed as a fact.
       return {
         status: "unreachable",
-        hostLabel: hostId,
+        hostLabel: UNNAMED_HOST_LABEL,
         unavailability: "offline",
         basis: "directory",
         hostKind: "unknown",
@@ -243,7 +255,7 @@ export function useHostReachability(hostId: string): HostReachability {
     if (isLocalHostBootingEntry(entry)) {
       return {
         status: "host-starting",
-        hostLabel: entry.label.length > 0 ? entry.label : hostId,
+        hostLabel: entry.label.length > 0 ? entry.label : UNNAMED_HOST_LABEL,
         unavailability: null,
         basis: "directory",
         hostKind: "local",
@@ -268,7 +280,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // a dead tile — a banner, and for terminals a "permanently closed"
     // notification. So it gates on the REASON, and only the reason that is
     // actually evidence about the host.
-    const hostLabel = entry.label.length > 0 ? entry.label : hostId;
+    const hostLabel = entry.label.length > 0 ? entry.label : UNNAMED_HOST_LABEL;
     const hostKind = entry.kind;
     const unavailability = hostUnavailability(entry);
     if (unavailability === null) {
@@ -403,19 +415,43 @@ export function useHostReachability(hostId: string): HostReachability {
 
 /**
  * The label a surface may NAME this host by, or `null` while the directory
- * has not resolved one.
+ * has not resolved one, or has no name for it.
  *
- * `hostLabel` falls back to the raw `hostId` so callers always have a string,
- * which is right for keys and diagnostics and wrong for copy: while the
- * directory is still `checking` that fallback is a uuid, and "Waiting for
- * 8f3c-…-a19 to start" is not a sentence to show a person. One rule, encoded
- * once, rather than each of the six tile families inventing its own fallback
- * phrase.
+ * `null` is what the tile copy (`tileHostName`) turns into "the host", and a
+ * name into a quoted one, so an unnamed host is never quoted as if "the host"
+ * were its name. One rule, encoded once, rather than each of the six tile
+ * families inventing its own fallback phrase.
  */
 export function resolvedHostLabel(
   reachability: HostReachability,
 ): string | null {
-  return reachability.status === "checking" ? null : reachability.hostLabel;
+  if (reachability.status === "checking") return null;
+  return reachability.hostLabel === UNNAMED_HOST_LABEL
+    ? null
+    : reachability.hostLabel;
+}
+
+/**
+ * A host label where it opens a sentence: "The host" when the host has no
+ * name, a real name exactly as the host reported it - never recapitalized.
+ */
+export function hostLabelAtSentenceStart(hostLabel: string): string {
+  return hostLabel === UNNAMED_HOST_LABEL ? "The host" : hostLabel;
+}
+
+/**
+ * A host where copy quotes its name: `host "Ada's Mac"`, or "the host" when it
+ * has none - never `host "the host"`. `atSentenceStart` capitalizes the
+ * leading word, which is never part of the name.
+ */
+export function quotedHostReference(
+  hostLabel: string,
+  atSentenceStart: boolean,
+): string {
+  if (hostLabel === UNNAMED_HOST_LABEL) {
+    return atSentenceStart ? "The host" : UNNAMED_HOST_LABEL;
+  }
+  return `${atSentenceStart ? "Host" : "host"} "${hostLabel}"`;
 }
 
 /**

@@ -1,5 +1,8 @@
 import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
-import type { HostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  resolvedHostLabel,
+  type HostReachability,
+} from "@/hooks/agent/use-host-reachability";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -8,7 +11,6 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { chatTileHostLabel } from "./chat-pre-content";
 
 /** The label a host reported to an environment it is bound to, if any. */
 function environmentHostLabel(
@@ -44,7 +46,7 @@ export function useChatTileHostLabel(
   reachability: HostReachability,
   hostId: string,
 ): string | null {
-  const directoryLabel = chatTileHostLabel(reachability, hostId);
+  const directoryLabel = resolvedHostLabel(reachability);
   const client = useOptionalHostClient();
   const appHostId = client?.getActiveHostId() ?? null;
   const authorized = useAuthStore((state) =>

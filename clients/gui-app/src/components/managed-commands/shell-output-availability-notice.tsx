@@ -3,6 +3,7 @@ import { TriangleAlert } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { quotedHostReference } from "@/hooks/agent/use-host-reachability";
 import {
   isShellOutputPanelReplacement,
   type ShellOutputAvailability,
@@ -151,8 +152,9 @@ function panelSentence(availability: ShellOutputPanelAvailability): ReactNode {
     case "unreachable-host":
       return (
         <>
-          Host &quot;{availability.hostLabel}&quot; is unreachable, so this
-          output cannot be read. The shell and its log are kept on that host.
+          {quotedHostReference(availability.hostLabel, true)} is unreachable, so
+          this output cannot be read. The shell and its log are kept on that
+          host.
         </>
       );
     // One sentence, no hedge about "what is shown below": nothing is shown

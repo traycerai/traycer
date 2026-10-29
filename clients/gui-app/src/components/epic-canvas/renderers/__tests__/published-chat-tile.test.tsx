@@ -54,7 +54,10 @@ import type {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
-import type { HostReachabilityHostKind } from "@/hooks/agent/use-host-reachability";
+import {
+  UNNAMED_HOST_LABEL,
+  type HostReachabilityHostKind,
+} from "@/hooks/agent/use-host-reachability";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -231,10 +234,11 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
 }));
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: (hostId: string) => mockUseHostReachability(hostId),
-  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
-    r.status === "checking" ? null : r.hostLabel,
 }));
 // The chat's sandbox state and the viewer's epic role, stubbed at their own
 // seams: both hooks have their own suites, and this one is about the tile's
@@ -981,14 +985,12 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
     });
   });
 
-  it("hands the banner no host name when the directory only knows the owner by its id", () => {
+  it("hands the banner no host name when nothing names the owner", () => {
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
     mockUseChatReplicaRead.mockReturnValue(replicaOk());
-    // `useHostReachability` falls back to the raw host id when the directory
-    // has no label; NODE's `ownerHostId` is that id.
     mockUseHostReachability.mockReturnValue({
       status: "unreachable",
-      hostLabel: "owner-host-1",
+      hostLabel: UNNAMED_HOST_LABEL,
     });
 
     render(
@@ -1316,7 +1318,7 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
   // What `useHostReachability` answers for a host its directory does not list.
   const UNLISTED_OWNER: MockHostReachability = {
     status: "unreachable",
-    hostLabel: "owner-host-1",
+    hostLabel: UNNAMED_HOST_LABEL,
     unavailability: "offline",
     hostKind: "unknown",
   };

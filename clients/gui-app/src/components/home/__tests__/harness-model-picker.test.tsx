@@ -366,7 +366,10 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   },
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: (hostId: string) => {
     const reachability = queryMock.reachabilityByHost.get(hostId);
     return {

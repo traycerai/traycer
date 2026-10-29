@@ -347,7 +347,10 @@ vi.mock("@/lib/browser-view/sessions/peek-frame-cache", () => ({
     readonly instanceId: string;
   }) => `${node.hostId}:${node.sessionId}:${node.tabId}:${node.instanceId}`,
 }));
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: (hostId: string) => {
     hostBindingHarness.reachabilityHostIds.push(hostId);
     return {

@@ -283,7 +283,7 @@ function usePublishedChatOwner(
   };
 }
 
-/** A sandbox by its own name, never the raw host id a directory falls back to. */
+/** A sandbox by its own name, never the words a directory has for an unnamed host. */
 function copyOwnerLabel(
   state: ChatSandboxState,
   hostId: string,
