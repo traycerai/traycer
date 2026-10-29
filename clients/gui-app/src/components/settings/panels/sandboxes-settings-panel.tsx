@@ -46,7 +46,7 @@ import { useApplyRequestedSandboxesConfiguration } from "@/hooks/sandboxes/use-a
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
-import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import {
   sandboxSettingsFailed,
@@ -922,7 +922,8 @@ function SandboxListRow(props: {
   const settingsFailed = sandboxSettingsFailed(settings.data?.items ?? []);
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
-  const sessions = useSandboxSessionReport(summary.hostId, awake);
+  const sessions = useSandboxRowSessionReport(summary);
+  const resumePending = sessions.resumePending && !settingsFailed;
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
   const unreachable = useSandboxRowUnreachable(
@@ -985,6 +986,7 @@ function SandboxListRow(props: {
                 wakeString: wake,
                 viewerUserId,
                 reachability,
+                resumePending,
                 now,
               })}
             </span>
@@ -1002,7 +1004,7 @@ function SandboxListRow(props: {
               </p>
             </div>
           ) : null}
-          {awake && !unreachable ? (
+          {awake && !unreachable && !resumePending ? (
             <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>
