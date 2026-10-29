@@ -6,6 +6,7 @@ import {
 } from "@/components/settings/personal/personal-entry-mark";
 import {
   PERSONAL_ENTRY_LOCKED_TEXT,
+  SKILL_EDIT_REVOKED_TEXT,
   personalRemoveText,
   usePersonalEntryApplied,
 } from "@/components/settings/personal/personal-page-context";
@@ -460,10 +461,13 @@ function ProviderSkillsTabBody({
             actionError={detailError}
             lockedNote={openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null}
             canEdit={openSkillEditable}
-            // A draft held while the skill became one of the person's
-            // settings says why Save is off, as the read-only detail does.
+            // A draft held while editing was taken away says why Save is
+            // off: the dashboard owns a Personal entry, and a role or scope
+            // change takes the rest. Shown only while the editor is locked.
             editRevokedNote={
-              openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null
+              openSkillPersonal
+                ? PERSONAL_ENTRY_LOCKED_TEXT
+                : SKILL_EDIT_REVOKED_TEXT
             }
             onDraftHeldChange={null}
             canUpdate={openSkillUpdatable}
