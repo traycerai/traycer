@@ -728,6 +728,38 @@ export const botCheckinTurnSchema = lazySchema(() =>
 );
 export type BotCheckinTurn = z.infer<typeof botCheckinTurnSchema>;
 
+/** A member as the bot's records name one: their user id. */
+const botMemberIdSchema = lazySchema(() => z.string().min(1).max(36));
+
+/**
+ * An automation a member paused (T92): its check-ins wait, unread by the
+ * bot, until they resume it; `since` is when they paused it.
+ */
+export const botTaskPauseSchema = lazySchema(() =>
+  z.object({ byUserId: botMemberIdSchema, since: z.number().int() }),
+);
+export type BotTaskPause = z.infer<typeof botTaskPauseSchema>;
+
+/** An automation a member stopped (T92): its entry ended `by-bot` at `at`. */
+export const botTaskStopSchema = lazySchema(() =>
+  z.object({ byUserId: botMemberIdSchema, at: z.number().int() }),
+);
+export type BotTaskStop = z.infer<typeof botTaskStopSchema>;
+
+/**
+ * A member's Run now not answered yet (T92): `running` when the bound host
+ * composes the pass itself, `requested` when the task runs only on other
+ * hosts, whose next report answers it.
+ */
+export const botTaskRunRequestSchema = lazySchema(() =>
+  z.object({
+    byUserId: botMemberIdSchema,
+    requestedAt: z.number().int(),
+    state: z.enum(["running", "requested"]),
+  }),
+);
+export type BotTaskRunRequest = z.infer<typeof botTaskRunRequestSchema>;
+
 /**
  * One entry of a task's check-in history (`bot.subscribe@1.4`, T86), newest
  * first, as the bot's bound host kept it:
@@ -755,6 +787,12 @@ export const botTaskCheckinRecordSchema = lazySchema(() =>
       ticketsClosed: z.number().int().nonnegative(),
       backgroundEvents: z.number().int().nonnegative(),
       turn: botCheckinTurnSchema.nullable(),
+      /**
+       * The member whose Run now this report answered (T92): the first
+       * report filed after they asked. `null` for a pass on the task's own
+       * cadence, and from a host that predates it.
+       */
+      requestedByUserId: botMemberIdSchema.nullable().default(null),
     }),
     z.object({
       kind: z.literal("missed"),
@@ -838,6 +876,16 @@ export const botTaskEntrySchema = lazySchema(() =>
        * `lastCheckin` is `null` for want of the room.
        */
       checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
+      /**
+       * What members did to the automation from the Activity page (T92),
+       * kept by the bot's bound host and mirrored into its environment room
+       * like `checkins`: who paused it and since when, who stopped it, and a
+       * Run now not answered yet. `null` for none, and from a host that
+       * predates them.
+       */
+      pause: botTaskPauseSchema.nullable().default(null),
+      stop: botTaskStopSchema.nullable().default(null),
+      runRequest: botTaskRunRequestSchema.nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
@@ -1039,10 +1087,50 @@ export const botNotificationSubscriptionSchema = lazySchema(() =>
     attentionOnly: z.boolean(),
     everySeconds: z.number().int().positive().nullable(),
     since: z.number().int().nullable().default(null),
+    /**
+     * The digests the chat was handed (T92), newest first, bounded as a
+     * task's check-in history is; `null` from a host that predates them.
+     */
+    digests: z.array(botNotificationDigestSchema).nullable().default(null),
   }),
 );
 export type BotNotificationSubscription = z.infer<
   typeof botNotificationSubscriptionSchema
+>;
+
+/**
+ * One digest a subscribed chat was handed (T92): when its turn took it, how
+ * many notifications it listed and how many of those needed the person, and
+ * the queue item it travelled as.
+ */
+export const botNotificationDigestSchema = lazySchema(() =>
+  z.object({
+    deliveredAt: z.number().int(),
+    itemCount: z.number().int().nonnegative(),
+    attentionCount: z.number().int().nonnegative(),
+    queueItemId: z.string().min(1),
+  }),
+);
+export type BotNotificationDigest = z.infer<typeof botNotificationDigestSchema>;
+
+/**
+ * A chat's notification watch a member stopped from the Activity page (T92),
+ * kept beside the live ones until the chat watches again: what it watched,
+ * who stopped it and when, and the digests it had been handed.
+ */
+export const botStoppedNotificationWatchSchema = lazySchema(() =>
+  z.object({
+    target: botActivityTargetSchema,
+    attentionOnly: z.boolean(),
+    everySeconds: z.number().int().positive().nullable(),
+    since: z.number().int(),
+    stoppedAt: z.number().int(),
+    stoppedByUserId: botMemberIdSchema,
+    digests: z.array(botNotificationDigestSchema),
+  }),
+);
+export type BotStoppedNotificationWatch = z.infer<
+  typeof botStoppedNotificationWatchSchema
 >;
 
 /** The subscription of `bot.subscribe@1.2` and `@1.3`, frozen without `since`. */
@@ -1113,6 +1201,15 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
        */
       notificationSubscriptions: z
         .array(botNotificationSubscriptionSchema)
+        .nullable()
+        .default(null),
+      /**
+       * The watches members stopped (T92), apart from the live ones so a
+       * reader that predates the key never shows one as live. Kept on the
+       * bound host only, like `notificationSubscriptions`.
+       */
+      stoppedNotificationWatches: z
+        .array(botStoppedNotificationWatchSchema)
         .nullable()
         .default(null),
       hasBinaryPayload: z.literal(false),

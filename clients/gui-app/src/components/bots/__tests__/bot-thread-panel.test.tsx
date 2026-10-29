@@ -1950,6 +1950,9 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       originRequestId: null,
       createdByChatId: THREAD_ID,
       checkins: null,
+      pause: null,
+      stop: null,
+      runRequest: null,
       ...overrides,
     };
   }
