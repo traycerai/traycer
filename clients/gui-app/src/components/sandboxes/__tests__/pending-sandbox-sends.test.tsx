@@ -4933,6 +4933,85 @@ describe("cancelling a refused pending message", () => {
   );
 });
 
+describe("cancelling a send whose create was accepted but not answered", () => {
+  it("keeps the create's key on the task composer, so its next Send names the same sandbox", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({ ...SEEDED, phase: "creating", created: false });
+      const key = readStagedSandbox(SURFACE)?.clientRequestId;
+      if (key === null || key === undefined)
+        throw new Error("expected the create's key");
+      const creation = deferred<SandboxCreateFetchResult>();
+      mocks.createSandbox.mockReturnValue(creation.promise);
+      mount();
+      // The create still unanswered past its wait: the line offers Cancel.
+      act(() => {
+        useStagedSandboxStore.getState().report(SURFACE, {
+          failure: { kind: "timed-out", step: "creating" },
+        });
+      });
+      const cancel = await screen.findByRole("button", {
+        name: "Cancel the message",
+      });
+      await waitFor(() => expect(cancel).not.toHaveProperty("disabled", true));
+
+      fireEvent.click(cancel);
+
+      await waitFor(() =>
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+      );
+      const taskSurface = newConversationSurfaceKey("epic-1");
+      expect(readStagedSandbox(taskSurface)).toMatchObject({
+        phase: "staged",
+        clientRequestId: key,
+        target: NEW_TARGET,
+      });
+
+      const createsBeforeSend = mocks.createSandbox.mock.calls.length;
+      // The composer's Send hands its stage over, as the modal does.
+      act(() => {
+        handPendingSandboxSend({
+          fromSurfaceKey: taskSurface,
+          epicId: "epic-1",
+          request: { kind: "chat", parentId: null, placement: null },
+          content: MESSAGE_CONTENT,
+          text: "fix the login bug",
+          settings: PICKED_SETTINGS,
+          epicConfirmed: true,
+          now: Date.now(),
+        });
+      });
+
+      await waitFor(() =>
+        expect(usePendingSandboxSendStore.getState().sends).not.toEqual({}),
+      );
+      const handed = Object.values(
+        usePendingSandboxSendStore.getState().sends,
+      )[0];
+      await waitFor(() =>
+        expect(mocks.createSandbox.mock.calls.length).toBeGreaterThan(
+          createsBeforeSend,
+        ),
+      );
+      // The Send's create names the accepted one again.
+      expect(
+        mocks.createSandbox.mock.calls
+          .slice(createsBeforeSend)
+          .map(([request]) => request.clientRequestId),
+      ).toEqual([key]);
+      expect(
+        readStagedSandbox(pendingSendSurfaceKey(handed.id))?.clientRequestId,
+      ).toBe(key);
+      await act(async () => {
+        creation.resolve(CREDITS_REFUSED);
+        await creation.promise;
+      });
+    } finally {
+      restoreLocks();
+    }
+  });
+});
+
 describe("a send that named no model, ready on its sandbox", () => {
   it("reads the host's default model with a live subscription and sends with it, once", async () => {
     seed({

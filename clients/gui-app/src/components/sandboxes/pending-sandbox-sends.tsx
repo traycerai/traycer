@@ -1199,7 +1199,10 @@ function returnWatchedSend(
 /**
  * The sandbox a send's message stays on in its task's composer, as that
  * composer's own pick of it would be: an awake one is its host, a resting
- * one is staged to wake, and one not created yet is its own stage again.
+ * one is staged to wake, and one not created yet is its own stage again,
+ * with the create's key whenever Cancel would keep it, so an accepted
+ * create still unanswered is named again rather than billed twice. A
+ * created sandbox only wakes, so it needs no key.
  */
 function returnedSandboxPick(
   send: PendingSandboxSend,
@@ -1208,7 +1211,13 @@ function returnedSandboxPick(
 ): ReturnedSandboxPick {
   const { createdSandboxId, createdHostId, target } = stage;
   if (createdSandboxId === null || createdHostId === null)
-    return { kind: "stage", target };
+    return {
+      kind: "stage",
+      target,
+      clientRequestId: stagedCreateNeedsFreshKey(stage)
+        ? null
+        : stage.clientRequestId,
+    };
   if (state === "awake") return { kind: "host", hostId: createdHostId };
   return {
     kind: "stage",
@@ -1224,6 +1233,7 @@ function returnedSandboxPick(
       // Still on its way up: waking it joins that.
       verb: restingVerb(state) ?? "resume",
     },
+    clientRequestId: null,
   };
 }
 

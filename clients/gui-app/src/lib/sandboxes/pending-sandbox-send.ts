@@ -425,8 +425,16 @@ export function returnPendingSandboxSend(
  * composer, as that composer's own pick would have it.
  */
 export type ReturnedSandboxPick =
-  /** Resting, or not created yet: staged, so the composer's Send wakes or creates it. */
-  | { readonly kind: "stage"; readonly target: StagedSandboxTarget }
+  /**
+   * Resting, or not created yet: staged, so the composer's Send wakes or
+   * creates it. `clientRequestId` is a create the server may have accepted,
+   * kept so that Send names it again rather than billing a second sandbox.
+   */
+  | {
+      readonly kind: "stage";
+      readonly target: StagedSandboxTarget;
+      readonly clientRequestId: string | null;
+    }
   /** Awake: its host, with nothing staged. */
   | { readonly kind: "host"; readonly hostId: string };
 
@@ -449,7 +457,10 @@ export function returnPendingSandboxSendToSandbox(
     pins.setSelection(surfaceKey, pick.hostId);
     return returned;
   }
-  useStagedSandboxStore.getState().stage(surfaceKey, pick.target);
+  const staged = useStagedSandboxStore.getState();
+  staged.stage(surfaceKey, pick.target);
+  if (pick.clientRequestId !== null)
+    staged.report(surfaceKey, { clientRequestId: pick.clientRequestId });
   if (pick.target.kind === "existing")
     pins.setSelection(surfaceKey, pick.target.hostId);
   return returned;
