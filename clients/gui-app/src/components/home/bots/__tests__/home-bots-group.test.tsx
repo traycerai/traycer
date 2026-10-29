@@ -12,13 +12,19 @@
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
 import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
+import { botTabIntent } from "@/lib/tab-navigation/intents";
+import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const mocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  navigateToTabIntent: vi.fn(),
   supported: true as boolean | null,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   memberQueries: [] as Array<{
@@ -50,7 +56,10 @@ vi.mock("@/hooks/bots/use-environment-members-query", () => ({
 }));
 // What a row reads its live state through; nothing here shapes attribution.
 vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
+}));
+vi.mock("@/lib/tab-navigation", () => ({
+  navigateToTabIntent: mocks.navigateToTabIntent,
 }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-band",
@@ -136,6 +145,7 @@ function mountCard(
         }}
         client={null}
         hostId={HOST}
+        setup={null}
       />
     </StrictMode>,
   );
@@ -161,6 +171,8 @@ function createdBy(): Record<string, string> {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  useBotTabsStore.setState({ tabs: {} });
   mocks.supported = true;
   mocks.supportQueries.length = 0;
   mocks.memberQueries.length = 0;
@@ -262,9 +274,86 @@ describe("<HomeBotsGroupCard /> adding a bot", () => {
         }}
         client={null}
         hostId={HOST}
+        setup={null}
       />,
     );
 
     expect(screen.getByTestId("home-bots-create-toggle")).toBeTruthy();
+  });
+});
+
+/**
+ * A creatable team with no live bot whose main bot is still to be set up: its
+ * card shows that bot, needing a host, in place of "No bots here yet.", and
+ * opens the bot's tab on the band's host.
+ */
+describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
+  const SETUP: TeamSetup = {
+    environmentId: "env-1",
+    teamName: "acme",
+    botId: "bot-tracy-env",
+    title: "Tracy",
+  };
+
+  function mountBotlessTeam(setup: TeamSetup | null): void {
+    render(
+      <HomeBotsGroupCard
+        group={{ ...group("organization", null), canCreate: true, bots: [] }}
+        hostReach={{
+          directoryHostIds: new Set(),
+          connectableHostIds: new Set(),
+          connectableResolved: true,
+          personalHostIds: null,
+        }}
+        environmentHostIds={null}
+        connectableHostIds={[]}
+        environmentBindings={{
+          byHostId: new Map(),
+          failedHostIds: [],
+          retryFailed: () => undefined,
+        }}
+        client={null}
+        hostId={HOST}
+        setup={setup}
+      />,
+    );
+  }
+
+  it("shows the bot as its main bot needing a host, with New bot still offered", () => {
+    mountBotlessTeam(SETUP);
+
+    const row = screen.getByRole("button", { name: /^Tracy/ });
+    expect(row.getAttribute("data-testid")).toBe("home-bot-setup-row");
+    expect(row.getAttribute("data-bot-id")).toBe("bot-tracy-env");
+    expect(within(row).getByTestId("home-bot-setup-row-main")).toBeTruthy();
+    expect(
+      within(row).getByTestId("home-bot-setup-row-needs-host").textContent,
+    ).toBe("Needs a host");
+    expect(screen.getByTestId("home-bots-create-toggle")).toBeTruthy();
+    expect(screen.queryByText("No bots here yet.")).toBeNull();
+  });
+
+  it("opens the bot's tab on the band's host when its row is clicked", async () => {
+    const user = userEvent.setup();
+    mountBotlessTeam(SETUP);
+
+    await user.click(screen.getByTestId("home-bot-setup-row"));
+
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, "bot-tracy-env"),
+    ).toMatchObject({ hostId: HOST, title: "Tracy" });
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
+      mocks.navigate,
+      botTabIntent("bot-tracy-env"),
+      undefined,
+    );
+  });
+
+  it("says no bots are here yet, with no setup row, when the team has none to set up", () => {
+    mountBotlessTeam(null);
+
+    expect(screen.getByText("No bots here yet.")).toBeTruthy();
+    expect(screen.queryByTestId("home-bot-setup-row")).toBeNull();
   });
 });

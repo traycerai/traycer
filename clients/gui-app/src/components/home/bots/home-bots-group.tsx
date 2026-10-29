@@ -10,8 +10,10 @@ import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-quer
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import {
   HomeBotRow,
+  HomeSetupBotRow,
   type HomeBotHostReach,
 } from "@/components/home/bots/home-bot-row";
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
@@ -19,7 +21,8 @@ import { CreateBotForm } from "@/components/home/bots/create-bot-form";
 /**
  * One environment's card on Home: its label and kind, its bots, and the
  * create form that makes a bot INTO it - the environment is the card's, named
- * explicitly on the create, never a page-wide default.
+ * explicitly on the create, never a page-wide default. A team with no bot
+ * whose main bot is still to be set up shows that bot, needing a host.
  */
 export function HomeBotsGroupCard(props: {
   readonly group: HomeBotsGroup;
@@ -33,8 +36,12 @@ export function HomeBotsGroupCard(props: {
    * names who made it when that host answers `environment.members`. */
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
+  /** The team's main bot still to be set up, shown in place of its bots
+   * (there are none); `null` for none. */
+  readonly setup: TeamSetup | null;
 }): ReactNode {
   const {
+    setup,
     group,
     hostReach,
     environmentHostIds,
@@ -54,6 +61,15 @@ export function HomeBotsGroupCard(props: {
     membersSupported && isTeam,
   );
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
+  // A team with no bot shows its main bot still to be set up, if it has one.
+  const empty =
+    setup === null ? (
+      <p className="px-1 py-2 text-ui-xs text-muted-foreground">
+        No bots here yet.
+      </p>
+    ) : (
+      <HomeSetupBotRow setup={setup} hostReach={hostReach} />
+    );
 
   return (
     <section
@@ -98,9 +114,7 @@ export function HomeBotsGroupCard(props: {
         />
       ) : null}
       {group.bots.length === 0 ? (
-        <p className="px-1 py-2 text-ui-xs text-muted-foreground">
-          No bots here yet.
-        </p>
+        empty
       ) : (
         <ul className="flex flex-col gap-1">
           {group.bots.map((bot) => (
