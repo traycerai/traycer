@@ -4107,11 +4107,17 @@ describe("ChatMessages scroll policy", () => {
       });
 
       it("leaves the list alone when a wheel finds no restore or navigation in flight", async () => {
+        // The mount's own end correction holds a list command until the
+        // list's scroll-end timers fire, which the frames of a settle do not
+        // always reach on the runner's wall clock. Run them out on the
+        // virtual clock so the wheel finds nothing held.
+        installLegendListTestClock();
         const view = renderChatMessages({
           messages: makeCompletedTranscript(20),
           scrollStateKey: "t5-cancel-pending-idle",
         });
         await settleLegendList();
+        await advanceLegendListTime(CHAT_ANCHOR_SETTLE_FALLBACK_MS);
         const cancel = spyCancelPendingScroll();
 
         fireEvent.wheel(getScrollNode(), { deltaY: -40 });
