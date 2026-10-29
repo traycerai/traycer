@@ -162,6 +162,21 @@ function SimulatorPendingOpensWatcher(props: {
  * this open's own answer and never one cached from before it was sent; a read
  * that itself fails leaves the row, since the GUI's inability to ask is not
  * the open having failed.
+ *
+ * A read that finds the open still in `opening` decides nothing yet: the host
+ * is running it. So the read is keyed by the published state's revision too,
+ * and the host is asked again every time that state moves - the only sign
+ * that the open may have ended since the last answer. That is what ends a row
+ * whose open was lost while the stream was away: the stream comes back on a
+ * snapshot carrying neither the open nor a session, which it never saw run
+ * and so cannot judge, and the read taken against that same move answers for
+ * it.
+ *
+ * What this deliberately does NOT do is hand the stream an `opening` sighting
+ * of its own to judge by. The stream's rule reads a FAILURE from the open's
+ * absence, and a state the stream published BEFORE this read is missing the
+ * open because the host had not heard of it yet - so the row of an open that
+ * is merely still booting would end as a failure.
  */
 function SimulatorLostOpenResolver(props: {
   readonly epicId: string;
@@ -172,11 +187,16 @@ function SimulatorLostOpenResolver(props: {
   const binding = useHostBinding();
   const client = resolveNamedHostClient(binding, open.hostId);
   const supported = useHostSupportsMethod(open.hostId, "simulator.list");
+  // The same stream the watcher follows, shared through the coordinator. Its
+  // revision keys the read, and is `none` until it has published anything.
+  const sessions = useSimulatorSessionsForHost({ hostId: open.hostId, epicId });
+  const streamRevision =
+    sessions.state === null ? "none" : String(sessions.state.revision);
   const query = useHostQuery<HostRpcRegistry, "simulator.list">({
     client: supported ? client : null,
     method: "simulator.list",
     params: { epicId },
-    cacheKeyIdentity: [open.requestId],
+    cacheKeyIdentity: [open.requestId, streamRevision],
     // `opening` is a `@1.1` field: a `@1.0` answer would read as "gone" for
     // every open in flight.
     requiredHostMethodVersion: () => ({

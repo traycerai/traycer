@@ -295,6 +295,7 @@ const host_ = {
     | SimulatorCatalogReadResponse
     | { kind: "not-ready" },
   catalogReads: 0,
+  listReads: 0,
   openAnswer: (): Promise<SimulatorOpenResponse> => new Promise(() => {}),
   listAnswer: openingEveryPendingOpen,
   closes: [] as unknown[],
@@ -423,6 +424,7 @@ describe("Mobile simulators panel", () => {
     world.toastError.mockReset();
     world.hostErrorToast.mockReset();
     host_.catalogReads = 0;
+    host_.listReads = 0;
     host_.closes = [];
     host_.closeFails = new Set();
     host_.opens = [];
@@ -443,7 +445,10 @@ describe("Mobile simulators panel", () => {
           host_.catalogReads += 1;
           return host_.catalog;
         },
-        "simulator.list": () => host_.listAnswer(),
+        "simulator.list": () => {
+          host_.listReads += 1;
+          return host_.listAnswer();
+        },
         "simulator.open": (params) => {
           host_.opens.push(params);
           return host_.openAnswer();
@@ -900,6 +905,45 @@ describe("Mobile simulators panel", () => {
       });
       expect(useSimulatorPendingOpensStore.getState().byRequestId).toEqual({});
       expect(screen.queryByText("Booting")).toBeNull();
+      expect(place).not.toHaveBeenCalled();
+    });
+
+    it("ends the row, with a failure, when the answer is lost while the stream is down and the host runs the open no longer", async () => {
+      const place = vi.fn();
+      host_.openAnswer = () =>
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "The host did not answer in time.",
+            requestId: "request",
+            method: "simulator.open",
+            fatalDetails: null,
+          }),
+        );
+      // The first read catches the host still running the open; by the time
+      // the stream is back and the host is asked again, it runs it no longer.
+      host_.listAnswer = () =>
+        host_.listReads === 1 ? openingEveryPendingOpen() : STREAM_BASE;
+      renderPanel(place);
+
+      fireEvent.click(screen.getByRole("button", { name: "Boot" }));
+
+      // The stream is still connecting, so this read is the only word on the
+      // open - and `opening` is not a failure, so the row waits.
+      await waitFor(() => {
+        expect(host_.listReads).toBe(1);
+      });
+      expect(screen.getByText("Booting")).toBeTruthy();
+
+      // Back on a snapshot that holds neither the open nor a session for it.
+      // The stream never saw this open run, so it cannot judge that absence.
+      publishStream({});
+
+      await waitFor(() => {
+        expect(screen.queryByText("Booting")).toBeNull();
+      });
+      expect(useSimulatorPendingOpensStore.getState().byRequestId).toEqual({});
+      expect(world.toastError).toHaveBeenCalledWith("Couldn't open iPhone 16.");
       expect(place).not.toHaveBeenCalled();
     });
 
