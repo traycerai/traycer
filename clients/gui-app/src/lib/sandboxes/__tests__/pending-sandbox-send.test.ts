@@ -20,6 +20,7 @@ import {
   pendingSandboxRecoveryDraftId,
   pickedRunSettings,
   requestedAgentReadiness,
+  resumePendingSandboxMessageReturn,
   returnPendingSandboxMessage,
   returnPendingSandboxSend,
   returnPendingSandboxSendToSandbox,
@@ -1077,6 +1078,8 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
   });
 
   afterEach(() => {
+    // A case's overrides (the image byte resolver) end with it.
+    vi.restoreAllMocks();
     if (originalLocks === undefined) {
       Reflect.deleteProperty(navigator, "locks");
     } else {
@@ -1225,6 +1228,108 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
           .drafts.find((draft) => draft.id === returned.draftId)
           ?.returnedSandbox,
       ).toMatchObject({ target: CHAT_SANDBOX, clientRequestId: null });
+      release();
+    });
+
+    /**
+     * The window reloads in the middle of a return: the return has begun
+     * (recorded with its decision) and its picture is still being read, so
+     * no draft is written yet. Storage is kept as it was at that moment, and
+     * every live store is read back from it. The old window's return never
+     * finishes there: it is settled first, and its later writes are lost
+     * with the window.
+     */
+    async function reloadMidReturn(keepsSandbox: boolean): Promise<void> {
+      const { sends } = usePendingSandboxSendStore.getState();
+      if (!Object.hasOwn(sends, "send-1")) throw new Error("expected the send");
+      usePendingSandboxSendStore.setState({
+        sends: {
+          ...sends,
+          "send-1": { ...sends["send-1"], content: imageDoc("b".repeat(64)) },
+        },
+      });
+      const read = Promise.withResolvers<null>();
+      const bytes = vi
+        .spyOn(draftImageBytes, "resolveDraftImageBytes")
+        .mockReturnValue(read.promise);
+      vi.useFakeTimers();
+      const saved: Array<[string, string]> = [];
+      try {
+        const returning = returnPendingSandboxMessage(
+          "send-1",
+          false,
+          keepsSandbox,
+        );
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          const value = key === null ? null : localStorage.getItem(key);
+          if (key !== null && value !== null) saved.push([key, value]);
+        }
+        await vi.advanceTimersByTimeAsync(
+          HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50,
+        );
+        read.resolve(null);
+        await returning;
+      } finally {
+        vi.useRealTimers();
+        bytes.mockRestore();
+      }
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+      localStorage.clear();
+      for (const [key, value] of saved) localStorage.setItem(key, value);
+      await usePendingSandboxSendStore.persist.rehydrate();
+      await useStagedSandboxStore.persist.rehydrate();
+      await useLandingDraftStore.persist.rehydrate();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+      expect(
+        usePendingSandboxSendStore.getState().sends["send-1"]?.returnRequested,
+      ).toBeDefined();
+      vi.spyOn(draftImageBytes, "resolveDraftImageBytes").mockResolvedValue(
+        null,
+      );
+    }
+
+    function recoveredDraftRecord() {
+      return useLandingDraftStore
+        .getState()
+        .drafts.find(
+          (draft) => draft.id === pendingSandboxRecoveryDraftId("send-1"),
+        )?.returnedSandbox;
+    }
+
+    it("keeps Choose another host's no-sandbox decision when a return interrupted by a reload is replayed", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+      await reloadMidReturn(false);
+
+      // The replay the return driver and the retry item used to make: their
+      // own call keeps the sandbox. The recorded decision wins.
+      const returned = await returnPendingSandboxMessage("send-1", false, true);
+
+      expect(returned).toEqual({
+        kind: "landing-draft",
+        draftId: pendingSandboxRecoveryDraftId("send-1"),
+      });
+      expect(recoveredDraftRecord()).toBeNull();
+      release();
+    });
+
+    it("keeps the sandbox a return decided to keep when it is resumed after a reload interrupted it", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+      await reloadMidReturn(true);
+
+      const returned = await resumePendingSandboxMessageReturn("send-1");
+
+      expect(returned).toEqual({
+        kind: "landing-draft",
+        draftId: pendingSandboxRecoveryDraftId("send-1"),
+      });
+      expect(recoveredDraftRecord()).toMatchObject({
+        target: CHAT_SANDBOX,
+        clientRequestId: null,
+      });
       release();
     });
 
