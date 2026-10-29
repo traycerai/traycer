@@ -1070,10 +1070,13 @@ export function HostOverviewPanel(props: {
     // The check reads on its own now, so this gate is load-bearing rather than
     // cosmetic: without it the page would spawn a CLI process on the host from
     // a scope that has not resolved, and cache the answer under this page's key.
-    // It also waits for the first status answer: the host says there whether
-    // anything here can change its version, and a catalog fetched before that
-    // answer would put a version list on screen for the next render to retire.
-    enabled: usable && !statusQuery.isPending,
+    // It also waits for a status ANSWER: the host says there whether anything
+    // here can change its version, and a catalog fetched before that answer
+    // would put a version list on screen for the next render to retire. An
+    // answer, not merely a settled query: a failed first read leaves the query
+    // settled with no data, and a host that recovers from it would show the
+    // list for the span until its status arrived.
+    enabled: usable && statusQuery.data !== undefined,
     checkDegrade: updatesExternallyManaged
       ? "externally-managed"
       : updateCheckDegrade,
