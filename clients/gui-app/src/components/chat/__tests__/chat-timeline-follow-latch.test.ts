@@ -14,6 +14,7 @@ import {
   CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
   isChatTimelineAtStrictBottom,
   isChatTimelineGeometryMeasurable,
+  moveChatTimelineScroller,
   useChatTimelineFollowLatch,
   type ChatTimelineFollowLatch,
 } from "@/components/chat/chat-timeline-follow-latch";
@@ -873,7 +874,10 @@ describe("useChatTimelineFollowLatch", () => {
     const listRef = makeFakeListRef(node);
     const onFollowIntentChange = vi.fn();
     listRef.scrollToEnd.mockImplementation((): Promise<void> => {
-      shim.setGeometry(node, { scrollTop: 1120 });
+      // The list's own under-landing, announced as the list announces it.
+      moveChatTimelineScroller(node, () =>
+        shim.setGeometry(node, { scrollTop: 1120 }),
+      );
       fireNativeScroll(node);
       return Promise.resolve();
     });
@@ -1003,6 +1007,9 @@ describe("useChatTimelineFollowLatch", () => {
           onFollowIntentChange,
         }),
       );
+      // A report seen first: the ledger is live, so a gesture event is the
+      // only thing that suspends its judgment of the scroll below.
+      fireNativeScroll(node);
       if (frameGesture !== null) {
         frame.dispatchEvent(
           new CustomEvent(SANDBOX_SCROLL_GESTURE_EVENT, {
@@ -1024,14 +1031,19 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     });
 
-    it("corrects the same scroll back to the tail when no gesture was relayed", () => {
-      const { scrollToEnd } = scrollAwayFromTail(null);
-      expect(scrollToEnd).toHaveBeenCalled();
+    it("reads a chained scroll no gesture announced as the reader's silent pan", () => {
+      const { scrollToEnd, onFollowIntentChange } = scrollAwayFromTail(null);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     });
 
-    it("ignores a gesture event whose detail is not a direction", () => {
-      const { scrollToEnd } = scrollAwayFromTail("sideways");
-      expect(scrollToEnd).toHaveBeenCalled();
+    // A toward-end gesture would suspend the ledger and the scroll would be
+    // corrected, so the departure proves the detail was not taken as one.
+    it("takes a gesture event whose detail is not a direction for no gesture", () => {
+      const { scrollToEnd, onFollowIntentChange } =
+        scrollAwayFromTail("sideways");
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     });
   });
 
@@ -3112,10 +3124,13 @@ describe("useChatTimelineFollowLatch", () => {
     );
     fireNativeScroll(node);
 
-    // A real DOM scrollTop write matching MVCP's own coordinate remap. With
-    // no publishing reader input, this layout-owned report cannot revoke the
-    // existing follow intent and immediately starts correction.
-    shim.setGeometry(node, { scrollTop: 300, scrollHeight: 1500 });
+    // A real DOM scrollTop write matching MVCP's own coordinate remap,
+    // announced as the list announces it. With no publishing reader input,
+    // this layout-owned report cannot revoke the existing follow intent and
+    // immediately starts correction.
+    moveChatTimelineScroller(node, () =>
+      shim.setGeometry(node, { scrollTop: 300, scrollHeight: 1500 }),
+    );
     fireNativeScroll(node);
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
@@ -3929,6 +3944,153 @@ describe("useChatTimelineFollowLatch", () => {
 
       expect(mounted.listRef.scrollToEnd).toHaveBeenCalledTimes(1);
       expect(mounted.onFollowIntentChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a scroll report that nothing announced", () => {
+    const AWAY_FROM_END_PUBLISHED = {
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    } as const;
+
+    // Following at the strict bottom with one report seen, so the latch knows
+    // where the view should be.
+    function followingWithLiveLedger() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const onReaderGesture = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          onReaderGesture,
+        }),
+      );
+      fireNativeScroll(node);
+      return { node, listRef, onFollowIntentChange, onReaderGesture, result };
+    }
+
+    function expectDeparted(mounted: {
+      readonly onFollowIntentChange: Mock<(follow: boolean) => void>;
+      readonly onReaderGesture: Mock;
+    }): void {
+      expect(mounted.onReaderGesture).toHaveBeenCalledTimes(1);
+      expect(mounted.onReaderGesture).toHaveBeenCalledWith(
+        AWAY_FROM_END_PUBLISHED,
+      );
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    }
+
+    function expectNotDeparted(mounted: {
+      readonly onFollowIntentChange: Mock<(follow: boolean) => void>;
+      readonly onReaderGesture: Mock;
+    }): void {
+      expect(mounted.onReaderGesture).not.toHaveBeenCalled();
+      expect(mounted.onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    }
+
+    it("is the reader's silent pan: it publishes the departure", () => {
+      const mounted = followingWithLiveLedger();
+
+      shim.setGeometry(mounted.node, { scrollTop: 970 });
+      fireNativeScroll(mounted.node);
+
+      expectDeparted(mounted);
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("is not the reader's when the list announced the write it reports", () => {
+      const mounted = followingWithLiveLedger();
+
+      moveChatTimelineScroller(mounted.node, () =>
+        shim.setGeometry(mounted.node, { scrollTop: 900 }),
+      );
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
+    it("is the reader's when it lands beyond what the list announced", () => {
+      const mounted = followingWithLiveLedger();
+
+      moveChatTimelineScroller(mounted.node, () =>
+        shim.setGeometry(mounted.node, { scrollTop: 900 }),
+      );
+      shim.setGeometry(mounted.node, { scrollTop: 870 });
+      fireNativeScroll(mounted.node);
+
+      expectDeparted(mounted);
+    });
+
+    it("is not the reader's when the browser clamped the view onto a lower end that an observation saw", () => {
+      const mounted = followingWithLiveLedger();
+
+      shim.setGeometry(mounted.node, { scrollHeight: 1460, scrollTop: 960 });
+      mounted.result.current.followEndIfPermitted();
+      // The end grows again before any report: the view is short of it.
+      shim.setGeometry(mounted.node, { scrollHeight: 1520 });
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
+    it("is not the reader's when the browser clamped the view onto a lower end that only an announced write's start saw", () => {
+      const mounted = followingWithLiveLedger();
+
+      // The end dropped 9 and the browser clamped the view onto it; nothing
+      // observed that.
+      shim.setGeometry(mounted.node, { scrollHeight: 1491, scrollTop: 991 });
+      moveChatTimelineScroller(mounted.node, () =>
+        shim.setGeometry(mounted.node, { scrollTop: 982 }),
+      );
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
+    it("counts the latch's own correction write, so a pan after it departs unannounced", () => {
+      const mounted = followingWithLiveLedger();
+
+      shim.setGeometry(mounted.node, { scrollHeight: 1700 });
+      mounted.result.current.followEndIfPermitted();
+      expect(mounted.node.scrollTop).toBe(1200);
+
+      shim.setGeometry(mounted.node, { scrollTop: 1150 });
+      fireNativeScroll(mounted.node);
+
+      expectDeparted(mounted);
+    });
+
+    it("does not depart a reader whose owned free navigation still owns the view", () => {
+      const mounted = followingWithLiveLedger();
+      shim.setGeometry(mounted.node, { scrollTop: 970 });
+      fireNativeScroll(mounted.node);
+      mounted.onReaderGesture.mockClear();
+      mounted.result.current.beginOwnedFreeNavigation();
+      // Follow resumes, which releases the navigation's arm; the navigation
+      // is not over.
+      mounted.result.current.completeOwnedEndNavigation(true);
+
+      shim.setGeometry(mounted.node, { scrollTop: 940 });
+      fireNativeScroll(mounted.node);
+
+      expect(mounted.onReaderGesture).not.toHaveBeenCalled();
+    });
+
+    it("publishes a detached reader's further pan once, not again", () => {
+      const mounted = followingWithLiveLedger();
+      shim.setGeometry(mounted.node, { scrollTop: 970 });
+      fireNativeScroll(mounted.node);
+      shim.setGeometry(mounted.node, { scrollTop: 900 });
+      fireNativeScroll(mounted.node);
+
+      expectDeparted(mounted);
     });
   });
 });

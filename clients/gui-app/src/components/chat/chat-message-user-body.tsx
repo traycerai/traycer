@@ -64,6 +64,7 @@ import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-
 import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { moveChatTimelineScroller } from "@/components/chat/chat-timeline-follow-latch";
 import {
   chatFindA2AReceivedBodyUnitId,
   chatFindMessageContentUnitId,
@@ -1374,8 +1375,11 @@ function restoreScrollSnapshot(snapshot: ScrollSnapshot): void {
     window.scrollTo(snapshot.left, snapshot.top);
     return;
   }
-  snapshot.container.scrollLeft = snapshot.left;
-  snapshot.container.scrollTop = snapshot.top;
+  const { container } = snapshot;
+  moveChatTimelineScroller(container, () => {
+    container.scrollLeft = snapshot.left;
+    container.scrollTop = snapshot.top;
+  });
 }
 
 function nearestScrollContainer(element: HTMLElement): HTMLElement | null {
@@ -1405,5 +1409,7 @@ function scrollByAmount(element: HTMLElement | null, top: number): void {
     window.scrollTo({ top: window.scrollY + top, behavior: "auto" });
     return;
   }
-  element.scrollTo({ top: element.scrollTop + top, behavior: "auto" });
+  moveChatTimelineScroller(element, () => {
+    element.scrollTo({ top: element.scrollTop + top, behavior: "auto" });
+  });
 }
