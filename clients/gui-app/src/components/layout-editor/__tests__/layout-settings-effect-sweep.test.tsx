@@ -33,6 +33,7 @@ import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions
 import {
   asBarRegionId,
   DEFAULT_ARRANGEMENT,
+  railPanelToStackBelow,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -111,6 +112,23 @@ const CONFIGURED_PREFIXES = SWEEP_CONFIGURED_PROVIDERS.map(
   (providerId) => `provider-display:${providerId}:`,
 );
 
+/**
+ * The "Stack … with the panel below" entries whose pair joins Mobile
+ * simulators: the verb on its own row, and the one on the panel directly above
+ * it. Read off the shipped rail through the product's own neighbour rule, so
+ * the pair follows the canonical order rather than being named here.
+ */
+const STACKS_JOINING_SIMULATORS: ReadonlySet<string> = new Set(
+  DEFAULT_ARRANGEMENT.rail.flatMap((entry) => {
+    if (entry.kind !== "panel") return [];
+    const joins =
+      entry.id === "railSimulators" ||
+      railPanelToStackBelow(DEFAULT_ARRANGEMENT.rail, entry.id) ===
+        "railSimulators";
+    return joins ? [`rail-structure:stack-below:${entry.id}`] : [];
+  }),
+);
+
 const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   {
     id: "unconfigured-provider-hidden",
@@ -129,6 +147,16 @@ const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
     id: "status-bar-parked",
     matches: (entry) => entry.id === "arrangement-field:statusBarParked",
     why: "it only remembers what the Toggle status bar command last sent up, for the next press to bring back; nothing draws from it",
+  },
+  {
+    id: "simulators-hidden",
+    matches: (entry) => entry.id === "region-display:railSimulators:hidden",
+    why: "the Mobile simulators panel draws where a machine can run one or the task holds one, and neither window has either, so Auto already draws no icon for Hidden to take away; the Shown pin does draw one, so that half is not silent",
+  },
+  {
+    id: "simulators-stack",
+    matches: (entry) => STACKS_JOINING_SIMULATORS.has(entry.id),
+    why: "each of these joins Mobile simulators, which draws in neither window, so the stack is left with one shown member and the rail draws that member standing alone (T3)",
   },
 ];
 
