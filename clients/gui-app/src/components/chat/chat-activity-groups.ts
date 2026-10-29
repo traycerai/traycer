@@ -310,7 +310,10 @@ function activitySummaryStepsOf(
       ];
     case "tool":
       return [
-        isMemoryUpdateToolCall(segment)
+        isMemoryUpdateToolCall({
+          ...segment,
+          completed: !segment.isStreaming && segment.endState === null,
+        })
           ? { kind: "memory_update" }
           : {
               kind: "tool",

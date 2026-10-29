@@ -565,6 +565,26 @@ describe("what the bot knows, in the rail", () => {
     ]);
   });
 
+  it("marks nothing new for an entry one reading left out and a later one brings back", async () => {
+    const user = userEvent.setup();
+    render(<MountedKnowingChannel />);
+    const pane = await openPane(user, MEMORY);
+    const own = within(pane).getByTestId("bot-memory-own");
+
+    sendMemory(memoryOf([FROM_POST, FROM_THREAD, SHARED]));
+    await waitFor(() =>
+      expect(textsOf(own)).not.toContain(NEVER_CONFIRMED.text),
+    );
+    sendMemory(MEMORY);
+    await waitFor(() => expect(textsOf(own)).toContain(NEVER_CONFIRMED.text));
+
+    expect(
+      within(pane)
+        .getAllByTestId("bot-memory-entry")
+        .map((row) => row.getAttribute("data-new")),
+    ).toEqual([null, null, null, null]);
+  });
+
   it("finds the entries whose text holds what is typed", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);

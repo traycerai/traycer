@@ -242,15 +242,18 @@ const MEMORY_UPDATE_ACTIONS: ReadonlySet<string> = new Set([
 /**
  * Whether a tool call wrote the bot's memory: a `traycer_memory` call, bare
  * or server-prefixed as each harness reports it, whose `action` adds,
- * removes or confirms an entry and which did not fail. Such a call is its
- * own clause of the label ("updated 1 memory"), never "used 1 tool".
+ * removes or confirms an entry, and which completed without failing - one
+ * still running, or cut off with its turn, wrote nothing yet. Such a call is
+ * its own clause of the label ("updated 1 memory"), never "used 1 tool".
  */
 export function isMemoryUpdateToolCall(call: {
   readonly toolName: string;
   readonly inputDetail: ToolInputDetail | null;
   readonly error: string | null;
+  readonly completed: boolean;
 }): boolean {
-  if (call.error !== null || call.inputDetail?.kind !== "fields") return false;
+  if (!call.completed || call.error !== null) return false;
+  if (call.inputDetail?.kind !== "fields") return false;
   const name = call.toolName.toLowerCase().replaceAll("-", "_");
   if (!/(^|[_/.])traycer_memory$/.test(name)) return false;
   const action = call.inputDetail.entries.find(

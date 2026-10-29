@@ -1349,6 +1349,16 @@ describe("chat activity grouping", () => {
     ).toBe("Updated 2 memories, used 2 tools");
   });
 
+  it("names no memory updated by a memory write still running, or cut off with its turn", () => {
+    const write = toolSegment("tool-1", "traycer_memory", { action: "add" });
+    expect(activityGroupSummary([{ ...write, isStreaming: true }])).toBe(
+      "Used 1 tool",
+    );
+    expect(activityGroupSummary([{ ...write, endState: "interrupted" }])).toBe(
+      "Used 1 tool",
+    );
+  });
+
   it("groups web_fetch alongside web_search in the search bucket", () => {
     expect(
       activityGroupSummary([

@@ -93,7 +93,10 @@ export function fullnessOf(usage: BotMemoryTagUsage): string | null {
  * it first read the memory, marked `New`.
  */
 export interface MemoryMarks {
-  /** The ids of the last reading. */
+  /**
+   * Every id the pane has read since it opened: an entry one reading left
+   * out and a later one brings back is not new.
+   */
   readonly seen: ReadonlySet<string>;
   /** The ids of the entries written since, still kept. */
   readonly added: ReadonlySet<string>;
@@ -111,9 +114,9 @@ export function nextMemoryMarks(
   marks: MemoryMarks,
   entries: readonly BotMemoryEntry[],
 ): MemoryMarks {
-  const seen = new Set(entries.map((entry) => entry.id));
+  const current = entries.map((entry) => entry.id);
   const added = new Set(
-    [...seen].filter((id) => marks.added.has(id) || !marks.seen.has(id)),
+    current.filter((id) => marks.added.has(id) || !marks.seen.has(id)),
   );
-  return { seen, added };
+  return { seen: new Set([...marks.seen, ...current]), added };
 }
