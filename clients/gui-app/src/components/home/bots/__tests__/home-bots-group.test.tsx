@@ -7,20 +7,18 @@
  * The card and its rows are real: each row is found by its button's
  * accessible name and its attribution read from what it renders; the
  * directory hook and the hooks a row reads its live state from are stubs.
- * The onboarding gate is real, over a stubbed onboarding read: a new team
- * whose GitHub set holds no repository gets no "New bot".
+ * A team the person can add to offers "New bot" at once, whether or not it has
+ * a bot yet (T67: nothing locks a new team's entry).
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
-import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
 import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
 import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
-  onboarding: undefined as BotOnboardingReadResponse | undefined,
   supported: true as boolean | null,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   memberQueries: [] as Array<{
@@ -35,16 +33,6 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     return mocks.supported;
   },
   useHostSupportsMethod: () => true,
-}));
-vi.mock("@/hooks/bots/use-bot-onboarding-query", () => ({
-  useBotOnboardingQuery: (
-    _client: unknown,
-    _environmentId: string,
-    enabled: boolean,
-  ) => {
-    const data = enabled ? mocks.onboarding : undefined;
-    return { status: data === undefined ? "pending" : "success", data };
-  },
 }));
 // The directory knows one teammate by name, and answers only when asked.
 vi.mock("@/hooks/bots/use-environment-members-query", () => ({
@@ -173,7 +161,6 @@ function createdBy(): Record<string, string> {
 }
 
 beforeEach(() => {
-  mocks.onboarding = undefined;
   mocks.supported = true;
   mocks.supportQueries.length = 0;
   mocks.memberQueries.length = 0;
@@ -255,9 +242,8 @@ describe("<HomeBotsGroupCard /> main bot", () => {
   });
 });
 
-describe("<HomeBotsGroupCard /> team onboarding", () => {
-  function mountTeam(onboarding: BotOnboardingReadResponse): void {
-    mocks.onboarding = onboarding;
+describe("<HomeBotsGroupCard /> adding a bot", () => {
+  it("offers a team with no bot yet a New bot, with nothing locking it", () => {
     render(
       <HomeBotsGroupCard
         group={{ ...group("organization", null), canCreate: true, bots: [] }}
@@ -278,28 +264,7 @@ describe("<HomeBotsGroupCard /> team onboarding", () => {
         hostId={HOST}
       />,
     );
-  }
 
-  const read = (unlocked: boolean): BotOnboardingReadResponse => ({
-    github: {
-      state: "ok",
-      installingAdmin: null,
-      repositories: unlocked
-        ? [{ repositoryId: "1", fullName: "acme/web", permission: "write" }]
-        : [],
-      callerCanConnect: false,
-    },
-    unlocked,
-    choice: null,
-    catalog: [],
-  });
-
-  it("offers a new team no New bot until its GitHub set holds a repository", () => {
-    mountTeam(read(false));
-    expect(screen.queryByTestId("home-bots-create-toggle")).toBeNull();
-
-    cleanup();
-    mountTeam(read(true));
     expect(screen.getByTestId("home-bots-create-toggle")).toBeTruthy();
   });
 });

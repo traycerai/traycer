@@ -61,6 +61,7 @@ import {
   botOnboardingCompleteResponseSchema,
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
+  botOnboardingReadResponseSchemaV10,
 } from "./onboarding-schemas";
 import {
   botSurfaceActRequestSchema,
@@ -359,7 +360,27 @@ export const botOnboardingReadV10 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchemaV10,
+});
+
+/**
+ * `bot.onboarding.read@1.1` (T67): the team's main bot while it is still to
+ * be set up. A `1.0` host offers no setup.
+ */
+export const botOnboardingReadV11 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
   responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof botOnboardingReadV10,
+  typeof botOnboardingReadV11
+>({
+  from: botOnboardingReadV10.schemaVersion,
+  to: botOnboardingReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, setup: null }),
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({

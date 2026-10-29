@@ -126,7 +126,6 @@ function mountReplyingRow(): StubSession {
         environmentOwnerKind="organization"
         createdBy={null}
         isMain={false}
-        entryLocked={false}
       />
     </QueryClientProvider>,
   );

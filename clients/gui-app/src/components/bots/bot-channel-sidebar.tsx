@@ -6,13 +6,13 @@ import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/c
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import {
-  TeamBotSetupDialog,
-  type TeamBotSetupTarget,
-} from "@/components/bots/team-bot-setup-dialog";
+  NewBotDialog,
+  type NewBotTarget,
+} from "@/components/bots/new-bot-dialog";
+import { Badge } from "@/components/ui/badge";
 import { useDashboardPageOpener } from "@/components/settings/host-scope/use-dashboard-page-opener";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
+import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -49,14 +49,15 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * the bot's picture and name. A channel with a reply the person has not
  * read is bold and carries how many, right-aligned, as Slack marks an unread
  * channel. The sections list
- * channels and nothing else. The header of a section the person can add to
- * carries a + that opens its setup (`TeamBotSetupDialog`): a team's
- * onboarding while that is open, else the create form for one more bot, so
- * the environment is the section's and never a default. A section with no
- * bots says so once, with the same way in. While a team's onboarding locks
- * its chat (`teamOnboardingGate`), its channels do not open. With no team at
- * all, "Create a team" stands where a team's section would, opening the
- * dashboard page where a team is made.
+ * channels and nothing else. A team's main bot is its channel from the
+ * moment the team exists (T67): while the bot is still to be set up
+ * (`useTeamSetups`) its row stands in the team's section, marked as needing
+ * a host, and opens the channel where the team is set up. The + on a team's
+ * header opens the team's main bot; on the person's own section it opens the
+ * create form for one more bot there (`NewBotDialog`), which an empty
+ * personal section offers once too. With no team at all, "Create a team"
+ * stands where a team's section would, opening the dashboard page where a
+ * team is made.
  *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
@@ -109,18 +110,27 @@ export function BotChannelSidebar(props: {
     return unread;
   }, [botIds, indicators.epics]);
 
+  const teamSetups = useTeamSetups({
+    client,
+    hostId,
+    groups:
+      environments.data === undefined || bots.data === undefined
+        ? null
+        : model.groups,
+  });
+
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  const [setup, setSetup] = useState<TeamBotSetupTarget | null>(null);
-  const openChannel = (bot: BotRecord): void => {
-    if (bot.botId === activeBotId) return;
+  const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
+  const openChannel = (channel: SidebarChannel): void => {
+    if (channel.botId === activeBotId) return;
     rebindUnreachableBotTab(
-      bot.botId,
+      channel.botId,
       hostId,
       connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
     );
-    openBotTab({ botId: bot.botId, hostId, title: bot.title });
-    navigateToTabIntent(navigate, botTabIntent(bot.botId), undefined);
+    openBotTab({ botId: channel.botId, hostId, title: channel.title });
+    navigateToTabIntent(navigate, botTabIntent(channel.botId), undefined);
   };
 
   return (
@@ -135,49 +145,48 @@ export function BotChannelSidebar(props: {
           group={group}
           activeBotId={activeBotId}
           unreadByBotId={unreadByBotId}
+          setup={
+            teamSetups.setups.find(
+              (setup) => setup.environmentId === group.environmentId,
+            ) ?? null
+          }
           onOpenChannel={openChannel}
-          onSetUp={setSetup}
+          onNewBot={setNewBot}
         />
       ))}
       {noTeam ? <CreateTeamRow /> : null}
-      <TeamBotSetupDialog
-        team={setup}
+      <NewBotDialog
+        target={newBot}
         connectableHostIds={connectable.hostIds}
         environmentBindings={bindings}
-        onClose={() => setSetup(null)}
+        onClose={() => setNewBot(null)}
       />
     </nav>
   );
 }
 
+/** A channel the sidebar opens: a listed bot, or a team's main bot still to be set up. */
+type SidebarChannel = { readonly botId: string; readonly title: string };
+
 function SidebarSection(props: {
   readonly group: HomeBotsGroup;
   readonly activeBotId: string;
   readonly unreadByBotId: ReadonlyMap<string, number | null>;
-  readonly onOpenChannel: (bot: BotRecord) => void;
-  readonly onSetUp: (team: TeamBotSetupTarget) => void;
+  /** The team's main bot while it is still to be set up; `null` otherwise. */
+  readonly setup: TeamSetup | null;
+  readonly onOpenChannel: (channel: SidebarChannel) => void;
+  readonly onNewBot: (target: NewBotTarget) => void;
 }): ReactNode {
-  const { group, activeBotId, unreadByBotId, onOpenChannel, onSetUp } = props;
+  const { group, activeBotId, unreadByBotId, setup, onOpenChannel } = props;
   const isTeam = group.canCreate && group.ownerKind === "organization";
   const isPersonal = group.canCreate && group.ownerKind === "user";
-  const client = useTabHostClient();
-  const tabHostId = useTabHostId();
-  const { gate } = useTeamOnboardingGate({
-    client,
-    hostId: tabHostId,
-    environmentId: group.environmentId,
-    isTeam,
-    botCount: group.bots.length,
-  });
-  const locked = gate === "locked";
-  const setUp = (event: MouseEvent<HTMLButtonElement>): void =>
-    onSetUp({
+  const newBot = (event: MouseEvent<HTMLButtonElement>): void =>
+    props.onNewBot({
       environmentId: group.environmentId,
-      isTeam,
-      teamName: group.label,
-      botCount: group.bots.length,
+      environmentLabel: group.label,
       opener: event.currentTarget,
     });
+  const main = isTeam ? teamMainChannelOf(group, setup) : null;
   return (
     <section
       aria-label={group.label}
@@ -189,30 +198,33 @@ function SidebarSection(props: {
         <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-ui-sm font-medium text-muted-foreground">
           {group.label}
         </span>
-        {isTeam || isPersonal ? (
+        {main !== null || isPersonal ? (
           // Drawn on the header's hover and on keyboard focus, as the
           // section's own control rather than a row of it; always drawn on a
           // touch screen, which has no hover.
           <button
             type="button"
-            aria-label={isTeam ? `Set up ${group.label}'s bots` : "New bot"}
+            aria-label={main === null ? "New bot" : `Open ${main.title}`}
             data-testid="bot-channel-section-add"
-            onClick={setUp}
+            onClick={(event) => {
+              if (main === null) newBot(event);
+              else onOpenChannel(main);
+            }}
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100 pointer-coarse:opacity-100"
           >
             <Plus className="size-3.5" aria-hidden="true" />
           </button>
         ) : null}
       </div>
-      {!(isTeam || isPersonal) || group.bots.length > 0 ? null : (
+      {!isPersonal || group.bots.length > 0 ? null : (
         <button
           type="button"
           data-testid="bot-channel-section-set-up"
-          onClick={setUp}
+          onClick={newBot}
           className={SIDEBAR_ACTION_ROW_CLASS}
         >
           <Plus className="size-3.5 shrink-0" aria-hidden="true" />
-          {isTeam ? "Set up your team's bots" : "New bot"}
+          New bot
         </button>
       )}
       <ul className="flex flex-col gap-0.5">
@@ -224,13 +236,82 @@ function SidebarSection(props: {
               active={bot.botId === activeBotId}
               unread={unreadByBotId.has(bot.botId)}
               unreadCount={unreadByBotId.get(bot.botId) ?? null}
-              locked={locked}
               onOpen={() => onOpenChannel(bot)}
             />
           </li>
         ))}
+        {setup === null ? null : (
+          <li>
+            <SetupChannelRow
+              setup={setup}
+              active={setup.botId === activeBotId}
+              onOpen={() => onOpenChannel(setup)}
+            />
+          </li>
+        )}
       </ul>
     </section>
+  );
+}
+
+/**
+ * The channel a team's + opens: its main bot, the one still to be set up
+ * while it is, else its first bot where the list names no main bot (a host
+ * that predates the field). `null` for a team with neither.
+ */
+function teamMainChannelOf(
+  group: HomeBotsGroup,
+  setup: TeamSetup | null,
+): SidebarChannel | null {
+  if (setup !== null) return setup;
+  return (
+    group.bots.find((bot) => bot.botId === group.mainBotId) ??
+    group.bots.at(0) ??
+    null
+  );
+}
+
+/**
+ * A team's main bot while it is still to be set up: its picture and name,
+ * marked as the main bot and as needing a host the team can use, opening the
+ * channel where the team is set up.
+ */
+function SetupChannelRow(props: {
+  readonly setup: TeamSetup;
+  readonly active: boolean;
+  readonly onOpen: () => void;
+}): ReactNode {
+  const { setup, active } = props;
+  return (
+    <button
+      type="button"
+      data-testid="bot-channel-setup-row"
+      data-bot-id={setup.botId}
+      aria-current={active ? "page" : undefined}
+      onClick={props.onOpen}
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+        active
+          ? "bg-primary text-primary-foreground"
+          : "text-muted-foreground hover:bg-foreground/6",
+      )}
+    >
+      <NamedBotAvatar botId={setup.botId} title={setup.title} size="sm" />
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="truncate">{setup.title}</span>
+        <MainBotBadge
+          testId="bot-channel-setup-row-main"
+          tone={active ? "current" : "muted"}
+        />
+      </span>
+      <Badge
+        variant="muted"
+        size="xs"
+        data-testid="bot-channel-setup-row-needs-host"
+      >
+        Needs a host
+      </Badge>
+    </button>
   );
 }
 
@@ -241,14 +322,12 @@ function ChannelRow(props: {
   readonly unread: boolean;
   /** Drawn right-aligned; `null` where the host does not count. */
   readonly unreadCount: number | null;
-  readonly locked: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, isMain, active, unread, unreadCount, locked, onOpen } = props;
+  const { bot, isMain, active, unread, unreadCount, onOpen } = props;
   return (
     <button
       type="button"
-      disabled={locked}
       data-testid="bot-channel-row"
       data-bot-id={bot.botId}
       data-unread={unread ? "true" : "false"}

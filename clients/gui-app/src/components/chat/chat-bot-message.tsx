@@ -187,6 +187,35 @@ export function ChatBotMessage(props: {
 }
 
 /**
+ * A post the app draws in the bot's voice where the bot has written none (Tracy
+ * Bots T67, a team's channel before the team has a host): the bot's picture
+ * and name, with no time and no actions, over `children`. It is not a message
+ * of the channel: no member wrote it and nothing stores it.
+ */
+export function ChatBotAppPost(props: {
+  readonly name: string;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <BotMessageFrame
+      avatar={<BotAvatar size="lg" />}
+      name={props.name}
+      bot={false}
+      sentAt={null}
+      instanceId={props.testId}
+      testId={props.testId}
+      hoverActions={false}
+      replyInThread={null}
+      failed={null}
+      longPress={null}
+    >
+      {props.children}
+    </BotMessageFrame>
+  );
+}
+
+/**
  * A member's message the bot failed to answer: its actions, the agent chat's
  * recovery where the session names the post's turn, and that turn's receipt;
  * all `null` on any other message.
@@ -565,7 +594,8 @@ function BotMessageFrame(props: {
   readonly name: string;
   /** A bot's row: its picture and name open its card. */
   readonly bot: boolean;
-  readonly sentAt: number;
+  /** When the message was sent; `null` for a post the app draws, which has no time. */
+  readonly sentAt: number | null;
   /** Names the time stamp for the layout editor; a message id. */
   readonly instanceId: string;
   readonly testId: string;
@@ -632,11 +662,13 @@ function BotMessageFrame(props: {
           ) : (
             <span className={nameClassName}>{props.name}</span>
           )}
-          <ChatMessageTimestamp
-            timestamp={props.sentAt}
-            separated={false}
-            instanceId={props.instanceId}
-          />
+          {props.sentAt === null ? null : (
+            <ChatMessageTimestamp
+              timestamp={props.sentAt}
+              separated={false}
+              instanceId={props.instanceId}
+            />
+          )}
         </div>
         {props.children}
       </div>

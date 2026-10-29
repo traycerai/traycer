@@ -4,7 +4,9 @@
  * names the machine a bot runs on or moves to it (T65).
  * Also: the stream's states, the re-subscribe and re-open when the pane comes
  * back into view, the tab closing when the bot is gone from `bot.list`, and a
- * team whose onboarding locks its chat (the real gate, over a mocked read).
+ * team's main bot still to be set up (T67): a tab on its id shows the channel
+ * where the team is set up, with nothing opened, subscribed or closed (the
+ * real hook, over a scripted `bot.onboarding.read`).
  * The three views are replaced by stubs that expose their props, so what the
  * surface PASSES them is what is asserted. The tab strip's Activity label
  * reads the real summary hook over the real agent-activity store.
@@ -20,7 +22,7 @@ import type {
   BotRecord,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
-import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
+import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type {
   BotOpenThread,
@@ -34,6 +36,8 @@ import {
 type OpenResult =
   | { readonly kind: "answer"; readonly response: BotOpenResponse }
   | { readonly kind: "error"; readonly message: string };
+
+type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
 
 const mocks = vi.hoisted(() => ({
   hostClient: { stub: "tab-host-client" },
@@ -54,6 +58,10 @@ const mocks = vi.hoisted(() => ({
       else options.onError({ message: result.message });
     },
   },
+  /** The bots the tab subscribed to, in order. */
+  subscribed: [] as string[],
+  /** What `bot.onboarding.read` answers per environment id; absent is pending. */
+  reads: {} as Record<string, ReadScript>,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   membersQueries: [] as Array<{
     environmentId: string | null;
@@ -92,19 +100,23 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     return true;
   },
 }));
-/** The team's onboarding read, by environment id; absent reads as pending. */
-const onboardingReads = vi.hoisted(
-  () => new Map<string, BotOnboardingReadResponse>(),
-);
-vi.mock("@/hooks/bots/use-bot-onboarding-query", () => ({
-  useBotOnboardingQuery: (
-    _client: unknown,
-    environmentId: string,
-    enabled: boolean,
-  ) => {
-    const data = enabled ? onboardingReads.get(environmentId) : undefined;
-    return { status: data === undefined ? "pending" : "success", data };
-  },
+// The host RPC boundary: `bot.onboarding.read` answers what the test
+// scripted, and a query that is not enabled reads as pending, as TanStack's
+// does.
+vi.mock("@/hooks/host/use-host-queries", () => ({
+  useHostQueries: (args: {
+    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    options: { enabled?: boolean } | null;
+  }) =>
+    args.requests.map((request) => {
+      const script =
+        args.options?.enabled === true
+          ? mocks.reads[request.params.environmentId]
+          : undefined;
+      if (script === undefined) return { status: "pending", data: undefined };
+      if (script === "fails") return { status: "error", data: undefined };
+      return { status: "success", data: script };
+    }),
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   useHostEnvironmentBindings: () => ({
@@ -112,20 +124,6 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
     failedHostIds: [],
     retryFailed: () => undefined,
   }),
-}));
-vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
-  BotOnboardingCard: (props: {
-    environmentId: string;
-    teamName: string;
-    botCount: number;
-  }) => (
-    <div
-      data-testid="stub-onboarding-card"
-      data-environment-id={props.environmentId}
-      data-team-name={props.teamName}
-      data-bot-count={String(props.botCount)}
-    />
-  ),
 }));
 // The members of the bot's environment, as the channel view's resolver:
 // one teammate it knows by name.
@@ -176,13 +174,16 @@ vi.mock("@/hooks/bots/use-bot-memory", () => ({
   useBotMemory: () => ({ kind: "unsupported" }),
 }));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscriptionForHost: () => ({
-    snapshot: mocks.state.snapshot,
-    deleted: mocks.state.deleted,
-    error: mocks.state.error,
-    isPending: mocks.state.snapshot === null,
-    resubscribe: mocks.resubscribe,
-  }),
+  useBotSubscriptionForHost: (input: { botId: string }) => {
+    mocks.subscribed.push(input.botId);
+    return {
+      snapshot: mocks.state.snapshot,
+      deleted: mocks.state.deleted,
+      error: mocks.state.error,
+      isPending: mocks.state.snapshot === null,
+      resubscribe: mocks.resubscribe,
+    };
+  },
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => mocks.state.connectable,
@@ -207,6 +208,7 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
         : {
             bots: mocks.state.listedBotIds.map((botId) => ({
               botId,
+              title: botId,
               environmentId: "env-team",
               archivedAt: null,
             })),
@@ -370,6 +372,8 @@ import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
+/** The id a new team's main bot will be created under. */
+const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
 const TAB_HOST = "host-tab";
 const BOUND_HOST = "host-bound";
 
@@ -432,12 +436,16 @@ function answer(outcome: BotOpenResponse["outcome"]): OpenResult {
   return { kind: "answer", response: { bot: BOT, outcome } };
 }
 
-function surface(): ReactNode {
+function surfaceFor(botId: string): ReactNode {
   return (
     <StrictMode>
-      <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+      <BotTabSurface botId={botId} hostId={TAB_HOST} />
     </StrictMode>
   );
+}
+
+function surface(): ReactNode {
+  return surfaceFor(BOT_ID);
 }
 
 /** Nothing on a tab says where a bot runs or offers to move it. */
@@ -464,8 +472,7 @@ beforeEach(() => {
   mocks.state.error = null;
   mocks.state.paneVisible = true;
   mocks.state.connectable = { hostIds: [TAB_HOST, BOUND_HOST], resolved: true };
-  // The bot is listed, and its team has answered with no onboarding: a team
-  // from before onboarding, never locked.
+  // The bot is listed, in a team that has bots: nothing is to be set up.
   mocks.state.listedBotIds = [BOT_ID];
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
@@ -473,8 +480,8 @@ beforeEach(() => {
   mocks.state.environments = [
     { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
   ];
-  onboardingReads.clear();
-  onboardingReads.set("env-team", noOnboardingRead());
+  mocks.subscribed.length = 0;
+  for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
   __resetAgentActivityStoreForTests();
@@ -523,115 +530,146 @@ describe("<BotTabSurface /> on a host without bot.open", () => {
   });
 });
 
-/** A team's onboarding read with no record: the team pre-dates onboarding. */
-function noOnboardingRead(): BotOnboardingReadResponse {
-  return {
-    github: {
-      state: "ok",
-      installingAdmin: null,
-      repositories: [
-        { repositoryId: "11", fullName: "acme/web", permission: "write" },
-      ],
-      callerCanConnect: false,
-    },
-    unlocked: true,
-    choice: null,
-    catalog: [],
-  };
+/**
+ * A tab on a team's main bot before the bot exists: the team (`env-new`) has
+ * no bot of its own, another team's bot is the only one listed, and the tab
+ * is open as the sidebar's row would have opened it.
+ */
+function setUpNewTeam(): void {
+  mocks.state.environments = [
+    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+    { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+  ];
+  mocks.state.listedBotIds = [BOT_ID];
+  useBotTabsStore
+    .getState()
+    .openBotTab({ botId: SETUP_BOT_ID, hostId: TAB_HOST, title: "Tracy" });
 }
 
-/** A team's onboarding read: `repositories` empty locks its chat. */
-function onboardingRead(
-  repositories: BotOnboardingReadResponse["github"]["repositories"],
-): BotOnboardingReadResponse {
-  return {
-    github: {
-      state: "ok",
-      installingAdmin: null,
-      repositories,
-      callerCanConnect: false,
-    },
-    unlocked: repositories.length > 0,
-    choice: {
-      areas: ["ci-speed-and-cost"],
-      chosenAt: 1_000,
-      completedAt: null,
-      pending: [
-        { area: "ci-speed-and-cost", botId: BOT_ID, hostId: BOUND_HOST },
-      ],
-    },
-    catalog: [],
-  };
-}
+describe("<BotTabSurface /> a team's main bot still to be set up", () => {
+  beforeEach(() => {
+    setUpNewTeam();
+    mocks.reads["env-new"] = {
+      setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+    };
+  });
 
-describe("<BotTabSurface /> while the team's onboarding locks its chat", () => {
-  it("shows a restored tab the onboarding instead of the channel, opening nothing, and opens the channel once the lock lifts", () => {
-    // A bot an onboarding try made, its tab restored with the team's GitHub
-    // set holding no repository.
-    mocks.state.listedBotIds = [BOT_ID];
-    onboardingReads.set("env-team", onboardingRead([]));
-    const view = render(surface());
+  it("shows the channel where the team is set up, with the bot's post and the ways to get a host, and none of the starter-bot flow", () => {
+    render(surfaceFor(SETUP_BOT_ID));
 
-    const card = screen.getByTestId("stub-onboarding-card");
-    expect(card.dataset.environmentId).toBe("env-team");
-    expect(card.dataset.teamName).toBe("Acme");
-    expect(card.dataset.botCount).toBe("1");
+    const channel = screen.getByTestId("team-setup-channel");
+    expect(within(channel).getByTestId("bot-tab-title").textContent).toBe(
+      "Tracy",
+    );
+    expect(within(channel).getByTestId("bot-tab-main")).toBeTruthy();
+    expect(screen.getByTestId("stub-sidebar").dataset.activeBotId).toBe(
+      SETUP_BOT_ID,
+    );
+    const post = within(channel).getByTestId("team-setup-post");
+    expect(within(post).getByText("Tracy")).toBeTruthy();
+    const card = within(post).getByTestId("team-host-options");
+    expect(
+      within(card)
+        .getAllByRole("heading")
+        .map((heading) => heading.textContent),
+    ).toEqual([
+      "Give the team a host",
+      "Enable cloud for the team",
+      "Create a team host on a machine",
+    ]);
+    expect(within(card).queryAllByRole("button")).toHaveLength(0);
+    expect(within(card).queryAllByRole("link")).toHaveLength(0);
+    expect(channel.textContent).not.toMatch(/github|starter|seat/i);
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
-    expect(mocks.open).not.toHaveBeenCalled();
-    expect(mocks.supportQueries).toContainEqual({
-      hostId: TAB_HOST,
-      method: "bot.onboarding.read",
+  });
+
+  it("draws the message box with nothing to type into or send, and says why", () => {
+    render(surfaceFor(SETUP_BOT_ID));
+
+    const composer = screen.getByTestId("team-setup-composer");
+    const input = within(composer).getByRole("textbox", {
+      name: "Message Tracy",
     });
-
-    onboardingReads.set(
-      "env-team",
-      onboardingRead([
-        { repositoryId: "11", fullName: "acme/web", permission: "write" },
-      ]),
-    );
-    view.rerender(surface());
-
-    expect(screen.queryByTestId("stub-onboarding-card")).toBeNull();
-    expect(screen.getByTestId("stub-channel")).toBeTruthy();
-    expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
+    expect(input).toHaveProperty("disabled", true);
+    expect(
+      within(composer).getByRole("button", { name: "Send" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(composer).getByTestId("team-setup-composer-reason").textContent,
+    ).toBe("Tracy can reply once the team has a host.");
   });
 
-  it("opens nothing and shows no channel while the onboarding read is held, then shows the onboarding when it answers locked", () => {
-    onboardingReads.clear();
-    const view = render(surface());
+  it("opens, subscribes to and closes nothing: the bot does not exist", () => {
+    render(surfaceFor(SETUP_BOT_ID));
 
     expect(mocks.open).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-    expect(screen.queryByTestId("stub-sidebar")).toBeNull();
+    expect(mocks.subscribed).toEqual([]);
+    expect(mocks.useBotListChangedSubscriptionForHost).not.toHaveBeenCalled();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
+  });
+
+  it("shows the connecting state, opening nothing, until the team's read answers, then the setup channel", () => {
+    delete mocks.reads["env-new"];
+    const view = render(surfaceFor(SETUP_BOT_ID));
+
     expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
 
-    onboardingReads.set("env-team", onboardingRead([]));
-    view.rerender(surface());
+    mocks.reads["env-new"] = {
+      setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+    };
+    view.rerender(surfaceFor(SETUP_BOT_ID));
 
-    expect(screen.getByTestId("stub-onboarding-card")).toBeTruthy();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
     expect(mocks.open).not.toHaveBeenCalled();
   });
 
-  it("opens the channel of a team with no onboarding once its read answers", () => {
-    onboardingReads.clear();
-    const view = render(surface());
-    expect(mocks.open).not.toHaveBeenCalled();
+  it.each<readonly [string, ReadScript]>([
+    ["the read answers no setup", { setup: null }],
+    ["the read fails", "fails"],
+    [
+      "the setup names another bot",
+      { setup: { botId: OTHER_BOT_ID, title: "Tracy" } },
+    ],
+  ])(
+    "opens the tab as any unlisted bot's, which closes itself, when %s",
+    (_name, script) => {
+      mocks.reads["env-new"] = script;
+      render(surfaceFor(SETUP_BOT_ID));
 
-    onboardingReads.set("env-team", noOnboardingRead());
-    view.rerender(surface());
+      expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+      expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+      ).toBeNull();
+    },
+  );
 
-    expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
+  it("opens the bot normally once it exists under the setup's id", () => {
+    mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
+    render(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
+});
 
-  it("opens nothing until bot.list names the bot's team", () => {
+describe("<BotTabSurface /> before the lists answer", () => {
+  it("opens nothing and shows no channel until bot.list names the bot's team", () => {
     mocks.state.listedBotIds = undefined;
     render(surface());
 
     expect(mocks.open).not.toHaveBeenCalled();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
   });
 });
 
