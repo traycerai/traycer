@@ -78,12 +78,23 @@ function SurfaceCard(props: {
     openSurfaces,
     entry,
     hostAction: entry === null ? null : cards.hostAction(entry.actionId),
+    postActions: messageId === null ? [] : cards.postActions(messageId),
     viewerUserId: cards.viewerUserId,
     memberName: cards.memberName,
     canAct: cards.act !== null && messageId !== null,
   });
   const open = openSurfaceOf(surface, openSurfaces);
-  const onOpen = useBotSurfaceOpen(surface, open);
+  const onOpen = useBotSurfaceOpen(surface, open, view.title);
+  // This window's own refused action gives its answers back, once.
+  const returnDrafts =
+    view.state.kind === "refused" && entry !== null && !entry.draftsReturned;
+  const onDraftsReturned = (): void => {
+    if (entry === null || messageId === null) return;
+    const current =
+      useBotSurfaceActionsStore.getState().entries[botId]?.[messageId];
+    if (current?.actionId !== entry.actionId) return;
+    setEntry(botId, messageId, { ...current, draftsReturned: true });
+  };
 
   // The post's own resolution closes whatever this window had in flight on it.
   const resolved = surface.resolution !== null;
@@ -115,6 +126,7 @@ function SurfaceCard(props: {
       action,
       phase: "sending",
       code: null,
+      draftsReturned: false,
     });
     act({
       botId,
@@ -129,8 +141,16 @@ function SurfaceCard(props: {
           action,
           phase: response.outcome,
           code: response.code,
+          draftsReturned: false,
         }),
-      () => settle({ actionId, action, phase: "unconfirmed", code: null }),
+      () =>
+        settle({
+          actionId,
+          action,
+          phase: "unconfirmed",
+          code: null,
+          draftsReturned: false,
+        }),
     );
   };
 
@@ -156,7 +176,8 @@ function SurfaceCard(props: {
           messageId={messageId}
           questions={open.surface.questions}
           busy={view.actionsBusy}
-          refused={view.state.kind === "refused"}
+          returnDrafts={returnDrafts}
+          onDraftsReturned={onDraftsReturned}
           onSend={send}
         />
       ) : null}
@@ -222,25 +243,34 @@ function SurfaceQuestion(props: {
     { kind: "question" }
   >["questions"];
   readonly busy: boolean;
-  readonly refused: boolean;
+  /** This window's action was refused and its answers are not given back yet. */
+  readonly returnDrafts: boolean;
+  readonly onDraftsReturned: () => void;
   readonly onSend: (action: BotSurfaceAction) => void;
 }): ReactElement {
-  const { botId, messageId, questions, busy, refused, onSend } = props;
+  const {
+    botId,
+    messageId,
+    questions,
+    busy,
+    returnDrafts,
+    onDraftsReturned,
+    onSend,
+  } = props;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
   const setAnswer = useBotDraftsStore((state) => state.setAnswer);
   const keyOf = (index: number): string => answerDraftKey(messageId, index);
-  // A send that did not land gives the person's answers back to change.
-  const held = questions.some(
-    (_, index) => (drafts?.[keyOf(index)]?.sent ?? null) !== null,
-  );
+  // A send that did not land gives the person's answers back to change,
+  // once: answering again after that is not undone.
   useEffect(() => {
-    if (!refused || !held) return;
+    if (!returnDrafts) return;
     const current = useBotDraftsStore.getState().answers[botId] ?? {};
     for (const [key, draft] of Object.entries(current)) {
       if (draft === undefined || !key.startsWith(`${messageId}#`)) continue;
       if (draft.sent !== null) setAnswer(botId, key, { ...draft, sent: null });
     }
-  }, [botId, held, messageId, refused, setAnswer]);
+    onDraftsReturned();
+  }, [botId, messageId, onDraftsReturned, returnDrafts, setAnswer]);
   const cardQuestions = questions.map((item, index): QuestionCardQuestion => ({
     index,
     text: item.text,

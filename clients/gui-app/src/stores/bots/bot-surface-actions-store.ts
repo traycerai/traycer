@@ -24,6 +24,11 @@ export interface BotSurfaceActionEntry {
     | "unconfirmed";
   /** Why it was refused; `null` in every other phase. */
   readonly code: BotSurfaceActionRefusalCode | null;
+  /**
+   * The answers this action sent were given back to the person to change,
+   * once, when it was refused: a later answer is theirs again.
+   */
+  readonly draftsReturned: boolean;
 }
 
 type ByBot = Readonly<

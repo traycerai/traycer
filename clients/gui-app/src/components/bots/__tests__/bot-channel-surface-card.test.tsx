@@ -54,8 +54,14 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 type TranscriptState = Pick<
   ChatSessionState,
@@ -287,6 +293,26 @@ const OPEN_QUESTION = openItem({
       text: "Which branch should I deploy?\nmain is the default.",
       options: ["main", "release"],
       allowsFreeText: true,
+    },
+  ],
+  askedAt: 900,
+});
+
+const OPEN_INTERVIEW = openItem({
+  kind: "question",
+  blockId: "block-interview",
+  questions: [
+    {
+      questionId: "q-branch",
+      text: "Which branch should I deploy?",
+      options: ["main", "release"],
+      allowsFreeText: false,
+    },
+    {
+      questionId: "q-region",
+      text: "Which region?",
+      options: ["east", "west"],
+      allowsFreeText: false,
     },
   ],
   askedAt: 900,
@@ -529,6 +555,11 @@ function cardButtons(): string[] {
     .map((button) => button.textContent);
 }
 
+/** One question of the card, by its text. */
+function questionItem(text: string): HTMLElement {
+  return within(card()).getByRole("region", { name: text });
+}
+
 function isDisabled(element: HTMLElement): boolean {
   return (element as HTMLButtonElement).disabled;
 }
@@ -557,6 +588,9 @@ beforeEach(() => {
   rowBlocks.clear();
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   useBotSurfaceActionsStore.setState({ entries: {} });
+  useSelectionAuthorityStore.getState().reset();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   mocks.client = hostClientRecordingActs();
   signInViewer(VIEWER_USER_ID);
 });
@@ -768,6 +802,58 @@ describe("<BotChannelView /> a post's surface card: Open", () => {
     expect(
       mocks.route.mock.calls.every((call) => call[0] === mocks.navigate),
     ).toBe(true);
+  });
+
+  it("opens a question or an approval on another machine than the window's as a chat tile bound to that machine, and parks the jump to it", async () => {
+    const user = userEvent.setup();
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: HOST_ID,
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab(TASK_ID, "Deploy");
+    mountChannel({
+      rows: [
+        botPost(QUESTION, "q", "post-question"),
+        botPost(APPROVAL, "a", "post-approval"),
+      ],
+      tasks: [task([OPEN_QUESTION, OPEN_APPROVAL])],
+      surfaceActions: [],
+    });
+    const [questionCard, approvalCard] =
+      screen.getAllByTestId("bot-surface-card");
+    const parked = () =>
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(TASK_HOST_ID, AGENT_CHAT_ID)
+      ];
+
+    await user.click(
+      within(questionCard).getByRole("button", { name: "Open" }),
+    );
+
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    expect(Object.values(canvas?.tilesByInstanceId ?? {})).toMatchObject([
+      { id: AGENT_CHAT_ID, type: "chat", hostId: TASK_HOST_ID },
+    ]);
+    expect(parked()).toMatchObject({
+      target: { kind: "block", blockId: "block-interview" },
+      tileInstanceId: null,
+    });
+
+    await user.click(
+      within(approvalCard).getByRole("button", { name: "Open" }),
+    );
+
+    expect(parked()).toMatchObject({
+      target: { kind: "approval", approvalId: "approval-publish" },
+      tileInstanceId: null,
+    });
+    expect(
+      Object.keys(
+        useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
+          {},
+      ),
+    ).toHaveLength(1);
+    expect(mocks.route).not.toHaveBeenCalled();
   });
 
   it("opens an artifact in its task, focused on it", async () => {
@@ -1164,5 +1250,108 @@ describe("<BotChannelView /> a post's surface card: answering and deciding", () 
       ),
     ]);
     expect(stateLine()).toBe("Answered by you");
+  });
+
+  it("keeps a re-answered question sent after the task could not be reached, so the last answer of a two-question interview sends both as a new action", async () => {
+    const user = userEvent.setup();
+    answer = () =>
+      Promise.resolve({ outcome: "refused", code: "NOT_REACHABLE" });
+    mountChannel({
+      rows: [post(QUESTION)],
+      tasks: [task([OPEN_INTERVIEW])],
+      surfaceActions: [],
+    });
+    const branch = "Which branch should I deploy?";
+    const region = "Which region?";
+
+    await user.click(
+      within(questionItem(branch)).getByRole("button", { name: "main" }),
+    );
+    await user.click(
+      within(questionItem(branch)).getByRole("button", { name: "Submit" }),
+    );
+    await user.click(
+      within(questionItem(region)).getByRole("button", { name: "east" }),
+    );
+    await user.click(
+      within(questionItem(region)).getByRole("button", { name: "Submit" }),
+    );
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task. Your answer is kept."),
+    );
+    expect(acts).toHaveLength(1);
+    expect(questionItem(branch).getAttribute("data-state")).toBe("open");
+
+    answer = () => Promise.resolve(SETTLED);
+    await user.click(
+      within(questionItem(branch)).getByRole("button", { name: "release" }),
+    );
+    await user.click(
+      within(questionItem(branch)).getByRole("button", { name: "Submit" }),
+    );
+    expect(questionItem(branch).getAttribute("data-state")).toBe("sent");
+    expect(acts).toHaveLength(1);
+
+    await user.click(
+      within(questionItem(region)).getByRole("button", { name: "west" }),
+    );
+    await user.click(
+      within(questionItem(region)).getByRole("button", { name: "Submit" }),
+    );
+
+    expect(acts).toHaveLength(2);
+    expect(acts[1]?.actionId).toMatch(UUID);
+    expect(acts[1]?.actionId).not.toBe(acts[0]?.actionId);
+    expect(acts[1]?.action).toMatchObject({
+      kind: "answer",
+      answers: [
+        { questionId: "q-branch", values: ["release"] },
+        { questionId: "q-region", values: ["west"] },
+      ],
+    });
+  });
+
+  it("holds a decision another window sent as sending, and offers it again once that window's action is reported refused", async () => {
+    const user = userEvent.setup();
+    const channel = mountChannel({
+      rows: [post(APPROVAL)],
+      tasks: [task([OPEN_APPROVAL])],
+      surfaceActions: [
+        {
+          actionId: "other-window",
+          messageId: POST_ID,
+          state: "sending",
+          code: null,
+        },
+      ],
+    });
+
+    expect(card().getAttribute("data-state")).toBe("sending");
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: /Allow/ })),
+    ).toBe(true);
+    expect(
+      isDisabled(within(card()).getByRole("button", { name: /Deny/ })),
+    ).toBe(true);
+
+    channel.serve(
+      [task([OPEN_APPROVAL])],
+      [
+        {
+          actionId: "other-window",
+          messageId: POST_ID,
+          state: "refused",
+          code: "NOT_REACHABLE",
+        },
+      ],
+    );
+
+    expect(stateLine()).toBe("Couldn't reach the task.");
+    const allow = within(card()).getByRole("button", { name: "Allow" });
+    expect(isDisabled(allow)).toBe(false);
+    await user.click(allow);
+    expect(acts).toHaveLength(1);
+    expect(acts[0]?.actionId).toMatch(UUID);
+    expect(acts[0]?.actionId).not.toBe("other-window");
   });
 });

@@ -692,6 +692,9 @@ function useSurfaceCards(args: {
         tasks.find((task) => task.taskId === taskId)?.inputNeeded ?? null,
       hostAction: (actionId) =>
         surfaceActions?.find((action) => action.actionId === actionId) ?? null,
+      postActions: (messageId) =>
+        surfaceActions?.filter((action) => action.messageId === messageId) ??
+        [],
       act: actSupported && client !== null ? actAsync : null,
     }),
     [

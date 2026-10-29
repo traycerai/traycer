@@ -19,7 +19,8 @@ import type { BotSurfaceActionEntry } from "@/stores/bots/bot-surface-actions-st
  *  1. the post's resolution, written once the task's machine reported the
  *     surface settled: who settled it and how, and no action;
  *  2. the person's own action from this window: sending, recorded here, or
- *     refused and why;
+ *     refused and why; with none here, their action on the post the serving
+ *     host holds (from another window, or from this one before a reload);
  *  3. the surface among the task's open surfaces: it waits, with its action;
  *  4. otherwise unknown, and only Open.
  */
@@ -55,6 +56,8 @@ export interface BotSurfaceCardInput {
   readonly entry: BotSurfaceActionEntry | null;
   /** The serving host's state of that action, from the subscription. */
   readonly hostAction: BotSurfaceActionState | null;
+  /** The viewer's actions on the post the serving host holds, oldest first. */
+  readonly postActions: ReadonlyArray<BotSurfaceActionState>;
   readonly viewerUserId: string | null;
   readonly memberName: SurfaceMemberName;
   /** Whether the tab's host takes an answer or a decision from the card. */
@@ -223,13 +226,15 @@ function inlineActionOf(
 /**
  * Why the person's action was refused, `null` when it was not. The serving
  * host's word on a forwarded action outranks this window's: a refusal there
- * is the task's machine answering.
+ * is the task's machine answering. With no action of this window's own, the
+ * one the serving host holds for the post says.
  */
 function refusalOf(
   entry: BotSurfaceActionEntry | null,
   hostAction: BotSurfaceActionState | null,
+  held: BotSurfaceActionState | null,
 ): BotSurfaceActionRefusalCode | null {
-  if (entry === null) return null;
+  if (entry === null) return held?.state === "refused" ? held.code : null;
   if (
     hostAction !== null &&
     hostAction.actionId === entry.actionId &&
@@ -239,6 +244,29 @@ function refusalOf(
   }
   if (entry.phase === "unconfirmed") return "NOT_REACHABLE";
   return entry.phase === "refused" ? entry.code : null;
+}
+
+/**
+ * The viewer's action on the post the serving host holds, for a window with
+ * none of its own: one on its way, else the latest refused.
+ */
+function heldAction(
+  postActions: ReadonlyArray<BotSurfaceActionState>,
+): BotSurfaceActionState | null {
+  return (
+    postActions.find((action) => action.state === "sending") ??
+    postActions.at(-1) ??
+    null
+  );
+}
+
+/** The person's action is on its way: from this window, or from another the serving host holds. */
+function isOnItsWay(
+  entry: BotSurfaceActionEntry | null,
+  held: BotSurfaceActionState | null,
+): boolean {
+  if (entry === null) return held?.state === "sending";
+  return entry.phase === "sending" || entry.phase === "forwarded";
 }
 
 /** The card's title, state and actions, from the post, the task's open surfaces and the person's own action. */
@@ -266,8 +294,9 @@ export function botSurfaceCardView(
     return { ...quiet, state: { kind: "unknown" } };
   }
   const inline = input.canAct ? inlineActionOf(surface) : null;
-  const refusedCode = refusalOf(entry, hostAction);
-  if (entry !== null && refusedCode !== null) {
+  const held = entry === null ? heldAction(input.postActions) : null;
+  const refusedCode = refusalOf(entry, hostAction, held);
+  if (refusedCode !== null) {
     const line = refusedLine(refusedCode, surface);
     // Unreachable: the answer is kept and can be sent again. Every other
     // refusal leaves Open alone.
@@ -285,10 +314,7 @@ export function botSurfaceCardView(
       state: { kind: "resolved", line: ownSettlementLine(entry.action) },
     };
   }
-  if (
-    entry !== null &&
-    (entry.phase === "sending" || entry.phase === "forwarded")
-  ) {
+  if (isOnItsWay(entry, held)) {
     return {
       title,
       state: { kind: "sending" },

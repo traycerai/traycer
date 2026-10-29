@@ -30,6 +30,13 @@ export interface BotSurfaceCards {
   /** The serving host's state of one of the viewer's forwarded actions; `null` when it holds none. */
   readonly hostAction: (actionId: string) => BotSurfaceActionState | null;
   /**
+   * The viewer's forwarded actions on one post the serving host holds, from
+   * any of their windows, in the order they were made.
+   */
+  readonly postActions: (
+    messageId: string,
+  ) => ReadonlyArray<BotSurfaceActionState>;
+  /**
    * Sends an answer or a decision through the tab's host; `null` where that
    * host takes none, and the card offers Open alone.
    */
