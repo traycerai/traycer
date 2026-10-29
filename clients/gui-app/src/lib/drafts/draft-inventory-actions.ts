@@ -226,8 +226,10 @@ export function deleteLandingDraftRow(
  * constraint of the retirement plane, not a preference.
  */
 function restoreLandingDraft(draft: LandingDraftTab): void {
-  useLandingDraftStore.getState().installLandingDraft({
-    id: mintDraftId(),
+  const id = mintDraftId();
+  const store = useLandingDraftStore.getState();
+  store.installLandingDraft({
+    id,
     content: draft.content,
     selection: draft.selection,
     lastTouchedAt: draft.lastTouchedAt,
@@ -236,6 +238,7 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
     workspace: draft.workspace,
     closed: draft.closed,
   });
+  store.setDraftReturnedSandbox(id, draft.returnedSandbox);
 }
 
 /**
@@ -507,6 +510,7 @@ function restoreNewChatDraft(
     store.addResolvedFolders(epicId, patch.workspace, []);
   }
   if (patch.selection !== null) store.setSelection(epicId, patch.selection);
+  store.setReturnedSandbox(epicId, patch.returnedSandbox ?? null);
   if (ownerHostId === null || client === null) return;
   if (newChatBoundHostId(epicId) !== null) return;
   const after =

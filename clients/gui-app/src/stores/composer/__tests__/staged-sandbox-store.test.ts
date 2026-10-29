@@ -6,10 +6,6 @@ import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
-import {
-  emptyLandingDraftWorkspaceSnapshot,
-  useLandingDraftStore,
-} from "@/stores/home/landing-draft-store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   readStagedSandbox,
@@ -240,34 +236,6 @@ describe("staged sandbox store", () => {
 
     store.stage(pendingSendSurfaceKey("send-1"), NEW_TARGET);
     expect(persistedSurfaceKeys()).toEqual([pendingSendSurfaceKey("send-1")]);
-  });
-
-  it("persists a stage a message was given back with, until another pick replaces it or its draft is deleted", () => {
-    const store = useStagedSandboxStore.getState();
-    store.stage(SURFACE, EXISTING_TARGET);
-    store.returnTo(SURFACE, "draft-returned");
-    expect(persistedSurfaceKeys()).toEqual([SURFACE]);
-
-    // The person picks again: that choice lasts only as long as the window.
-    store.stage(SURFACE, NEW_TARGET);
-    expect(persistedSurfaceKeys()).toEqual([]);
-
-    useLandingDraftStore.getState().installLandingDraft({
-      id: "draft-returned",
-      content: { type: "doc", content: [{ type: "paragraph" }] },
-      selection: null,
-      lastTouchedAt: 1_000,
-      settings: null,
-      composerMode: "chat",
-      workspace: emptyLandingDraftWorkspaceSnapshot(),
-      closed: true,
-    });
-    store.stage(SURFACE, EXISTING_TARGET);
-    store.returnTo(SURFACE, "draft-returned");
-    useLandingDraftStore.getState().deleteDraft("draft-returned");
-
-    expect(readStagedSandbox(SURFACE)).toBeNull();
-    expect(persistedSurfaceKeys()).toEqual([]);
   });
 
   it("brings a handed-over stage back after a reload with its create key and the sandbox it made", async () => {

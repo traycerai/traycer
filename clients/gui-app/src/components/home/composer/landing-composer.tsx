@@ -129,6 +129,7 @@ import {
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
 import { useLandingOwner } from "@/hooks/home/use-landing-owner";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { ComposerUploadProgressNotice } from "@/components/home/composer/composer-upload-progress-notice";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
@@ -367,6 +368,7 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   // The window's pin key, which a staged sandbox is staged under.
   const composerSurfaceKey = useComposerSurfaceHostKey();
+  useLandingReturnedSandbox(composerSurfaceKey, draftId);
   const settingsSeed = useMemo(
     () =>
       landingComposerSettingsSeedForDraft(
