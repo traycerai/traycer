@@ -106,11 +106,48 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * otherwise; never set with `redeliver`.
      */
     supersedes: z.string().min(1).max(255).nullable().default(null),
+    /**
+     * `bot.conversation.send@1.2`: an answer or Skip from a bot's question
+     * card (decision 121): the
+     * question it settles, on the record the question is on - its thread
+     * (`threadId`), or the channel's top level (`null`), where the answer
+     * goes to the bot itself and opens no thread. `text` is the answer, or
+     * the Skip's line. The bound host refuses an answer to a question already
+     * settled with `QUESTION_ALREADY_SETTLED`, and writes nothing. `null` (or
+     * absent) otherwise; never set with `announcementId`, `redeliver` or
+     * `supersedes`.
+     */
+    answer: z
+      .object({
+        /** The bot's row that asks, by its message id. */
+        questionMessageId: z.string().min(1).max(255),
+        /** Which of the row's questions, from 0. */
+        questionIndex: z.number().int().min(0),
+        skipped: z.boolean(),
+      })
+      .nullable()
+      .default(null),
   }),
 );
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
 >;
+
+/** The 1.1 request, frozen by hand: without `answer`. */
+export const botConversationSendRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1).max(255),
+    text: z.string().min(1).max(100_000),
+    threadId: z.string().min(1).max(36).nullable().default(null),
+    announcementId: z.string().min(1).max(255).nullable().default(null),
+    redeliver: z
+      .object({ requestId: z.string().min(1).max(255) })
+      .nullable()
+      .default(null),
+    supersedes: z.string().min(1).max(255).nullable().default(null),
+  }),
+);
 
 /** The 1.0 request, frozen by hand: without `redeliver` and `supersedes`. */
 export const botConversationSendRequestSchemaV10 = lazySchema(() =>

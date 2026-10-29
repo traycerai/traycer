@@ -62,7 +62,7 @@ export function NotificationRowBotAvatar(props: {
     (): BotIdentity | null =>
       botId === null || title === undefined
         ? null
-        : { botId, title, owner: null, openActivity: null },
+        : { botId, title, owner: null },
     [botId, title],
   );
   if (identity === null) return props.fallback;

@@ -5,6 +5,7 @@ import {
   botTaskEntrySchema,
   type BotActivity,
   type BotSessionActivity,
+  type BotTaskCheckinRecord,
   type BotTaskEntry,
   type BotTaskLastCheckin,
 } from "@traycer/protocol/host/bot/schemas";
@@ -22,6 +23,7 @@ const TRACKING_EVERY: BotTaskEntry = {
   label: null,
   originRequestId: null,
   createdByChatId: null,
+  checkins: null,
 };
 
 const TRACKING_ON_COMPLETION: BotTaskEntry = {
@@ -37,6 +39,7 @@ const TRACKING_ON_COMPLETION: BotTaskEntry = {
   label: null,
   originRequestId: null,
   createdByChatId: null,
+  checkins: null,
 };
 
 function issuePaths(entry: BotTaskEntry): string[] {
@@ -432,10 +435,10 @@ describe("bot.subscribe@1.3 task provenance", () => {
   it("carries the provenance to a 1.3 subscriber and strips it below 1.3", () => {
     const frame = snapshotWith([{ ...TRACKING_EVERY, ...PROVENANCE }]);
 
-    expect(line.latestMinor).toBe(3);
-    const latest = line.versions[3].contract.serverFrameSchema.parse(frame);
-    expect(latest.kind === "snapshot" ? latest.tasks : null).toEqual([
-      { ...TRACKING_EVERY, ...PROVENANCE },
+    const { checkins: _checkins, ...v13Entry } = TRACKING_EVERY;
+    const v13 = line.versions[3].contract.serverFrameSchema.parse(frame);
+    expect(v13.kind === "snapshot" ? v13.tasks : null).toEqual([
+      { ...v13Entry, ...PROVENANCE },
     ]);
     const {
       spun: _spun,
@@ -443,7 +446,7 @@ describe("bot.subscribe@1.3 task provenance", () => {
       originRequestId: _origin,
       createdByChatId: _creator,
       ...v12Entry
-    } = TRACKING_EVERY;
+    } = v13Entry;
     for (const minor of [0, 1, 2] as const) {
       const parsed =
         line.versions[minor].contract.serverFrameSchema.parse(frame);
@@ -451,6 +454,98 @@ describe("bot.subscribe@1.3 task provenance", () => {
         v12Entry,
       ]);
     }
+  });
+});
+
+describe("bot.subscribe@1.4 check-in history", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const HISTORY: BotTaskCheckinRecord[] = [
+    {
+      kind: "missed",
+      dueAt: 1_760_000_000_000,
+      missedThrough: 1_760_001_800_000,
+      reason: "no-host-reported",
+      caughtUpAt: 1_760_003_000_000,
+    },
+    {
+      kind: "received",
+      receivedAt: 1_759_999_000_000,
+      hostId: "host-1",
+      hostName: "laptop",
+      outcome: "still-running",
+      agentsStarted: 2,
+      ticketsOpened: 1,
+      ticketsClosed: 0,
+      backgroundEvents: 3,
+      turn: { chatId: "trunk-1", turnId: "turn-1" },
+    },
+  ];
+  const WATCH = {
+    target: { kind: "trunk" },
+    attentionOnly: true,
+    everySeconds: null,
+  } as const;
+
+  function snapshotWith(
+    tasks: ReadonlyArray<object>,
+    watches: ReadonlyArray<object>,
+  ): object {
+    return {
+      ...snapshotFrame([], null),
+      tasks,
+      notificationSubscriptions: watches,
+    };
+  }
+
+  it("carries the history and a watch's start to a 1.4 subscriber", () => {
+    const frame = snapshotWith(
+      [{ ...TRACKING_EVERY, checkins: HISTORY }],
+      [{ ...WATCH, since: 1_759_000_000_000 }],
+    );
+
+    expect(line.latestMinor).toBe(4);
+    const latest = line.versions[4].contract.serverFrameSchema.parse(frame);
+    expect(latest.kind === "snapshot" ? latest.tasks : null).toEqual([
+      { ...TRACKING_EVERY, checkins: HISTORY },
+    ]);
+    expect(
+      latest.kind === "snapshot" ? latest.notificationSubscriptions : null,
+    ).toEqual([{ ...WATCH, since: 1_759_000_000_000 }]);
+  });
+
+  it("strips both for a 1.3 and a 1.2 subscriber", () => {
+    const frame = snapshotWith(
+      [{ ...TRACKING_EVERY, checkins: HISTORY }],
+      [{ ...WATCH, since: 1_759_000_000_000 }],
+    );
+
+    for (const minor of [2, 3] as const) {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(frame);
+      if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+      expect(parsed.tasks[0]).not.toHaveProperty("checkins");
+      expect(parsed.notificationSubscriptions).toEqual([WATCH]);
+    }
+  });
+
+  it("reads an entry and a watch from a host that predates them as unknown", () => {
+    const { checkins: _omitted, ...withoutHistory } = TRACKING_EVERY;
+    const parsed = botSubscribeServerFrameSchema.parse(
+      snapshotWith([withoutHistory], [WATCH]),
+    );
+
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]?.checkins).toBeNull();
+    expect(parsed.notificationSubscriptions?.[0]?.since).toBeNull();
+  });
+
+  it("refuses a missed record with a reason it does not know", () => {
+    expect(
+      botTaskEntrySchema.safeParse({
+        ...TRACKING_EVERY,
+        checkins: [{ ...HISTORY[0], reason: "host-asleep" }],
+      }).success,
+    ).toBe(false);
   });
 });
 

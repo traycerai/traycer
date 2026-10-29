@@ -394,14 +394,14 @@ const QUESTION_1: BotOpenThread = {
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
-  readonly onOpenUnderTheHood: Mock<(id: string) => void>;
+  readonly onOpenActivity: Mock<() => void>;
   /** Renders the same view again, reading the mocks' current state. */
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
-  const onOpenUnderTheHood = vi.fn<(id: string) => void>();
+  const onOpenActivity = vi.fn<() => void>();
   const queryClient = new QueryClient();
   const tree = (openThread: BotOpenThread | null): ReactNode => (
     <QueryClientProvider client={queryClient}>
@@ -419,7 +419,7 @@ function mount(options: MountOptions): {
             tasks={[]}
             openThread={openThread}
             onOpenThread={onOpenThread}
-            onOpenUnderTheHood={onOpenUnderTheHood}
+            onOpenActivity={onOpenActivity}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -437,7 +437,7 @@ function mount(options: MountOptions): {
   const result = render(tree(current));
   return {
     onOpenThread,
-    onOpenUnderTheHood,
+    onOpenActivity,
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
@@ -1177,6 +1177,7 @@ describe("<BotChannelView /> channel", () => {
       announcementId: null,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
   });
 
@@ -1387,26 +1388,21 @@ describe("<BotChannelView /> open thread", () => {
     );
   });
 
-  it("shows the thread's cost in the header only when the host can say", () => {
+  it("shows no cost in the thread's header, even for a thread the host prices", () => {
     mount({ openThreadPostId: "post-a" });
-    expect(screen.getByTestId("bot-thread-cost").textContent).toBe("$0.42");
-    cleanup();
 
-    mount({ openThreadPostId: "post-b" });
-    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
-    expect(screen.queryByTestId("bot-thread-cost")).toBeNull();
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).queryByTestId("bot-thread-cost")).toBeNull();
+    expect(panel.textContent).not.toContain("$0.42");
   });
 
-  it("opens the thread's session under the hood", async () => {
+  it("opens the bot's Activity from the thread's header", async () => {
     const user = userEvent.setup();
-    const { onOpenUnderTheHood } = mount({
-      openThreadPostId: "post-a",
-    });
+    const { onOpenActivity } = mount({ openThreadPostId: "post-a" });
 
-    await user.click(screen.getByTestId("bot-thread-under-the-hood"));
+    await user.click(screen.getByRole("button", { name: "Activity" }));
 
-    expect(onOpenUnderTheHood).toHaveBeenCalledTimes(1);
-    expect(onOpenUnderTheHood).toHaveBeenCalledWith("session-a");
+    expect(onOpenActivity).toHaveBeenCalledTimes(1);
   });
 
   it("closes the thread from its header", async () => {

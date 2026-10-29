@@ -51,6 +51,7 @@ import {
   useBotOpenThreadStore,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
@@ -83,6 +84,8 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn<
     (variables: BotConversationSendRequest, callbacks: SendCallbacks) => void
   >(),
+  /** Each send's callbacks, to the send settling once the box has taken its outcome. */
+  settled: new WeakMap<SendCallbacks, Promise<void>>(),
   sessionFor: null as
     | ((chatId: string, enabled: boolean) => ChatSessionStoreHandle | null)
     | null,
@@ -140,6 +143,22 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
     mutate: mocks.send,
+    // The box settles its send through the promise; the case settles it
+    // through the callbacks the promise is built on.
+    mutateAsync: (variables: BotConversationSendRequest) => {
+      const { promise, resolve, reject } =
+        Promise.withResolvers<BotConversationSendResponse>();
+      const callbacks: SendCallbacks = { onSuccess: resolve, onError: reject };
+      mocks.settled.set(
+        callbacks,
+        promise.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      mocks.send(variables, callbacks);
+      return promise;
+    },
     isPending: false,
     error: null,
   }),
@@ -167,6 +186,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: (_args: ChatLocateRowArgs) => null,
+  useChatLocateRowAnswer: (_args: ChatLocateRowArgs) => ({
+    status: "waiting",
+  }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   ...(await importOriginal<
@@ -483,7 +505,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       onOpenThread={(open) =>
         useBotOpenThreadStore.getState().setOpenThread(BOT_ID, open)
       }
-      onOpenUnderTheHood={vi.fn()}
+      onOpenActivity={vi.fn()}
     />
   );
 }
@@ -559,6 +581,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   mocks.send.mockReset();
   for (const { handle } of sessions.values()) handle.dispose();
@@ -740,18 +764,19 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     return call[1];
   }
 
-  function accept(
+  async function accept(
     callbacks: SendCallbacks,
     threadId: string | null,
     delivery: BotConversationSendDelivery,
-  ): void {
-    act(() => {
+  ): Promise<void> {
+    await act(async () => {
       callbacks.onSuccess?.({
         messageId: POST_ID,
         requestId: "request-1",
         delivery,
         threadId,
       });
+      await mocks.settled.get(callbacks);
     });
   }
 
@@ -772,7 +797,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     const user = userEvent.setup();
     mountQuietChannel();
 
-    accept(await postInChannel(user), THREAD_ID, "written");
+    await accept(await postInChannel(user), THREAD_ID, "written");
 
     const panel = await screen.findByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe(THREAD_ID);
@@ -815,9 +840,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
       threads: { [THREAD_ID]: replying("request-1", null) },
     });
 
-    expect(
-      await within(panel).findByTestId("bot-thread-under-the-hood"),
-    ).toBeTruthy();
+    expect(await within(panel).findByTestId("bot-thread-replies")).toBeTruthy();
     expect(
       within(panel).getByRole("textbox", { name: "Reply in the thread" }),
     ).toBe(reply);
@@ -839,7 +862,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     });
     const view = mountQuietChannel();
 
-    accept(await postInChannel(user), THREAD_ID, "queued");
+    await accept(await postInChannel(user), THREAD_ID, "queued");
 
     // No channel row yet: the bot's host has not taken the post.
     const panel = await screen.findByTestId("bot-thread-panel");
@@ -872,7 +895,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-queued")).toBeNull();
 
-    // Messages → Under the hood → Messages: the tab unmounts the channel and
+    // Messages → Activity → Messages: the tab unmounts the channel and
     // mounts it again on the thread it holds open.
     view.unmount();
     mountChannel([]);
@@ -889,7 +912,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     const user = userEvent.setup();
     mountQuietChannel();
 
-    accept(await postInChannel(user), null, "queued");
+    await accept(await postInChannel(user), null, "queued");
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(screen.getByTestId("bot-channel-composer-queued").textContent).toBe(
@@ -901,7 +924,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     const user = userEvent.setup();
     mountQuietChannel();
 
-    accept(await postInChannel(user), null, "written");
+    await accept(await postInChannel(user), null, "written");
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(textbox("Message Tracy").value).toBe("");
@@ -912,8 +935,9 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
     mountQuietChannel();
 
     const callbacks = await postInChannel(user);
-    act(() => {
+    await act(async () => {
       callbacks.onError?.(new Error("host refused the post"));
+      await mocks.settled.get(callbacks);
     });
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();

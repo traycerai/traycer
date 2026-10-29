@@ -93,6 +93,7 @@ function channelPresentation(
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
+    questions: null,
     failedRequest: null,
   };
 }
@@ -469,6 +470,7 @@ describe("<ChatMessage /> in a bot thread", () => {
         openAnnouncementThread: null,
         answerThreads: false,
         chooseOption: null,
+        questions: null,
         failedRequest: null,
         replyFollowsPost: null,
       },
@@ -723,6 +725,7 @@ describe("<ChatMessage /> bot rows", () => {
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
+    questions: null,
     failedRequest: null,
   };
 
@@ -843,6 +846,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       openAnnouncementThread: input.openAnnouncementThread,
       answerThreads: false,
       chooseOption: input.chooseOption,
+      questions: null,
       failedRequest: null,
     };
   }
@@ -1020,6 +1024,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
+    questions: null,
     failedRequest: null,
   };
 
@@ -1535,11 +1540,11 @@ describe("<ChatEmptyState /> in a bot channel", () => {
       openAnnouncementThread: null,
       answerThreads: false,
       chooseOption: null,
+      questions: null,
       failedRequest: null,
     });
 
     expect(document.body.textContent).toBe("");
     expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
-    expect(screen.queryByText("Start the conversation")).toBeNull();
   });
 });

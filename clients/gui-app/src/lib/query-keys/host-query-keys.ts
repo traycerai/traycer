@@ -224,22 +224,6 @@ export const hostQueryKeys = {
       >(hostId, EPIC_TASK_CONTEXTS_METHOD, { taskIds: [...taskIds] }),
       userId,
     ] as const,
-  /**
-   * One task's title lookup for a task chip in a message: the
-   * `epic.getTaskContexts` family (so rename, pin and deletion patches reach
-   * it) under a tag of its own, because it lives for the session where the
-   * shared batches go stale and are collected. Matches `useHostQuery` with
-   * `cacheKeyIdentity: [userId, TASK_REFERENCE_LOOKUP_TAG]`.
-   */
-  taskReferenceLookup: (
-    hostId: string | null,
-    userId: string,
-    taskId: string,
-  ) =>
-    [
-      ...hostQueryKeys.epicTaskContexts(hostId, userId, [taskId]),
-      TASK_REFERENCE_LOOKUP_TAG,
-    ] as const,
 };
 
 /** Marks a task chip's own lookup apart from the shared title batches. */

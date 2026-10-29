@@ -35,6 +35,7 @@ import { TextSegment } from "@/components/chat/segments/text-segment";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TabActivationIntent } from "@/lib/tab-navigation";
 import { queryKeys } from "@/lib/query-keys";
+import { taskReferenceLookupKey } from "@/lib/query-keys/__tests__/task-reference-lookup-key";
 import {
   recheckTaskContextAnswers,
   removeDeletedEpicsFromCloudTaskCaches,
@@ -62,11 +63,7 @@ const SIBLING_HOST_ID = "host-sibling";
 const TASK_ID = "6f1c2a9e-4b7d-4e21-9c3a-1d2e3f4a5b6c";
 const AGENT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 /** The chip's own lookup of `TASK_ID`. */
-const OWN_LOOKUP_KEY = queryKeys.hostTaskReferenceLookup(
-  HOST_ID,
-  USER_ID,
-  TASK_ID,
-);
+const OWN_LOOKUP_KEY = taskReferenceLookupKey(HOST_ID, USER_ID, TASK_ID);
 /** History's first page of tasks. */
 const LIST_KEY = cloudEpicTasksQueryKey(
   HOST_ID,
@@ -101,6 +98,9 @@ const mocks = vi.hoisted(() => {
       readonly type: string;
       readonly name: string;
     }>,
+    // Each host query operation the chip's lookups run, from the request
+    // through `mapResponse`, captured when it starts.
+    operations: [] as Array<Promise<unknown>>,
   };
 });
 
@@ -124,6 +124,27 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   useNavigate: () => vi.fn(),
   useRouter: () => ({ state: { location: { pathname: "/epics" } } }),
 }));
+
+// Runs the real boundary unchanged and keeps the operation it returns, so a
+// test can await a lookup's whole run - the host's answer, then its mapping
+// and admission - even after the query that started it was cancelled.
+vi.mock("@/lib/query/host-query-error-boundary", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/lib/query/host-query-error-boundary")
+    >();
+  return {
+    ...original,
+    withHostQueryErrorBoundary: <T,>(
+      method: string,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const operation = original.withHostQueryErrorBoundary(method, run);
+      mocks.operations.push(operation);
+      return operation;
+    },
+  };
+});
 
 vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
@@ -229,10 +250,10 @@ function deleteTask(): void {
   );
 }
 
-/** Lets a read the chip would start reach the host, and its answer land. */
-async function settle(): Promise<void> {
+/** Every lookup started so far has run to its end, response mapping included. */
+async function lookupsCompleted(): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.allSettled(mocks.operations);
   });
 }
 
@@ -280,6 +301,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false } },
   });
   mocks.records = [];
+  mocks.operations.length = 0;
   useTaskLossRegister.setState({ byUserId: {} });
   useAuthStore
     .getState()
@@ -416,10 +438,7 @@ describe("a task id in a message", () => {
     expect(
       screen.getByRole("button", { name: "Ship the release" }),
     ).toBeTruthy();
-    // Let any lookup the chip would start reach the host.
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await lookupsCompleted();
     expect(lookedUpIds()).toEqual([]);
   });
 
@@ -465,7 +484,7 @@ describe("a task id in a message", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button")).toBeNull();
     });
-    await settle();
+    await lookupsCompleted();
     expect(lookedUpIds()).toEqual([TASK_ID]);
   });
 
@@ -488,7 +507,7 @@ describe("a task id in a message", () => {
     await waitFor(() => {
       expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
     });
-    await settle();
+    await lookupsCompleted();
     expect(screen.queryByRole("button")).toBeNull();
     expect(lookedUpIds()).toEqual([]);
   });
@@ -512,7 +531,7 @@ describe("a task id in a message", () => {
         lookupAnswer({ [TASK_ID]: "Ship the release" }, { taskIds: [TASK_ID] }),
       );
     });
-    await settle();
+    await lookupsCompleted();
 
     expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
     expect(screen.queryByRole("button")).toBeNull();
@@ -623,7 +642,7 @@ describe("a task id in a message", () => {
         tasks: { [TASK_ID]: { status: "unknown", reason: "denied" } },
       });
     });
-    await settle();
+    await lookupsCompleted();
 
     expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
     expect(screen.queryByRole("button")).toBeNull();
@@ -702,19 +721,21 @@ describe("a task id in a message", () => {
         [TASK_ID],
       );
     });
-    await settle();
+    await waitFor(() => {
+      expect(
+        taskLossFor(
+          useTaskLossRegister.getState(),
+          USER_ID,
+          SIBLING_HOST_ID,
+          TASK_ID,
+        )?.loss,
+      ).toBe("recheck");
+    });
+    await lookupsCompleted();
 
     expect(container.textContent).toBe(`In flight: ${TASK_ID}.`);
     expect(screen.queryByRole("button")).toBeNull();
     expect(lookedUpIds()).toEqual([]);
-    expect(
-      taskLossFor(
-        useTaskLossRegister.getState(),
-        USER_ID,
-        SIBLING_HOST_ID,
-        TASK_ID,
-      )?.loss,
-    ).toBe("recheck");
   });
 
   it("keeps a settled answer through host reconnects instead of reading it again", async () => {
@@ -749,9 +770,7 @@ describe("a task id in a message", () => {
       expect(
         screen.getByRole("button", { name: "Ship the release" }),
       ).toBeTruthy();
-      await act(async () => {
-        await Promise.resolve();
-      });
+      await lookupsCompleted();
       expect(lookedUpIds()).toEqual([TASK_ID]);
       expect(
         queryClient.getQueryCache().find({ queryKey: OWN_LOOKUP_KEY })?.gcTime,
@@ -803,6 +822,7 @@ describe("a task id in a bot's row", () => {
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
+    questions: null,
     failedRequest: null,
   };
 

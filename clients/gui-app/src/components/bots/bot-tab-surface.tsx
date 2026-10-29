@@ -44,7 +44,14 @@ import {
 } from "@/stores/bots/bot-open-thread-store";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
-import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
+import { BotActivityPage } from "@/components/bots/bot-activity-page";
+import { BotThreadsPage } from "@/components/bots/bot-threads-page";
+import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
+import {
+  activityLabelParts,
+  type BotActivityLabelPart,
+} from "@/lib/bots/bot-activity-model";
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
   BotIdentityContext,
@@ -63,10 +70,10 @@ import {
 } from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
 
-type BotTabView = "messages" | "under-the-hood";
+type BotTabView = "messages" | "activity" | "threads";
 
 function isBotTabView(value: string): value is BotTabView {
-  return value === "messages" || value === "under-the-hood";
+  return value === "messages" || value === "activity" || value === "threads";
 }
 
 /**
@@ -77,8 +84,8 @@ function isBotTabView(value: string): value is BotTabView {
  * doing, whether it runs the bot (bound here, or claimed here because its
  * host was away) or another host does; the bot's host only runs its turns.
  * When no host can run them the paused banner says so, naming no machine,
- * above the channel, and a post waits for delivery. Under the hood alone is
- * the bot's host's to show.
+ * above the channel, and a post waits for delivery. The background work
+ * under Activity alone is the bot's host's to show.
  *
  * While its team's onboarding locks the team's chat (`teamOnboardingGate`,
  * as the sidebar's channel rows read it) the tab is not opened and shows the
@@ -89,8 +96,9 @@ function isBotTabView(value: string): value is BotTabView {
  *
  * Laid out as Slack is (decision 41): the person's environments and their
  * bots as channels down the side, and the bot's channel beside them, with
- * its under-the-hood view as the channel's other tab and its settings
- * behind the header's ⋮.
+ * Slack's tab strip under its header - Messages, Activity (what the bot is
+ * doing and did, its label counting it) and Threads (decision 115) - and its
+ * settings behind the header's ⋮.
  *
  * Bound to ONE host at a time through `TabHostProvider`; everything below
  * reads that host - the stream, the conversation list, every write. A tab
@@ -353,24 +361,20 @@ function BotTabContent(props: {
     membersSupported,
   );
   const resolveMember = directory.resolve;
-  // The open thread is held in its store and the session shown under the
-  // hood here, above the views, so both survive a switch between the
-  // channel's tabs.
+  // The open thread is held in its store, above the views, so it survives a
+  // switch between the channel's tabs.
   const openThread = useBotOpenThread(botId);
   const setOpenThreadFor = useBotOpenThreadStore((s) => s.setOpenThread);
   const setOpenThread = useCallback(
     (open: BotOpenThread | null) => setOpenThreadFor(botId, open),
     [botId, setOpenThreadFor],
   );
-  const [sessionChatId, setSessionChatId] = useState<string | null>(null);
-  const openUnderTheHood = useCallback(
-    (threadSessionChatId: string) => {
-      setSessionChatId(threadSessionChatId);
-      onViewChange("under-the-hood");
-    },
+  const openActivity = useCallback(
+    () => onViewChange("activity"),
     [onViewChange],
   );
-  // A task's post, from the bot's view: its thread opens beside the channel.
+  // A post or a thread, from Activity or Threads: its thread opens beside the
+  // channel.
   const openPostInChannel = useCallback(
     (open: BotOpenThread) => {
       setOpenThread(open);
@@ -378,10 +382,21 @@ function BotTabContent(props: {
     },
     [onViewChange, setOpenThread],
   );
-  const openBotActivity = useCallback(() => {
-    setSessionChatId(null);
-    onViewChange("under-the-hood");
-  }, [onViewChange]);
+  // Any host with the list lists the threads; Activity names a thread's work
+  // by it, and the label tells a thread's session from the bot's other chats.
+  const threadListSupported =
+    useHostMethodSupport(hostId, "bot.thread.list") === true;
+  const threadList = useBotThreadListQuery(client, botId, {
+    enabled: threadListSupported,
+  });
+  const threads = threadListSupported ? (threadList.data?.threads ?? null) : [];
+  const activitySummary = useBotActivitySummary({
+    botId,
+    trunkChatId: snapshot.bot.trunkChatId,
+    tasks: snapshot.tasks,
+    activity: snapshot.activity,
+    threads,
+  });
   // The channel's settings open beside it from the header's ⋮.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toggleSettings = useCallback(
@@ -414,9 +429,8 @@ function BotTabContent(props: {
       botId,
       title: snapshot.bot.title,
       owner,
-      openActivity: openBotActivity,
     }),
-    [botId, openBotActivity, owner, snapshot.bot.title],
+    [botId, owner, snapshot.bot.title],
   );
 
   return (
@@ -445,6 +459,11 @@ function BotTabContent(props: {
               isMain={isMain === true}
               settingsOpen={settingsOpen}
               onToggleSettings={toggleSettings}
+              activityLabel={activityLabelParts({
+                stopped: activitySummary.stopped.length,
+                running: activitySummary.running.length,
+                tasks: activitySummary.tasks,
+              })}
             />
             {streamError === null ? null : (
               // A fatal close AFTER a snapshot: the last reading stays on
@@ -485,27 +504,33 @@ function BotTabContent(props: {
                 tasks={snapshot.tasks}
                 openThread={openThread}
                 onOpenThread={setOpenThread}
-                onOpenUnderTheHood={openUnderTheHood}
+                onOpenActivity={openActivity}
               />
             </TabsContent>
             <TabsContent
-              value="under-the-hood"
+              value="activity"
               className="flex min-h-0 flex-1 flex-col"
             >
-              <BotUnderTheHoodPanel
+              <BotActivityPage
                 botId={botId}
                 hostId={hostId}
-                botTitle={snapshot.bot.title}
-                trunkChatId={snapshot.bot.trunkChatId}
-                tasks={snapshot.tasks}
-                openRequestCount={snapshot.openRequestCount}
-                notificationSubscriptions={snapshot.notificationSubscriptions}
                 boundHost={snapshot.boundHost}
-                environmentLabel={environmentLabel}
-                environmentBots={environmentBots}
-                sessionChatId={sessionChatId}
-                onSelectSession={setSessionChatId}
                 channelId={snapshot.bot.appConversationChatId}
+                tasks={snapshot.tasks}
+                notificationSubscriptions={snapshot.notificationSubscriptions}
+                summary={activitySummary}
+                threads={threads}
+                onOpenPost={openPostInChannel}
+              />
+            </TabsContent>
+            <TabsContent
+              value="threads"
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <BotThreadsPage
+                botId={botId}
+                hostId={hostId}
+                threadList={threadListSupported ? threadList : null}
                 onOpenPost={openPostInChannel}
               />
             </TabsContent>
@@ -679,13 +704,15 @@ function ErrorNotice(props: {
  * Slack's channel header: the bot's picture (its card on hover and click),
  * its name with the main bot's star, the ⋮ that opens the channel's settings, and the channel's views
  * under it. What the bot is for is the top of its channel; nothing else
- * sits here.
+ * sits here. Activity's label is the bot's indicator: what stopped, in red
+ * and first, what runs and the tasks it tracks.
  */
 function BotChannelHeader(props: {
   readonly title: string;
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
+  readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
   // Focus goes back to the ⋮ when the settings close.
@@ -735,11 +762,25 @@ function BotChannelHeader(props: {
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
           Messages
         </TabsTrigger>
-        <TabsTrigger
-          value="under-the-hood"
-          data-testid="bot-tab-view-under-the-hood"
-        >
-          Under the hood
+        <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
+          Activity
+          {props.activityLabel.map((part) => (
+            <span
+              key={part.kind}
+              data-testid={`bot-tab-activity-${part.kind}`}
+              className={cn(
+                "font-normal",
+                part.kind === "stopped"
+                  ? "text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              {` · ${part.text}`}
+            </span>
+          ))}
+        </TabsTrigger>
+        <TabsTrigger value="threads" data-testid="bot-tab-view-threads">
+          Threads
         </TabsTrigger>
       </TabsList>
     </header>
