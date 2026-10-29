@@ -930,3 +930,40 @@ export const hostStatusUpgradeV18ToV19 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, sessions: null }),
 });
+
+/**
+ * v1.10 adds `updatesExternallyManaged`: whether whatever deployed this host
+ * owns its version, so `host.update.install`, the auto-update reconciler and
+ * the service verbs all refuse (`TRAYCER_HOST_UPDATES=external`: a source-tree
+ * host under its own supervisor, a sandbox or automation pod updated by its
+ * image). A client reads it BEFORE offering a version list, instead of
+ * learning it from the first refused install. `null` means the host did not
+ * report: a peer below this minor, which keeps the discover-on-attempt path.
+ * Every other field is v1.9's, unchanged.
+ */
+export const hostStatusV110 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 10 } as const,
+  requestSchema: hostStatusV19.requestSchema,
+  responseSchema: lazySchema(() =>
+    hostStatusV19.responseSchema.extend({
+      updatesExternallyManaged: z.boolean().nullable(),
+    }),
+  ),
+});
+
+// A pre-1.10 peer never said who owns its updates: `null`, never `false` -
+// "updatable from here" about a host that was never asked is the fabrication
+// every upgrade above refuses.
+export const hostStatusUpgradeV19ToV110 = defineUpgradePath<
+  typeof hostStatusV19,
+  typeof hostStatusV110
+>({
+  from: hostStatusV19.schemaVersion,
+  to: hostStatusV110.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    updatesExternallyManaged: null,
+  }),
+});

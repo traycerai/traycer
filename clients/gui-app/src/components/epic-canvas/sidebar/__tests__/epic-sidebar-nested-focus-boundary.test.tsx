@@ -377,6 +377,21 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => ({ hostId: "host-1" }),
 }));
 
+// The Mobile simulators panel's presence rule, asked for on every render of the
+// panel host. Left out for the same two reasons the search query above is: its
+// real hook issues a `simulator.status` host query, and it reads the host
+// binding through the `@/lib/host` barrel, whose `useHostBinding` this suite's
+// `@/lib/host/runtime` stub does not carry.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
+  () => ({
+    useSimulatorPanelAvailability: () => ({
+      localHostRunsSimulators: false,
+      hasSimulatorRecords: false,
+    }),
+  }),
+);
+
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicCreateArtifact: () => ({
     mutate: (

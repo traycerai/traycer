@@ -669,6 +669,7 @@ beforeEach(() => {
         processMemory: null,
         crossHostMessaging: null,
         sessions: null,
+        updatesExternallyManaged: null,
       }),
       "environment.host.list": ({ environmentId }) => ({
         hosts: appHost.hostsByEnvironmentId.get(environmentId) ?? [],
