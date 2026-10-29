@@ -489,6 +489,8 @@ function ProviderSkillsTabBody({
               setDetailError(null);
             }}
             fileEpoch={detailFileEpoch}
+            // A provider's own list names no version to follow.
+            contentVersion={null}
           />
         )}
 

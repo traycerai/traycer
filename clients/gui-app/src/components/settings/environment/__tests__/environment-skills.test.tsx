@@ -1340,6 +1340,65 @@ describe("The Skills page's update policies", () => {
       expect(screen.getByRole("dialog")).toBe(dialog);
     });
 
+    it("reads SKILL.md again, and shows the new instructions, when another editor's update changes the open skill's listed version", async () => {
+      negotiateHosted();
+      let reads = 0;
+      Object.defineProperty(skillFile, "text", {
+        configurable: true,
+        get: () => {
+          reads += 1;
+          return reads === 1
+            ? "---\nname: review\n---\n\n# Instructions at version one\n"
+            : "---\nname: review\n---\n\n# Instructions at version two\n";
+        },
+        set: (value: string) => {
+          Object.defineProperty(skillFile, "text", {
+            configurable: true,
+            writable: true,
+            value,
+          });
+        },
+      });
+      let version = "1a2c79d";
+      const row = (): EnvironmentSkillV11 => ({
+        ...REVIEW,
+        policy: "evolve",
+        upstream: { source: "https://github.com/acme/skills.git", ref: "dev" },
+        version,
+      });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([row()], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+        "environment.configuration.skills.list": () => listed([row()], "pol-1"),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await screen.findByText("review");
+      await userEvent.click(
+        within(rowOf("review")).getByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        (await within(dialog).findAllByText(/Instructions at version one/))
+          .length,
+      ).toBeGreaterThan(0);
+      expect(reads).toBe(1);
+
+      version = "2b3d80e";
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
+
+      expect(
+        (await within(dialog).findAllByText(/Instructions at version two/))
+          .length,
+      ).toBeGreaterThan(0);
+      expect(within(dialog).queryAllByText(/version one/)).toHaveLength(0);
+      expect(reads).toBe(2);
+    });
+
     it("disables Edit and Update from source in an open dialog while the update is pending, and frees both once it lands", async () => {
       negotiateHosted();
       let release: () => void = () => {};

@@ -183,6 +183,13 @@ export function ProviderSkillDetailDialog(props: {
   readonly onRequestRemove: () => void;
   readonly onClose: () => void;
   readonly fileEpoch: number;
+  /**
+   * The version the skill's files are at as the caller lists it, or `null`
+   * when it names none: the files are read again when it changes under the
+   * open detail (another editor's update or restore), so the instructions
+   * shown are the version's. A held draft is kept through the reread.
+   */
+  readonly contentVersion: string | null;
 }): ReactNode {
   const client = useHostClient();
   // The content an editor holding unsaved changes opened on: it stays
@@ -198,7 +205,7 @@ export function ProviderSkillDetailDialog(props: {
     client,
     props.skill.path,
     SKILL_ENTRY_FILE,
-    [props.fileEpoch],
+    [props.fileEpoch, props.contentVersion],
   );
   const content = fileQuery.data?.content ?? null;
   const [optimisticContent, setOptimisticContent] = useState<string | null>(

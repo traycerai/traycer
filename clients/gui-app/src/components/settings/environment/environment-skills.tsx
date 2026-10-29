@@ -1103,8 +1103,10 @@ function EnvironmentSkillDetail(props: {
       onRequestRemove={() => undefined}
       onClose={props.onClose}
       // Either move reads the files again: this dialog's edit, or a write
-      // that replaced them.
+      // that replaced them; so does the listed version moving under the
+      // open detail, another editor's update or restore.
       fileEpoch={epoch + props.contentEpoch}
+      contentVersion={props.skill.version}
     />
   );
 }
