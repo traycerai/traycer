@@ -1,5 +1,6 @@
 import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { BotSurfaceKind } from "@traycer/protocol/persistence/epic/messages";
+import type { SegmentEndState } from "@/stores/composer/chat-store";
 
 /** One question of a `traycer_ask` call, as the person reads it. */
 export interface BotSendQuestion {
@@ -64,17 +65,21 @@ export function isBotSendToolName(toolName: string): boolean {
 
 /**
  * The send a tool call's card paints, or `null` for a call that is not a
- * send, that failed (nothing was posted, and the agent chat's row says why),
- * or whose input the block does not carry (a call still streaming its input,
- * a block from before inputs were persisted).
+ * send, that has not completed (still running, failed, or cut off by a stop
+ * or a steer: nothing may have been posted, and the agent chat's row says
+ * where it stands), or whose input the block does not carry (a block from
+ * before inputs were persisted).
  */
 export function paintedBotSendOf(call: {
   readonly toolName: string;
   readonly inputDetail: ToolInputDetail | null;
   readonly error: string | null;
+  readonly isStreaming: boolean;
+  readonly endState: SegmentEndState;
 }): BotSend | null {
   const kind = sendKindOf(call.toolName);
   if (kind === null || call.inputDetail?.kind !== "fields") return null;
+  if (call.isStreaming || call.endState !== null) return null;
   if (call.error !== null && call.error.length > 0) return null;
   const fields = new Map(
     call.inputDetail.entries.map((entry) => [entry.key, entry.value]),
@@ -98,14 +103,6 @@ export function paintedBotSendOf(call: {
     options: stringsOf(parsed(fields.get("options"))),
     surface,
   };
-}
-
-/** What find reads of a send: the text its card paints. */
-export function botSendSearchText(send: BotSend): string {
-  if (send.kind !== "ask") return send.text;
-  return send.questions
-    .flatMap((question) => [question.text, ...question.options])
-    .join("\n");
 }
 
 /** A field's value, or `null` for a field left out or sent as `null`. */

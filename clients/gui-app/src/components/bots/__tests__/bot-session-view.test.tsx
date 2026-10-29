@@ -325,6 +325,20 @@ function mountTrunk(landOn: BotTranscriptLanding | null): void {
   mountSession({ chatId: TRUNK_ID, threadId: null, landOn, threads: [] });
 }
 
+/** The trunk with one check-in turn whose only block is `send`. */
+function mountOneSend(send: ContentBlock): void {
+  mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
+    checkinPrompt(),
+    botTurn({
+      messageId: "turn-send-record",
+      turnId: "turn-send",
+      at: 2_000,
+      blocks: [send],
+    }),
+  ]).handle;
+  mountTrunk(null);
+}
+
 function view(): HTMLElement {
   return screen.getByTestId("bot-session-view");
 }
@@ -537,6 +551,61 @@ describe("a bot's trunk session, read whole", () => {
     );
 
     expect(opened.channel).toHaveBeenCalledWith(POST_ID);
+  });
+
+  it("leaves a send a stop cut off as the agent chat's row, since it may not have posted", async () => {
+    mountOneSend({
+      ...sendCall({
+        blockId: "send-interrupted",
+        toolName: "mcp__traycer_a2a__traycer_reply",
+        fields: { conversationId: CHANNEL_ID, text: REPLY_TEXT },
+        error: null,
+        at: 2_000,
+      }),
+      status: "interrupted",
+      endedAt: null,
+    });
+    await settleLegendList();
+
+    expect(within(view()).queryByTestId("bot-send-card")).toBeNull();
+    expect(view().textContent).toContain("traycer_reply");
+  });
+
+  it("renders a reply's Markdown as the channel does, and finds its link and its choices as they read", async () => {
+    const user = userEvent.setup();
+    mountOneSend(
+      sendCall({
+        blockId: "send-markdown",
+        toolName: "mcp__traycer_a2a__traycer_reply",
+        fields: {
+          conversationId: CHANNEL_ID,
+          text: "Details in [the audit report](https://example.com/audit).",
+          options: JSON.stringify(["Ship tonight"]),
+          repliesTo: POST_ID,
+        },
+        error: null,
+        at: 2_000,
+      }),
+    );
+    await settleLegendList();
+
+    const [reply] = sendCards();
+    const text = within(reply).getByTestId("bot-send-text");
+    expect(text.textContent).toBe("Details in the audit report.");
+    expect(
+      within(text).getByRole("link", { name: "the audit report" }),
+    ).toBeDefined();
+
+    act(() => {
+      useTileFindStore.getState().openForTile(`bot-session:${TRUNK_ID}`);
+    });
+    const bar = await within(view()).findByTestId("tile-find-bar");
+    const input = within(bar).getByRole("textbox", { name: "Find in tile" });
+    await user.type(input, "the audit report");
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
+    await user.clear(input);
+    await user.type(input, "Ship tonight");
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
   });
 });
 

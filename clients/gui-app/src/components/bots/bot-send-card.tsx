@@ -10,6 +10,7 @@ import {
 import type { BotSurfaceKind } from "@traycer/protocol/persistence/epic/messages";
 import { Button } from "@/components/ui/button";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
+import { TextSegment } from "@/components/chat/segments/text-segment";
 import {
   BotSessionContext,
   type BotSessionAccess,
@@ -21,7 +22,7 @@ import { postTextOf } from "@/lib/bots/reply-row";
 /**
  * One of the bot's sends in its session, read-only (Tracy Bots T93): where it
  * went - the channel, or the session's thread named by its post - and what it
- * posted, a reply's choices and a question's options drawn as they read, with
+ * posted, its Markdown rendered as the channel renders it, a reply's choices and a question's options drawn as they read, with
  * nothing to press but the link to where it landed: the post a reply or
  * question follows, the thread, or the channel. What in a task a send
  * pointed at (T89) is named under its text, never acted on. A question or an
@@ -66,12 +67,14 @@ export function BotSendCard(props: {
           </ol>
         ) : (
           <>
-            <p
-              data-testid="bot-send-text"
-              className="whitespace-pre-wrap text-foreground"
-            >
-              {send.text}
-            </p>
+            <div data-testid="bot-send-text" className="text-foreground">
+              <TextSegment
+                findUnitId={null}
+                markdown={send.text}
+                isStreaming={false}
+                nextStepActions={null}
+              />
+            </div>
             {send.kind === "reply" ? (
               <SendOptions options={send.options} />
             ) : null}

@@ -1,5 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
-import { botSendSearchText, paintedBotSendOf } from "@/lib/bots/bot-send-tool";
+import { paintedBotSendOf, type BotSend } from "@/lib/bots/bot-send-tool";
 import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
@@ -160,6 +160,25 @@ export function buildChatFindRows(
       units,
     };
   });
+}
+
+/**
+ * What a bot's send card paints of what it posted: a question's text and
+ * options, or a reply's or announcement's Markdown as rendered and a reply's
+ * choices.
+ */
+function botSendSearchText(send: BotSend): string {
+  if (send.kind === "ask") {
+    return normalizeSearchableText(
+      send.questions
+        .flatMap((question) => [question.text, ...question.options])
+        .join("\n"),
+    );
+  }
+  const choices = send.kind === "reply" ? send.options : [];
+  return normalizeSearchableText(
+    [markdownToChatSearchText(send.text), ...choices].join("\n"),
+  );
 }
 
 export function markdownToChatSearchText(markdown: string): string {
@@ -814,7 +833,7 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (send !== null) {
     // A bot's send card paints what it posted; its destination line names
     // where, which is not the transcript's text.
-    return [normalizeSearchableText(botSendSearchText(send))];
+    return [botSendSearchText(send)];
   }
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not
