@@ -6,6 +6,7 @@ import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxListFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
@@ -17,7 +18,13 @@ const sources = vi.hoisted(
     binding: FakeSandboxBinding | null;
     serving: ChatServing | null;
     status: StreamConnectionStatus;
-  } => ({ binding: null, serving: null, status: "open" }),
+    task: TaskSandboxHost;
+  } => ({
+    binding: null,
+    serving: null,
+    status: "open",
+    task: { kind: "other" },
+  }),
 );
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -34,7 +41,7 @@ vi.mock("@/hooks/chats/use-chat-stream-sync-state", () => ({
   }),
 }));
 vi.mock("@/hooks/epic/use-task-sandbox-end", () => ({
-  useTaskSandboxHost: () => ({ kind: "other" }),
+  useTaskSandboxHost: () => sources.task,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
@@ -125,12 +132,13 @@ function setup(response: SandboxListResponse) {
     },
     { wrapper },
   );
-  return { ...rendered, binding, queryClient };
+  return { ...rendered, binding, queryClient, wrapper };
 }
 
 beforeEach(() => {
   sources.serving = LIVE;
   sources.status = "open";
+  sources.task = { kind: "other" };
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: VIEWER, username: "Viewer" },
@@ -146,6 +154,61 @@ afterEach(() => {
 });
 
 describe("a live chat's sandbox lifecycle reconciliation", () => {
+  it("finishes the shared lifecycle read when the live tile unmounts during substitution", async () => {
+    const live = setup(listed("awake"));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+    const copy = renderHook(() => useSandboxList(), { wrapper: live.wrapper });
+    live.binding.auth.listSandboxes.mockResolvedValueOnce({
+      kind: "ok",
+      response: listed("stopped"),
+    });
+
+    sources.serving = { ownerHostId: HOST, state: "at-rest", catchingUp: null };
+    live.rerender();
+    live.unmount();
+
+    await waitFor(() =>
+      expect(copy.result.current.data?.sandboxes[0]?.state).toBe("stopped"),
+    );
+    expect(live.binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a task's permanent end when it arrives during an at-rest reconciliation", async () => {
+    const { result, rerender, binding } = setup(listed("awake"));
+    await waitFor(() => expect(result.current.listedState).toBe("awake"));
+    const read = deferredAnswer();
+    binding.auth.listSandboxes.mockReturnValueOnce(read.promise);
+    sources.serving = { ownerHostId: HOST, state: "at-rest", catchingUp: null };
+    rerender();
+    await waitFor(() =>
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
+    );
+    expect(result.current.state.kind).toBe("pending");
+
+    const ended = {
+      name: "test-box",
+      end: {
+        state: "destroyed",
+        destroyedAt: Date.UTC(2026, 9, 28, 12),
+        cause: "verb",
+        actor: "you",
+        idleMinutes: null,
+      },
+    } as const;
+    sources.task = { kind: "ended", ended };
+    rerender();
+    expect(result.current.state).toEqual({ kind: "destroyed", ended });
+    expect(result.current.view.composer.kind).toBe("line");
+    expect(result.current.view.line?.text).toContain("was destroyed");
+
+    await act(async () => {
+      read.answer(listed("awake"));
+      await read.promise;
+    });
+    expect(result.current.state).toEqual({ kind: "destroyed", ended });
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+  });
+
   it("replaces a stale awake row on a remote Stop without a poll or remount", async () => {
     const { result, rerender, binding } = setup(listed("awake"));
     await waitFor(() => expect(result.current.listedState).toBe("awake"));

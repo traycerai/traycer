@@ -122,13 +122,9 @@ export function useLiveChatSandboxState(
     atRest,
   );
 
-  if (
-    sandbox?.state === "awake" &&
-    !sandbox.frozen &&
-    (atRest || (disconnected && reading))
-  ) {
+  if (state.kind === "unreachable" && (atRest || reading)) {
     return {
-      state: { kind: "pending", name: sandbox.displayName },
+      state: { kind: "pending", name: state.sandbox.displayName },
       reachable: false,
     };
   }
@@ -160,7 +156,15 @@ function useSandboxLifecycleRead(
         queryKey: sandboxQueryKeys.list(auth, userId),
         exact: true,
       });
-      if (!isActive()) return;
+      // The live tile may be replaced by its published copy while the
+      // cancellation settles. That copy still needs this shared read;
+      // only an account change prevents it from starting.
+      const account = useAuthStore.getState();
+      if (
+        account.status !== "signed-in" ||
+        (account.contextMetadata?.userId ?? null) !== userId
+      )
+        return;
       void directory?.refresh();
       try {
         await queryClient.fetchQuery({
