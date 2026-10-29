@@ -60,8 +60,11 @@ import "@/index.css";
  * names a call (`scroll-into-view`, `scroll-into-view-if-needed`, `focus`)
  * on an element at the bottom of its page, taller than the row's cap, then
  * reports it on `body[data-did]` with its own scroll offset on
- * `body[data-app-scroll-y]`. `body-overflow` and `covering-nearest` first
- * shape the page into a case the native reveal is compared on.
+ * `body[data-app-scroll-y]` (its body's on `body[data-app-body-scroll-top]`).
+ * `closed-shadow-focus` focuses a field in a closed shadow root at the
+ * bottom. `body-overflow`, `contained-body-overflow`,
+ * `container-body-overflow` and `covering-nearest` first shape the page into
+ * a case the native reveal is compared on.
  * `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
@@ -143,8 +146,29 @@ setInterval(async () => {
   if (command === "scroll-into-view") last.scrollIntoView({ block: "nearest" });
   if (command === "scroll-into-view-if-needed") last.scrollIntoViewIfNeeded();
   if (command === "focus") last.focus();
-  if (command === "body-overflow") {
-    // The body's overflow is the viewport's: the body scrolls nothing.
+  if (command === "closed-shadow-focus") {
+    // Below the frame's view, in a root the page cannot see into.
+    const host = document.createElement("div");
+    document.body.append(host);
+    const field = host.attachShadow({ mode: "closed" }).appendChild(
+      document.createElement("input"),
+    );
+    field.focus();
+  }
+  if (
+    command === "body-overflow" ||
+    command === "contained-body-overflow" ||
+    command === "container-body-overflow"
+  ) {
+    // The body's overflow is the viewport's, unless containment keeps it the
+    // body's: named by contain on the root, or applied by a sizing
+    // container-type on the body, which leaves contain itself none.
+    if (command === "contained-body-overflow") {
+      document.documentElement.style.contain = "paint";
+    }
+    if (command === "container-body-overflow") {
+      document.body.style.containerType = "inline-size";
+    }
     document.documentElement.style.height = "100%";
     document.body.style.height = "100%";
     document.body.style.overflowX = "hidden";
@@ -166,7 +190,9 @@ setInterval(async () => {
     cover.scrollIntoView({ block: "nearest" });
   }
   void ask("resources/read", {
-    uri: "ui://did/" + command + "/" + Math.round(scrollY),
+    uri:
+      "ui://did/" + command + "/" + Math.round(scrollY) + "/" +
+      Math.round(document.body.scrollTop),
   });
 }, 30);
 </script>`;
@@ -253,9 +279,12 @@ const mcpRpc: McpAppRpc = {
     }
     if (params.uri === "ui://fullscreen") body.dataset.appFullscreen = "true";
     if (params.uri.startsWith("ui://did/")) {
-      const [did, scrollY] = params.uri.slice("ui://did/".length).split("/");
+      const [did, scrollY, bodyScrollTop] = params.uri
+        .slice("ui://did/".length)
+        .split("/");
       body.dataset.did = did;
       body.dataset.appScrollY = scrollY;
+      body.dataset.appBodyScrollTop = bodyScrollTop;
     }
     body.dataset.reads = String(Number(body.dataset.reads ?? "0") + 1);
     return Promise.resolve({
