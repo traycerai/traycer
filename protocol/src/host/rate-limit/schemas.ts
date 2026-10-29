@@ -472,19 +472,23 @@ const antigravityRateLimitWindowSchema = lazySchema(() =>
   }),
 );
 
-// Antigravity arm - httpFetch-class provider (a refresh-token exchange and two
+// Antigravity arm - httpFetch-class provider (a refresh-token exchange and
 // POSTs to Google's Cloud Code Private API, no subprocess). The host reads
 // `v1internal:retrieveUserQuotaSummary`, the surface Antigravity's own quota
 // panel renders: named model groups ("Gemini Models", "Claude and GPT models"),
 // each with a 5-hour and a weekly window. The ACP server itself reports no
-// quota, and the per-model quota surfaces carry only the 5-hour window.
+// quota, and the per-model quota surfaces carry only the 5-hour window. When
+// the summary names no Gemini group (Google stopped sending one for some
+// accounts), the host reads the per-model surface too and puts the shared
+// Gemini pool first as "Gemini Models" with that one 5-hour window.
 //
-// Nested exactly as Google groups it, so a group Google adds or renames needs no
-// protocol change. Every window is account usage - none is scoped to the models
-// Traycer runs - so all of them feed the shared severity rollup. `planName` is
-// the subscription Google names for the account ("Google AI Pro"), null when it
-// names none. A group may legitimately carry no windows (Google marks such a
-// group purely informational).
+// Otherwise nested exactly as Google groups it, so a group Google adds or
+// renames needs no protocol change. Every window feeds the shared severity
+// rollup. Each group is its own pool for its own models, so the host's
+// per-model scopes (`providerProfileRateLimitScopeSchema`) name a window's
+// group as its family. `planName` is the subscription Google names for the
+// account ("Google AI Pro"), null when it names none. A group may legitimately
+// carry no windows (Google marks such a group purely informational).
 //
 // ORDER: groups keep Google's order (Gemini first). A group's windows are
 // shortest first, unknown lengths last - the host sorts them, because Google

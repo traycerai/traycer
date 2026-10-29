@@ -171,6 +171,10 @@ vi.mock(
     usePaneVisible: () => mocks.state.paneVisible,
   }),
 );
+// The card's memory row is driven in `bot-memory-pane.test.tsx`.
+vi.mock("@/hooks/bots/use-bot-memory", () => ({
+  useBotMemory: () => ({ kind: "unsupported" }),
+}));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   useBotSubscriptionForHost: () => ({
     snapshot: mocks.state.snapshot,
@@ -395,6 +399,7 @@ function snapshot(): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    surfaceActions: null,
     stoppedNotificationWatches: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
     activity: null,
@@ -416,6 +421,7 @@ function trackingTask(taskId: string): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,

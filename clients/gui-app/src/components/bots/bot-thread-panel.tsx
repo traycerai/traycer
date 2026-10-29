@@ -857,7 +857,7 @@ function KnownThread(
             surface={surface}
             resolveMember={resolveMember}
             showConnecting={hasReplies}
-            landOnMessageId={null}
+            landOn={null}
           />
         </div>
       )}

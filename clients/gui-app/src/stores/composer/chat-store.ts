@@ -4,6 +4,7 @@ import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-t
 import type {
   BotAnnouncement,
   BotQuestion,
+  BotSurfaceReference,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import type {
@@ -788,6 +789,13 @@ export interface ChatMessage {
    * Absent on every other row.
    */
   question?: BotQuestion;
+  /**
+   * What in a task a bot's post points at (Tracy Bots T89) - a question, an
+   * approval, a browser session or an artifact - with how it was settled:
+   * drawn as a card under the row's text, which stands alone for an older
+   * client. Absent on every other row.
+   */
+  surface?: BotSurfaceReference;
   /**
    * The member's post a bot's direct reply answers, by its message id (Tracy
    * Bots, reply mode `direct`), on the bot's row in its channel. Absent on

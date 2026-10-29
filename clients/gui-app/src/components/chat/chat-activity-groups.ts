@@ -29,6 +29,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/activity-step-label";
 import {
   activitySummaryOf,
+  isMemoryUpdateToolCall,
   thoughtClockDuration,
   type ActivitySummaryStep,
 } from "@traycer/protocol/host/agent/gui/activity-summary";
@@ -309,11 +310,17 @@ function activitySummaryStepsOf(
       ];
     case "tool":
       return [
-        {
-          kind: "tool",
-          toolName: segment.toolName,
-          editKey: filePathFromInputDetail(segment.inputDetail) ?? segment.id,
-        },
+        isMemoryUpdateToolCall({
+          ...segment,
+          completed: !segment.isStreaming && segment.endState === null,
+        })
+          ? { kind: "memory_update" }
+          : {
+              kind: "tool",
+              toolName: segment.toolName,
+              editKey:
+                filePathFromInputDetail(segment.inputDetail) ?? segment.id,
+            },
       ];
   }
 }

@@ -418,8 +418,13 @@ function mount(options: MountOptions): {
             trunkChatId="trunk-chat"
             openTurn={null}
             onOpenTurn={vi.fn()}
+            openMemory={null}
+            onOpenMemory={vi.fn()}
+            environmentId="env-1"
+            botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenActivity={onOpenActivity}

@@ -46,6 +46,7 @@ import {
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
+import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -291,7 +292,7 @@ export function BotChatTranscript(props: {
   readonly resolveMember: BotMemberResolver;
   readonly showConnecting: boolean;
   /** A message the list lands on once it loads; `null` keeps where it opens. */
-  readonly landOnMessageId: string | null;
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
     props;
@@ -323,7 +324,7 @@ export function BotChatTranscript(props: {
         instanceId={instanceId}
         surface={surface}
         resolveMember={resolveMember}
-        landOnMessageId={props.landOnMessageId}
+        landOn={props.landOn}
       />
     </TileErrorBoundary>
   );
@@ -357,7 +358,7 @@ function BotChatTranscriptBody(props: {
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
-  readonly landOnMessageId: string | null;
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const {
     handle,
@@ -368,7 +369,7 @@ function BotChatTranscriptBody(props: {
     instanceId,
     surface,
     resolveMember,
-    landOnMessageId,
+    landOn,
   } = props;
   const { state, messages } = useBotSessionMessages({
     handle,
@@ -400,15 +401,24 @@ function BotChatTranscriptBody(props: {
   // id is held as pending, the host locates its ordinal, the store hydrates
   // around it (`requestTranscriptOrdinal`), and the scroll is issued the
   // moment the row renders.
-  const [scrollRequest, setScrollRequest] =
-    useState<ChatMessageScrollRequest | null>(null);
+  // Requests are numbered past every one issued, settled ones included: the
+  // list drops a request whose id it has handled, and a settled request is
+  // cleared.
+  const [scroll, setScroll] = useState<{
+    readonly request: ChatMessageScrollRequest | null;
+    readonly issued: number;
+  }>({ request: null, issued: 0 });
+  const scrollRequest = scroll.request;
   const [pendingReplyId, setPendingReplyId] = useState<string | null>(null);
   const issueScroll = useCallback((rowId: string) => {
-    setScrollRequest((previous) => ({
-      kind: "message",
-      messageId: rowId,
-      blockId: null,
-      requestId: (previous?.requestId ?? 0) + 1,
+    setScroll((previous) => ({
+      request: {
+        kind: "message",
+        messageId: rowId,
+        blockId: null,
+        requestId: previous.issued + 1,
+      },
+      issued: previous.issued + 1,
     }));
   }, []);
   const scrollToMessage = useCallback(
@@ -464,11 +474,13 @@ function BotChatTranscriptBody(props: {
     [requestTranscriptOrdinal],
   );
   const onScrollRequestSettled = useCallback((requestId: number) => {
-    setScrollRequest((current) =>
-      current !== null && current.requestId === requestId ? null : current,
+    setScroll((current) =>
+      current.request !== null && current.request.requestId === requestId
+        ? { request: null, issued: current.issued }
+        : current,
     );
   }, []);
-  useLandOnMessage(landOnMessageId, state.snapshotLoaded, scrollToMessage);
+  useLandOnMessage(landOn, state.snapshotLoaded, scrollToMessage);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
@@ -572,29 +584,31 @@ function BotChatTranscriptBody(props: {
               directive={intro.directive}
             />
           ) : (
-            <ChatMessages
-              taskTitle={title}
-              taskId={chatId}
-              epicId={botId}
-              hostId={hostId}
-              messages={messages}
-              transcriptWindow={transcriptWindow}
-              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-              onFindReadOrdinalChange={state.requestFindReadOrdinal}
-              baselineEpoch={state.transcriptBaselineEpoch}
-              hydrationSequence={state.transcriptHydrationSequence}
-              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-              backgroundItems={state.backgroundItems}
-              getMessageActions={getMessageActions}
-              nextStepActions={null}
-              instanceId={instanceId}
-              visible
-              systemOverlayActive={false}
-              scrollRequest={scrollRequest}
-              onScrollRequestSettled={onScrollRequestSettled}
-              composerOverlayHeight={0}
-              subagentDrillIn={subagentDrillIn}
-            />
+            <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
+              <ChatMessages
+                taskTitle={title}
+                taskId={chatId}
+                epicId={botId}
+                hostId={hostId}
+                messages={messages}
+                transcriptWindow={transcriptWindow}
+                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+                onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                baselineEpoch={state.transcriptBaselineEpoch}
+                hydrationSequence={state.transcriptHydrationSequence}
+                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                backgroundItems={state.backgroundItems}
+                getMessageActions={getMessageActions}
+                nextStepActions={null}
+                instanceId={instanceId}
+                visible
+                systemOverlayActive={false}
+                scrollRequest={scrollRequest}
+                onScrollRequestSettled={onScrollRequestSettled}
+                composerOverlayHeight={0}
+                subagentDrillIn={subagentDrillIn}
+              />
+            </TasklessMarkdownLinkProvider>
           )}
         </div>
       </ChatBotPresentationContext.Provider>
@@ -603,20 +617,41 @@ function BotChatTranscriptBody(props: {
 }
 
 /**
- * A list opened to show one turn lands on its message once the snapshot is
- * in, once per message: settled during render (the adjust-state-on-prop-change
+ * A message the list lands on, and the visit that asks it to: a request to
+ * land on the message the list last landed on is a new visit, and lands
+ * again.
+ */
+export interface BotTranscriptLanding {
+  readonly messageId: string;
+  readonly visit: number;
+}
+
+/**
+ * A list opened to show one message lands on it once the snapshot is in,
+ * once per visit: settled during render (the adjust-state-on-prop-change
  * pattern), as a pending jump is, so no effect sets state.
  */
 function useLandOnMessage(
-  messageId: string | null,
+  landing: BotTranscriptLanding | null,
   ready: boolean,
   scrollToMessage: (messageId: string) => void,
 ): void {
-  const [landedOn, setLandedOn] = useState<string | null>(null);
-  if (messageId !== null && ready && landedOn !== messageId) {
-    setLandedOn(messageId);
-    scrollToMessage(messageId);
+  const [landed, setLanded] = useState<BotTranscriptLanding | null>(null);
+  if (landing !== null && ready && !sameLanding(landed, landing)) {
+    setLanded(landing);
+    scrollToMessage(landing.messageId);
   }
+}
+
+function sameLanding(
+  landed: BotTranscriptLanding | null,
+  landing: BotTranscriptLanding,
+): boolean {
+  return (
+    landed !== null &&
+    landed.messageId === landing.messageId &&
+    landed.visit === landing.visit
+  );
 }
 
 /** The turn receipts and failed-turn recovery a channel or thread draws, for its presentation. */

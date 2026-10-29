@@ -152,6 +152,8 @@ function loadedOriginRow(
         : { announcement: post.announcement }),
       // A question's thread opens on its card, settled as the channel shows it.
       ...(post.question === undefined ? {} : { question: post.question }),
+      // A surface post's thread opens on its card, resolved as the channel shows it.
+      ...(post.surface === undefined ? {} : { surface: post.surface }),
     };
   }
   const userId = post.sender.type === "user" ? post.sender.userId : null;

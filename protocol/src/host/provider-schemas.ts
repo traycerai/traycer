@@ -1462,9 +1462,9 @@ export type ProviderProfileAccentColor = z.infer<
 
 // One near/at-limit rate-limit window on a profile, annotated with the model
 // family it gates. `family` is a provider-reported token - "opus", "sonnet",
-// or a model-scoped bucket's display name ("Fable") - matched by the GUI
-// against the selected model's slug/label; `null` means a shared window that
-// gates every model.
+// a model-scoped bucket's display name ("Fable"), or an Antigravity group's
+// name and description - matched by the GUI against the selected model's
+// slug/label; `null` means a shared window that gates every model.
 export const providerProfileRateLimitScopeSchema = lazySchema(() =>
   z.object({
     family: z.string().nullable(),
