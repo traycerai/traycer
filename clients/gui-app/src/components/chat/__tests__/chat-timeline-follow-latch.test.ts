@@ -3678,6 +3678,51 @@ describe("useChatTimelineFollowLatch", () => {
     fireNativeScroll(node);
 
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    // And the release leaves them there rather than yanking them to the tail,
+    // which is the harm the step exists to prevent.
+    node.dispatchEvent(new PointerEvent("pointerup"));
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("departs a following reader whose press drag and an end-pad drop land in one report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    // One frame carries the whole movement: the drag takes the view 400 up
+    // and the end pad drops by 100, so the single coalesced report shows
+    // both. The clamp accounts for the view down to the new end and no
+    // further - the rest is the press's own scroll, and taking the view as
+    // where the press stands would swallow it.
+    shim.setGeometry(node, { scrollTop: 600, scrollHeight: 1400 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    // The departure stands: the release leaves them where they dragged to
+    // rather than correcting them onto the tail.
+    node.dispatchEvent(new PointerEvent("pointerup"));
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
   it("departs a following reader whose scrollbar drag reports after growth the press alone held off", () => {

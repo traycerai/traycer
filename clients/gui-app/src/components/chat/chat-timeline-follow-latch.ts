@@ -455,47 +455,47 @@ function indeterminateArmHoldsFollow(
 }
 
 /**
- * Whether the view has left the offset a press is measured from, by anything
- * other than the press's own scroll away from the end. The press is measured
- * a step at a time, as a finger is (`touchStep`), and this is what ends a
- * step: the offset it carries becomes the one the view stands at, and the
- * press's landing is measured from there.
+ * Where a press stands after this observation, or null while it stands where
+ * it already did. The press is measured a step at a time, as a finger is
+ * (`touchStep`), and this is what ends a step: the offset it is measured from
+ * becomes this one, and its landing is measured from there.
  *
- * Two ways, and only an offset BELOW the carried one is left to be the
- * press's own scroll:
+ * Two ways, each with its own answer, because each knows a different thing:
  *
- *  - The view stands past that offset, toward the end. The view did move
- *    there, and a step away from where it now stands is the reader leaving
- *    it, however it arrived - which is what a single measurement from the
+ *  - The view stands past that offset, toward the end. The view really is
+ *    there, so that is where the press stands, and a step away from it is
+ *    the reader leaving it - which is what a single measurement from the
  *    first offset cannot see: a press that drags to the end and back has
  *    returned to the very offset it pressed at. An announced write is not
- *    one of these: it carries the offset along with the view
+ *    one of these; it carries the offset along with the view
  *    (`noteScrollerMoved`).
- *  - The end has fallen below that offset, so the view came down with it -
- *    an end pad dropping, a row below collapsing. The browser clamps the
- *    view onto the end without announcing it, and an offset past the end is
- *    one the view can no longer hold, so holding onto it would read the
- *    clamp as the press's own scroll the moment the end grew back.
+ *  - The end has fallen below that offset - an end pad dropping, a row below
+ *    collapsing, a pane growing. The browser brings the view down with it
+ *    without announcing it, and an offset past the end is one the view can
+ *    no longer hold, so keeping it would read the clamp as the press's own
+ *    scroll the moment the end grew back. But a clamp only ever lands the
+ *    view ON the end, so the press stands at the new end and no lower: a
+ *    view below it in the same observation - one report carries the frame's
+ *    whole movement, the reader's drag with the pad's drop - is the press's
+ *    own scroll, and taking the view here would swallow it and yank them
+ *    back to the tail.
  *
- * The step itself departs nothing. A press dragging toward the tail is
- * asking for it, and one that stops short never steps away again, so the
+ * Ending a step departs nothing by itself. A press dragging toward the tail
+ * is asking for it, and one that stops short never steps away again, so the
  * release follows it there.
  */
-function pressArmReferenceMoved(
-  arm: ArmedReaderDeparture,
+function pressArmReferenceAfter(
+  arm: ReaderGestureArm,
   geometry: ChatTimelineScrollGeometry,
-): arm is ReaderGestureArm {
-  if (arm?.source !== "gesture" || arm.direction !== "indeterminate") {
-    return false;
-  }
+): ChatTimelineScrollGeometry | null {
   const start = arm.geometryAtGesture;
-  if (start === null) return false;
+  if (start === null) return null;
   const reference = restingScrollTop(start);
   const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
-  return (
-    restingScrollTop(geometry) > reference + epsilon ||
-    reference > geometry.scrollHeight - geometry.clientHeight + epsilon
-  );
+  if (restingScrollTop(geometry) > reference + epsilon) return geometry;
+  const end = Math.max(0, geometry.scrollHeight - geometry.clientHeight);
+  if (reference > end + epsilon) return { ...geometry, scrollTop: end };
+  return null;
 }
 
 /**
@@ -1624,17 +1624,21 @@ export function useChatTimelineFollowLatch(
 
   // Where a press is measured from, as the view leaves it: the step it is
   // on ends, and the next is measured from where the view now stands
-  // (`pressArmReferenceMoved`). Every path that observes the view notes it,
+  // (`pressArmReferenceAfter`). Every path that observes the view notes it,
   // a report and a maintain read alike - a touch arm re-bases on both too
   // (`reconcileStrictBottom`), and a press's step can be the one a read sees
   // before its report.
   const notePressView = useCallback(
     (geometry: ChatTimelineScrollGeometry): void => {
       const arm = armedReaderDepartureRef.current;
-      if (!pressArmReferenceMoved(arm, geometry)) return;
+      if (arm?.source !== "gesture" || arm.direction !== "indeterminate") {
+        return;
+      }
+      const reference = pressArmReferenceAfter(arm, geometry);
+      if (reference === null) return;
       armedReaderDepartureRef.current = {
         ...arm,
-        geometryAtGesture: geometry,
+        geometryAtGesture: reference,
       };
     },
     [],
