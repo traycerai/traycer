@@ -28,7 +28,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
-import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
+import type {
+  BotOnboardingReadResponse,
+  BotOnboardingSetup,
+} from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 
 interface IndicatorState {
@@ -37,7 +40,11 @@ interface IndicatorState {
   unreadCount: number | null;
 }
 
-type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
+type ReadScript =
+  | ({ setup: BotOnboardingSetup | null } & Partial<
+      Pick<BotOnboardingReadResponse, "github" | "unlocked">
+    >)
+  | "fails";
 
 const mocks = vi.hoisted(() => {
   const epics: Record<string, IndicatorState> = {};
@@ -206,6 +213,23 @@ const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** What the host answers for a new team: its main bot, still to be set up. */
 function setupRead(title: string): ReadScript {
   return { setup: { botId: SETUP_BOT_ID, title } };
+}
+
+/**
+ * What the host answers for a new team when it could not read GitHub: the
+ * empty, locked set beside the setup, which still stands.
+ */
+function degradedSetupRead(title: string): ReadScript {
+  return {
+    setup: { botId: SETUP_BOT_ID, title },
+    github: {
+      state: "needs_installing_admin",
+      installingAdmin: null,
+      repositories: [],
+      callerCanConnect: false,
+    },
+    unlocked: false,
+  };
 }
 
 /** What the host answers for a team that has its bots. */
@@ -607,6 +631,32 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
       expect(screen.queryByTestId("new-bot-dialog")).toBeNull();
     },
   );
+
+  it("still shows the setup row, its Needs a host badge and the team's +, when the host could not read GitHub", async () => {
+    mocks.state.reads["env-empty"] = degradedSetupRead("Tracy");
+    const user = userEvent.setup();
+    mount("bot-release");
+
+    const setup = within(section("env-empty")).getByTestId(
+      "bot-channel-setup-row",
+    );
+    expect(setup.getAttribute("data-bot-id")).toBe(SETUP_BOT_ID);
+    expect(
+      within(setup).getByTestId("bot-channel-setup-row-needs-host").textContent,
+    ).toBe("Needs a host");
+
+    await user.click(
+      within(section("env-empty")).getByRole("button", { name: "Open Tracy" }),
+    );
+
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).toMatchObject({ botId: SETUP_BOT_ID, hostId: TAB_HOST, title: "Tracy" });
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
+      kind: "bot",
+      botId: SETUP_BOT_ID,
+    });
+  });
 
   it("marks the setup row as the current page while its channel is in view, and does nothing when it is clicked", async () => {
     const user = userEvent.setup();
