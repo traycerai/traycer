@@ -489,8 +489,8 @@ function ProviderSkillsTabBody({
               setDetailError(null);
             }}
             fileEpoch={detailFileEpoch}
-            // A provider's own list names no version to follow.
-            contentVersion={null}
+            // A provider's own list carries no content key to follow.
+            contentKey={null}
           />
         )}
 
