@@ -291,7 +291,7 @@ export function SimulatorCreatePickerBody(props: {
         <PickerContent
           note={note}
           state={state}
-          instances={v11 === true ? (instances.data?.instances ?? []) : null}
+          instances={v11 === true ? (instances.data?.instances ?? null) : null}
           query={query}
           onPick={pick}
         />
@@ -436,6 +436,13 @@ const NO_RUNNING_DEVICES: ReadonlySet<string> = new Set();
  *
  * A clone is not its source: a device can be cold and bootable while a copy
  * of it runs.
+ *
+ * Null is no instance read to go on, which is UNKNOWN and not "nothing is
+ * running": removing a row needs a read that says the device is up, so while
+ * the answer is owed the device list's own flag decides alone, exactly as it
+ * did before this set existed. Suppressing on the strength of an owed read
+ * would take a bootable device off the picker over a question nobody had
+ * answered yet.
  */
 function runningDeviceIds(
   instances: readonly SimulatorHostInstance[] | null,
@@ -449,8 +456,11 @@ function runningDeviceIds(
 }
 
 /**
- * The two sections. `instances` is the `@1.1` host's `simulator.instances`;
- * null on a `@1.0` host, whose booted devices stand in for its instances.
+ * The two sections. `instances` is the `@1.1` host's `simulator.instances`,
+ * and null is NO instance read to go on - a `@1.0` host, which has none, or a
+ * `@1.1` one that still owes its answer. Both fall back to the device list's
+ * own `booted` flag, which is the only thing either has, and both refuse Boot
+ * another: a copy is asked for by naming an instance, and neither can.
  */
 function PickerContent(props: {
   readonly note: string | null;
