@@ -17,7 +17,7 @@ import {
   type DetailsProvider,
 } from "@/lib/settings-details-entry";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { reachableHost } from "./mcp-skills-test-support";
+import { providerState, reachableHost } from "./mcp-skills-test-support";
 import {
   configurationItem,
   mountTeamPage,
@@ -292,10 +292,16 @@ describe("TeamProviders items", () => {
   });
 
   it("says on its Env tab that the team's variables reach every host running the team", async () => {
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers(() => [envOverride("https://old.example", 7)]),
-    );
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [envOverride("https://old.example", 7)]),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "providers.list": () => ({
+        providers: [
+          providerState("claude-code", { mcp: false, skills: false }),
+        ],
+        native: null,
+      }),
+    });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
@@ -305,6 +311,23 @@ describe("TeamProviders items", () => {
       /^Set for .+ each time it starts, on every host running Acme\. Unset removes a variable .+ would otherwise get from the shell\.$/,
     );
     expect(subtitle.textContent).not.toContain("Personal");
+  });
+
+  it("names no mechanism on its Env tab while the team has no reachable host to confirm the scope from", async () => {
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers(() => [envOverride("https://old.example", 7)]),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+
+    const subtitle = await screen.findByTestId("team-provider-env-subtitle");
+    expect(subtitle.textContent).toBe(
+      "Set for Claude Code on every host running Acme. Unset removes a variable Claude Code would otherwise get from the shell.",
+    );
+    expect(subtitle.textContent).not.toContain("each time it starts");
+    expect(subtitle.textContent).not.toContain("conversations");
   });
 
   it("says on its Env tab that a native-config-only provider's variables never reach its conversations (NEW-154-15)", async () => {
