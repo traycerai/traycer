@@ -1857,6 +1857,87 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onReaderGesture).toHaveBeenCalledTimes(1);
     });
 
+    // Each report is measured from the last one the finger moved toward the
+    // end, not from the contact: a reversal stays net toward the end of the
+    // contact offset, and is the reader leaving all the same.
+    it("detaches a finger that reverses away from the end, though it is still past the contact offset", () => {
+      const { node, listRef, onFollowIntentChange, onReaderGesture } =
+        mountWithFinger(true, undefined, true);
+
+      shim.setGeometry(node, { scrollTop: 1060 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+      shim.setGeometry(node, { scrollTop: 1040 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+      fireTouch(node, "touchend", 300);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(1040);
+    });
+
+    it("decides at the lift a reversal back to the contact offset whose report has not arrived", () => {
+      const { node, listRef, onFollowIntentChange, onReaderGesture } =
+        mountWithFinger(true, undefined, true);
+
+      shim.setGeometry(node, { scrollTop: 1060 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireTouch(node, "touchend", 300);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(1000);
+    });
+
+    // Rows above grew by 100 after the finger's step toward the end: the list
+    // moved scrollTop, the reference row and the edge element together, so
+    // neither measure moved since that step.
+    it("keeps the finger's step toward the end through a compensation reported after it", () => {
+      const {
+        node,
+        listRef,
+        moveEdgeElement,
+        onFollowIntentChange,
+        onReaderGesture,
+      } = mountWithFinger(true, undefined, true);
+
+      shim.setGeometry(node, { scrollTop: 1030 });
+      fireNativeScroll(node);
+      listRef.setRowTop(TAIL_ROW_KEY, 1300);
+      moveEdgeElement(1100);
+      shim.setGeometry(node, { scrollTop: 1130, scrollHeight: 1800 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(onReaderGesture).not.toHaveBeenCalled();
+      fireTouch(node, "touchend", 300);
+      expect(node.scrollTop).toBe(1300);
+    });
+
+    it("keeps a resting finger following through a compensation alone", () => {
+      const {
+        node,
+        listRef,
+        moveEdgeElement,
+        onFollowIntentChange,
+        onReaderGesture,
+      } = mountWithFinger(true, undefined, true);
+
+      listRef.setRowTop(TAIL_ROW_KEY, 1300);
+      moveEdgeElement(1100);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1800 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(onReaderGesture).not.toHaveBeenCalled();
+      fireTouch(node, "touchend", 300);
+      expect(node.scrollTop).toBe(1300);
+    });
+
     it("publishes a departure when the reference row has gone, rather than reading it as toward the end", () => {
       const { node, listRef, onFollowIntentChange } = mountWithFinger(
         true,

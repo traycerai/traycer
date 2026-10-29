@@ -176,16 +176,17 @@ type ArmedReaderDeparture =
        *  `pointercancel` at once) when its native pan owns the touch, so the
        *  contact itself is the only reader evidence the page can count on. */
       readonly source: "touch";
-      /** Fresh `scrollTop` at contact. A later report that moved past it is
-       *  the reader's; one that did not is a tap. */
-      readonly scrollTopAtContact: number;
-      /** A row that started below the viewport's top edge at contact, or the
-       *  last row: the list moves it with any growth above it that it
+      /** Fresh `scrollTop` at contact, or at the latest report the finger
+       *  moved a following reader toward the end: the finger's next step is
+       *  measured from here. A report that did not move past it is a tap. */
+      readonly scrollTopAtStep: number;
+      /** A row that started below the viewport's top edge at that step, or
+       *  the last row: the list moves it with any growth above it that it
        *  compensates, so the finger's movement is the view's net of it. */
-      readonly rowAtContact: ListRowTop | null;
-      /** The element at the viewport's top edge at contact: the list's
+      readonly rowAtStep: ListRowTop | null;
+      /** The element at the viewport's top edge at that step: the list's
        *  compensation holds it still on screen, so only the finger moves it. */
-      readonly edgeAtContact: EdgeMark | null;
+      readonly edgeAtStep: EdgeMark | null;
     }
   | null;
 
@@ -517,38 +518,40 @@ function touchArmAt(
   const node = list?.getScrollableNode();
   return {
     source: "touch",
-    scrollTopAtContact: geometry.scrollTop,
-    rowAtContact: touchReferenceRow(list, geometry),
-    edgeAtContact: node ? edgeMarkOf(node) : null,
+    scrollTopAtStep: geometry.scrollTop,
+    rowAtStep: touchReferenceRow(list, geometry),
+    edgeAtStep: node ? edgeMarkOf(node) : null,
   };
 }
 
-/** Whether the finger moved a following reader toward the end since
- *  contact. The list can move `scrollTop` under the finger to compensate
- *  growth, so two measures must agree, and neither alone is fooled into it:
+/** Which way the finger moved a following reader since the arm's step. The
+ *  list can move `scrollTop` under the finger to compensate growth, so the
+ *  finger's own movement has two measures, and neither alone is fooled into
+ *  reading it as toward the end:
  *  - the view's movement net of the reference row's, which moves with any
  *    growth above it - but not with growth inside the row above the edge,
  *    which the list compensates too;
  *  - how far the edge element rose on screen, which the list's compensation
  *    holds still - unless the list anchored a row below it instead, whose
  *    move the reference row then shares.
- *  With either gone there is no such measure, and the movement is not taken
- *  as toward the end. */
-function touchMovedTowardEnd(
+ *  Toward the end when both agree; still when neither moved beyond the
+ *  edge's epsilon, as under a compensation alone; away when either did, or
+ *  when either is gone and there is no such measure. */
+function touchStep(
   arm: ReaderTouchArm,
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
-): boolean {
-  const row = arm.rowAtContact;
-  if (list === null || row === null) return false;
+): "toward-end" | "still" | "away" {
+  const row = arm.rowAtStep;
+  if (list === null || row === null) return "away";
   const top = list.getState().positionByKey(row.key);
-  const rise = edgeMarkRise(arm.edgeAtContact);
-  if (top === undefined || rise === null) return false;
-  return (
-    geometry.scrollTop - arm.scrollTopAtContact - (top - row.top) >
-      CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
-    rise > CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
-  );
+  const rise = edgeMarkRise(arm.edgeAtStep);
+  if (top === undefined || rise === null) return "away";
+  const net = geometry.scrollTop - arm.scrollTopAtStep - (top - row.top);
+  const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
+  if (net > epsilon && rise > epsilon) return "toward-end";
+  if (net >= -epsilon && rise >= -epsilon) return "still";
+  return "away";
 }
 
 /** Whether a report is at an offset other than the one a reader departure
@@ -679,10 +682,6 @@ export function useChatTimelineFollowLatch(
   // momentum after the lift is the reader's own motion, with no touch event
   // to say where it is heading.
   const readerMomentumEndRef = useRef<ReaderMomentumEnd | null>(null);
-  // What the latest native scroll report saw. A finger landing on a fling
-  // gives iOS no touch event for its whole contact: its pan shows only as
-  // scroll reports, moving the content down on screen and the view up past
-  // the rows, which nothing the list does between two reports also does.
   const lastTouchClientYRef = useRef<number | null>(null);
   // Whether an owned free navigation still owns the view: from its begin
   // until its completion, reader input, an end navigation or unmount. Its
@@ -1068,23 +1067,31 @@ export function useChatTimelineFollowLatch(
       geometry: ChatTimelineScrollGeometry,
     ): boolean => {
       if (armedDeparture.source === "touch") {
-        // A report at the contact offset is not the finger moving the view:
+        // A report at the step's offset is not the finger moving the view:
         // the correction the contact cancelled may have left the DOM a hair
         // off the tail, and the lift resolves that as a tap. Keep the arm.
         if (
-          Math.abs(geometry.scrollTop - armedDeparture.scrollTopAtContact) <=
+          Math.abs(geometry.scrollTop - armedDeparture.scrollTopAtStep) <=
           CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
         ) {
           return false;
         }
-        // A following reader's finger toward the end never departs from it:
-        // the tail grew under the held correction, and the lift's catch-up
-        // brings them to it. Keep the arm.
-        if (
-          permissionRef.current &&
-          touchMovedTowardEnd(armedDeparture, geometry, listRef.current)
-        ) {
-          return false;
+        // A following reader's finger is decided a step at a time. A step
+        // toward the end never departs from it: the tail grew under the held
+        // correction, and the lift's catch-up brings them to it. The next
+        // step is measured from here, so a reversal is still their departure
+        // though it stays past the contact offset. A step the list alone
+        // moved is no step of the finger's. Keep the arm.
+        if (permissionRef.current) {
+          const step = touchStep(armedDeparture, geometry, listRef.current);
+          if (step === "toward-end") {
+            armedReaderDepartureRef.current = touchArmAt(
+              geometry,
+              listRef.current,
+            );
+            return false;
+          }
+          if (step === "still") return false;
         }
         // The finger moved the view: this is the published reader position a
         // delivered `touchmove` would have reported.
@@ -1580,14 +1587,15 @@ export function useChatTimelineFollowLatch(
         liveGeometry !== null &&
         isChatTimelineGeometryMeasurable(liveGeometry) &&
         !isChatTimelineAtStrictBottom(liveGeometry) &&
-        Math.abs(liveGeometry.scrollTop - armedDeparture.scrollTopAtContact) >
+        Math.abs(liveGeometry.scrollTop - armedDeparture.scrollTopAtStep) >
           CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       ) {
-        // The finger moved the view and its scroll report has not arrived
-        // (or arrived before the lift could be read). Decide it now, while
-        // the arm is intact: a departure is published, so the next maintain
-        // trigger cannot classify it as layout-owned; a following reader's
-        // drag toward the end is not one, and the catch-up below follows it.
+        // The finger moved the view since its last decided step, and that
+        // scroll report has not arrived (or arrived before the lift could be
+        // read). Decide it now, while the arm is intact: a departure is
+        // published, so the next maintain trigger cannot classify it as
+        // layout-owned; a following reader's drag toward the end is not one,
+        // and the catch-up below follows it.
         observeLiveGeometry();
       }
       // The lift ends the contact. After a departure, follow is already off
