@@ -875,7 +875,7 @@ describe("useChatTimelineFollowLatch", () => {
     const onFollowIntentChange = vi.fn();
     listRef.scrollToEnd.mockImplementation((): Promise<void> => {
       // The list's own under-landing, announced as the list announces it.
-      moveChatTimelineScroller(node, () =>
+      moveChatTimelineScroller(node, 1120, () =>
         shim.setGeometry(node, { scrollTop: 1120 }),
       );
       fireNativeScroll(node);
@@ -1903,7 +1903,7 @@ describe("useChatTimelineFollowLatch", () => {
       shim.setGeometry(node, { scrollTop: 920 });
       // A row above the view measures 30 larger and the list adjusts.
       shim.setGeometry(node, { scrollHeight: 1490 });
-      moveChatTimelineScroller(node, () =>
+      moveChatTimelineScroller(node, 950, () =>
         shim.setGeometry(node, { scrollTop: 950 }),
       );
       listRef.scrollToEnd.mockClear();
@@ -1923,7 +1923,7 @@ describe("useChatTimelineFollowLatch", () => {
       onReaderGesture.mockClear();
 
       shim.setGeometry(node, { scrollHeight: 1490 });
-      moveChatTimelineScroller(node, () =>
+      moveChatTimelineScroller(node, 990, () =>
         shim.setGeometry(node, { scrollTop: 990 }),
       );
       listRef.scrollToEnd.mockClear();
@@ -1960,7 +1960,7 @@ describe("useChatTimelineFollowLatch", () => {
 
       // A row above the view grows 30 and the list's adjust moves them.
       shim.setGeometry(node, { scrollHeight: 1630 });
-      moveChatTimelineScroller(node, () =>
+      moveChatTimelineScroller(node, 1086, () =>
         shim.setGeometry(node, { scrollTop: 1086 }),
       );
       fireNativeScroll(node);
@@ -2000,7 +2000,7 @@ describe("useChatTimelineFollowLatch", () => {
       shim.setGeometry(node, { scrollHeight: 1600 });
       result.current.followEndIfPermitted();
       shim.setGeometry(node, { scrollHeight: 1630 });
-      moveChatTimelineScroller(node, () =>
+      moveChatTimelineScroller(node, 1086, () =>
         shim.setGeometry(node, { scrollTop: 1086 }),
       );
       fireNativeScroll(node);
@@ -2295,7 +2295,7 @@ describe("useChatTimelineFollowLatch", () => {
       const mounted = followingAtLiveEnd();
 
       shim.setGeometry(mounted.node, { scrollHeight: 1530 });
-      moveChatTimelineScroller(mounted.node, () =>
+      moveChatTimelineScroller(mounted.node, 1030, () =>
         shim.setGeometry(mounted.node, { scrollTop: 1030 }),
       );
       mounted.result.current.followEndIfPermitted();
@@ -2340,7 +2340,7 @@ describe("useChatTimelineFollowLatch", () => {
 
       shim.setGeometry(mounted.node, { scrollHeight: 1530 });
       // The write asks for 1029.6; the browser reads back 1030.
-      moveChatTimelineScroller(mounted.node, () =>
+      moveChatTimelineScroller(mounted.node, Math.round(1029.6), () =>
         shim.setGeometry(mounted.node, { scrollTop: Math.round(1029.6) }),
       );
       mounted.result.current.followEndIfPermitted();
@@ -2731,6 +2731,182 @@ describe("useChatTimelineFollowLatch", () => {
       result.current.followEndIfPermitted();
 
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+    });
+  });
+
+  describe("a write the list makes under a finger, which iOS lands after the lift", () => {
+    // A following reader at the end with one report seen, so the latch knows
+    // where the view should be.
+    function followingWithLiveLedger() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const onReaderGesture = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          onReaderGesture,
+        }),
+      );
+      fireNativeScroll(node);
+      return { node, listRef, onFollowIntentChange, onReaderGesture, result };
+    }
+
+    /** A row above re-measures 60 smaller and the list adjusts by -60. The
+     *  finger is down, so iOS holds the write back: the announcement reads
+     *  the old offset. */
+    function announceHeldBackAdjust(node: HTMLDivElement): void {
+      moveChatTimelineScroller(node, node.scrollTop - 60, () => {});
+    }
+
+    /** The held-back adjust lands after the lift, unannounced, while the
+     *  stream has grown the end past the view. */
+    function landHeldBackAdjust(node: HTMLDivElement): void {
+      shim.setGeometry(node, {
+        scrollHeight: node.scrollHeight - 60 + 100,
+        scrollTop: node.scrollTop - 60,
+      });
+    }
+
+    it("a tap's held-back adjust that lands after the lift is not the reader's pan", () => {
+      const { node, onFollowIntentChange, onReaderGesture } =
+        followingWithLiveLedger();
+
+      fireTouch(node, "touchstart", 300);
+      announceHeldBackAdjust(node);
+      fireTouch(node, "touchend", 300);
+      landHeldBackAdjust(node);
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("a tap's held-back adjust that a read sees before its report is not the reader's pan", () => {
+      const { node, onFollowIntentChange, onReaderGesture, result } =
+        followingWithLiveLedger();
+
+      fireTouch(node, "touchstart", 300);
+      announceHeldBackAdjust(node);
+      fireTouch(node, "touchend", 300);
+      landHeldBackAdjust(node);
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("a drag toward the end's held-back adjust that lands after the lift is not the reader's pan", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      installEdgeLayout(node);
+      const listRef = makeFakeListRef(node);
+      // The first row below the viewport's top edge at contact.
+      listRef.setRowTop("tail-row", 1200);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const onReaderGesture = vi.fn();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          onReaderGesture,
+        }),
+      );
+      fireNativeScroll(node);
+
+      fireTouch(node, "touchstart", 300);
+      // The stream grows the end under the finger, which drags toward it.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      fireTouch(node, "touchmove", 260);
+      shim.setGeometry(node, { scrollTop: 1030 });
+      fireNativeScroll(node);
+      announceHeldBackAdjust(node);
+      fireTouch(node, "touchend", 260);
+      landHeldBackAdjust(node);
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(onReaderGesture).not.toHaveBeenCalledWith(
+        expect.objectContaining({ direction: "away-from-end" }),
+      );
+      expect(onReaderGesture).not.toHaveBeenCalledWith(
+        expect.objectContaining({ direction: "indeterminate" }),
+      );
+    });
+
+    it("a real pan after the landed adjust's report still departs", () => {
+      const { node, onFollowIntentChange, onReaderGesture } =
+        followingWithLiveLedger();
+
+      fireTouch(node, "touchstart", 300);
+      announceHeldBackAdjust(node);
+      fireTouch(node, "touchend", 300);
+      landHeldBackAdjust(node);
+      fireNativeScroll(node);
+      expect(onReaderGesture).not.toHaveBeenCalled();
+
+      shim.setGeometry(node, { scrollTop: node.scrollTop - 50 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("a departure published in the contact stands where a held-back adjust landed it, so the end coming up to them is held while the turn runs", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isTurnRunning: () => true,
+        }),
+      );
+      fireNativeScroll(node);
+
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 340);
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      announceHeldBackAdjust(node);
+      fireTouch(node, "touchend", 340);
+
+      // The adjust lands after the lift, and its report comes first.
+      shim.setGeometry(node, { scrollTop: 890 });
+      fireNativeScroll(node);
+      // Then the end comes up to them.
+      shim.setGeometry(node, { scrollHeight: 1390 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("with no write held back, a pan right after the lift still departs", () => {
+      const { node, onFollowIntentChange, onReaderGesture } =
+        followingWithLiveLedger();
+
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchend", 300);
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     });
   });
 
@@ -3860,7 +4036,7 @@ describe("useChatTimelineFollowLatch", () => {
     // announced as the list announces it. With no publishing reader input,
     // this layout-owned report cannot revoke the existing follow intent and
     // immediately starts correction.
-    moveChatTimelineScroller(node, () =>
+    moveChatTimelineScroller(node, 300, () =>
       shim.setGeometry(node, { scrollTop: 300, scrollHeight: 1500 }),
     );
     fireNativeScroll(node);
@@ -4740,7 +4916,7 @@ describe("useChatTimelineFollowLatch", () => {
     it("is not the reader's when the list announced the write it reports", () => {
       const mounted = followingWithLiveLedger();
 
-      moveChatTimelineScroller(mounted.node, () =>
+      moveChatTimelineScroller(mounted.node, 900, () =>
         shim.setGeometry(mounted.node, { scrollTop: 900 }),
       );
       fireNativeScroll(mounted.node);
@@ -4751,7 +4927,7 @@ describe("useChatTimelineFollowLatch", () => {
     it("is the reader's when it lands beyond what the list announced", () => {
       const mounted = followingWithLiveLedger();
 
-      moveChatTimelineScroller(mounted.node, () =>
+      moveChatTimelineScroller(mounted.node, 900, () =>
         shim.setGeometry(mounted.node, { scrollTop: 900 }),
       );
       shim.setGeometry(mounted.node, { scrollTop: 870 });
@@ -4778,7 +4954,7 @@ describe("useChatTimelineFollowLatch", () => {
       // The end dropped 9 and the browser clamped the view onto it; nothing
       // observed that.
       shim.setGeometry(mounted.node, { scrollHeight: 1491, scrollTop: 991 });
-      moveChatTimelineScroller(mounted.node, () =>
+      moveChatTimelineScroller(mounted.node, 982, () =>
         shim.setGeometry(mounted.node, { scrollTop: 982 }),
       );
       fireNativeScroll(mounted.node);

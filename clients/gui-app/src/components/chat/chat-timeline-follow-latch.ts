@@ -66,11 +66,14 @@ export function chatTimelineEndScrollTop(
 }
 
 /** A write to the scroll node, announced as it lands: the offset before and
- *  after it, and the end before it. */
+ *  after it, the end before it, and the offset it asked for within the
+ *  scroll range. iOS holds back a write made while a finger is down and
+ *  lands it after the lift, so `to` can fall short of `intended`. */
 interface ChatTimelineScrollerMove {
   readonly from: number;
   readonly fromEnd: number;
   readonly to: number;
+  readonly intended: number;
 }
 
 /** Dispatched on the scroll node for every write the app or the list makes to
@@ -79,9 +82,10 @@ export const CHAT_TIMELINE_SCROLLER_MOVED_EVENT = "legend-list-scroller-moved";
 
 /** Writes a scroll node and announces the write, as the list announces its
  *  own. On the transcript's, the latch reads a movement nobody announced as
- *  the reader's. */
+ *  the reader's. `intendedTop` is the offset the write asks for. */
 export function moveChatTimelineScroller(
   node: HTMLElement,
+  intendedTop: number,
   move: () => void,
 ): void {
   const from = node.scrollTop;
@@ -91,6 +95,7 @@ export function moveChatTimelineScroller(
     from,
     fromEnd,
     to: node.scrollTop,
+    intended: Math.max(0, Math.min(intendedTop, fromEnd)),
   };
   node.dispatchEvent(
     new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, { detail }),
@@ -114,19 +119,21 @@ function scrollerMoveOf(event: Event): ChatTimelineScrollerMove | null {
     detail === null ||
     !("from" in detail) ||
     !("fromEnd" in detail) ||
-    !("to" in detail)
+    !("to" in detail) ||
+    !("intended" in detail)
   ) {
     return null;
   }
-  const { from, fromEnd, to } = detail;
+  const { from, fromEnd, to, intended } = detail;
   if (
     typeof from !== "number" ||
     typeof fromEnd !== "number" ||
-    typeof to !== "number"
+    typeof to !== "number" ||
+    typeof intended !== "number"
   ) {
     return null;
   }
-  return { from, fromEnd, to };
+  return { from, fromEnd, to, intended };
 }
 
 export interface ChatTimelineFollowLatch {
@@ -779,12 +786,21 @@ export function useChatTimelineFollowLatch(
   // it since the latest scroll report, or read of it. A finger landing on a
   // fling gives iOS no touch event for its whole contact, so its pan shows
   // only as scroll reports: a report above this is that pan, and so is a
-  // view read above it before its report arrives. The app and the list announce
-  // every write they make (`CHAT_TIMELINE_SCROLLER_MOVED_EVENT`), and the
-  // browser moves the view only by clamping it onto a lower end, which
-  // leaves it on the end. Null while the movement is announced reader
-  // input's, until the next report or the touch's lift, and before the first.
+  // view read above it before its report arrives. The app and the list
+  // announce every write they make (`CHAT_TIMELINE_SCROLLER_MOVED_EVENT`),
+  // and the browser moves the view only by clamping it onto a lower end,
+  // which leaves it on the end. Null while the movement is announced reader
+  // input's, until the next report or the touch's lift; from a lift a
+  // held-back write may land after, until the next report; and before the
+  // first.
   const expectedScrollTopRef = useRef<number | null>(null);
+  // A write announced under a finger read back short of what it asked for:
+  // iOS holds it back and lands it after the lift, unannounced.
+  const touchWriteMayLandRef = useRef(false);
+  // From such a lift until the next scroll report: the offsets a late landing
+  // would shift (the ledger, a published departure) are taken from that
+  // report, not from the view the lift saw.
+  const liftAwaitsLandingRef = useRef(false);
   const lastTouchClientYRef = useRef<number | null>(null);
   // Whether an owned free navigation still owns the view: from its begin
   // until its completion, reader input, an end navigation or unmount. Its
@@ -1030,8 +1046,9 @@ export function useChatTimelineFollowLatch(
         // the list holds its command until its layout has been still for two
         // frames after a data change. Land the end now so the painted frame
         // shows it; the command then brings the list's own offset along.
-        moveChatTimelineScroller(node, () => {
-          node.scrollTop = chatTimelineEndScrollTop(list, node);
+        const end = chatTimelineEndScrollTop(list, node);
+        moveChatTimelineScroller(node, end, () => {
+          node.scrollTop = end;
         });
         const pendingScroll = list.scrollToEnd({ animated: false });
         pendingEndCorrectionScrollRef.current = pendingScroll;
@@ -1308,6 +1325,12 @@ export function useChatTimelineFollowLatch(
   const noteScrollerMoved = useCallback((event: Event): void => {
     const move = scrollerMoveOf(event);
     if (move === null) return;
+    if (
+      armedReaderDepartureRef.current?.source === "touch" &&
+      Math.abs(move.intended - move.to) > CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+    ) {
+      touchWriteMayLandRef.current = true;
+    }
     const departure = readerDepartureScrollTopRef.current;
     if (departure !== null) {
       readerDepartureScrollTopRef.current = departure + move.to - move.from;
@@ -1320,6 +1343,20 @@ export function useChatTimelineFollowLatch(
         : expected;
     expectedScrollTopRef.current = base + move.to - move.from;
   }, []);
+
+  // The first report after a lift that a held-back write may land after: a
+  // published departure stands where the view now is. The ledger, left null
+  // at the lift, re-bases at this report too (`noteReportMovement`).
+  const noteReportAfterLiftLanding = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      if (!liftAwaitsLandingRef.current) return;
+      liftAwaitsLandingRef.current = false;
+      if (readerDepartureScrollTopRef.current !== null) {
+        readerDepartureScrollTopRef.current = geometry.scrollTop;
+      }
+    },
+    [],
+  );
 
   // Whether this scroll report moved the view away from the end past
   // everything the app, the list and the browser moved it since the previous
@@ -1466,6 +1503,7 @@ export function useChatTimelineFollowLatch(
     if (!node) return;
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
+    noteReportAfterLiftLanding(geometry);
     const movedAway = noteReportMovement(geometry);
     if (noteReportAfterDeparture(geometry)) return;
     const momentumArrived = noteReaderMomentum(geometry);
@@ -1508,6 +1546,7 @@ export function useChatTimelineFollowLatch(
     listRef,
     noteReaderMomentum,
     noteReportAfterDeparture,
+    noteReportAfterLiftLanding,
     noteReportMovement,
     publishArmedReport,
     publishFreeTouchWhileSuppressed,
@@ -1843,6 +1882,13 @@ export function useChatTimelineFollowLatch(
       // again and corrects any growth the contact held back.
       armedReaderDepartureRef.current = null;
       followEndIfPermitted();
+      if (touchWriteMayLandRef.current) {
+        // A write the contact held back may land now, unannounced: the view
+        // the lift saw is not where it will rest. The next report says.
+        touchWriteMayLandRef.current = false;
+        expectedScrollTopRef.current = null;
+        liftAwaitsLandingRef.current = true;
+      }
       // Momentum may carry the reader on from here, reported only by bare
       // scroll reports.
       noteReaderLift();
