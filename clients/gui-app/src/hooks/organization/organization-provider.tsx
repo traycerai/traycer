@@ -19,7 +19,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
@@ -29,7 +29,8 @@ import {
   type OrganizationCommand,
   type OrganizationView,
 } from "@traycer/protocol/host/organization/contracts";
-import { useHostClient } from "@/lib/host";
+import { useAuthService, useHostClient } from "@/lib/host";
+import { authMutationKeys } from "@/lib/query-keys/auth-mutation-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -53,6 +54,13 @@ const EMPTY_TASK_IDS: string[] = [];
 interface OrganizationLifecycle {
   readonly seenFailures: Set<string>;
   confirmedView: OrganizationView | null;
+}
+
+interface OrganizationIdentityScope {
+  readonly hostId: string | null;
+  readonly userId: string | null;
+  // `null` means no account-wide view has arrived; older hosts omit the token.
+  historyInvalidation: string | undefined | null;
 }
 
 /** One host-owned projection. React only subscribes and sends commands; it never queues edits. */
@@ -82,6 +90,35 @@ export function OrganizationProvider({
   const accountUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
+  const auth = useAuthService();
+  const identityScope = useRef<OrganizationIdentityScope | null>(null);
+  useLayoutEffect(() => {
+    identityScope.current = {
+      hostId,
+      userId: accountUserId === userId ? userId : null,
+      historyInvalidation: null,
+    };
+    return () => {
+      identityScope.current = null;
+    };
+  }, [hostId, userId, accountUserId]);
+  const { mutate: revalidateIdentity } = useMutation({
+    mutationKey: authMutationKeys.revalidateContextAfterInvalidation(userId),
+    mutationFn: (expected: OrganizationIdentityScope) => {
+      const account = useAuthStore.getState();
+      if (
+        identityScope.current !== expected ||
+        expected.userId === null ||
+        client.getActiveHostId() !== expected.hostId ||
+        client.getRequestContextUserId() !== expected.userId ||
+        account.contextMetadata?.userId !== expected.userId ||
+        !authorizesCloudCapability(account.status)
+      )
+        return Promise.resolve(null);
+      return auth.revalidateCurrentContextAfterInvalidation();
+    },
+    retry: false,
+  });
   const scope = `${hostId}:${userId}`;
   useLayoutEffect(() => {
     if (accountUserId === null) return;
@@ -155,6 +192,20 @@ export function OrganizationProvider({
         client.getActiveHostId() !== hostId
       )
         return;
+      // Task chunks can carry tokens from another subscription generation.
+      // Keep only the account-wide baseline, including across reconnects.
+      const current = identityScope.current;
+      if (
+        ids.length === 0 &&
+        current !== null &&
+        current.userId !== null &&
+        useAuthStore.getState().contextMetadata?.userId === userId
+      ) {
+        const previous = current.historyInvalidation;
+        current.historyInvalidation = next.historyInvalidation;
+        if (previous !== null && previous !== next.historyInvalidation)
+          revalidateIdentity(current);
+      }
       const requestedIds = new Set(ids);
       queryClient.setQueryData<OrganizationView>(key, (previous) => ({
         ...next,
@@ -175,7 +226,7 @@ export function OrganizationProvider({
         },
       }));
     },
-    [key, queryClient, client, userId, hostId],
+    [key, queryClient, client, userId, hostId, revalidateIdentity],
   );
   const mutation = useHostMutation({
     client,

@@ -38,7 +38,7 @@ import {
   REMOVE_SKILL_LABEL,
   SKILL_SWITCHES_UNAVAILABLE,
   providersPhrase,
-  removeReach,
+  removeSkillReach,
   removeTitle,
   skillPageLine,
   skillSourcePhrase,
@@ -351,7 +351,7 @@ function RemoveSkillDialog(props: {
         if (!next) props.onClose();
       }}
       title={removeTitle(props.skill.name)}
-      description={removeReach(personal, name, props.skill.name)}
+      description={removeSkillReach(personal, name, props.skill.name)}
       cascadeSummary={null}
       actionLabel={REMOVE_SKILL_LABEL}
       isPending={props.pending}
