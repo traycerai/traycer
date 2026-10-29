@@ -65,6 +65,15 @@ test("clicking the toast's close button leaves the dialog open", async ({
 }) => {
   await openDialog(page);
   await raiseDeleted(page);
+  // The premise the launch flags create: a fine, hovering pointer, where the
+  // close button is hidden until hover. On a coarse one it is always visible
+  // and the opacity check below would prove nothing.
+  expect(
+    await page.evaluate(
+      () => matchMedia("(hover: hover) and (pointer: fine)").matches,
+    ),
+    "the pointer must be fine and hovering",
+  ).toBe(true);
 
   const toastCentre = await centreOf(page.locator(FRONT_TOAST));
   await page.mouse.move(toastCentre.x, toastCentre.y);
@@ -142,9 +151,33 @@ test("hidden toasts take no click", async ({ page }) => {
 
   const back = page.locator(`${TOAST}[data-front=false] [data-close-button]`);
   const { x, y } = await centreOf(back.first());
+  // Recorded at the window after the click's own handlers have run: React
+  // flushes a click's updates before the event bubbles past its root, so a
+  // dismissal would already read `data-removed="true"` here.
+  await page.evaluate(() => {
+    const probe = window as Window & {
+      __probeClicks?: Array<{ x: number; y: number }>;
+    };
+    probe.__probeClicks = [];
+    window.addEventListener("click", (event) => {
+      probe.__probeClicks?.push({ x: event.clientX, y: event.clientY });
+    });
+  });
   await page.mouse.click(x, y);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as Window & { __probeClicks?: unknown[] }).__probeClicks,
+        ),
+      { message: "the click must be dispatched at the back close button" },
+    )
+    .toEqual([{ x, y }]);
+  // Sonner keeps a dismissed toast's node for its exit animation, marked
+  // `data-removed="true"`: a count alone cannot see a dismissal.
   await expect(
-    page.locator(TOAST),
+    page.locator(`${TOAST}[data-removed="false"]`),
     "a click on a hidden toast's close button must dismiss nothing",
   ).toHaveCount(5);
 });
