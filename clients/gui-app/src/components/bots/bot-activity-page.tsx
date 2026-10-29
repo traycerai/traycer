@@ -4,28 +4,35 @@ import { useShallow } from "zustand/react/shallow";
 import { useNavigate } from "@tanstack/react-router";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
+  BotActivityTarget,
+  BotNotificationDigest,
   BotNotificationSubscription,
   BotSessionActivity,
+  BotStoppedNotificationWatch,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { fallbackReasonLabelFor } from "@/components/chat/fallback/fallback-copy";
 import { BotTaskList } from "@/components/bots/bot-task-list";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import type { BotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
+import { useBotNotificationsStopMutation } from "@/hooks/bots/use-bot-task-action-mutations";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import {
   useBotSendFailure,
   type BotSendFailure,
 } from "@/hooks/bots/use-bot-send-failure";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   endedReasonWords,
   finishedTasksOf,
   finishedThisWeek,
   producedTicketsOf,
+  RECENT_CHECKINS_SHOWN,
   stoppedPostOf,
   trackingTasksOf,
   type BotFinishedTask,
@@ -38,6 +45,10 @@ import {
   firstLineOf,
   threadOpenOf,
 } from "@/lib/bots/bot-trunk-model";
+import {
+  botMemberName,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { formatAbsoluteDateTime, useSampledNow } from "@/lib/relative-time";
@@ -75,6 +86,10 @@ export function BotActivityPage(props: {
   readonly channelId: string | null;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  /** The watches members stopped; `null` from a host that does not say. */
+  readonly stoppedNotificationWatches: ReadonlyArray<BotStoppedNotificationWatch> | null;
+  /** Names the members who paused, stopped or ran something. */
+  readonly resolveMember: BotMemberResolver;
   readonly summary: BotActivitySummary;
   /** The bot's threads, as listed; `null` while the list is not read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
@@ -90,12 +105,20 @@ export function BotActivityPage(props: {
     channelId,
     tasks,
     notificationSubscriptions,
+    stoppedNotificationWatches,
+    resolveMember,
     summary,
     threads,
     onOpenPost,
     onOpenTurn,
   } = props;
-  const userId = useAuthStore((s) => s.profile?.userId ?? null);
+  const viewer = useAuthStore((s) => s.profile);
+  const userId = viewer?.userId ?? null;
+  const nameOf = useCallback(
+    (memberId: string): string =>
+      botMemberName(memberId, viewer, resolveMember),
+    [resolveMember, viewer],
+  );
   const taskIds = useMemo(() => tasks.map((task) => task.taskId), [tasks]);
   const contexts = useEpicGetTaskContexts(taskIds, userId, {
     enabled: taskIds.length > 0,
@@ -106,9 +129,17 @@ export function BotActivityPage(props: {
     [contexts.tasksById],
   );
   const tracking = useMemo(() => trackingTasksOf(tasks), [tasks]);
+  const boundHere = boundHost.isThisHost;
   const place = useMemo(
-    () => ({ kind: "bot" as const, channelId, onOpenPost, onOpenTurn }),
-    [channelId, onOpenPost, onOpenTurn],
+    () => ({
+      kind: "bot" as const,
+      channelId,
+      onOpenPost,
+      onOpenTurn,
+      boundHere,
+      nameOf,
+    }),
+    [boundHere, channelId, nameOf, onOpenPost, onOpenTurn],
   );
   return (
     <div
@@ -167,10 +198,13 @@ export function BotActivityPage(props: {
       <NotificationsSection
         botId={botId}
         hostId={hostId}
+        boundHere={boundHere}
         watches={notificationSubscriptions}
+        stopped={stoppedNotificationWatches}
         threads={threads}
+        nameOf={nameOf}
       />
-      <FinishedSection tasks={tasks} titleOf={titleOf} />
+      <FinishedSection tasks={tasks} titleOf={titleOf} nameOf={nameOf} />
     </div>
   );
 }
@@ -567,17 +601,40 @@ function SessionBackgroundItemsBody(props: {
 
 /**
  * The bot's chats watching the person's notifications (T84): the channel's
- * and each subscribed thread's, what each watches and since when. The bot
- * sets these itself. Nothing from a host that does not say.
+ * and each subscribed thread's, what each watches and since when, and the
+ * digests each was handed this week. The bot sets these itself; a member
+ * can stop one here (T92) where the tab's host runs the bot, and a stopped
+ * watch stays listed, with who stopped it, until the chat watches again.
+ * Nothing from a host that does not say.
  */
 function NotificationsSection(props: {
   readonly botId: string;
   readonly hostId: string;
+  readonly boundHere: boolean;
   readonly watches: ReadonlyArray<BotNotificationSubscription> | null;
+  readonly stopped: ReadonlyArray<BotStoppedNotificationWatch> | null;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { botId, hostId, watches, threads } = props;
-  if (watches === null || watches.length === 0) return null;
+  const { botId, hostId, boundHere, threads, nameOf } = props;
+  const watches = props.watches ?? [];
+  const stopped = props.stopped ?? [];
+  const client = useTabHostClient();
+  const canStop =
+    useHostMethodSupport(hostId, "bot.notifications.stop") === true &&
+    boundHere;
+  const stopWatching = useBotNotificationsStopMutation(client);
+  if (watches.length === 0 && stopped.length === 0) return null;
+  const where = (target: BotActivityTarget): ReactNode =>
+    target.kind === "trunk" ? (
+      "In the channel"
+    ) : (
+      <ThreadName
+        botId={botId}
+        hostId={hostId}
+        thread={threadOf(target, threads)}
+      />
+    );
   return (
     <ActivitySection label="Notifications" testId="bot-activity-notifications">
       <ul className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
@@ -585,33 +642,124 @@ function NotificationsSection(props: {
           const target = watch.target;
           return (
             <li
-              key={target.kind === "trunk" ? "trunk" : target.threadId}
-              className="flex min-w-0 flex-col px-2"
+              key={targetKey(target)}
+              className="flex min-w-0 flex-col gap-0.5 px-2"
               data-testid="bot-notification-watch"
             >
-              <span className="truncate text-foreground">
-                {target.kind === "trunk" ? (
-                  "In the channel"
-                ) : (
-                  <ThreadName
-                    botId={botId}
-                    hostId={hostId}
-                    thread={threadOf(target, threads)}
-                  />
-                )}
-              </span>
+              <span className="truncate text-foreground">{where(target)}</span>
               <span>
                 {describeNotificationWatch(watch)}
                 {watch.since === null
                   ? null
                   : ` · since ${formatAbsoluteDateTime(watch.since)}`}
               </span>
+              {canStop ? (
+                <span className="flex">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    data-testid="bot-notification-stop"
+                    disabled={stopWatching.isPending}
+                    onClick={() => stopWatching.mutate({ botId, target })}
+                  >
+                    Stop watching
+                    {stopWatching.isPending &&
+                    stopWatching.variables.target === target ? (
+                      <AgentSpinningDots
+                        className={undefined}
+                        testId={undefined}
+                        variant={undefined}
+                      />
+                    ) : null}
+                  </Button>
+                </span>
+              ) : null}
+              <RecentDigests digests={watch.digests ?? []} />
             </li>
           );
         })}
+        {stopped.map((watch) => (
+          <li
+            key={`stopped:${targetKey(watch.target)}`}
+            className="flex min-w-0 flex-col gap-0.5 px-2 opacity-70"
+            data-testid="bot-notification-watch-stopped"
+          >
+            <span className="truncate text-foreground">
+              {where(watch.target)}
+            </span>
+            <span>
+              Stopped watching your notifications · by{" "}
+              {nameOf(watch.stoppedByUserId)} ·{" "}
+              {formatAbsoluteDateTime(watch.stoppedAt)}
+            </span>
+            <RecentDigests digests={watch.digests} />
+          </li>
+        ))}
       </ul>
     </ActivitySection>
   );
+}
+
+function targetKey(target: BotActivityTarget): string {
+  return target.kind === "trunk" ? "trunk" : target.threadId;
+}
+
+/**
+ * The digests a watching chat was handed, newest first: the newest few, and
+ * "All N digests" the rest of the week the host keeps.
+ */
+function RecentDigests(props: {
+  readonly digests: ReadonlyArray<BotNotificationDigest>;
+}): ReactNode {
+  const { digests } = props;
+  const [all, setAll] = useState(false);
+  if (digests.length === 0) return null;
+  const shown = all ? digests : digests.slice(0, RECENT_CHECKINS_SHOWN);
+  return (
+    <section
+      aria-label="Recent digests"
+      className="flex flex-col gap-0.5 border-l border-border/60 pl-2"
+      data-testid="bot-notification-digests"
+    >
+      <ul className="flex flex-col gap-0.5">
+        {shown.map((digest) => (
+          <li
+            key={digest.queueItemId}
+            data-testid="bot-notification-digest"
+            className="tabular-nums"
+          >
+            {formatAbsoluteDateTime(digest.deliveredAt)} ·{" "}
+            {describeDigest(digest)}
+          </li>
+        ))}
+      </ul>
+      {digests.length > RECENT_CHECKINS_SHOWN ? (
+        <span className="flex">
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            data-testid="bot-notification-digests-all"
+            aria-expanded={all}
+            onClick={() => setAll((open) => !open)}
+          >
+            {all ? "Fewer digests" : `All ${digests.length} digests`}
+          </Button>
+        </span>
+      ) : null}
+    </section>
+  );
+}
+
+function describeDigest(digest: BotNotificationDigest): string {
+  const items =
+    digest.itemCount === 1
+      ? "1 notification"
+      : `${digest.itemCount} notifications`;
+  return digest.attentionCount === 0
+    ? items
+    : `${items}, ${digest.attentionCount} needing you`;
 }
 
 /**
@@ -622,8 +770,9 @@ function NotificationsSection(props: {
 function FinishedSection(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   readonly titleOf: (taskId: string) => string | null;
+  readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { tasks, titleOf } = props;
+  const { tasks, titleOf, nameOf } = props;
   const now = useSampledNow();
   const [all, setAll] = useState(false);
   const finished = useMemo(() => finishedTasksOf(tasks), [tasks]);
@@ -637,7 +786,11 @@ function FinishedSection(props: {
         <ul className="flex flex-col gap-1">
           {shown.map((entry) => (
             <li key={entry.task.taskId}>
-              <FinishedRow entry={entry} title={titleOf(entry.task.taskId)} />
+              <FinishedRow
+                entry={entry}
+                title={titleOf(entry.task.taskId)}
+                nameOf={nameOf}
+              />
             </li>
           ))}
         </ul>
@@ -663,8 +816,9 @@ function FinishedSection(props: {
 function FinishedRow(props: {
   readonly entry: BotFinishedTask;
   readonly title: string | null;
+  readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { entry, title } = props;
+  const { entry, title, nameOf } = props;
   const { task } = entry;
   const navigate = useNavigate();
   const produced = producedTicketsOf(task);
@@ -678,7 +832,11 @@ function FinishedRow(props: {
         {title ?? task.taskId}
       </span>
       <span className="flex flex-wrap gap-x-2">
-        <span>{endedReasonWords(task)}</span>
+        <span data-testid="bot-activity-finished-reason">
+          {task.stop === null
+            ? endedReasonWords(task)
+            : `Stopped by ${nameOf(task.stop.byUserId)}`}
+        </span>
         {entry.endedAt === null ? null : (
           <span className="tabular-nums">
             {formatAbsoluteDateTime(entry.endedAt)}

@@ -8,6 +8,7 @@ import {
   botSubscribeServerFrameSchema,
   type BotActivity,
   type BotNotificationSubscription,
+  type BotStoppedNotificationWatch,
   type BotRecord,
   type BotSubscribeServerFrame,
   type BotTaskEntry,
@@ -67,6 +68,11 @@ export interface BotSubscriptionSnapshot {
    * the serving host does not run the bot, or predates them.
    */
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  /**
+   * The watches members stopped from the Activity page (T92), with who and
+   * when. `null` like `notificationSubscriptions`.
+   */
+  readonly stoppedNotificationWatches: ReadonlyArray<BotStoppedNotificationWatch> | null;
 }
 
 /**
@@ -249,6 +255,7 @@ function toSnapshot(
     boundHost: frame.boundHost,
     activity: frame.activity,
     notificationSubscriptions: frame.notificationSubscriptions,
+    stoppedNotificationWatches: frame.stoppedNotificationWatches,
   };
 }
 

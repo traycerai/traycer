@@ -395,6 +395,7 @@ function snapshot(): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
     activity: null,
   };
@@ -415,6 +416,9 @@ function trackingTask(taskId: string): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
   };
 }
 

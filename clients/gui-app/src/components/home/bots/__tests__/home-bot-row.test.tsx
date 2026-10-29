@@ -83,6 +83,7 @@ function snapshotWith(activity: BotActivity | null): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
     activity,
   };
@@ -337,6 +338,7 @@ describe("<HomeBotRow /> state", () => {
       openRequestCount: 0,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      stoppedNotificationWatches: null,
       boundHost: { hostId: null, epoch: 2, isThisHost: false },
       activity: null,
     };
@@ -483,6 +485,9 @@ describe("<HomeBotRow /> tasks", () => {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
   };
 
   it("counts the tasks the bot spun and says nothing of check-ins", () => {
