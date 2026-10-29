@@ -83,7 +83,8 @@ vi.mock("@/lib/host", () => ({
     hostId: null,
     directory: testDirectory,
   }),
-  useHostClient: () => getSpine().createRequesterForHostId(FOLLOWED_HOST.hostId),
+  useHostClient: () =>
+    getSpine().createRequesterForHostId(FOLLOWED_HOST.hostId),
   useHostDirectory: () => testDirectory,
 }));
 
