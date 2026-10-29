@@ -1792,10 +1792,14 @@ export function useChatTimelineFollowLatch(
     // departure when it lands. One no report has followed may still be
     // coming, and would read as the list's: a reader held at the strict
     // bottom with it stays held, as at any follow the latch starts itself
-    // (`reconcileStrictBottom`). One a report has followed is spent here:
-    // nothing grows past the reader now to start a correction that would
-    // mask what is left of it, and that report restarted the ledger, so a
-    // later frame reads as their own (`publishUnannouncedDeparture`).
+    // (`reconcileStrictBottom`). That is so whether the wheel's arm still
+    // waits for it or the tail's growth already published the departure
+    // ahead of it (`departureAwaitsReportRef`); the report ends either.
+    // An arm a report has followed is spent here: nothing grows past the
+    // reader now to start a correction that would mask what is left of it,
+    // and that report restarted the ledger, so a later frame reads as their
+    // own (`publishUnannouncedDeparture`).
+    if (departureAwaitsReportRef.current) return;
     if (armAwaitsScrollAway(armedReaderDepartureRef.current)) {
       if (expectedScrollTopRef.current === null) return;
       armedReaderDepartureRef.current = null;

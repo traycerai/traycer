@@ -1252,6 +1252,31 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     });
 
+    // The turn resting before that report changes nothing: the report is
+    // still owed, and following them would correct it back to the end.
+    it("a reader departed ahead of any report of their wheel's stays held at the turn's rest, and the wheel's report leaves them free", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom();
+      fireNativeScroll(node);
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      result.current.followEndIfPermitted();
+      result.current.reconcileTurnAtRest();
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      flushAnimationFrame();
+      flushAnimationFrame();
+
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(960);
+    });
+
     // The wheel's report already came, absorbed at the end: none is owed, so
     // the end coming back to meet them at rest follows them, and the tail's
     // next growth with them.
