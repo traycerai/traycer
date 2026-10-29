@@ -56,7 +56,10 @@ import { TeamReadFailed } from "./team-read-failed";
 import { TeamSkillUpload } from "./team-skill-upload";
 import { TeamSkills } from "./team-skills";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
-import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import {
+  TeamViewingHostPicker,
+  TeamViewingHostSwitch,
+} from "./team-viewing-host-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import { typedWriteIssue } from "./configuration-write-issue";
 
@@ -153,9 +156,13 @@ function EnvironmentSkills(props: {
   const canRemove = canEdit && served.removable;
   const [picking, setPicking] = useState(false);
   // An upload the host refused as not-served is the one moment the listed
-  // page needs a host of its own: the picker mounts beside the upload from
-  // then on, and not before, so the room-read list carries no host line.
+  // page needs a host of its own: a switch mounts beside the upload from then
+  // on, and not before, so the room-read list carries no host line. It is the
+  // switch alone - `as reported by <host>` was never true of a list the room
+  // served - and it owns its own open state, so it and a card's picker can
+  // never be two controls opening as one.
   const [uploadNeedsHost, setUploadNeedsHost] = useState(false);
+  const [uploadPicking, setUploadPicking] = useState(false);
   const picker = (
     <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
   );
@@ -230,10 +237,15 @@ function EnvironmentSkills(props: {
           <TeamSkillUpload
             onNotServed={() => {
               setUploadNeedsHost(true);
-              setPicking(true);
+              setUploadPicking(true);
             }}
           />
-          {uploadNeedsHost ? picker : null}
+          {uploadNeedsHost ? (
+            <TeamViewingHostSwitch
+              open={uploadPicking}
+              onOpenChange={setUploadPicking}
+            />
+          ) : null}
         </>
       ) : null}
     </section>

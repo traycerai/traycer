@@ -12,7 +12,12 @@ const scope = vi.hoisted(
     pending: boolean;
   } => ({ hosts: [], viewing: null, selectable: new Set(), pending: false }),
 );
-vi.mock("@/hooks/environment/team/use-team-viewing-host", () => ({
+// Only the hook is faked: `canSwitchViewingHost` stays real, since the
+// answer these cases are about is the one it gives for a scope.
+vi.mock("@/hooks/environment/team/use-team-viewing-host", async (original) => ({
+  ...(await original<
+    typeof import("@/hooks/environment/team/use-team-viewing-host")
+  >()),
   useTeamViewingHost: () => ({
     hosts: {
       isError: false,

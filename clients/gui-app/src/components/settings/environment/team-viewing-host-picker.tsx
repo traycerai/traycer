@@ -7,7 +7,10 @@ import {
   SelectValue,
   SelectGroup,
 } from "@/components/ui/select";
-import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import {
+  canSwitchViewingHost,
+  useTeamViewingHost,
+} from "@/hooks/environment/team/use-team-viewing-host";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /**
@@ -25,47 +28,64 @@ export function TeamViewingHostPicker(props: {
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
   const scope = useTeamViewingHost();
-  const hosts = scope.hosts.isError ? [] : (scope.hosts.data?.hosts ?? []);
   const viewing = scope.viewingHost;
   if (viewing === null) return null;
-  const canSwitch = hosts.some(
-    (host) =>
-      host.hostId !== viewing.hostId && scope.canSelectHost(host.hostId),
-  );
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground">
       <span className="min-w-0 truncate">
         as reported by {hostNameFromLabel(viewing.hostLabel, viewing.hostId)}
       </span>
-      {canSwitch ? (
+      {canSwitchViewingHost(scope) ? (
         <>
           <span aria-hidden>·</span>
-          <Select
+          <TeamViewingHostSwitch
             open={props.open}
             onOpenChange={props.onOpenChange}
-            value={viewing.hostId}
-            onValueChange={scope.selectHost}
-          >
-            <SelectTrigger size="sm" className="max-w-full">
-              <SelectValue>Use another host</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {hosts.map((host) => (
-                  <SelectItem
-                    key={host.hostId}
-                    value={host.hostId}
-                    disabled={!scope.canSelectHost(host.hostId)}
-                  >
-                    {hostNameFromLabel(host.hostLabel, host.hostId)}
-                    {scope.canSelectHost(host.hostId) ? "" : " · offline"}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          />
         </>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The switch alone, with no claim about where anything on the page came from:
+ * for a control that needs a host of its own beside content the room served,
+ * such as an upload the viewed host refused. It draws nothing unless there is
+ * another host to switch to.
+ */
+export function TeamViewingHostSwitch(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const scope = useTeamViewingHost();
+  const hosts = scope.hosts.isError ? [] : (scope.hosts.data?.hosts ?? []);
+  const viewing = scope.viewingHost;
+  if (viewing === null || !canSwitchViewingHost(scope)) return null;
+  return (
+    <Select
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      value={viewing.hostId}
+      onValueChange={scope.selectHost}
+    >
+      <SelectTrigger size="sm" className="max-w-full">
+        <SelectValue>Use another host</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {hosts.map((host) => (
+            <SelectItem
+              key={host.hostId}
+              value={host.hostId}
+              disabled={!scope.canSelectHost(host.hostId)}
+            >
+              {hostNameFromLabel(host.hostLabel, host.hostId)}
+              {scope.canSelectHost(host.hostId) ? "" : " · offline"}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   );
 }

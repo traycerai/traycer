@@ -212,7 +212,7 @@ describe("The Skills page", () => {
     expect(await screen.findByText("Review a change.")).toBeTruthy();
   });
 
-  it("mounts a picker beside the upload only once the host refuses it as not-served", async () => {
+  it("mounts a host switch beside the upload only once the host refuses it as not-served, and never names a host for the room's list", async () => {
     negotiateMethods({
       ...BASE_METHODS,
       "environment.configuration.skills.upload": LIST,
@@ -246,11 +246,13 @@ describe("The Skills page", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Add a skill" }));
 
-    // The refusal is the one moment this page needs a host of its own: the
-    // picker mounts and opens on the hosts it can switch to. (Its trigger is
+    // The refusal is the one moment this page needs a host of its own: a
+    // switch mounts and opens on the hosts it can switch to. (Its trigger is
     // aria-hidden while the list is open, so the options are what to read.)
-    expect(await screen.findByText(/as reported by/)).toBeTruthy();
     expect(await screen.findByRole("option", { name: "Studio" })).toBeTruthy();
+    // Still the switch alone: the skills on screen came from the room, and
+    // `as reported by <host>` was never true of them.
+    expect(screen.queryByText(/as reported by/)).toBeNull();
   });
 
   describe("a skill's files that cannot be read", () => {

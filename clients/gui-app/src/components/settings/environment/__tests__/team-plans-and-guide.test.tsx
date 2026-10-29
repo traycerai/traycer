@@ -320,8 +320,10 @@ describe("TeamGuide", () => {
     render(<TeamGuide />, { wrapper: harness.Wrapper });
 
     await waitFor(() => {
+      // One host, and it is the one being read: there is nothing to switch
+      // to, so the opening is the whole line and no verb is offered.
       expect(screen.getByRole("status").textContent).toBe(
-        "The guide needs a host running Acme.Pick one.",
+        "The guide needs a host running Acme.",
       );
     });
     expect(harness.paramsOf("environment.configuration.guide.get")).toEqual([

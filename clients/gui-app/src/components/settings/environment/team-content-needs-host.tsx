@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import { Button } from "@/components/ui/button";
-import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import {
+  canSwitchViewingHost,
+  useTeamViewingHost,
+} from "@/hooks/environment/team/use-team-viewing-host";
 import { useConfigurationIsPersonal } from "./configuration-source";
 
 /** What a card needs a host for, as its line opens. */
@@ -37,8 +40,8 @@ const NEED_OPENING: Readonly<Record<TeamHostNeed, string>> = {
  *   opening alone. Picking is no remedy when there is nothing to switch to;
  * - nothing runs it at all: a sandbox of the configuration's.
  *
- * `Pick one.` is offered on the picker's own predicate — an eligible host
- * that is not the viewed one — so the verb is never drawn where the picker
+ * `Pick one.` is offered on `canSwitchViewingHost` — the same answer the
+ * switch itself is drawn on — so the verb is never drawn where the picker
  * would open with nothing in it.
  */
 export function TeamContentNeedsHost(props: {
@@ -49,9 +52,13 @@ export function TeamContentNeedsHost(props: {
   const scope = useTeamViewingHost();
   const personal = useConfigurationIsPersonal();
   const hosts = scope.hosts.data?.hosts ?? [];
-  // An inventory still being read is not an empty one either: until it
-  // answers, the card has nothing true to say about where the configuration
-  // runs, so it says nothing. The line arrives with the answer.
+  // An inventory with no answer is not an empty one either, whether a read is
+  // in flight or the read is disabled and never asked: until it answers, the
+  // card has nothing true to say about where the configuration runs, so it
+  // says nothing. `isPending` is that condition - no data - and not
+  // `isLoading`, which is `isPending && isFetching` and so false for a
+  // disabled read, where every line this card can draw would be a claim about
+  // an inventory nobody read.
   if (scope.hosts.isPending) return null;
   return (
     <p
@@ -65,14 +72,9 @@ export function TeamContentNeedsHost(props: {
         unread: scope.hosts.isError,
         listed: hosts.length,
         reachable: hosts.some((host) => scope.canSelectHost(host.hostId)),
-        // The picker's own predicate: it draws a Select only for an eligible
-        // host that is not the one being viewed, so that is the only state in
-        // which `Pick one.` opens anything.
-        pickable: hosts.some(
-          (host) =>
-            host.hostId !== scope.viewingHost?.hostId &&
-            scope.canSelectHost(host.hostId),
-        ),
+        // The switch's own answer, not a copy of its rule: `Pick one.` is
+        // drawn exactly where a switch would have somewhere to go.
+        pickable: canSwitchViewingHost(scope),
         onPickHost: props.onPickHost,
         onRetry: () => void scope.hosts.refetch(),
       })}
