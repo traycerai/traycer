@@ -66,6 +66,8 @@ const mocks = vi.hoisted(() => ({
   readRefetch: vi.fn<() => void>(),
   /** The bot list query's `refetch`; a case scripts what a re-read answers. */
   listRefetch: vi.fn<() => void>(),
+  /** The environment list query's `refetch`. */
+  environmentsRefetch: vi.fn<() => void>(),
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   membersQueries: [] as Array<{
     environmentId: string | null;
@@ -88,8 +90,13 @@ const mocks = vi.hoisted(() => ({
     onboardingVersion: { major: 1, minor: 1 },
     /** When a successful `bot.onboarding.read` answered. */
     readAt: 1_000,
-    /** The bot list's last read failed: its status is `error`, its data kept. */
+    /**
+     * The bot list's last read failed: its status is `error`, with the data
+     * it had kept, or none when `listedBotIds` is `undefined` (a cold read).
+     */
     listFailed: false,
+    /** The environment list's status; `error` and `pending` carry no data. */
+    environmentsStatus: "success",
     /** The bot list query's freshness, as TanStack reports it. */
     list: {
       dataUpdatedAt: 1_000,
@@ -232,7 +239,9 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => {
   const listStatus = (): "pending" | "error" | "success" => {
-    if (mocks.state.listedBotIds === undefined) return "pending";
+    if (mocks.state.listedBotIds === undefined) {
+      return mocks.state.listFailed ? "error" : "pending";
+    }
     return mocks.state.listFailed ? "error" : "success";
   };
   return {
@@ -261,8 +270,12 @@ vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
-    status: "success",
-    data: { environments: mocks.state.environments },
+    status: mocks.state.environmentsStatus,
+    data:
+      mocks.state.environmentsStatus === "success"
+        ? { environments: mocks.state.environments }
+        : undefined,
+    refetch: mocks.environmentsRefetch,
   }),
 }));
 // One stable mutation object, like TanStack's `mutate`: the surface re-opens
@@ -519,6 +532,7 @@ beforeEach(() => {
   mocks.state.onboardingVersion = { major: 1, minor: 1 };
   mocks.state.readAt = 1_000;
   mocks.state.listFailed = false;
+  mocks.state.environmentsStatus = "success";
   mocks.state.list = {
     dataUpdatedAt: 1_000,
     errorUpdatedAt: 0,
@@ -527,6 +541,7 @@ beforeEach(() => {
   };
   mocks.readRefetch.mockReset();
   mocks.listRefetch.mockReset();
+  mocks.environmentsRefetch.mockReset();
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   mocks.state.environments = [
     { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
@@ -760,7 +775,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       const view = render(surfaceFor(SETUP_BOT_ID));
 
       const notice = screen.getByTestId("bot-tab-error");
-      expect(notice.textContent).toContain("Couldn't load your team's setup.");
+      expect(notice.textContent).toContain("Couldn't load this channel.");
       expect(screen.queryByTestId("team-setup-channel")).toBeNull();
       expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
       expect(mocks.open).not.toHaveBeenCalled();
@@ -778,10 +793,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       });
       mocks.state.onboardingSupport = true;
       mocks.state.onboardingVersion = { major: 1, minor: 1 };
-      mocks.listRefetch.mockClear();
       await user.click(within(notice).getByRole("button", { name: "Retry" }));
 
-      expect(mocks.listRefetch).toHaveBeenCalled();
+      expect(mocks.listRefetch).not.toHaveBeenCalled();
+      expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
       view.rerender(surfaceFor(SETUP_BOT_ID));
 
       expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
@@ -803,7 +818,63 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(mocks.readRefetch).toHaveBeenCalled();
+    expect(mocks.listRefetch).not.toHaveBeenCalled();
+    expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
   });
+
+  /**
+   * A cold first read failed (no data), where the setup tab was restored:
+   * neither list can say the bot is absent, so the tab says the channel could
+   * not be loaded, opens and subscribes to nothing, keeps the tab and reads
+   * only what failed, and only on Retry.
+   */
+  it.each<readonly [string, () => void, () => void, () => void]>([
+    [
+      "the first bot.list failed while environment.list succeeded",
+      () => {
+        mocks.state.listedBotIds = undefined;
+        mocks.state.listFailed = true;
+      },
+      () => expect(mocks.listRefetch).toHaveBeenCalledTimes(1),
+      () => expect(mocks.environmentsRefetch).not.toHaveBeenCalled(),
+    ],
+    [
+      "the bot list answered while the first environment.list failed",
+      () => {
+        mocks.state.listedBotIds = [];
+        mocks.state.environmentsStatus = "error";
+      },
+      () => expect(mocks.environmentsRefetch).toHaveBeenCalledTimes(1),
+      () => expect(mocks.listRefetch).not.toHaveBeenCalled(),
+    ],
+  ])(
+    "shows the channel could not be loaded, opening, subscribing to and closing nothing and refetching nothing on its own, when %s; Retry reads only the failed list",
+    async (_name, script, expectFailedRefetched, expectOtherNotRefetched) => {
+      mocks.reads["env-new"] = {
+        setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+      };
+      script();
+      const user = userEvent.setup();
+      render(surfaceFor(SETUP_BOT_ID));
+
+      const notice = screen.getByTestId("bot-tab-error");
+      expect(notice.textContent).toContain("Couldn't load this channel.");
+      expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+      expect(mocks.open).not.toHaveBeenCalled();
+      expect(mocks.subscribed).toEqual([]);
+      expect(mocks.listRefetch).not.toHaveBeenCalled();
+      expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+      ).not.toBeNull();
+
+      await user.click(within(notice).getByRole("button", { name: "Retry" }));
+
+      expectFailedRefetched();
+      expectOtherNotRefetched();
+    },
+  );
 
   /**
    * The team's read answers `setup: null` because the bot has been created,
@@ -877,7 +948,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     const view = render(surfaceFor(SETUP_BOT_ID));
 
     const notice = screen.getByTestId("bot-tab-error");
-    expect(notice.textContent).toContain("Couldn't load your team's setup.");
+    expect(notice.textContent).toContain("Couldn't load this channel.");
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
     expect(screen.queryByTestId("team-setup-channel")).toBeNull();
     expect(mocks.open).not.toHaveBeenCalled();
