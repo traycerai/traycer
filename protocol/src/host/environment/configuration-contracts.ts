@@ -981,7 +981,9 @@ export const ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS = 64;
  * hands back: one schema on both ends, so a token the host issues always
  * round-trips.
  */
-const environmentSkillImportTokenSchema = z.string().min(1).max(128);
+const environmentSkillImportTokenSchema = lazySchema(() =>
+  z.string().min(1).max(128),
+);
 
 export const environmentConfigurationSkillImportRequestSchema = lazySchema(() =>
   z.discriminatedUnion("step", [

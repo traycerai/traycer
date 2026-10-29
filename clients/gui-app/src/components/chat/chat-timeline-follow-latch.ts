@@ -417,6 +417,19 @@ function gestureScrollLanded(
   );
 }
 
+/** A gesture's geometry with an announced write applied: its offset moves
+ *  with the view, and its distance from the end stays the reader's. */
+function geometryMovedBy(
+  geometry: ChatTimelineScrollGeometry,
+  delta: number,
+): ChatTimelineScrollGeometry {
+  return {
+    ...geometry,
+    scrollTop: geometry.scrollTop + delta,
+    scrollHeight: geometry.scrollHeight + delta,
+  };
+}
+
 /**
  * Whether an indeterminate gesture arm still holds its reader's follow: a
  * press (the scrollbar's) that has not scrolled yet. It arms before anything
@@ -469,19 +482,6 @@ function pressArmSteppedTowardEnd(
     restingScrollTop(geometry) >
       restingScrollTop(start) + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
   );
-}
-
-/** A gesture's geometry with an announced write applied: its offset moves
- *  with the view, and its distance from the end stays the reader's. */
-function geometryMovedBy(
-  geometry: ChatTimelineScrollGeometry,
-  delta: number,
-): ChatTimelineScrollGeometry {
-  return {
-    ...geometry,
-    scrollTop: geometry.scrollTop + delta,
-    scrollHeight: geometry.scrollHeight + delta,
-  };
 }
 
 /**
