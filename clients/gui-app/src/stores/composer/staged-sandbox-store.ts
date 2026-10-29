@@ -155,6 +155,12 @@ export interface StagedSandbox {
    * nothing.
    */
   readonly sendTaken: boolean;
+  /**
+   * The draft holding a message this stage was given back with: the
+   * message's destination, kept across a reload as the draft is. Absent on
+   * a person's own pick, which lasts only as long as the window.
+   */
+  readonly returnedTo?: string;
 }
 
 /**
@@ -260,6 +266,10 @@ interface StagedSandboxStoreState {
   ) => void;
   /** Back to staged with the draft kept (Cancel and keep the draft). */
   readonly cancel: (surfaceKey: string) => void;
+  /** Gives a surface's stage to the draft a message was given back to. */
+  readonly returnTo: (surfaceKey: string, draftId: string) => void;
+  /** Drops the stage a message was given back with: its draft is gone. */
+  readonly forgetReturnedTo: (draftId: string) => void;
   readonly requestRetry: (
     surfaceKey: string,
     userId: string | null,
@@ -299,16 +309,26 @@ function freshStage(target: StagedSandboxTarget): StagedSandbox {
 
 /**
  * The surface key of a send handed to its task (`pending-sandbox-sends`):
- * the only stages that are persisted.
+ * with the stages a message was given back with, the only ones persisted.
  */
 export const PENDING_SEND_SURFACE_PREFIX = "pending-send:";
+
+function persistedStage(
+  key: string,
+  stage: StagedSandbox | undefined,
+): boolean {
+  return (
+    key.startsWith(PENDING_SEND_SURFACE_PREFIX) ||
+    stage?.returnedTo !== undefined
+  );
+}
 
 function persistedStages(
   bySurface: StagedSandboxStoreState["bySurface"],
 ): StagedSandboxStoreState["bySurface"] {
   return Object.fromEntries(
-    Object.entries(bySurface).filter(([key]) =>
-      key.startsWith(PENDING_SEND_SURFACE_PREFIX),
+    Object.entries(bySurface).filter(([key, stage]) =>
+      persistedStage(key, stage),
     ),
   );
 }
@@ -330,8 +350,10 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
         }),
       adopt: (fromSurfaceKey, toSurfaceKey) =>
         set((state) => {
-          const stage = state.bySurface[fromSurfaceKey];
-          if (stage === undefined) return state;
+          const current = state.bySurface[fromSurfaceKey];
+          if (current === undefined) return state;
+          // The send takes the destination: no draft holds it any longer.
+          const { returnedTo: _draftId, ...stage } = current;
           const next = { ...state.bySurface, [toSurfaceKey]: stage };
           delete next[fromSurfaceKey];
           return { bySurface: next };
@@ -399,6 +421,23 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             };
           }),
         })),
+      returnTo: (surfaceKey, draftId) =>
+        set((state) => ({
+          bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
+            ...stage,
+            returnedTo: draftId,
+          })),
+        })),
+      forgetReturnedTo: (draftId) =>
+        set((state) => {
+          const kept = Object.entries(state.bySurface).filter(
+            ([key, stage]) =>
+              key.startsWith(PENDING_SEND_SURFACE_PREFIX) ||
+              stage?.returnedTo !== draftId,
+          );
+          if (kept.length === Object.keys(state.bySurface).length) return state;
+          return { bySurface: Object.fromEntries(kept) };
+        }),
       requestRetry: async (surfaceKey, userId, action) => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== userId)
           return null;
@@ -428,11 +467,12 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
       merge: (persisted, current) => ({
         ...current,
         bySurface: {
-          // A different window writes only pending sends. Its snapshot must
-          // never erase this window's unsubmitted composer picks.
+          // A different window writes only pending sends and given-back
+          // stages. Its snapshot must never erase this window's unsubmitted
+          // composer picks.
           ...Object.fromEntries(
             Object.entries(current.bySurface).filter(
-              ([key]) => !key.startsWith(PENDING_SEND_SURFACE_PREFIX),
+              ([key, stage]) => !persistedStage(key, stage),
             ),
           ),
           ...(

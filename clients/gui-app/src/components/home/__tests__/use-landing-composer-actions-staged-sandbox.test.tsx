@@ -55,6 +55,8 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { recordMapStoragePrefix } from "@/lib/persist/keys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
@@ -376,6 +378,26 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
   }
 
+  /** A reload of the staged store: memory gone, then read back from storage. */
+  async function reloadStagedSandboxes(): Promise<void> {
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const prefix = recordMapStoragePrefix(name);
+    const saved: Array<readonly [string, string]> = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      const value = key === null ? null : localStorage.getItem(key);
+      if (
+        key !== null &&
+        value !== null &&
+        (key === name || key.startsWith(prefix))
+      )
+        saved.push([key, value]);
+    }
+    useStagedSandboxStore.setState({ bySurface: {} });
+    for (const [key, value] of saved) localStorage.setItem(key, value);
+    await useStagedSandboxStore.persist.rehydrate();
+  }
+
   function onlyPendingSend() {
     const sends = Object.values(usePendingSandboxSendStore.getState().sends);
     expect(sends).toHaveLength(1);
@@ -602,6 +624,13 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       });
       const returnedDraft = useLandingDraftStore.getState().drafts[0];
       const requestId = readStagedSandbox(SURFACE)?.clientRequestId;
+      // A reload before the second Send: the stage comes back with its draft.
+      await reloadStagedSandboxes();
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        target,
+        phase: "staged",
+        clientRequestId: requestId,
+      });
       expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual(
         ["epic.create", "epic.attachEnvironment"],
       );

@@ -54,6 +54,7 @@ export function handLandingSandboxSend(
       const store = useStagedSandboxStore.getState();
       store.stage(input.fromSurfaceKey, stage.target);
       store.report(input.fromSurfaceKey, { ...stage, sendTaken: false });
+      store.returnTo(input.fromSurfaceKey, returned.draftId);
       return returned.draftId;
     },
   };

@@ -63,6 +63,7 @@ import {
 import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
   landingPlacementHostId,
   notifyDraftLocalDelete,
@@ -564,6 +565,8 @@ function destroyLandingDraft(
   }
   if (!routeDelete) completeLandingDraftDelete(id);
   pruneRecoveryDraft(id);
+  // The sandbox its given-back message was going to goes with it.
+  useStagedSandboxStore.getState().forgetReturnedTo(id);
   if (closing === undefined) return;
   draftRuntimeRegistry.close(id);
   // Route the host delete while the row still exists: `routeLocalDelete`

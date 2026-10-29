@@ -467,6 +467,13 @@ export function returnPendingSandboxSendToSandbox(
   staged.stage(surfaceKey, pick.target);
   if (pick.clientRequestId !== null)
     staged.report(surfaceKey, { clientRequestId: pick.clientRequestId });
+  // The destination belongs to the draft now holding the message, and
+  // survives a reload with it.
+  const draftId =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[
+      returned.epicId
+    ]?.draftId ?? null;
+  if (draftId !== null) staged.returnTo(surfaceKey, draftId);
   if (pick.target.kind === "existing")
     pins.setSelection(surfaceKey, pick.target.hostId);
   return returned;

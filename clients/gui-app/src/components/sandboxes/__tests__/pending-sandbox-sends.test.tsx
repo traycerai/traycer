@@ -4966,6 +4966,14 @@ describe("cancelling a send whose create was accepted but not answered", () => {
         clientRequestId: key,
         target: NEW_TARGET,
       });
+      // A reload before the Send: the destination comes back with its draft.
+      await reloadPendingSandboxStores();
+      expect(readStagedSandbox(taskSurface)).toMatchObject({
+        phase: "staged",
+        clientRequestId: key,
+        target: NEW_TARGET,
+      });
+      mount();
 
       const createsBeforeSend = mocks.createSandbox.mock.calls.length;
       // The composer's Send hands its stage over, as the modal does.
@@ -5579,6 +5587,36 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
       epicId: "epic-1",
       tabId: "tab-1",
       hostId: null,
+    });
+
+    // A reload before the Send: the sandbox comes back with the draft, and
+    // the composer's Send takes it, so it wakes the same sandbox here.
+    await reloadPendingSandboxStores();
+    expect(readStagedSandbox(taskSurface)).toMatchObject({
+      phase: "staged",
+      target: { kind: "existing", sandboxId: SANDBOX_ID, verb: "resume" },
+    });
+    // Nothing is mounted after the reload: the store calls need no act.
+    const handed = handPendingSandboxSend({
+      fromSurfaceKey: taskSurface,
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+      content: MESSAGE_CONTENT,
+      text: "fix the login bug",
+      settings: PICKED_SETTINGS,
+      epicConfirmed: true,
+      now: Date.now(),
+    });
+    if (handed === null) throw new Error("expected the Send to hand over");
+    expect(usePendingSandboxSendStore.getState().sends[handed]?.epicId).toBe(
+      "epic-1",
+    );
+    expect(readStagedSandbox(pendingSendSurfaceKey(handed))).toMatchObject({
+      target: {
+        kind: "existing",
+        hostId: SANDBOX_HOST,
+        sandboxId: SANDBOX_ID,
+      },
     });
   });
 
