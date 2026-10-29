@@ -3864,6 +3864,57 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
+  // Invariant of the press change, not a re-test of #3048's wheel behaviour:
+  // `pressArmSteppedTowardEnd`'s `direction === "indeterminate"` clause keeps
+  // the press-step rule off a wheel's `away-from-end` arm. Without it, a
+  // report that moves the view toward the end would re-base the wheel arm's
+  // carried offset the same way a press's is re-based, and a later report
+  // that moves back up - but only to above the ORIGINAL armed offset, so the
+  // wheel's own scroll has genuinely not landed - would read as landed
+  // relative to the re-based offset instead, retiring the arm early and
+  // letting the strict bottom that follows re-follow a reader whose wheel
+  // scroll never actually came down.
+  it("leaves a free reader's wheel-up arm alone: the press-step rule does not reach a wheel arm", () => {
+    const node = shim.makeNode({
+      scrollTop: 900,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    // Arms a wheel-up (away-from-end) gesture at scrollTop 900.
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+    // A report moves the view toward the end, past the armed offset (900 ->
+    // 950): the report a dropped clause would re-base the wheel arm on.
+    shim.setGeometry(node, { scrollTop: 950 });
+    fireNativeScroll(node);
+
+    // A report moves back up, to 920 - still above the ORIGINAL armed offset
+    // of 900, so the wheel's own scroll has not landed (landing for
+    // away-from-end means an offset below 900). Only a re-based arm (to 950)
+    // would read 920 as landed.
+    shim.setGeometry(node, { scrollTop: 920 });
+    fireNativeScroll(node);
+
+    // The reader reaches the strict bottom and reports.
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+  });
+
   it("converges a toward-end reader landing when content grows before scroll delivery", () => {
     const node = shim.makeNode({
       scrollTop: 700,
