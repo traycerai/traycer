@@ -438,6 +438,7 @@ const TAB_HOST_CLIENT = buildHostClient(TAB_ENTRY, true);
 const TEAM_HOST_CLIENT = buildHostClient(TEAM_ENTRY, false);
 
 const SETTINGS_SEED: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-4-7",
   permissionMode: "supervised",

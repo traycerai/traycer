@@ -181,6 +181,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    ultracode: false,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",

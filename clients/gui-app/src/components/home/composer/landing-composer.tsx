@@ -1,3 +1,4 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -390,6 +391,10 @@ export function LandingComposer(props: LandingComposerProps) {
   // new chat's initial settings. The catalog reads through the same
   // `hostClient` - the composer's pinned/followed host, NOT the app-wide
   // default (P1.2 retired the picker's rebind of that default).
+  const ultracodeCarried = useUltracodeCarrierSupported(
+    activeHostId,
+    "epic.create",
+  );
   const toolbarStore = useComposerToolbarStore(
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
@@ -400,6 +405,7 @@ export function LandingComposer(props: LandingComposerProps) {
       tuiOnly: composerMode === "terminal",
       // The landing composer has no chat yet - see `ComposerBody`.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried,
       stagedSurfaceKey: composerSurfaceKey,
       sendsToRestingSandbox: false,
     },
@@ -971,6 +977,7 @@ export function LandingComposer(props: LandingComposerProps) {
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
         permission: toolbar.permission,
+        ultracode: toolbar.ultracode,
       },
       owner,
       teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(

@@ -578,6 +578,7 @@ function chatRunSettingsEq(
     reasoningEffort: a.reasoningEffort === b.reasoningEffort,
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
+    ultracode: a.ultracode === b.ultracode,
     profileId: a.profileId === b.profileId,
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);

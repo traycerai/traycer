@@ -1,4 +1,13 @@
 import {
+  createChatRequestSchemaV14,
+  createEpicRequestSchemaV14,
+  updateChatRunSettingsRequestSchemaV12,
+} from "./unary-schemas";
+import {
+  getChatRunSettingsResponseSchemaV41,
+  getChatRunSettingsBatchResponseSchemaV21,
+} from "./chat-records";
+import {
   defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
@@ -2435,3 +2444,180 @@ export {
   epicSubscribeV15,
   epicSubscribeV16,
 };
+
+export const epicCreateV14 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: createEpicRequestSchemaV14,
+  responseSchema: createEpicResponseSchemaV12,
+});
+export const epicCreateUpgradeV13ToV14 = defineUpgradePath<
+  typeof epicCreateV13,
+  typeof epicCreateV14
+>({
+  from: epicCreateV13.schemaVersion,
+  to: epicCreateV14.schemaVersion,
+  upgradeRequest: (request) => createEpicRequestSchemaV14.parse(request),
+  upgradeResponse: (response) => response,
+});
+export const epicCreateChatV14 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: createChatRequestSchemaV14,
+  responseSchema: createChatResponseSchemaV12,
+});
+export const epicCreateChatUpgradeV13ToV14 = defineUpgradePath<
+  typeof epicCreateChatV13,
+  typeof epicCreateChatV14
+>({
+  from: epicCreateChatV13.schemaVersion,
+  to: epicCreateChatV14.schemaVersion,
+  upgradeRequest: (request) => createChatRequestSchemaV14.parse(request),
+  upgradeResponse: (response) => response,
+});
+export const epicUpdateChatRunSettingsV12 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV12,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+export const epicUpdateChatRunSettingsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV11,
+  typeof epicUpdateChatRunSettingsV12
+>({
+  from: epicUpdateChatRunSettingsV11.schemaVersion,
+  to: epicUpdateChatRunSettingsV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    settings: { ...request.settings, ultracode: false },
+  }),
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsV41 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 4, minor: 1 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
+  responseSchema: getChatRunSettingsResponseSchemaV41,
+});
+export const epicGetChatRunSettingsUpgradeV40ToV41 = defineUpgradePath<
+  typeof epicGetChatRunSettingsV40,
+  typeof epicGetChatRunSettingsV41
+>({
+  from: epicGetChatRunSettingsV40.schemaVersion,
+  to: epicGetChatRunSettingsV41.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    getChatRunSettingsResponseSchemaV41.parse(response),
+});
+export const epicGetChatRunSettingsBatchV21 = defineRpcContract({
+  method: "epic.getChatRunSettingsBatch",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: getChatRunSettingsBatchRequestSchema,
+  responseSchema: getChatRunSettingsBatchResponseSchemaV21,
+});
+export const epicGetChatRunSettingsBatchUpgradeV20ToV21 = defineUpgradePath<
+  typeof epicGetChatRunSettingsBatchV20,
+  typeof epicGetChatRunSettingsBatchV21
+>({
+  from: epicGetChatRunSettingsBatchV20.schemaVersion,
+  to: epicGetChatRunSettingsBatchV21.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    getChatRunSettingsBatchResponseSchemaV21.parse(response),
+});
+
+export const epicGetChatRunSettingsDowngradeV41ToV30 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV41,
+  typeof epicGetChatRunSettingsV30
+>({
+  from: { major: 4, minor: 1 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Refuse rather than answering `{ settings: null }` - see the v2->v1
+    // bridge below for why that arm would be a false claim, not a degrade.
+    const parsed = getChatRunSettingsResponseSchemaV30.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const epicGetChatRunSettingsDowngradeV41ToV20 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV41,
+  typeof epicGetChatRunSettingsV20
+>({
+  from: { major: 4, minor: 1 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = getChatRunSettingsResponseSchemaV20.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const epicGetChatRunSettingsDowngradeV41ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV41,
+  typeof epicGetChatRunSettingsV10
+>({
+  from: { major: 4, minor: 1 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const epicGetChatRunSettingsBatchDowngradeV21ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsBatchV21,
+  typeof epicGetChatRunSettingsBatchV10
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Omits each entry the 1.0 line cannot represent and keeps the rest. The
+  // unary read refuses for such a chat because it has one tuple and nothing
+  // else to answer with; here refusing would withhold up to forty-nine
+  // readable siblings for one that is not. An omitted entry asserts nothing
+  // about its chat - unlike `settings: null`, which would claim the chat has
+  // no stored settings - and the caller already treats a chat with no entry
+  // as unresolved and renders the record row's harness mark for it.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      entries: response.entries.flatMap((entry) => {
+        const parsed = getChatRunSettingsBatchEntrySchemaV10.safeParse(entry);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
+});

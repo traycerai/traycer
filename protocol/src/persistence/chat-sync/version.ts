@@ -162,7 +162,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // 1.11 carries compaction.notApplied, defaulted false for older input.
 // Older readers conservatively show failed and preserve the canonical raw field.
 // No reader floor: this changes presentation, not an action the reader takes.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 11 } as const;
+// 1.12 adds the per-chat Ultracode request to core.settings.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 12 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

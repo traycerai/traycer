@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, Ref } from "react";
-import { ChevronDown, Zap } from "lucide-react";
+import { ChevronDown, Workflow, Zap } from "lucide-react";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -33,6 +33,7 @@ interface HarnessModelTriggerProps extends Omit<
   reasoningIndicator: ModelStyle;
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
+  ultracodeRequested: boolean | undefined;
   maxModeRequired?: boolean;
   profileLabel: string | null;
   /** Bottom-right corner dot on the harness icon (`AccentDot`).
@@ -58,6 +59,7 @@ function triggerSummary(input: {
   readonly reasoningLabel: string | null;
   readonly serviceTierLabel: string | null;
   readonly serviceTierActive: boolean;
+  readonly ultracodeRequested: boolean | undefined;
   readonly maxModeRequired: boolean | undefined;
   readonly profileLabel: string | null;
 }): string {
@@ -69,6 +71,7 @@ function triggerSummary(input: {
     input.label,
     input.reasoningLabel === null ? null : `Thinking ${input.reasoningLabel}`,
     serviceTierSummary,
+    input.ultracodeRequested ? "Ultracode requested" : null,
     input.maxModeRequired ? "Max Mode" : null,
     input.profileLabel,
   ]
@@ -85,6 +88,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningIndicator,
     serviceTierLabel,
     serviceTierActive,
+    ultracodeRequested,
     maxModeRequired,
     profileLabel,
     profileAccentDot,
@@ -110,6 +114,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningLabel,
     serviceTierLabel,
     serviceTierActive,
+    ultracodeRequested,
     maxModeRequired,
     profileLabel,
   });
@@ -126,6 +131,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
       className={cn(
         "max-w-[min(50cqw,18rem)] min-w-0 justify-start",
         collapseWhenNarrow &&
+          !ultracodeRequested &&
           "@max-lg:size-7 @max-lg:justify-center @max-lg:px-0",
       )}
       {...rest}
@@ -140,6 +146,17 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           strokeWidth={2}
         />
       )}
+      {ultracodeRequested ? (
+        <span
+          className="inline-flex shrink-0"
+          data-testid="model-ultracode-icon"
+        >
+          <Workflow
+            aria-label="Ultracode requested"
+            className="size-3.5 text-muted-foreground"
+          />
+        </span>
+      ) : null}
       {maxModeRequired ? (
         <span
           className={cn(

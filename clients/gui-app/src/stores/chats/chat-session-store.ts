@@ -273,6 +273,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
+  ChatRunSettingsPreUltracode,
   PermissionMode,
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -344,6 +345,7 @@ export type ChatStreamClientHandle = Pick<
       // `auto`, and collapsing the two would veto the mode across every
       // fixture that predates it.
       | "autoPermissionModeProtocolSupported"
+      | "ultracodeProtocolSupported"
       // Optional, and absent reads as `null`, for the same reason.
       | "queuePauseReasonProtocolSupported"
     >
@@ -432,8 +434,12 @@ export interface ConfirmedManualFallbackAction {
    */
   readonly userMessageId: string;
   readonly turnId: string;
-  /** Where a switch went. `null` for `retry` and `wait_once`, which stay put. */
-  readonly target: ChatRunSettings | null;
+  /**
+   * Where a switch went, as reported by the frozen fallback unary. This
+   * announcement metadata carries no assertion about the chat's saved request.
+   * `null` for `retry` and `wait_once`, which stay put.
+   */
+  readonly target: ChatRunSettingsPreUltracode | null;
   /**
    * Monotonic per store instance - the consumer's dedupe key.
    *
@@ -1405,6 +1411,7 @@ export interface ChatSessionState {
    * chat composer has to hold both and this is the half only a session knows.
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
+  readonly ultracodeProtocolSupported: boolean;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -2575,6 +2582,7 @@ function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
     reasoningEffort: a.reasoningEffort === b.reasoningEffort,
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
+    ultracode: a.ultracode === b.ultracode,
     // `??` guards a pre-profile queued item (the field is missing, not
     // `null`, on an old serialized `ChatRunSettings`) so it still compares
     // equal to a fresh ambient commit instead of spuriously restamping.
@@ -10283,6 +10291,9 @@ export function createChatSessionStoreWithNotificationDependencies(
               resolveInterviewDeliveryRetryProtocolSupported(),
             autoPermissionModeProtocolSupported:
               resolveAutoPermissionModeProtocolSupported(),
+            ultracodeProtocolSupported:
+              status === "open" &&
+              streamClient?.ultracodeProtocolSupported?.() === true,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
@@ -10555,6 +10566,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10714,6 +10726,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
@@ -12493,6 +12506,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
         });
       },

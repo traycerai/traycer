@@ -238,6 +238,7 @@ vi.mock(
         selector({
           globalLastRunSettingsByHostId: {
             "host-a": {
+              ultracode: false,
               harnessId: "codex",
               model: runMocks.lastRunModel,
               profileId: "profile-2",

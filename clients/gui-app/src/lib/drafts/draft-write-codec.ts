@@ -9,7 +9,7 @@ import type {
   DraftTarget,
   DraftWorkspaceSnapshot,
 } from "@traycer/protocol/persistence/draft/schemas";
-import { chatRunSettingsStrictSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { chatRunSettingsStrictSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   DEFAULT_COMPOSER_MODE,
@@ -73,7 +73,7 @@ export function strictRunSettingsOrNull(
   settings: ChatRunSettings | null,
 ): DraftComposerPortable["runSettings"] {
   if (settings === null) return null;
-  const parsed = chatRunSettingsStrictSchema.safeParse(settings);
+  const parsed = chatRunSettingsStrictSchemaPreUltracode.safeParse(settings);
   return parsed.success ? parsed.data : null;
 }
 

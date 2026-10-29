@@ -24,6 +24,7 @@ describe("<HarnessModelTrigger />", () => {
   it("keeps the existing accessible summary when no profile data is provided", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel="High"
@@ -49,6 +50,7 @@ describe("<HarnessModelTrigger />", () => {
   it("keeps the profile accessible without repeating its name in the collapsed trigger", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel="High"
@@ -85,6 +87,7 @@ describe("<HarnessModelTrigger />", () => {
   it("renders nothing extra when the provider has under 2 profiles - byte-identical to today", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel="High"
@@ -112,6 +115,7 @@ describe("<HarnessModelTrigger />", () => {
   it("collapses the label in a narrow container only when responsive", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel={null}
@@ -132,6 +136,7 @@ describe("<HarnessModelTrigger />", () => {
   it("shows the model name at every width when labelDisplay is model-only", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel="High"
@@ -154,6 +159,7 @@ describe("<HarnessModelTrigger />", () => {
   it("drops the thinking-effort suffix in model-only, but still announces it", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel="High"
@@ -180,6 +186,7 @@ describe("<HarnessModelTrigger />", () => {
   it("keeps the thinking-effort suffix in the responsive (desktop) pill", () => {
     render(
       <HarnessModelTrigger
+        ultracodeRequested={false}
         selection={SELECTION}
         label="GPT-5.5"
         reasoningLabel="High"
@@ -205,6 +212,7 @@ describe("<HarnessModelTrigger />", () => {
     ): void {
       render(
         <HarnessModelTrigger
+          ultracodeRequested={false}
           selection={SELECTION}
           label="GPT-5.5"
           reasoningLabel={reasoningLabel}
@@ -360,6 +368,7 @@ describe("<HarnessModelTrigger />", () => {
     it("shows no glyph in model-only, whatever the setting", () => {
       render(
         <HarnessModelTrigger
+          ultracodeRequested={false}
           selection={SELECTION}
           label="GPT-5.5"
           reasoningLabel="High"

@@ -17,6 +17,7 @@ const SELECTION: HarnessModelSelection = {
 function renderTrigger(maxModeRequired: boolean) {
   render(
     <HarnessModelTrigger
+      ultracodeRequested={false}
       selection={SELECTION}
       label="Example"
       reasoningLabel="High"

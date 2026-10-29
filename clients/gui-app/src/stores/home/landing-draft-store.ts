@@ -1,4 +1,8 @@
 import {
+  chatRunSettingsSchemaPreUltracode,
+  type ChatRunSettingsPreUltracode,
+} from "@traycer/protocol/persistence/epic/foundation";
+import {
   pruneRecoveryDraft,
   recoveryDraftIds,
 } from "@/lib/tab-recovery/history";
@@ -1076,6 +1080,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       partialize: (state) => ({
         drafts: state.drafts.map((draft) => ({
           ...draft,
+          settings:
+            draft.settings === null
+              ? null
+              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
           ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
@@ -1325,13 +1333,13 @@ function parseComposerMode(value: unknown): ComposerMode {
 export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
   if (value === null || value === undefined) return null;
   const parsed = chatRunSettingsSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? { ...parsed.data, ultracode: false } : null;
 }
 
 function copyChatRunSettings(
-  settings: ChatRunSettings | null,
+  settings: ChatRunSettingsPreUltracode | null,
 ): ChatRunSettings | null {
-  return settings === null ? null : { ...settings };
+  return settings === null ? null : { ...settings, ultracode: false };
 }
 
 export function sameNullableChatRunSettings(
@@ -1344,8 +1352,9 @@ export function sameNullableChatRunSettings(
 
 function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
   return (
+    a.ultracode === b.ultracode &&
     JSON.stringify(normalizeChatRunSettings(a)) ===
-    JSON.stringify(normalizeChatRunSettings(b))
+      JSON.stringify(normalizeChatRunSettings(b))
   );
 }
 
@@ -2063,7 +2072,7 @@ export function applyLandingHostDocument(
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: document.portable.runSettings,
+    settings: copyChatRunSettings(document.portable.runSettings),
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null

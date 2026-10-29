@@ -853,6 +853,7 @@ const DRIFT_LABELS: Record<keyof ChatRunSettings | "accountContext", string> = {
   serviceTier: "service tier",
   agentMode: "agent mode",
   profileId: "profile",
+  ultracode: "Ultracode",
   accountContext: "billing",
 };
 
@@ -921,6 +922,7 @@ function runSettingsDrift(
     serviceTier: [sent.serviceTier, current.serviceTier],
     agentMode: [sent.agentMode, current.agentMode],
     profileId: [sent.profileId ?? null, current.profileId ?? null],
+    ultracode: [String(sent.ultracode), String(current.ultracode)],
   };
   // `null` is a VALUE - "use the default" - not an absence. Dropping a field
   // because its SENT value was null hid the drift that matters most.

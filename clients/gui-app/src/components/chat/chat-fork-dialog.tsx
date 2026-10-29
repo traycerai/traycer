@@ -1,3 +1,4 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -247,6 +248,7 @@ function ChatForkModelPicker(props: {
   );
   return (
     <HarnessModelPicker
+      withUltracode
       openForHarnessRef={props.openForHarnessRef}
       labelDisplay="responsive"
       store={props.store}
@@ -563,6 +565,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // against the SELECTED host's live `providers.list` and corrects a dead
   // profile to ambient, and reads the harness/model catalog through the same
   // client, so the fork offers the target host's harnesses and models.
+  const ultracodeCarried = useUltracodeCarrierSupported(
+    selectedHostId,
+    "epic.createChat",
+  );
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, selectedHostClient),
@@ -578,6 +584,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       // A fork CREATES a chat; nothing has negotiated a `chat.subscribe` line
       // for it yet, so the harness-catalog line decides `auto` alone.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried,
       stagedSurfaceKey: forkSurfaceKey,
       sendsToRestingSandbox: false,
     },
@@ -1038,6 +1045,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
+      ultracode: toolbar.ultracode,
     });
     const submittedBy = useAuthStore.getState().profile?.userId ?? null;
     const createForkChat = (): void => {

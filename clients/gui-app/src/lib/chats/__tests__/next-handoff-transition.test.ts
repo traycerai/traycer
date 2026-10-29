@@ -26,6 +26,7 @@ function makeHandoff(
     status: "waitingChat",
     content: CONTENT,
     settings: {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-sonnet-4-5",
       permissionMode: "supervised",

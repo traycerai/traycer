@@ -185,6 +185,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           reasoningFallback: "model-default",
           seedKey: "team-bot-setup-dialog-test",
           values: {
+            ultracode: false,
             permission: "supervised",
             selection: {
               harnessId: "claude",
@@ -197,6 +198,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           onSettingsChange: null,
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           hostId: HOST_ID,
         }),
       );

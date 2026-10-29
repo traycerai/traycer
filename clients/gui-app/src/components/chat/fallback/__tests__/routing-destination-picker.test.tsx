@@ -2246,6 +2246,7 @@ describe("RoutingDestinationPicker", () => {
         purpose: "setting",
         seedKey: "direct-picker-seed",
         values: {
+          ultracode: false,
           permission: DEFAULT_PERMISSION,
           selection: {
             harnessId: "claude",
@@ -2258,6 +2259,7 @@ describe("RoutingDestinationPicker", () => {
         onSettingsChange: null,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         hostId: null,
         reasoningFallback: "model-default",
       });
@@ -2277,6 +2279,7 @@ describe("RoutingDestinationPicker", () => {
         <TooltipProvider>
           <TabHostProvider hostId={TAB_HOST_ID}>
             <HarnessModelPicker
+              withUltracode={false}
               store={store}
               maxModeContext={{ kind: "none" }}
               withServiceTier={false}

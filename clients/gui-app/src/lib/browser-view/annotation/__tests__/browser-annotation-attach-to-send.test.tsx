@@ -100,6 +100,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: "browser-annotation-attach-to-send",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",
@@ -112,6 +113,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>

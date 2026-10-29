@@ -580,6 +580,7 @@ describe("useEpicCreateChatForPendingSandbox", () => {
       title: "",
       chatId: "chat-2",
       settings: {
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-6.1-sol",
         permissionMode: "supervised",
@@ -594,6 +595,7 @@ describe("useEpicCreateChatForPendingSandbox", () => {
         content: hashOnlyAttachmentDoc("a".repeat(64)),
         sender: { type: "user", userId: "user-1" },
         settings: {
+          ultracode: false,
           harnessId: "codex",
           model: "gpt-6.1-sol",
           permissionMode: "supervised",

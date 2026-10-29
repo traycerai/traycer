@@ -60,6 +60,7 @@ const QUEUE_ITEM_ID = "queue-item-1";
 const MESSAGE_ID = "queued-message-1";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

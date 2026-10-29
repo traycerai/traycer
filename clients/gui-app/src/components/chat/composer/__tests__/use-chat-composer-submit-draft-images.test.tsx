@@ -186,6 +186,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: "draft-image-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -194,6 +195,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>
@@ -660,6 +662,7 @@ function mountSubmitRerenderable(initial: {
     reasoningFallback: "model-default",
     seedKey: "draft-image-submit-rerender",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -668,6 +671,7 @@ function mountSubmitRerenderable(initial: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   const bridgeSource = mutableBridgeSource(initial.draftBlobBridgeSupported);
@@ -1025,6 +1029,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
       reasoningFallback: "model-default",
       seedKey: "btw-inline-submit",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
         reasoning: "medium",
@@ -1033,6 +1038,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const { result } = renderHook(() =>

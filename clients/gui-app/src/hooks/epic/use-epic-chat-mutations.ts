@@ -6,7 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  CreateChatRequestV13,
+  CreateChatRequestV14,
   CreateChatResponse,
   CreateChatResponseV12,
   DeleteChatRequest,
@@ -16,7 +16,7 @@ import type {
   SetChatArchivedResponse,
   UpdateChatProfileRequest,
   UpdateChatProfileResponse,
-  UpdateChatRunSettingsRequest,
+  UpdateChatRunSettingsRequestV12,
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -101,7 +101,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
  * is rejected through the mutation error channel instead of creating the chat
  * on the wrong machine.
  */
-export type CreateChatMutationInput = CreateChatRequestV13;
+export type CreateChatMutationInput = CreateChatRequestV14;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
   /**
@@ -589,7 +589,7 @@ function invalidateBindingsForEpic(
 export function useEpicUpdateChatRunSettings(): UseMutationResult<
   UpdateChatRunSettingsResponse,
   HostRpcError,
-  UpdateChatRunSettingsRequest
+  UpdateChatRunSettingsRequestV12
 > {
   const client = useTabHostClient();
   const queryClient = useQueryClient();
@@ -597,7 +597,7 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
     HostRpcRegistry,
     "epic.updateChatRunSettings",
     { hostId: string | null },
-    UpdateChatRunSettingsRequest
+    UpdateChatRunSettingsRequestV12
   >({
     client,
     method: "epic.updateChatRunSettings",

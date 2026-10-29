@@ -173,6 +173,7 @@ export function OnboardingCreateControls(props: {
       ) : null}
       <div className="flex min-w-0">
         <HarnessModelPicker
+          withUltracode={false}
           labelDisplay="responsive"
           maxModeContext={flow.maxModeContext}
           store={flow.toolbarStore}

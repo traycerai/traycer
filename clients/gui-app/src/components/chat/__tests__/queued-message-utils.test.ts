@@ -6,6 +6,7 @@ import type {
 import { queueItemCanPauseFromQueueHeader } from "@/components/chat/queued-message-utils";
 
 const TEST_SETTINGS = {
+  ultracode: false,
   harnessId: "codex" as const,
   model: "gpt-5-codex",
   permissionMode: "supervised" as const,

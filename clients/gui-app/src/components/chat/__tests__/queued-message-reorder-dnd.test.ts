@@ -243,6 +243,7 @@ describe("useQueuedMessageReorderDnd managed-command drags", () => {
 });
 
 const TEST_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

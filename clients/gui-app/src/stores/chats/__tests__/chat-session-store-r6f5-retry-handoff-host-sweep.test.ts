@@ -63,6 +63,7 @@ const OWNER_ID = "owner-r6f5b";
 const HOST_ID = "host-r6f5b";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

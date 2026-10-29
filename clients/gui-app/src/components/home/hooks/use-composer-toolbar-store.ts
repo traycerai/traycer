@@ -89,6 +89,7 @@ export interface ComposerToolbarCatalogScope {
    * the mode this composer actually sends.
    */
   readonly chatLineCarriesAutoMode: boolean | null;
+  readonly ultracodeCarried: boolean;
   /**
    * The pin key a sandbox may be staged under for this composer, or `null` on
    * a surface that stages none. While one is staged the send runs on that
@@ -155,6 +156,7 @@ export function useComposerToolbarStore(
     hostId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    ultracodeCarried,
     stagedSurfaceKey,
     sendsToRestingSandbox,
   } = catalog;
@@ -190,6 +192,7 @@ export function useComposerToolbarStore(
         selection: defaultSelection,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        ultracode: false,
       }),
     [
       defaultPermission,
@@ -213,6 +216,7 @@ export function useComposerToolbarStore(
       tuiOnly,
       hostId,
       chatLineCarriesAutoMode,
+      ultracodeCarried,
     }),
   );
   // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
@@ -305,6 +309,7 @@ export function useComposerToolbarStore(
       modelsLoaded,
       tuiOnly,
       chatLineCarriesAutoMode,
+      ultracodeCarried,
       keepsUnavailablePick,
     });
   }, [
@@ -316,6 +321,7 @@ export function useComposerToolbarStore(
     harnessId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    ultracodeCarried,
     keepsUnavailablePick,
   ]);
 
@@ -361,6 +367,7 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  readonly ultracode: boolean;
 }
 
 /**
@@ -406,6 +413,7 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
     settingsSeed.profileId ?? "",
+    settingsSeed.ultracode ? "true" : "false",
   ].join("\u0000");
 }
 
@@ -419,5 +427,6 @@ function valuesFromSettingsSeed(
     selection: selectionFromChatRunSettings(settingsSeed),
     reasoning: reasoningFromChatRunSettings(settingsSeed),
     serviceTier: serviceTierFromChatRunSettings(settingsSeed),
+    ultracode: settingsSeed.ultracode,
   };
 }

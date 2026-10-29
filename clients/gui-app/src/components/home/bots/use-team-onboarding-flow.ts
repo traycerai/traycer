@@ -107,6 +107,7 @@ export function useTeamOnboardingFlow(input: {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     },

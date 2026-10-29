@@ -35,6 +35,7 @@ const OWNER_ID = "owner-steer-retire";
 const TILE_ID = "tile-steer-retire";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

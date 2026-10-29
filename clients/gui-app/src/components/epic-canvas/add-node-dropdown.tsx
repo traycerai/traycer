@@ -334,6 +334,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     hostId: memoryHostId,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     stagedSurfaceKey: null,
     sendsToRestingSandbox: false,
   });
@@ -447,6 +448,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         <DropdownMenuLabel>Harness</DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
+            withUltracode={false}
             maxModeContext={{ kind: "none" }}
             labelDisplay="responsive"
             store={toolbarStore}

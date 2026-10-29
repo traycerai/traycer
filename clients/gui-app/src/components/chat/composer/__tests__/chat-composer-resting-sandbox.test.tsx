@@ -355,6 +355,7 @@ const SEEDED_MODEL: Readonly<Record<string, string>> = {
 /** The chat's own settings, as its last turn left them. */
 function seed(harnessId: ChatRunSettings["harnessId"]): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId,
     model: SEEDED_MODEL[harnessId],
     permissionMode: "supervised",
@@ -509,6 +510,7 @@ function mountComposerOn(
         steerCapable={false}
         steerProtocolSupported
         autoPermissionModeProtocolSupported={null}
+        ultracodeProtocolSupported={false}
         getDraftBlobBridgeSupported={() => false}
         getActiveTurnForSteer={() => null}
         editingQueueItemId={null}

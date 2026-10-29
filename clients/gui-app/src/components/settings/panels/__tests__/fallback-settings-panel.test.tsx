@@ -4793,6 +4793,7 @@ describe("FallbackSettingsPanel - the equivalent-models step hint", () => {
    * real identifier can only be read one way.
    */
   const LAST_RUN = {
+    ultracode: false,
     harnessId: "claude",
     model: "claude-fable-5-1[1m]",
     permissionMode: "supervised",

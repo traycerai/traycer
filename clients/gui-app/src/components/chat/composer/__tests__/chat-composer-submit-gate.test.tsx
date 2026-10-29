@@ -84,6 +84,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       reasoningFallback: "model-default",
       seedKey: "chat-submit-gate-test",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -96,6 +97,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
 
@@ -789,6 +791,7 @@ function mountSubmitHookWith(args: {
     reasoningFallback: "model-default",
     seedKey: "chat-submit-gate-ready-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -801,6 +804,7 @@ function mountSubmitHookWith(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 

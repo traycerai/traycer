@@ -13,7 +13,7 @@ import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic
 import type { ChatQueueDeliveryPolicy } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
-  CreateChatRequestV13,
+  CreateChatRequestV14,
   CreateChatForkSourceV11,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
@@ -103,7 +103,7 @@ export interface PendingSandboxSendDelivery {
 
 /** The exact request remains replayable even after the account's stage is cleared. */
 export interface PendingSandboxSendDispatch {
-  readonly input: CreateChatRequestV13 & { readonly settings: ChatRunSettings };
+  readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
   readonly delivery: PendingSandboxSendDelivery;
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";

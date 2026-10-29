@@ -818,6 +818,7 @@ function depictTodo(values: SizedValues): ReactNode {
 function depictModel(values: ModelValues): ReactNode {
   return (
     <HarnessModelTrigger
+      ultracodeRequested={false}
       selection={{ harnessId: "codex", modelSlug: "specimen", profileId: null }}
       label="Model"
       reasoningLabel="Medium"

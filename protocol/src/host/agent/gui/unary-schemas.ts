@@ -894,3 +894,10 @@ export const getGuiAgentPlanResponseSchema = lazySchema(() =>
 export type GetGuiAgentPlanResponse = z.infer<
   typeof getGuiAgentPlanResponseSchema
 >;
+
+export const guiAgentModelUltracodeSchema = lazySchema(() =>
+  z.object({ ultracodeOffered: z.boolean().optional() }),
+);
+export type GuiAgentModelUltracode = z.infer<
+  typeof guiAgentModelUltracodeSchema
+>;

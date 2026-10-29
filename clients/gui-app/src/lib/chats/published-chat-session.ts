@@ -349,6 +349,7 @@ export function publishedChatSessionState(
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
+    ultracodeProtocolSupported: false,
     // Not a claim about a protocol line - a copy has none - but this read-only
     // view's rule: it has no queue surface, so it drops no queue text, and a
     // queue-pause notice stays in the transcript. Published and replica alike.

@@ -68,6 +68,7 @@ const captured = vi.hoisted(() => ({
           };
           readonly reasoning: string;
           readonly serviceTier: string;
+          readonly ultracode: boolean;
         },
       ) => void;
     };
@@ -129,6 +130,7 @@ async function createToolbarStore(modelSlug: string) {
     reasoningFallback: "model-default",
     seedKey: "chat-composer-picker-profile-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -141,6 +143,7 @@ async function createToolbarStore(modelSlug: string) {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }
@@ -371,6 +374,7 @@ function composerElement() {
       steerCapable={false}
       steerProtocolSupported={false}
       autoPermissionModeProtocolSupported={null}
+      ultracodeProtocolSupported={false}
       getDraftBlobBridgeSupported={() => false}
       getActiveTurnForSteer={() => null}
       editingQueueItemId={null}
@@ -517,6 +521,7 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
 
     act(() => {
       captured.toolbarStore?.getState().applySeed("another-seed", {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",

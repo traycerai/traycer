@@ -170,6 +170,7 @@ export function useJudgeToolbarStore(input: {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     }),
   );
@@ -213,6 +214,7 @@ export function useJudgeToolbarStore(input: {
     store.getState().setCatalog({
       hostId: null,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       harnesses,
       modelsHarnessId: harnessId,
       models: models ?? EMPTY_JUDGE_MODELS,
@@ -395,6 +397,7 @@ function judgeToolbarValues(
     selection,
     reasoning,
     serviceTier: "",
+    ultracode: false,
   };
 }
 

@@ -98,6 +98,7 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
 const CHAT_HOST_ID = "host-r6f1";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

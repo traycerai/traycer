@@ -39,6 +39,7 @@ import "@/lib/drafts/draft-mirror-coordinator";
 const NODE_ID = "chat-queue-1";
 const IMAGE_HASH = "a".repeat(64);
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

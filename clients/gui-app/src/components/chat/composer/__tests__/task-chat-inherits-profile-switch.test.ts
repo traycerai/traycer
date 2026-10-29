@@ -4,6 +4,7 @@ import { taskChatInheritsProfileSwitch } from "../use-task-profile-rate-limit-sw
 
 function settings(overrides: Partial<ChatRunSettings>): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId: "claude",
     model: "opus[1m]",
     permissionMode: "supervised",

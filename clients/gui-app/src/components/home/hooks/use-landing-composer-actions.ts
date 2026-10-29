@@ -4,7 +4,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
-  CreateEpicChatSeedV12,
+  CreateEpicChatSeedV14,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
   EpicCreateOwner,
@@ -186,6 +186,7 @@ export interface LandingComposerSubmitArgs {
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
+    readonly ultracode: boolean;
   };
   /**
    * Who the new task belongs to: the resolved host's owner, read by the
@@ -404,7 +405,7 @@ export function useLandingComposerActions(
       readonly hostId: string;
       readonly title: string;
       readonly initialUserPrompt: string;
-      readonly chat: CreateEpicChatSeedV12 | null;
+      readonly chat: CreateEpicChatSeedV14 | null;
       /** `epic.create@1.3`'s owner; `null` is the person. */
       readonly owner: EpicCreateOwner | null;
       readonly workspaceFolders: ReadonlyArray<string>;
@@ -636,6 +637,7 @@ export function useLandingComposerActions(
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
+        ultracode: toolbar.ultracode,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);

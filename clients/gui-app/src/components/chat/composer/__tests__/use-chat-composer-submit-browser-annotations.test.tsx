@@ -185,6 +185,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: "browser-annotation-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",
@@ -197,6 +198,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>
@@ -821,6 +823,7 @@ describe("useChatComposerSubmit: a refusal at the live re-check is logged", () =
       reasoningFallback: "model-default",
       seedKey: "browser-annotation-recheck",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
         reasoning: "medium",
@@ -829,6 +832,7 @@ describe("useChatComposerSubmit: a refusal at the live re-check is logged", () =
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const pickerStore = createComposerPickerStore();

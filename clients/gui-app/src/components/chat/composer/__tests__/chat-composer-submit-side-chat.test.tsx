@@ -51,6 +51,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: `side-chat-submit-test-${args.taskId}`,
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -63,6 +64,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 

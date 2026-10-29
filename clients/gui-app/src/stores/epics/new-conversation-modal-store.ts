@@ -1,3 +1,4 @@
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { DraftDocument } from "@traycer/protocol/host";
@@ -443,6 +444,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
                       epicId,
                       {
                         ...patch,
+                        settings:
+                          patch.settings === null
+                            ? null
+                            : chatRunSettingsSchemaPreUltracode.parse(
+                                patch.settings,
+                              ),
                         // Fourth seam of the same class: the caret travels with
                         // the strip. `selection` is persisted here so a focus
                         // round-trip can restore it, and a removed pending image
@@ -673,7 +680,10 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
           ...dropReturnedSandboxOnNewLine(current, document.draftId),
           content: document.portable.content,
           selection: document.portable.selection,
-          settings: document.portable.runSettings,
+          settings:
+            document.portable.runSettings === null
+              ? null
+              : { ...document.portable.runSettings, ultracode: false },
           composerMode: document.portable.composerMode,
           workspace: document.workspace,
           draftId: document.draftId,

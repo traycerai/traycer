@@ -5,7 +5,7 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import {
-  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreUltracode,
   chatRunSettingsSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -180,7 +180,7 @@ export type ChatFallbackCancelResponse = z.infer<
  */
 export const chatFallbackChooseTargetRequestSchema = lazySchema(() =>
   fallbackTraversalRefSchema.extend({
-    target: chatRunSettingsSchema,
+    target: chatRunSettingsSchemaPreUltracode,
     leaseToken: z.string().nullable(),
   }),
 );
@@ -253,7 +253,7 @@ export const chatFallbackRunManualRungRequestSchema = lazySchema(() =>
        * neither branches on, and it refuses exactly the same wire values this
        * does - so the fork buys nothing at the boundary and costs at every read.
        */
-      target: chatRunSettingsSchema.nullable(),
+      target: chatRunSettingsSchemaPreUltracode.nullable(),
       /** The failed attempt's identity. Both fields, for the reason above. */
       userMessageId: z.string().trim().min(1),
       turnId: z.string().trim().min(1),
@@ -721,7 +721,7 @@ export const fallbackModelTargetSchema = lazySchema(() =>
      * the engine on the next catalog change, which is the drift this whole method
      * exists to remove.
      */
-    target: chatRunSettingsSchema.nullable(),
+    target: chatRunSettingsSchemaPreUltracode.nullable(),
     /** Dropped effort / fast mode, in `agent.configure`'s wording. Unjoined. */
     warnings: z.array(z.string()),
     /**
@@ -832,7 +832,7 @@ export const chatFallbackListTargetsResponseSchema = lazySchema(() =>
      * `null` on every answer but `listed`, and on a `listed` answer with no
      * rows because the host never recorded the attempt's tuple.
      */
-    failedTuple: chatRunSettingsSchema.nullable(),
+    failedTuple: chatRunSettingsSchemaPreUltracode.nullable(),
     profileTargets: z.array(fallbackProfileTargetSchema),
     modelTargets: z.array(fallbackModelTargetSchema),
     /**

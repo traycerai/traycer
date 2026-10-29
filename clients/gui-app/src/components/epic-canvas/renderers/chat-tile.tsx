@@ -2253,6 +2253,7 @@ function useChatTileSessionViewModel(
         permission: defaultPermission,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        ultracode: false,
       }),
     [defaultPermission, defaultReasoning, defaultServiceTier, defaultSelection],
   );
@@ -2343,6 +2344,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported: s.steerProtocolSupported,
       autoPermissionModeProtocolSupported:
         s.autoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported: s.ultracodeProtocolSupported,
       draftBlobBridgeSupported: s.draftBlobBridgeSupported,
       interviewDeliveryRetryProtocolSupported:
         s.interviewDeliveryRetryProtocolSupported,
@@ -3977,6 +3979,7 @@ function useChatTileSessionViewModel(
   // handshake lands, so it never churns the memoized composer per token.
   const autoPermissionModeProtocolSupported =
     state.autoPermissionModeProtocolSupported;
+  const ultracodeProtocolSupported = state.ultracodeProtocolSupported;
   const getActiveTurnForSteer = useCallback(
     () => handle.store.getState().activeTurn,
     [handle.store],
@@ -3996,6 +3999,7 @@ function useChatTileSessionViewModel(
       steerCapable,
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported,
       getDraftBlobBridgeSupported,
       getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,
@@ -4008,6 +4012,7 @@ function useChatTileSessionViewModel(
       steerCapable,
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported,
       getDraftBlobBridgeSupported,
       getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,

@@ -19,6 +19,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatRunSettingsBatch } from "@/hooks/chats/use-chat-run-settings-query";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet",
   permissionMode: "full_access",

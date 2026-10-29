@@ -120,6 +120,7 @@ const ADDED_IMAGE_HASH = "b".repeat(64);
 const IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

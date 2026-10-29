@@ -149,6 +149,7 @@ function sendTestMessage(harness: Harness, content: JsonContent): void {
     content,
     sender: { type: "user", userId: OWNER_ID },
     settings: {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -438,6 +439,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
         content: failedContent,
         sender: { type: "user", userId: OWNER_ID },
         settings: {
+          ultracode: false,
           harnessId: "codex",
           model: "gpt-5-codex",
           permissionMode: "supervised",
