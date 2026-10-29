@@ -56,7 +56,7 @@ repos:
   - repo: local
     hooks:
       - id: unreleased-features-off
-        name: unreleased-features.ts commits the literal false
+        name: unreleased-features.ts commits the literal true
         entry: scripts/check_unreleased_features_off.sh
         language: script
         files: (^|/)unreleased-features\.ts$

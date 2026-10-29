@@ -252,13 +252,16 @@ export function useSandboxStaging(input: {
 }): SandboxStaging | null {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
-  const surfaceKey = input.surface === null ? "" : input.surface.surfaceKey;
-  const task = input.surface === null ? null : input.surface.task;
+  // No surface stages in a build without sandboxes
+  // (`unreleased-features.ts`): the hook answers `null` for every caller, so
+  // each picker draws the plain `Host` group and its own search threshold.
+  const surface = UNRELEASED_FEATURES_ENABLED ? input.surface : null;
+  const surfaceKey = surface === null ? "" : surface.surfaceKey;
+  const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
-  // Neither read in a build without sandboxes (`unreleased-features.ts`):
-  // the picker stages nothing, so nothing prices or shapes a stage.
-  const reads = UNRELEASED_FEATURES_ENABLED && input.surface !== null;
+  // Neither read without a surface: nothing prices or shapes a stage.
+  const reads = surface !== null;
   const catalogue = useSandboxCatalogue(reads).data ?? null;
   const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
@@ -601,11 +604,11 @@ export function useSandboxStaging(input: {
       />
     );
 
-  if (input.surface === null) return null;
+  if (surface === null) return null;
   const openTerminalInstead =
     stage === null || stage.phase === "handoff"
       ? null
-      : input.surface.openTerminalInstead;
+      : surface.openTerminalInstead;
   return {
     composer,
     stage,

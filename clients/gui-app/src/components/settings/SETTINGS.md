@@ -881,7 +881,16 @@ configuration line, the settings card, the remote access question nor the
 Access and setup tab (`HOST_OVERVIEW_TABS` leaves `access` out and its groups
 are offered to no search), the Local row note and the move reminders are not
 drawn, and Credits, MCP servers, Skills, Secrets, Sandboxes and Members are
-not offered. The suites describe the build with
+not offered. Permissions keeps its earlier words too: the page's search
+description reads "How much an agent may do on its own, and who reviews the
+rest.", Rules names its first section "Environment" and its footer is Discard
+and Save with no **Reset to default**, and the Modes row carries the "All
+machines" badge and the note that the machine picker above changes nothing on
+that tab instead of the "This app only" caption. Searching for MCP servers or
+Skills lands on Providers, where each provider's own tabs for them are, and
+the Providers variables group is "Environment variables" again, as the page
+itself reads. Every host picker outside Settings lists one "Host" group, with
+its search above six hosts, the layout before sandboxes. The suites describe the build with
 everything on (`__tests__/test-browser-apis.ts` mocks the switch to `true`);
 a suite of the switched-off build mocks it to `false` itself.
 

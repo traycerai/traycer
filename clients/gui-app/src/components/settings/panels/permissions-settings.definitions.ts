@@ -21,7 +21,10 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Permissions",
-    description: "What your agents may do without asking.",
+    // The page's own words off, where the policy covers this host alone.
+    description: UNRELEASED_FEATURES_ENABLED
+      ? "What your agents may do without asking."
+      : "How much an agent may do on its own, and who reviews the rest.",
     keywords: ["permissions", "approve", "approval", "ask before"],
   },
   modesTab: {

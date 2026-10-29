@@ -16,6 +16,7 @@ import {
   formatCreditsRequired,
   formatMemory,
 } from "@/lib/sandboxes/sandbox-pricing";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The version of the consequences block's wording. A full render is recorded
@@ -110,7 +111,10 @@ export function collapsedConfigurationsLabel(
     : `Personal and ${teamsLabel}`;
 }
 
-export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
+/** The search field above a host list; the ellipsis spelling is the older one. */
+export const SEARCH_HOSTS_PLACEHOLDER = UNRELEASED_FEATURES_ENABLED
+  ? "Search hosts"
+  : "Search hosts…";
 
 /** The chip and row title of the machine this app runs on. */
 export const THIS_COMPUTER = "This computer";

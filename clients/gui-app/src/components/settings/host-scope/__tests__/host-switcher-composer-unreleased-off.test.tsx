@@ -1,7 +1,11 @@
 /**
- * The build without sandboxes (`unreleased-features.ts`): the composer's
- * host picker names this computer by its name, as every other list does,
- * rather than `This computer` beside sandbox rows it does not have.
+ * `hostRowTitle`'s gate in a build without sandboxes
+ * (`unreleased-features.ts`): given composer mode, the row still names this
+ * computer by its name, as every other list does, rather than
+ * `This computer` beside sandbox rows it does not have. No surface reaches
+ * composer mode in that build — `useSandboxStaging` answers `null`, which
+ * `host-picker-unreleased-off.test.tsx` holds — so this covers the prop
+ * contract, not a picker a person meets.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
