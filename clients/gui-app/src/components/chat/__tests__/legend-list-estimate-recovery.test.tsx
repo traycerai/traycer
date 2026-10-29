@@ -21,7 +21,7 @@ class ControllableResizeObserver implements ResizeObserver {
 
   constructor(callback: ResizeObserverCallback) {
     this.callback = callback;
-    controllableResizeObservers.push(this);
+    constructedResizeObservers.push(this);
   }
 
   observe(target: Element): void {
@@ -37,27 +37,46 @@ class ControllableResizeObserver implements ResizeObserver {
   }
 }
 
-let controllableResizeObservers: ControllableResizeObserver[] = [];
+/** Every observer this file has constructed, never reset between tests.
+ *  LegendList creates its one process-wide observer on first use and keeps it
+ *  for every later test, so a list emptied per test would stop reaching it
+ *  after the first. A list unmounting unobserves its own elements, so only
+ *  the current test's targets are ever observed. */
+const constructedResizeObservers: ControllableResizeObserver[] = [];
 
+function fireResizeObserver(
+  observer: ControllableResizeObserver,
+  targets: Iterable<Element>,
+): void {
+  const entries = [...targets].map((target) => {
+    const contentRect = target.getBoundingClientRect();
+    const size = [
+      { inlineSize: contentRect.width, blockSize: contentRect.height },
+    ];
+    return {
+      target,
+      contentRect,
+      borderBoxSize: size,
+      contentBoxSize: size,
+      devicePixelContentBoxSize: size,
+    };
+  });
+  observer.callback(entries, observer);
+}
+
+/** Reports the current size of every observed element. */
 function fireAllResizeObservers(): void {
-  for (const observer of controllableResizeObservers) {
-    const entries = [...observer.observed].map((target) => {
-      const contentRect = target.getBoundingClientRect();
-      return {
-        target,
-        contentRect,
-        borderBoxSize: [
-          { inlineSize: contentRect.width, blockSize: contentRect.height },
-        ],
-        contentBoxSize: [
-          { inlineSize: contentRect.width, blockSize: contentRect.height },
-        ],
-        devicePixelContentBoxSize: [
-          { inlineSize: contentRect.width, blockSize: contentRect.height },
-        ],
-      };
-    });
-    observer.callback(entries, observer);
+  for (const observer of constructedResizeObservers) {
+    fireResizeObserver(observer, observer.observed);
+  }
+}
+
+/** Reports the current size of one element only. */
+function fireResizeObserversOf(target: Element): void {
+  for (const observer of constructedResizeObservers) {
+    if (observer.observed.has(target)) {
+      fireResizeObserver(observer, [target]);
+    }
   }
 }
 
@@ -128,7 +147,6 @@ function positionGapsAndSizes(list: LegendListRef): {
 
 describe("LegendList estimate recovery", () => {
   beforeEach(() => {
-    controllableResizeObservers = [];
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       writable: true,
@@ -923,6 +941,60 @@ describe("LegendList estimate recovery", () => {
       await advanceLegendListFrames(1);
 
       expect(scrollNode.scrollTop).toBeCloseTo(wheeledTo + growth, 0);
+    });
+  });
+
+  /**
+   * The initial scroll to the end leaves its end target standing so that a
+   * resize keeps the reader at the tail. A reader who then scrolls up has left
+   * the tail, and a layout change shortly after must not carry them back to
+   * it. The footer is what keeps the target alive past the scroll event
+   * itself: with a footer layout pending, a scroll away only retargets it, so
+   * it is the reader's own scroll that has to retire it.
+   */
+  describe("a reader's scroll away from the end after the initial scroll to the end", () => {
+    it("retires the end target: a later layout change leaves the reader where they are", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        <LegendList
+          ref={listRef}
+          data={rows(70)}
+          estimatedItemSize={90}
+          getItemType={() => "assistant"}
+          initialScrollAtEnd
+          keyExtractor={(item) => item.id}
+          ListFooterComponent={<div aria-hidden="true" />}
+          maintainScrollAtEndThreshold={0}
+          maintainVisibleContentPosition={{ data: false, size: true }}
+          recycleItems={false}
+          renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+        />,
+      );
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+      const scrollNode = list.getScrollableNode();
+
+      // The reader scrolls up from the end: one native scroll event.
+      const readerOffset = scrollNode.scrollTop - 1_500;
+      act(() => {
+        scrollNode.scrollTop = readerOffset;
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+      await advanceLegendListFrames(2);
+      expect(scrollNode.scrollTop).toBe(readerOffset);
+
+      // The scroller's height changes, well inside the target's lifetime.
+      vi.spyOn(scrollNode, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, 0, 800, 500),
+      );
+      act(() => {
+        fireResizeObserversOf(scrollNode);
+      });
+      await advanceLegendListFrames(10);
+
+      expect(scrollNode.scrollTop).toBe(readerOffset);
     });
   });
 });

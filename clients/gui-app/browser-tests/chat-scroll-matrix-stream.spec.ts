@@ -33,7 +33,19 @@ declare global {
     /** The reader's view as the first wheel of a burst landed, written by
      *  `armWheelPin`. */
     __preWheel?: ReaderView;
+    /** One entry per frame since the scroller mounted, written by
+     *  `installEarlyTrace`. */
+    __earlyTrace?: EarlyFrame[];
+    /** Index into `__earlyTrace` of the frame the first wheel landed in. */
+    __earlyWheelFrame?: number;
   }
+}
+
+interface EarlyFrame {
+  readonly at: number;
+  readonly scrollTop: number;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
 }
 
 interface ReaderView {
@@ -261,6 +273,78 @@ async function detach(page: Page, deltaY: number): Promise<ReaderIntent> {
   return intentOf(view);
 }
 
+/** Records the scroller's geometry every frame from the page's first script,
+ *  and the frame the first wheel lands in, so a test can say whether a wheel
+ *  came before the layout settled. */
+async function installEarlyTrace(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const trace: EarlyFrame[] = [];
+    window.__earlyTrace = trace;
+    window.addEventListener(
+      "wheel",
+      () => {
+        window.__earlyWheelFrame ??= trace.length;
+      },
+      { capture: true, passive: true },
+    );
+    const tick = (): void => {
+      const node = document.querySelector<HTMLElement>(
+        '[data-testid="chat-messages-scroll"]',
+      );
+      if (node !== null) {
+        trace.push({
+          at: performance.now(),
+          scrollTop: node.scrollTop,
+          scrollHeight: node.scrollHeight,
+          clientHeight: node.clientHeight,
+        });
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+/** Loads the transcript and wheels up the moment its scroller exists, without
+ *  waiting for the initial scroll to rest. Returns what the trace says about
+ *  the wheel's timing. */
+async function openAndWheelEarly(page: Page, deltaY: number): Promise<string> {
+  await installEarlyTrace(page);
+  await page.setViewportSize({ width: 900, height: 700 });
+  // The pointer is already over the transcript when the scroller mounts.
+  await page.mouse.move(450, 350);
+  await page.goto(
+    `${fixture("chat-scroll-model")}${currentLine === "windowed" ? "?line=windowed" : ""}`,
+  );
+  await page.waitForFunction(() => (window.__earlyTrace?.length ?? 0) > 0, {
+    polling: "raf",
+  });
+  // No `wheelsDelivered`: its listener install is a round trip of its own,
+  // and the trace already records the frame the wheel lands in.
+  await page.mouse.wheel(0, deltaY);
+  await page.waitForFunction(() => window.__earlyWheelFrame !== undefined, {
+    polling: "raf",
+  });
+  const trace = await page.evaluate(() => ({
+    frames: window.__earlyTrace ?? [],
+    wheelFrame: window.__earlyWheelFrame ?? null,
+  }));
+  if (trace.wheelFrame === null) throw new Error("the wheel never landed");
+  const before = trace.frames.at(trace.wheelFrame - 1);
+  const wheelAt = trace.frames.at(trace.wheelFrame)?.at ?? Number.NaN;
+  const fromEndBefore =
+    before === undefined
+      ? Number.NaN
+      : before.scrollHeight - before.clientHeight - before.scrollTop;
+  const heightChangesAfter = trace.frames
+    .slice(trace.wheelFrame)
+    .filter(
+      (frame, index, frames) =>
+        index > 0 && frame.scrollHeight !== frames[index - 1]?.scrollHeight,
+    ).length;
+  return `wheel landed ${wheelAt.toFixed(0)}ms after the page started, ${String(trace.wheelFrame)} frames after the scroller mounted, ${fromEndBefore.toFixed(0)}px from the end; scrollHeight changed in ${String(heightChangesAfter)} frames after it`;
+}
+
 for (const line of ["legacy", "windowed"] as const) {
   test.describe(line, () => {
     test.beforeEach(() => {
@@ -432,6 +516,66 @@ for (const line of ["legacy", "windowed"] as const) {
           await expectAtRest(page, intent, "detached");
           const edge = await markEdgeElement(page);
           await page.setViewportSize(size);
+          const view = await settle(page, 12);
+          const after = await edgeElementTop(page, edge);
+          expect(view.mode, "still detached").toBe("free-scrolling");
+          expect(view.pill, "pill shown while detached").toBe(true);
+          expect(
+            after,
+            `the ${edge.tag} "${edge.text.slice(0, 24)}" at the edge was re-found`,
+          ).not.toBeNull();
+          expect(
+            Math.abs((after ?? 0) - edge.top),
+            `the ${edge.tag} at the edge moved ${edge.top.toFixed(1)} -> ${String(after)}`,
+          ).toBeLessThanOrEqual(1);
+        });
+      });
+    }
+
+    // The reader wheels away before the initial scroll to the end settles. A
+    // layout change after that must not pull them back to the tail.
+    const earlyDetachChanges: ReadonlyArray<{
+      readonly name: string;
+      readonly lines: readonly (typeof line)[];
+      readonly apply: (page: Page) => Promise<void>;
+    }> = [
+      {
+        name: "resize (narrower)",
+        lines: ["legacy", "windowed"],
+        apply: (page) => page.setViewportSize({ width: 600, height: 700 }),
+      },
+      {
+        name: "resize (shorter)",
+        lines: ["legacy", "windowed"],
+        apply: (page) => page.setViewportSize({ width: 900, height: 500 }),
+      },
+      {
+        // Only the windowed fixture has a composer dock that can change height.
+        name: "composer dock (taller)",
+        lines: ["windowed"],
+        apply: (page) =>
+          page.evaluate(() => window.__chatScrollProbe.typeDraft(8)),
+      },
+    ];
+
+    for (const change of earlyDetachChanges) {
+      if (!change.lines.includes(line)) continue;
+      test(`B6 early detach: ${change.name} (${line}) before the initial scroll settles: the element at the top edge is held`, async ({
+        page,
+      }, testInfo) => {
+        const landing = await openAndWheelEarly(page, -1500);
+        testInfo.annotations.push({
+          type: "early wheel",
+          description: landing,
+        });
+        await withTimeline(page, async () => {
+          const detached = await settle(page, 12);
+          expect(
+            detached.mode,
+            `detached by the early wheel (${landing})`,
+          ).toBe("free-scrolling");
+          const edge = await markEdgeElement(page);
+          await change.apply(page);
           const view = await settle(page, 12);
           const after = await edgeElementTop(page, edge);
           expect(view.mode, "still detached").toBe("free-scrolling");
