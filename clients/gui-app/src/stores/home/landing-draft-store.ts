@@ -173,6 +173,12 @@ export interface InstallLandingDraftInput {
   readonly composerMode: ComposerMode;
   readonly workspace: LandingDraftWorkspaceSnapshot;
   readonly closed: boolean;
+  /**
+   * Where the draft's message goes, created with the draft in the same
+   * write. Stamped with the signed-in account as `setDraftReturnedSandbox`
+   * stamps it; a stored record keeps its own.
+   */
+  readonly returnedSandbox: ReturnedSandbox | StoredReturnedSandbox | null;
 }
 
 interface LandingDraftStoreState {
@@ -741,6 +747,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // adopts and publishes it on the next sweep.
           generation: 1,
           closed: input.closed,
+          returnedSandbox:
+            input.returnedSandbox === null
+              ? null
+              : storeReturnedSandbox(input.returnedSandbox),
         };
         // Partial set: `activeDraftId` is deliberately left where it is.
         set((state) => ({

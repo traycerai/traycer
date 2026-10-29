@@ -69,6 +69,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
@@ -205,6 +206,12 @@ export async function buildUnrecordedPromptHandoff(args: {
   readonly reason: string;
   readonly readHashImage: HandoffImageResolver;
   readonly stillCurrent: () => boolean;
+  /**
+   * Where the draft's message goes, or `null`. The draft is created with it,
+   * on every path: a draft listed in Drafts before its image reads settle
+   * already sends there.
+   */
+  readonly returnedSandbox: ReturnedSandbox | null;
 }): Promise<PromptHandoffOutcome> {
   // Started BEFORE the race and held afterwards, whichever leg wins. The race
   // bounds how long the handoff waits; it does not cancel anything, so this
@@ -249,6 +256,7 @@ export async function buildUnrecordedPromptHandoff(args: {
         recovery: args.recovery,
         content: raced.result.content,
         stillCurrent: args.stillCurrent,
+        returnedSandbox: args.returnedSandbox,
         qualification: teardownQualification({
           reason: args.reason,
           // Inline images whose format the host's writer will not accept are
@@ -411,6 +419,8 @@ export interface TextOnlyPromptHandoffInput {
   readonly reason: string;
   readonly cause: DroppedImageCause;
   readonly stillCurrent: () => boolean;
+  /** Where the draft's message goes, or `null`; the draft is created with it. */
+  readonly returnedSandbox: ReturnedSandbox | null;
 }
 
 export function buildTextOnlyPromptHandoff(
@@ -442,6 +452,7 @@ function installTextOnly(
         recovery: args.recovery,
         content: stripped.content,
         stillCurrent: args.stillCurrent,
+        returnedSandbox: args.returnedSandbox,
         qualification: teardownQualification({
           reason: args.reason,
           droppedImages: stripped.dropped,
@@ -472,6 +483,7 @@ function installHandoffDraft(args: {
   readonly content: JsonContent;
   readonly qualification: string;
   readonly stillCurrent: () => boolean;
+  readonly returnedSandbox: ReturnedSandbox | null;
 }): string | null {
   // SYNCHRONOUS with the install, with no await between them. The fence is
   // about WHO this text belongs to, and the image reads above it are long
@@ -494,6 +506,7 @@ function installHandoffDraft(args: {
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
+    returnedSandbox: args.returnedSandbox,
   });
   return installed ||
     useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)

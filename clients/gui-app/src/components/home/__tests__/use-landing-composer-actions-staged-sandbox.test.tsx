@@ -734,6 +734,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
     });
     const composer = renderHook<void, { readonly draftId: string }>(
       (props) => useLandingReturnedSandbox(SURFACE, props.draftId, true),
