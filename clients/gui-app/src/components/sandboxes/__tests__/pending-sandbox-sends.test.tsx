@@ -89,6 +89,7 @@ import {
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { useNewConversationReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
+import { takeReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -96,6 +97,7 @@ import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-
 import {
   readStagedSandbox,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxFailure,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -1044,6 +1046,42 @@ async function waitForCreateChats(count: number): Promise<void> {
 
 function createChatCalls(): CreateChatCall[] {
   return mocks.createChatCalls.filter(isCreateChatCall);
+}
+
+/** Every composer surface's stage; a pending send's own stage is not one. */
+function composerStages(): Readonly<Record<string, StagedSandbox | undefined>> {
+  const pending = pendingSendSurfaceKey("");
+  return Object.fromEntries(
+    Object.entries(useStagedSandboxStore.getState().bySurface).filter(
+      ([key]) => !key.startsWith(pending),
+    ),
+  );
+}
+
+/**
+ * A give-back writes only the record on the draft that takes the message: no
+ * composer surface is staged, and the task composer holds no restored mark
+ * for it. The composer showing the draft stages it.
+ */
+function expectOnlyTheRecordWritten(
+  before: Readonly<Record<string, StagedSandbox | undefined>>,
+): void {
+  expect(composerStages()).toEqual(before);
+  const records = [
+    useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+      ?.returnedSandbox,
+    ...useLandingDraftStore
+      .getState()
+      .drafts.map((draft) => draft.returnedSandbox),
+  ];
+  for (const record of records)
+    if (record !== undefined && record !== null)
+      expect(
+        takeReturnedSandboxRestored(
+          newConversationSurfaceKey("epic-1"),
+          record,
+        ),
+      ).toBe(false);
 }
 
 function isCreateChatCall(value: unknown): value is CreateChatCall {
@@ -2916,6 +2954,7 @@ describe("a send whose task may not exist yet", () => {
       });
       const key = readStagedSandbox(SURFACE)?.clientRequestId;
       mocks.createSandbox.mockResolvedValue(CREDITS_REFUSED);
+      const before = composerStages();
       mount();
 
       await waitFor(() => {
@@ -2937,6 +2976,7 @@ describe("a send whose task may not exist yet", () => {
           returnedSandbox: { target: NEW_TARGET, clientRequestId: key },
         },
       ]);
+      expectOnlyTheRecordWritten(before);
       expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
     } finally {
       if (originalLocks === undefined) {
@@ -4921,12 +4961,20 @@ describe("cancelling a refused pending message", () => {
           expect(
             useNewConversationModalOpenStore.getState().request,
           ).toMatchObject({ epicId: "epic-1", tabId: "tab-1", hostId: null });
-          // Still on the resting sandbox, staged so the composer's Send wakes it.
+          // Still on the resting sandbox: the task draft records it for its
+          // composer to stage, so the composer's Send wakes it. Nothing is
+          // staged until that composer shows it.
           expect(
-            readStagedSandbox(newConversationSurfaceKey("epic-1")),
+            useNewConversationModalStore.getState().draftPatchesByEpicId[
+              "epic-1"
+            ]?.returnedSandbox,
           ).toMatchObject({
             target: { kind: "existing", sandboxId: SANDBOX_ID, verb: "resume" },
+            clientRequestId: null,
           });
+          expect(
+            readStagedSandbox(newConversationSurfaceKey("epic-1")),
+          ).toBeNull();
           expect(
             screen.getByRole("button", { name: "Open draft" }),
           ).toBeDefined();
@@ -4975,13 +5023,15 @@ describe("cancelling a send whose create was accepted but not answered", () => {
         expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
       );
       const taskSurface = newConversationSurfaceKey("epic-1");
-      expect(readStagedSandbox(taskSurface)).toMatchObject({
-        phase: "staged",
-        clientRequestId: key,
-        target: NEW_TARGET,
-      });
-      // A reload before the Send: the composer's stage is gone with the
-      // window. Reopened from Drafts, the draft brings it back, key and all.
+      // The task draft records the sandbox and the create's key; nothing is
+      // staged until its composer shows it.
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+          ?.returnedSandbox,
+      ).toMatchObject({ target: NEW_TARGET, clientRequestId: key });
+      expect(readStagedSandbox(taskSurface)).toBeNull();
+      // A reload before the Send. Reopened from Drafts, the draft brings the
+      // sandbox back, key and all.
       await reloadPendingSandboxStores();
       await reloadTaskDrafts();
       expect(readStagedSandbox(taskSurface)).toBeNull();
@@ -5120,6 +5170,7 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
         name: "Cancel the message",
       });
       await waitFor(() => expect(cancel).not.toHaveProperty("disabled", true));
+      const before = composerStages();
 
       fireEvent.click(cancel);
 
@@ -5132,6 +5183,7 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
           returnedSandbox: { target: NEW_TARGET, clientRequestId: key },
         },
       ]);
+      expectOnlyTheRecordWritten(before);
       await act(async () => {
         creation.resolve(CREDITS_REFUSED);
         await creation.promise;
@@ -5146,6 +5198,7 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
     try {
       seed({ ...SEEDED, phase: "creating", created: false });
       const key = readStagedSandbox(SURFACE)?.clientRequestId;
+      const before = composerStages();
 
       recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-1");
 
@@ -5158,6 +5211,7 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
           returnedSandbox: { target: NEW_TARGET, clientRequestId: key },
         },
       ]);
+      expectOnlyTheRecordWritten(before);
     } finally {
       restoreLocks();
     }
@@ -5185,6 +5239,7 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
       answerSandboxRows([awake], Date.now() + 60_000);
       mount();
       await screen.findByTestId("pending-sandbox-sends");
+      const before = composerStages();
 
       recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-1");
 
@@ -5205,6 +5260,7 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
           },
         },
       ]);
+      expectOnlyTheRecordWritten(before);
     } finally {
       useLandingDraftStore.setState({ installLandingDraft: install });
       restoreLocks();
@@ -5752,9 +5808,12 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
     ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-    // Staged to resume, so the composer's Send wakes it in this task.
-    expect(readStagedSandbox(taskSurface)).toMatchObject({
-      phase: "staged",
+    // Recorded to resume, so the composer's Send wakes it in this task once
+    // the composer shows the draft. Nothing is staged or pinned before then.
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.returnedSandbox,
+    ).toMatchObject({
       target: {
         kind: "existing",
         hostId: SANDBOX_HOST,
@@ -5762,10 +5821,12 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
         name: "api-refactor",
         verb: "resume",
       },
+      clientRequestId: null,
     });
+    expect(readStagedSandbox(taskSurface)).toBeNull();
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe(SANDBOX_HOST);
+    ).toBeUndefined();
     // A rest is nobody's gesture: nothing opens on its own.
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
     const line = await screen.findByTestId("sandbox-stopped-line");
@@ -5925,6 +5986,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
         .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
     });
     await mountHeld();
+    const before = composerStages();
 
     answerSandboxRows([rowIn("suspended")], FRESH + 1);
 
@@ -5947,6 +6009,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
         },
       },
     ]);
+    expectOnlyTheRecordWritten(before);
   });
 
   it("keeps the awake sandbox on a cancelled message's draft when the task's composer holds another message", async () => {
@@ -5956,6 +6019,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
         .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
     });
     await mountHeld();
+    const before = composerStages();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel the message" }));
 
@@ -5976,10 +6040,12 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
         },
       },
     ]);
+    expectOnlyTheRecordWritten(before);
   });
 
   it("puts a cancelled message back in this task's composer on the awake sandbox", async () => {
     await mountHeld();
+    const before = composerStages();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel the message" }));
 
@@ -5993,8 +6059,17 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
     ).toBe(SANDBOX_HOST);
-    // Awake: the pick is the host itself, as the picker makes it.
+    // Awake: the pick is the host itself, as the picker makes it, and the
+    // task draft records the sandbox for its composer to decide on.
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.returnedSandbox,
+    ).toMatchObject({
+      target: { kind: "existing", hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID },
+      clientRequestId: null,
+    });
     expect(readStagedSandbox(taskSurface)).toBeNull();
+    expectOnlyTheRecordWritten(before);
     expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
       epicId: "epic-1",
       tabId: "tab-1",
@@ -7907,16 +7982,13 @@ describe("choosing Stop on an unclaimed send", () => {
       tabId: "tab-1",
       hostId: null,
     });
-    // On the sandbox it was sent to, never the composer's default host.
+    // On the sandbox it was sent to, never the composer's default host: the
+    // task draft records it, and the composer stages it when it shows the
+    // draft. Nothing is staged or pinned before then.
     expect(
-      useSurfaceHostSelectionStore.getState().selections[
-        newConversationSurfaceKey("epic-1")
-      ],
-    ).toBe(SANDBOX_HOST);
-    expect(
-      readStagedSandbox(newConversationSurfaceKey("epic-1")),
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.returnedSandbox,
     ).toMatchObject({
-      phase: "staged",
       target: {
         kind: "existing",
         hostId: SANDBOX_HOST,
@@ -7924,7 +7996,14 @@ describe("choosing Stop on an unclaimed send", () => {
         name: "api-refactor",
         verb: "start",
       },
+      clientRequestId: null,
     });
+    expect(readStagedSandbox(newConversationSurfaceKey("epic-1"))).toBeNull();
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        newConversationSurfaceKey("epic-1")
+      ],
+    ).toBeUndefined();
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(
@@ -7998,10 +8077,15 @@ describe("choosing Stop on an unclaimed send", () => {
 
     await chooseStopAndConfirmRest();
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
-    // The message is back in the task's composer on the stopped sandbox.
+    // The message is back in the task's composer on the stopped sandbox: its
+    // draft records it, and the composer's pin is left as it was.
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.returnedSandbox,
+    ).toMatchObject({ target: { kind: "existing", hostId: SANDBOX_HOST } });
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe(SANDBOX_HOST);
+    ).toBe("pinned-host");
 
     act(() => {
       useNewConversationModalStore.getState().clearDraft("epic-1");
@@ -8013,7 +8097,7 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBe(SANDBOX_HOST);
+    ).toBe("pinned-host");
   });
 
   it("clears the stopped receipt when a newer send appears in the task", async () => {

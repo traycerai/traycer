@@ -21,7 +21,13 @@ import {
   requestedAgentReadiness,
   returnPendingSandboxMessage,
   returnPendingSandboxSend,
+  returnPendingSandboxSendToSandbox,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import { takeReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   readStagedSandbox,
@@ -1075,7 +1081,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
   it("gives the message back to that chat's composer, and opens no new-agent modal and saves no landing draft", async () => {
     const release = await ownedMessageSend();
 
-    const returned = await returnPendingSandboxMessage("send-1", false);
+    const returned = await returnPendingSandboxMessage("send-1", false, true);
 
     expect(returned).toMatchObject({ kind: "chat", chatId: CHAT_ID });
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
@@ -1102,7 +1108,7 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
     useComposerDraftStore.getState().replaceDraft(CHAT_ID, newer, null);
     const release = await ownedMessageSend();
 
-    const returned = await returnPendingSandboxMessage("send-1", false);
+    const returned = await returnPendingSandboxMessage("send-1", false, true);
 
     expect(returned.kind).toBe("landing-draft");
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
@@ -1120,6 +1126,214 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     release();
   });
+
+  describe("on the chat's sandbox, when the chat's composer holds a newer draft", () => {
+    const CHAT_SANDBOX: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+      kind: "existing",
+      hostId: "sandbox-host",
+      sandboxId: "sandbox-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    };
+
+    beforeEach(() => {
+      useComposerDraftStore.getState().replaceDraft(
+        CHAT_ID,
+        {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "keep my newer draft" }],
+            },
+          ],
+        },
+        null,
+      );
+    });
+
+    async function ownedMessageOnItsSandbox(
+      stopRequested: boolean,
+    ): Promise<() => void> {
+      const release = await ownedMessageSend();
+      const surfaceKey = pendingSendSurfaceKey("send-1");
+      const staged = useStagedSandboxStore.getState();
+      staged.stage(surfaceKey, CHAT_SANDBOX);
+      staged.report(surfaceKey, {
+        clientRequestId: "key-1",
+        createdSandboxId: CHAT_SANDBOX.sandboxId,
+        createdHostId: CHAT_SANDBOX.hostId,
+      });
+      if (stopRequested) {
+        const { sends } = usePendingSandboxSendStore.getState();
+        if (!Object.hasOwn(sends, "send-1"))
+          throw new Error("expected the send");
+        const send = sends["send-1"];
+        usePendingSandboxSendStore.setState({
+          sends: { ...sends, "send-1": { ...send, stopRequested } },
+        });
+      }
+      return release;
+    }
+
+    it("keeps the sandbox on the landing draft it saves", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+
+      const returned = await returnPendingSandboxMessage("send-1", false, true);
+
+      if (returned.kind !== "landing-draft")
+        throw new Error("expected a landing draft");
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.find((draft) => draft.id === returned.draftId)
+          ?.returnedSandbox,
+      ).toMatchObject({ target: CHAT_SANDBOX, clientRequestId: null });
+      release();
+    });
+
+    it.each([
+      ["after a Stop", true, true],
+      ["when the person chose another host", false, false],
+    ])(
+      "keeps no sandbox on the landing draft %s",
+      async (_label, stopRequested, keepsSandbox) => {
+        const release = await ownedMessageOnItsSandbox(stopRequested);
+
+        const returned = await returnPendingSandboxMessage(
+          "send-1",
+          false,
+          keepsSandbox,
+        );
+
+        if (returned.kind !== "landing-draft")
+          throw new Error("expected a landing draft");
+        expect(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((draft) => draft.id === returned.draftId)
+            ?.returnedSandbox,
+        ).toBeNull();
+        release();
+      },
+    );
+  });
+});
+
+/**
+ * A give-back writes only the record on the draft that takes the message:
+ * the composer showing that draft stages it. Nothing is staged or marked on
+ * the composer's surface; an awake sandbox is also the task composer's host.
+ */
+describe("a message given back to its task's composer on its sandbox", () => {
+  const TASK_SURFACE = newConversationSurfaceKey("epic-1");
+  const SANDBOX: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+    kind: "existing",
+    hostId: "sandbox-host",
+    sandboxId: "sandbox-1",
+    name: "build-box",
+    configuration: { kind: "personal" },
+    verb: "resume",
+  };
+  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+
+  beforeEach(() => {
+    useNewConversationModalStore.getState().resetForTests();
+    useSurfaceHostSelectionStore.setState({ selections: {} });
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (originalLocks === undefined) {
+      Reflect.deleteProperty(navigator, "locks");
+    } else {
+      Object.defineProperty(navigator, "locks", originalLocks);
+    }
+  });
+
+  async function owned(): Promise<() => void> {
+    usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+    const owner = holdPendingSandboxSendOwnership("send-1");
+    expect(await owner.ready).toBe(true);
+    return owner.release;
+  }
+
+  function taskRecord() {
+    return useNewConversationModalStore.getState().draftPatchesByEpicId[
+      "epic-1"
+    ]?.returnedSandbox;
+  }
+
+  it("records an awake sandbox on the task draft and makes it the composer's host, staging nothing", async () => {
+    const release = await owned();
+
+    expect(
+      returnPendingSandboxSendToSandbox("send-1", {
+        kind: "host",
+        target: SANDBOX,
+      }).kind,
+    ).toBe("task");
+
+    expect(taskRecord()).toMatchObject({
+      target: SANDBOX,
+      clientRequestId: null,
+    });
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[TASK_SURFACE],
+    ).toBe(SANDBOX.hostId);
+    expect(readStagedSandbox(TASK_SURFACE)).toBeNull();
+    release();
+  });
+
+  it.each([
+    ["a resting sandbox", { target: SANDBOX, clientRequestId: null }],
+    [
+      "a create the server may have accepted",
+      {
+        target: NEW_TARGET,
+        clientRequestId: "key-1",
+      },
+    ],
+  ])(
+    "records %s on the task draft, and stages, marks and pins nothing",
+    async (_label, destination) => {
+      const release = await owned();
+
+      expect(
+        returnPendingSandboxSendToSandbox("send-1", {
+          kind: "stage",
+          ...destination,
+        }).kind,
+      ).toBe("task");
+
+      expect(taskRecord()).toMatchObject(destination);
+      expect(readStagedSandbox(TASK_SURFACE)).toBeNull();
+      expect(takeReturnedSandboxRestored(TASK_SURFACE, destination)).toBe(
+        false,
+      );
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[TASK_SURFACE],
+      ).toBeUndefined();
+      release();
+    },
+  );
 });
 
 describe("runSilentCapableEpicTerminalCreate", () => {
