@@ -20,6 +20,8 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import type {
   IFileSaveHost,
   IRunnerHost,
+  SavedFileLocation,
+  UrlDownloadRequest,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
   SandboxArtifactBridge,
@@ -351,6 +353,84 @@ describe("<FileArtifactViewer />", () => {
     expect(name).toBe("data.bin");
     expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([...bytes]);
     expect(requests).toHaveLength(1);
+  });
+
+  it("downloads a published file on another machine's host straight from its cloud URL, reading no bytes through that host", async () => {
+    mocks.localHostId = "host-2";
+    const downloadUrl =
+      vi.fn<
+        (request: UrlDownloadRequest) => Promise<SavedFileLocation | null>
+      >();
+    downloadUrl.mockResolvedValue({ name: "data.bin", path: "/dl/data.bin" });
+    mocks.fileSave = {
+      saveFile: () => Promise.resolve(null),
+      openSavedFile: null,
+      downloadFile: null,
+      saveRoute: "download",
+      downloadUrl,
+    };
+    const signed = "https://cdn.example.test/data.bin?sig=dl";
+    mocks.urlResponse = {
+      kind: "url",
+      url: signed,
+      expiresAt: Date.now() + 60_000,
+    };
+    const bytes = Uint8Array.from([0, 1, 2]);
+    const { readSpan, requests } = servingSpan(bytes);
+
+    renderViewer(
+      "data.bin",
+      objectOf(bytes, "a".repeat(64), "application/octet-stream"),
+      readSpan,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await waitFor(() =>
+      expect(downloadUrl).toHaveBeenCalledWith({
+        url: signed,
+        name: "data.bin",
+        type: "application/octet-stream",
+      }),
+    );
+    // The URL was minted for the press, not when the viewer opened.
+    expect(mocks.urlRequests).toEqual([
+      { epicId: "epic-1", sha256: "a".repeat(64), want: { kind: "url" } },
+    ]);
+    expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
+  });
+
+  it("downloads an unpublished file on another machine's host through that host, since the cloud has no copy yet", async () => {
+    mocks.localHostId = "host-2";
+    const downloadUrl =
+      vi.fn<
+        (request: UrlDownloadRequest) => Promise<SavedFileLocation | null>
+      >();
+    mocks.fileSave = {
+      saveFile: () => Promise.resolve(null),
+      openSavedFile: null,
+      downloadFile: null,
+      saveRoute: "download",
+      downloadUrl,
+    };
+    const bytes = Uint8Array.from([3, 4, 5]);
+    const { readSpan } = servingSpan(bytes);
+
+    renderViewer(
+      "data.bin",
+      {
+        ...objectOf(bytes, "a".repeat(64), "application/octet-stream"),
+        status: "uploading",
+      },
+      readSpan,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await waitFor(() =>
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledTimes(1),
+    );
+    expect(downloadUrl).not.toHaveBeenCalled();
+    expect(mocks.urlRequests).toEqual([]);
   });
 
   it("offers only Share on a shell whose save is a chooser with no direct download, and Share hands the bytes to the existing share route", async () => {
@@ -757,7 +837,7 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
       expect(container.querySelector("video")).not.toBeNull(),
     );
     expect(bridge.registered).toHaveLength(1);
-    expect(mocks.hostQueryParams).toEqual([]);
+    expect(mocks.urlRequests).toEqual([]);
   });
 
   it("keeps the same mount when only the object's status moves from queued to published", async () => {

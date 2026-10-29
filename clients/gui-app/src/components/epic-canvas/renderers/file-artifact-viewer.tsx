@@ -2,6 +2,7 @@ import { MediaArtifactContent } from "./media-artifact-content";
 import { useEffect, useState, type ReactNode } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
+import type { IFileSaveHost } from "@traycer-clients/shared/platform/runner-host";
 import { Button } from "@/components/ui/button";
 import {
   ImagePreview,
@@ -11,6 +12,9 @@ import { PdfPreviewLazy } from "@/components/epic-canvas/pdf-preview/pdf-preview
 import { DocxPreviewLazy } from "@/components/epic-canvas/docx-preview/docx-preview-lazy";
 import { useBlobObjectUrl } from "@/hooks/files/use-blob-object-url";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   canDownloadToDevice,
   downloadBlobToDevice,
@@ -91,10 +95,23 @@ export function FileArtifactViewer(props: {
       retry: false,
     }),
   );
+  const cloudDownload = useCloudDownload({
+    hostId: props.hostId,
+    epicId: props.epicId,
+    object,
+    name,
+    fileSave,
+  });
   const save = async (route: "download" | "share"): Promise<void> => {
     setSaving(true);
     setSaveError(null);
     try {
+      if (
+        route === "download" &&
+        cloudDownload !== null &&
+        (await cloudDownload())
+      )
+        return;
       const blob =
         query.data?.size === object.byteLength
           ? query.data
@@ -201,6 +218,57 @@ export function FileArtifactViewer(props: {
         ))}
     </div>
   );
+}
+
+/**
+ * Download of a published file on another machine's host: the shell pulls it
+ * straight from the cloud, network to disk, instead of this process reading
+ * every span over the relay into memory first, which a large recording does
+ * not survive. Resolves `false` when the host minted no URL, and the caller
+ * reads the bytes through the host as before.
+ *
+ * `null` where there is nothing to gain: a shell with no native URL
+ * download, a file not in the cloud yet, or this machine's own host, which
+ * has the file on disk or is mirroring it, so the read stays local.
+ */
+function useCloudDownload(input: {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly object: ArtifactObjectRef;
+  readonly name: string;
+  readonly fileSave: IFileSaveHost | null;
+}): (() => Promise<boolean>) | null {
+  const client = useHostClientForHostId(input.hostId);
+  const localHostId = useReactiveLocalHostId();
+  const url = useHostQuery({
+    client,
+    method: "epic.readArtifactObject",
+    params: {
+      epicId: input.epicId,
+      sha256: input.object.sha256,
+      want: { kind: "url" },
+    },
+    cacheKeyIdentity: undefined,
+    // Read only when Download is pressed: a signed URL is short-lived.
+    options: { enabled: false, staleTime: 0 },
+  });
+  const downloadUrl = input.fileSave?.downloadUrl ?? null;
+  if (
+    downloadUrl === null ||
+    input.object.status !== "published" ||
+    input.hostId === localHostId
+  )
+    return null;
+  return async () => {
+    const { data } = await url.refetch({ throwOnError: true });
+    if (data?.kind !== "url") return false;
+    await downloadUrl({
+      url: data.url,
+      name: input.name,
+      type: input.object.mediaType,
+    });
+    return true;
+  };
 }
 
 function FileContent(props: {
