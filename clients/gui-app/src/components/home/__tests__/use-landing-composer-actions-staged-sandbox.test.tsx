@@ -7,6 +7,7 @@
  * person asked for is ready there. The action, the stores and the navigation
  * seam are the real ones; `epic.create` is the host's.
  */
+import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-send-handoff";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -37,11 +38,7 @@ import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
-import {
-  confirmPendingSandboxSendEpic,
-  handPendingSandboxSend,
-  returnPendingSandboxSend,
-} from "@/lib/sandboxes/pending-sandbox-send";
+import { returnPendingSandboxSend } from "@/lib/sandboxes/pending-sandbox-send";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -368,32 +365,15 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     verb: "start",
   };
 
-  /** What the surface's send hands over, as the landing composer does. */
   function hand(epicId: string) {
-    const id = handPendingSandboxSend({
+    return handLandingSandboxSend({
       fromSurfaceKey: SURFACE,
       epicId,
-      request: { kind: "chat", parentId: null, placement: null },
       content: MESSAGE_CONTENT,
       text: SUBMITTED_PROMPT,
       settings: PICKED_SETTINGS,
-      // The task is being created with the send, as the landing composer's is.
-      epicConfirmed: false,
       now: Date.now(),
     });
-    return id === null
-      ? null
-      : {
-          isCurrent: () => {
-            const { sends } = usePendingSandboxSendStore.getState();
-            return Object.hasOwn(sends, id) && sends[id].delivery === null;
-          },
-          confirm: () => confirmPendingSandboxSendEpic(id),
-          giveBack: () => {
-            const returned = returnPendingSandboxSend(id);
-            return returned.kind === "landing-draft" ? returned.draftId : null;
-          },
-        };
   }
 
   function onlyPendingSend() {
@@ -566,28 +546,115 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     queryClient.clear();
   });
 
-  it("returns the message to its draft when the placement host refuses team attachment", async () => {
+  it.each([
+    ["a new sandbox", TEAM_TARGET],
+    [
+      "a resting sandbox",
+      { ...RESUME_TARGET, configuration: TEAM_TARGET.configuration },
+    ],
+  ] as const)(
+    "keeps %s and the Traycer pick after attachment refusal, so the second Send stays on the sandbox",
+    async (_label, target) => {
+      useStagedSandboxStore.getState().stage(SURFACE, target);
+      landingMocks.request.mockImplementation((method: string) => {
+        if (method === "epic.attachEnvironment") {
+          return Promise.reject(
+            new HostRpcError({
+              code: "FORBIDDEN",
+              message: "This task cannot be attached to that team.",
+              requestId: "request-attach-refused",
+              method,
+              fatalDetails: null,
+            }),
+          );
+        }
+        return Promise.resolve({ roomInfo: null });
+      });
+      const queryClient = newQueryClient();
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.startTaskOnStagedSandbox({
+          draftId: null,
+          owner: null,
+          sandboxTeamId: "team-9",
+          text: SUBMITTED_PROMPT,
+          hand,
+        });
+      });
+
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        target,
+        phase: "staged",
+        sendTaken: false,
+      });
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+        content: MESSAGE_CONTENT,
+        settings: PICKED_SETTINGS,
+        closed: false,
+      });
+      const returnedDraft = useLandingDraftStore.getState().drafts[0];
+      const requestId = readStagedSandbox(SURFACE)?.clientRequestId;
+      expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual(
+        ["epic.create", "epic.attachEnvironment"],
+      );
+      landingMocks.request.mockResolvedValue({ attached: true });
+      act(() => {
+        result.current.startTaskOnStagedSandbox({
+          draftId: returnedDraft.id,
+          owner: null,
+          sandboxTeamId: "team-9",
+          text: SUBMITTED_PROMPT,
+          hand: (epicId) =>
+            handLandingSandboxSend({
+              fromSurfaceKey: SURFACE,
+              epicId,
+              content: returnedDraft.content,
+              text: SUBMITTED_PROMPT,
+              settings: returnedDraft.settings ?? PICKED_SETTINGS,
+              now: Date.now(),
+            }),
+        });
+      });
+      await waitFor(() => expect(onlyPendingSend().epicConfirmed).toBe(true));
+      const secondSend = onlyPendingSend();
+      expect(secondSend.settings).toEqual(PICKED_SETTINGS);
+      expect(
+        readStagedSandbox(pendingSendSurfaceKey(secondSend.id)),
+      ).toMatchObject({
+        target,
+        clientRequestId: requestId,
+      });
+      const creates = landingMocks.request.mock.calls.filter(
+        ([method]) => method === "epic.create",
+      );
+      expect(creates).toHaveLength(2);
+      for (const [, payload] of creates)
+        expect(chatFromCreatePayload(payload)).toBeNull();
+      queryClient.clear();
+    },
+  );
+
+  it("keeps a late refusal with its pending send when the source has a newer explicit stage", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
-    landingMocks.request.mockImplementation((method: string) => {
-      if (method === "epic.attachEnvironment") {
-        return Promise.reject(
-          new HostRpcError({
-            code: "FORBIDDEN",
-            message: "This task cannot be attached to that team.",
-            requestId: "request-attach-refused",
-            method,
-            fatalDetails: null,
-          }),
-        );
-      }
-      return Promise.resolve({ roomInfo: null });
-    });
+    const attach = deferred<unknown>();
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? attach.promise
+        : Promise.resolve({ roomInfo: null }),
+    );
     const queryClient = newQueryClient();
     const { result } = renderHook(
       () => useLandingComposerActions(useTestPlacementTarget()),
       { wrapper: queryClientWrapper(queryClient) },
     );
-
     act(() => {
       result.current.startTaskOnStagedSandbox({
         draftId: null,
@@ -597,21 +664,31 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         hand,
       });
     });
-
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    await waitFor(() =>
+      expect(
+        landingMocks.request.mock.calls.some(
+          ([method]) => method === "epic.attachEnvironment",
+        ),
+      ).toBe(true),
+    );
+    const send = onlyPendingSend();
+    useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    const newerStage = readStagedSandbox(SURFACE);
+    await act(async () => {
+      attach.reject(new Error("attachment refused"));
+      await attach.promise.catch(() => undefined);
     });
-    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
-    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
-    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
-      content: MESSAGE_CONTENT,
-      settings: PICKED_SETTINGS,
-      closed: false,
-    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(readStagedSandbox(SURFACE)).toBe(newerStage);
+    expect(onlyPendingSend()).toEqual(send);
+    expect(readStagedSandbox(pendingSendSurfaceKey(send.id))?.target).toEqual(
+      TEAM_TARGET,
+    );
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
     queryClient.clear();
   });
 
-  it("leaves an attachment in flight with its pending send when the account changes", async () => {
+  it("keeps a refused attachment with its pending send when the account changes", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
     const attach = deferred<unknown>();
     landingMocks.request.mockImplementation((method: string) => {
@@ -654,10 +731,13 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       );
     });
     await act(async () => {
-      attach.resolve({ attached: true });
-      await attach.promise;
+      attach.reject(new Error("attachment refused"));
+      await attach.promise.catch(() => undefined);
     });
 
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(readStagedSandbox(SURFACE)).toBeNull();
     expect(usePendingSandboxSendStore.getState().sends[send.id]).toMatchObject({
       epicConfirmed: false,
     });
@@ -754,7 +834,11 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       await waitFor(() => {
         expect(usePendingSandboxSendStore.getState().sends).toEqual({});
       });
-      expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        target: NEW_TARGET,
+        phase: "staged",
+        sendTaken: false,
+      });
       // The send held the message's only copy: it is a draft again, with the
       // agent and model it was sent with, and the window goes to that draft.
       const drafts = useLandingDraftStore.getState().drafts;
@@ -872,12 +956,15 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (reason: Error) => void;
 } {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
+  let reject: (reason: Error) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function queryClientWrapper(
