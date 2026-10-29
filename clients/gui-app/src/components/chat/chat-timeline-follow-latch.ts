@@ -220,8 +220,9 @@ type ArmedReaderDeparture =
       /** False when fresh issue-time geometry proves this gesture cannot move
        *  in its requested direction (for example, wheel-up at scrollTop=0). */
       readonly blocksAutomaticCorrection: boolean;
-      /** Live geometry at the gesture's event; null when unmeasurable. Its
-       *  own movement is measured from here. */
+      /** Live geometry at the gesture's event, carried with every announced
+       *  write since (`noteScrollerMoved`); null when unmeasurable. Its own
+       *  movement is measured from here. */
       readonly geometryAtGesture: ChatTimelineScrollGeometry | null;
       /** The element a wheel was over; null for any other gesture. A nested
        *  scroller holding it may own the wheel's whole sequence. */
@@ -351,24 +352,31 @@ function readerGestureArm(
   };
 }
 
+/** The view's distance from the end at its resting offset: an elastic
+ *  overscroll and its spring back are no movement. */
 function distanceFromEnd(geometry: ChatTimelineScrollGeometry): number {
-  return geometry.scrollHeight - geometry.clientHeight - geometry.scrollTop;
+  return (
+    geometry.scrollHeight - geometry.clientHeight - restingScrollTop(geometry)
+  );
 }
 
 /**
  * Whether strict-bottom geometry ends a gesture's arm: one that cannot move
  * the view, one whose own movement it shows - the view moved up from where
  * the gesture began and away from the end, without leaving the edge's
- * epsilon. Nothing else is the gesture's: a clamp lowers the offset with the
- * end, growth moves the end alone, and a report queued by an earlier write,
+ * epsilon (`gestureScrollLanded`; announced writes carry where it began).
+ * Nothing else is the gesture's: a clamp lowers the offset with the end,
+ * growth moves the end alone, and a report queued by an earlier write,
  * or one that comes before a smooth scroll's first frame, has not moved the
  * view at all. No strict-bottom report tells a wheel whose movement the end
  * came up to absorb from one that has not moved yet: the browser applies a
  * wheel's delta to the offset of the frame it lands in, after any clamp. A
  * movable gesture with no such evidence keeps its arm until its scroll
- * reports, the tail grows away from a wheel's reader (their departure), a
- * nested scroller it was latched to ends its scroll
- * (`gestureScrollEndUnblocks`), or the next reader input replaces it: a
+ * reports (for a free reader, a report that shows it landed:
+ * `noteFreeReportAway`), the tail grows away from a wheel's reader (their
+ * departure), a nested scroller it was latched to ends its scroll
+ * (`gestureScrollEndUnblocks`), the turn rests after a report has followed
+ * it (`reconcileTurnAtRest`), or the next reader input replaces it: a
  * browser that scrolls a wheel frames after its event has no bound to wait
  * out.
  */
@@ -382,30 +390,36 @@ function strictBottomReleasesGestureArm(
 }
 
 /** Whether the view stands where a gesture away from the end moves it:
- *  above its offset at the gesture, and farther from the end. */
+ *  above its offset at the gesture, at resting offsets. Off the end that is
+ *  the gesture's: the list's and the app's writes carry the offset, and a
+ *  clamp only ever lands a view on the end, so the end coming toward the
+ *  reader meanwhile (a pad dropping, a row below collapsing) changes
+ *  nothing. On the end a clamp lowers the offset with the end, so the view
+ *  must also stand farther from it than at the gesture. */
 function gestureScrollLanded(
   arm: ReaderGestureArm,
   geometry: ChatTimelineScrollGeometry,
 ): boolean {
   const start = arm.geometryAtGesture;
   if (start === null) return false;
+  if (restingScrollTop(geometry) >= restingScrollTop(start)) return false;
   return (
-    geometry.scrollTop < start.scrollTop &&
+    !isChatTimelineAtStrictBottom(geometry) ||
     distanceFromEnd(geometry) > distanceFromEnd(start)
   );
 }
 
-/** The arm a free reader's report leaves. Their gesture away from the end
- *  awaits nothing once its scroll has landed: the strict bottom they reach
- *  after it, however they reach it, is theirs to follow
- *  (`reconcileStrictBottom`). */
-function armAfterFreeReport(
-  arm: ArmedReaderDeparture,
+/** A gesture's geometry with an announced write applied: its offset moves
+ *  with the view, and its distance from the end stays the reader's. */
+function geometryMovedBy(
   geometry: ChatTimelineScrollGeometry,
-): ArmedReaderDeparture {
-  return armAwaitsScrollAway(arm) && gestureScrollLanded(arm, geometry)
-    ? null
-    : arm;
+  delta: number,
+): ChatTimelineScrollGeometry {
+  return {
+    ...geometry,
+    scrollTop: geometry.scrollTop + delta,
+    scrollHeight: geometry.scrollHeight + delta,
+  };
 }
 
 /**
@@ -1180,7 +1194,8 @@ export function useChatTimelineFollowLatch(
       }
       // A free reader's own scroll away may still land: the strict bottom
       // under them is not their asking for the end, and they stay free with
-      // the pill until it lands or their next input.
+      // the pill until it lands, the turn rests after a report has followed
+      // it (`reconcileTurnAtRest`), or their next input.
       if (
         !isOwnedLanding &&
         !permissionRef.current &&
@@ -1324,17 +1339,32 @@ export function useChatTimelineFollowLatch(
     [isCorrectionSuppressed, publishArmedDeparture],
   );
 
-  // An announced write moves the ledger and a published departure by what it
-  // moved the view. A view on the end before it may have been clamped there
-  // since: that was the browser's. The touch, end and momentum offsets are
-  // left: they measure the reader net of the list's own movement already (a
-  // row's shift, an element's rise on screen), and would count it twice.
+  // An announced write moves the ledger, a published departure and a
+  // gesture's offset by what it moved the view: none of it is the reader's,
+  // so a gesture whose scroll has not landed still awaits it. A view on the
+  // end before it may have been clamped there since: that was the browser's.
+  // The touch, end and momentum offsets are left: they measure the reader net
+  // of the list's own movement already (a row's shift, an element's rise on
+  // screen), and would count it twice.
   const noteScrollerMoved = useCallback((event: Event): void => {
     const move = scrollerMoveOf(event);
     if (move === null) return;
     const departure = readerDepartureScrollTopRef.current;
     if (departure !== null) {
       readerDepartureScrollTopRef.current = departure + move.to - move.from;
+    }
+    const armedDeparture = armedReaderDepartureRef.current;
+    if (
+      armedDeparture?.source === "gesture" &&
+      armedDeparture.geometryAtGesture !== null
+    ) {
+      armedReaderDepartureRef.current = {
+        ...armedDeparture,
+        geometryAtGesture: geometryMovedBy(
+          armedDeparture.geometryAtGesture,
+          move.to - move.from,
+        ),
+      };
     }
     const expected = expectedScrollTopRef.current;
     if (expected === null) return;
@@ -1466,6 +1496,23 @@ export function useChatTimelineFollowLatch(
     [isCorrectionSuppressed, listRef, setFollowIntent, startEndCorrection],
   );
 
+  // A free reader's gesture away from the end awaits nothing once its scroll
+  // has landed: the strict bottom they reach after it, however they reach
+  // it, is theirs to follow (`reconcileStrictBottom`). The report is their
+  // departure from where it landed, as a following reader's is
+  // (`publishArmedDeparture`), so an end that comes up to them before that
+  // gesture's later frames is the list's (`noteReportAfterDeparture`).
+  const noteFreeReportAway = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      const armedDeparture = armedReaderDepartureRef.current;
+      if (!armAwaitsScrollAway(armedDeparture)) return;
+      if (!gestureScrollLanded(armedDeparture, geometry)) return;
+      armedReaderDepartureRef.current = null;
+      readerDepartureScrollTopRef.current = geometry.scrollTop;
+    },
+    [],
+  );
+
   // A following reader's non-bottom report under their arm: the departure,
   // once the arm says it is one.
   const publishArmedReport = useCallback(
@@ -1512,10 +1559,7 @@ export function useChatTimelineFollowLatch(
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) {
       publishFreeTouchWhileSuppressed(geometry);
-      armedReaderDepartureRef.current = armAfterFreeReport(
-        armedReaderDepartureRef.current,
-        geometry,
-      );
+      noteFreeReportAway(geometry);
       return;
     }
     const armedDeparture = armedReaderDepartureRef.current;
@@ -1534,6 +1578,7 @@ export function useChatTimelineFollowLatch(
     followReaderMomentumArrival,
     isCorrectionSuppressed,
     listRef,
+    noteFreeReportAway,
     noteReaderMomentum,
     noteReportAfterDeparture,
     noteReportMovement,
@@ -1671,13 +1716,21 @@ export function useChatTimelineFollowLatch(
   ]);
 
   const reconcileTurnAtRest = useCallback((): void => {
-    if (!holdsDepartedReaderAtEnd()) return;
-    // A gesture's arm is left as it is: the strict bottom cannot tell a
-    // wheel whose scroll is still coming from one the end absorbed, and the
-    // one still coming must be the reader's departure when it lands. So a
-    // held reader with one pending stays held, as at any follow the latch
-    // starts itself (`reconcileStrictBottom`).
-    if (armAwaitsScrollAway(armedReaderDepartureRef.current)) return;
+    // The strict bottom cannot tell a wheel whose scroll is still coming from
+    // one the end absorbed, and the one still coming must be the reader's
+    // departure when it lands. One no report has followed may still be
+    // coming, and would read as the list's: a reader held at the strict
+    // bottom with it stays held, as at any follow the latch starts itself
+    // (`reconcileStrictBottom`). One a report has followed is spent here:
+    // nothing grows past the reader now to start a correction that would
+    // mask what is left of it, and that report restarted the ledger, so a
+    // later frame reads as their own (`publishUnannouncedDeparture`).
+    if (armAwaitsScrollAway(armedReaderDepartureRef.current)) {
+      if (expectedScrollTopRef.current === null) return;
+      armedReaderDepartureRef.current = null;
+    } else if (!holdsDepartedReaderAtEnd()) {
+      return;
+    }
     const node = listRef.current?.getScrollableNode();
     if (!node) return;
     const geometry = readScrollGeometry(node);

@@ -4828,4 +4828,186 @@ describe("useChatTimelineFollowLatch", () => {
       expectDeparted(mounted);
     });
   });
+
+  describe("a free reader's gesture away from the end, once its scroll lands", () => {
+    // Mounting free at the strict bottom (the W4 state) must not let the
+    // layout effect's own mount-time `followEndIfPermitted` reconcile it back
+    // to following before the gesture ever arms: hold reattachment off
+    // through the mount, as a restored reading position would, then settle.
+    function freeReader(
+      geometry: ControllableGeometry,
+      isTurnRunning: (() => boolean) | undefined,
+    ) {
+      const node = shim.makeNode(geometry);
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      let restoreHolds = true;
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isTurnRunning,
+          isReattachSuppressed: () => restoreHolds,
+        }),
+      );
+      restoreHolds = false;
+      return { node, onFollowIntentChange, result };
+    }
+
+    it("carries the wheel's armed start through an announced write, so its own landing still releases it", () => {
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 },
+        undefined,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+      // The list inserts 400px above the reader and compensates, announcing
+      // the write as it lands.
+      shim.setGeometry(node, { scrollHeight: 1900 });
+      moveChatTimelineScroller(node, () => {
+        shim.setGeometry(node, { scrollTop: 1400 });
+      });
+      fireNativeScroll(node);
+
+      // The wheel's own scroll now lands, 40 above where the list left them.
+      shim.setGeometry(node, { scrollTop: 1360 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // They reach the end with no input event of their own.
+      shim.setGeometry(node, { scrollTop: 1400 });
+      fireNativeScroll(node);
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("records a free landing's departure, so a mid-turn pad clamp holds them instead of following early", () => {
+      let turnRunning = true;
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 900, scrollHeight: 1500, clientHeight: 500 },
+        () => turnRunning,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+      // The wheel's own scroll lands, clearly away from the end.
+      shim.setGeometry(node, { scrollTop: 860 });
+      fireNativeScroll(node);
+
+      // The end comes up to meet them: an end pad releasing, no farther than
+      // where they landed.
+      shim.setGeometry(node, { scrollHeight: 1360 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // A later frame of the same wheel lands farther up, the pad still
+      // releasing in step with it.
+      shim.setGeometry(node, { scrollTop: 820, scrollHeight: 1320 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      turnRunning = false;
+      result.current.reconcileTurnAtRest();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("spends an awaiting arm at the turn's rest once a report has followed it", () => {
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 },
+        undefined,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+      // The wheel's only report reads the strict bottom: its landing and an
+      // end-pad release in the same step.
+      shim.setGeometry(node, { scrollTop: 960, scrollHeight: 1460 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      result.current.reconcileTurnAtRest();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("leaves an arm with no report to follow held at the turn's rest, and nothing then corrects its departure", () => {
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 },
+        undefined,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+      // No report of the wheel's scroll has arrived yet.
+      result.current.reconcileTurnAtRest();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // The wheel's own scroll lands and departs them; nothing corrects it.
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+    });
+
+    it("does not release an overscrolled wheel's arm on its spring-back to the clamped end", () => {
+      const { node, onFollowIntentChange } = freeReader(
+        { scrollTop: 1010, scrollHeight: 1500, clientHeight: 500 },
+        undefined,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+      // The browser springs the elastic overscroll back to the real,
+      // unpadded end.
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+    });
+
+    it("row 23: a wheel up reported away from the end, then a silent arrival follows", () => {
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 },
+        undefined,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("lands off the end though the arm's distance is stale from a pad drop while it waited", () => {
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 1000, scrollHeight: 1600, clientHeight: 500 },
+        undefined,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+
+      // The pad drops: the view is now on the end, though it has not moved.
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // The wheel's own scroll lands off the end - 40 from it, less than the
+      // 100 the arm recorded at the gesture, but still above its offset.
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // They reach the end with no input event of their own.
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+  });
 });
