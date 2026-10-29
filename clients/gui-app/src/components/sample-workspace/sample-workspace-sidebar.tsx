@@ -343,6 +343,7 @@ const SAMPLE_PANEL_BODIES: Readonly<Record<LeftPanelId, () => ReactNode>> = {
   artifacts: SampleArtifactsBody,
   terminals: sampleEmptyBody("terminals"),
   browsers: sampleEmptyBody("browsers"),
+  simulators: sampleEmptyBody("simulators"),
   "git-diff": sampleEmptyBody("git-diff"),
   "pull-requests": SamplePullRequestsBody,
   "file-tree": sampleEmptyBody("file-tree"),

@@ -14,7 +14,6 @@ import { BrowserTabRow } from "./epic-browser-sidebar-row";
 import { BrowserDeviceGroup } from "./browser-device-group";
 import { BrowserListFeedback } from "./browser-list-feedback";
 import { useBrowserListModel } from "./use-browser-list-model";
-import { SimulatorsSidebarGroup } from "./epic-simulator-sidebar";
 import {
   useBrowserTabRowLabels,
   type BrowserSidebarSession,
@@ -22,10 +21,6 @@ import {
 } from "./use-browser-tab-rows";
 import { useBrowserListTabClose } from "@/components/epic-canvas/sidebar/use-browser-list-tab-close";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import {
-  useSurfaceHostPin,
-  useTabSurfaceKey,
-} from "@/hooks/host/use-surface-host-pin";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -44,7 +39,6 @@ import { revealSidebarNode } from "./epic-sidebar-tree-shared";
 export { BrowsersPanelActions } from "./epic-browser-sidebar-header";
 
 export function BrowsersPanelBody(props: LeftPanelSlotProps) {
-  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
   return (
     <SidebarContent className="min-h-0">
       <SidebarGroup className="min-h-0 flex-1">
@@ -52,11 +46,6 @@ export function BrowsersPanelBody(props: LeftPanelSlotProps) {
           <BrowsersPanelList {...props} />
         </SidebarGroupContent>
       </SidebarGroup>
-      <SimulatorsSidebarGroup
-        epicId={props.epicId}
-        tabId={props.tabId}
-        hostId={hostPin.resolvedHostId}
-      />
     </SidebarContent>
   );
 }

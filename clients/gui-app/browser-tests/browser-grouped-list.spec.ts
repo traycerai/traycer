@@ -228,7 +228,7 @@ test("the offline filter opens from the keyboard and returns focus on Escape", a
   const checkbox = menu.getByRole("menuitemcheckbox", {
     name: "Show offline devices",
   });
-  const submenu = menu.getByRole("menuitem", { name: "Simulator device" });
+  const submenu = menu.getByRole("menuitem", { name: "Open links on" });
   expect((await boxOf(checkbox)).height).toBeLessThan(40);
   expect((await boxOf(submenu)).height).toBeLessThan(40);
   await page.keyboard.press("Escape");

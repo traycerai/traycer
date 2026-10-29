@@ -80,6 +80,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   railAgents: { shown: "shown" },
   railTerminals: { shown: "shown" },
   railBrowsers: { shown: "shown" },
+  railSimulators: { shown: "auto" },
   railArtifacts: { shown: "shown" },
   railGitDiff: { shown: "shown" },
   railPullRequests: { shown: "auto" },
@@ -214,6 +215,7 @@ export function effectiveLayoutValues(
     railAgents: { ...base.railAgents, ...overrides.railAgents },
     railTerminals: { ...base.railTerminals, ...overrides.railTerminals },
     railBrowsers: { ...base.railBrowsers, ...overrides.railBrowsers },
+    railSimulators: { ...base.railSimulators, ...overrides.railSimulators },
     railArtifacts: { ...base.railArtifacts, ...overrides.railArtifacts },
     railGitDiff: { ...base.railGitDiff, ...overrides.railGitDiff },
     railPullRequests: {

@@ -102,6 +102,7 @@ import {
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * What an in-task picker knows about its task: the hosts it already uses,
@@ -251,12 +252,18 @@ export function useSandboxStaging(input: {
 }): SandboxStaging | null {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
-  const surfaceKey = input.surface === null ? "" : input.surface.surfaceKey;
-  const task = input.surface === null ? null : input.surface.task;
+  // No surface stages in a build without sandboxes
+  // (`unreleased-features.ts`): the hook answers `null` for every caller, so
+  // each picker draws the plain `Host` group and its own search threshold.
+  const surface = UNRELEASED_FEATURES_ENABLED ? input.surface : null;
+  const surfaceKey = surface === null ? "" : surface.surfaceKey;
+  const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
-  const catalogue = useSandboxCatalogue(input.surface !== null).data ?? null;
-  const defaultsFor = useSandboxDefaultsLookup(input.surface !== null);
+  // Neither read without a surface: nothing prices or shapes a stage.
+  const reads = surface !== null;
+  const catalogue = useSandboxCatalogue(reads).data ?? null;
+  const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,
@@ -475,7 +482,8 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      newRows: rows.map(newRowPresentation),
+      // No New sandbox row in a build without sandboxes.
+      newRows: UNRELEASED_FEATURES_ENABLED ? rows.map(newRowPresentation) : [],
       rememberedConfigurationKey:
         memoryHostId === null
           ? null
@@ -596,11 +604,11 @@ export function useSandboxStaging(input: {
       />
     );
 
-  if (input.surface === null) return null;
+  if (surface === null) return null;
   const openTerminalInstead =
     stage === null || stage.phase === "handoff"
       ? null
-      : input.surface.openTerminalInstead;
+      : surface.openTerminalInstead;
   return {
     composer,
     stage,

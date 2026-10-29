@@ -133,7 +133,7 @@ const STATE = {
 };
 
 describe("SimulatorSessionsStreamClient", () => {
-  it("subscribes at @1.0 with the epic, delivers validated frames and drops malformed ones", () => {
+  it("subscribes at @1.1 with the epic, delivers validated frames and drops malformed ones", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
     const frames: SimulatorSessionsServerFrame[] = [];
@@ -154,7 +154,7 @@ describe("SimulatorSessionsStreamClient", () => {
       .find((frame) => frame.kind === "subscribe");
     expect(subscribe).toMatchObject({
       method: "simulator.sessions",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-1" },
     });
 
@@ -186,6 +186,40 @@ describe("SimulatorSessionsStreamClient", () => {
     stream.close();
     stream.sendClientFrame({ kind: "refresh", hasBinaryPayload: false });
     expect(sockets[0].textSent).toHaveLength(before + 1);
+  });
+
+  it("delivers the @1.1 keys of a snapshot intact", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const frames: SimulatorSessionsServerFrame[] = [];
+    new SimulatorSessionsStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      callbacks: {
+        onServerFrame: (frame) => {
+          frames.push(frame);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    const session = {
+      epicId: "epic-1",
+      ownerUserId: "user-1",
+      hostId: "host-1",
+      simulatorId: "ABCDEF-0000",
+      platform: "ios",
+      openedAt: "2026-10-18T00:00:00.000Z",
+      sessionId: "session-1",
+    };
+    const snapshot = {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      state: { ...STATE, sessions: [session], opening: [{ requestId: "r1" }] },
+    };
+    sockets[0].fireText(snapshot);
+    expect(frames).toEqual([snapshot]);
   });
 });
 

@@ -33,6 +33,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 export type SettingsSectionId =
   | "dev-artifact-proof"
@@ -135,10 +136,22 @@ export const SETTINGS_SECTION_GROUPS: ReadonlyArray<SettingsSectionGroup> = [
   { id: "account", label: "Account" },
   // The id stays `personal` (ids are a compatibility surface); the group is
   // the Environment dropdown's: its picker names the configuration the pages
-  // below it show, Personal, a team, or a computer that has not moved.
-  { id: "personal", label: "Environment" },
+  // below it show, Personal, a team, or a computer that has not moved. A
+  // build without environments (`unreleased-features.ts`) has no such group:
+  // its pages sit under the host picker, where they were before it.
+  ...(UNRELEASED_FEATURES_ENABLED
+    ? [{ id: "personal", label: "Environment" } satisfies SettingsSectionGroup]
+    : []),
   { id: "host", label: "Host" },
 ];
+
+/**
+ * The group of the Environment dropdown's pages: `personal` under the
+ * dropdown, `host` in a build without environments, where each of them reads
+ * the host the Host picker names (`PersonalPageFrame`'s host source).
+ */
+const ENVIRONMENT_PAGES_GROUP: SettingsSectionGroupId =
+  UNRELEASED_FEATURES_ENABLED ? "personal" : "host";
 
 export interface SettingsSection {
   readonly id: SettingsSectionId;
@@ -185,6 +198,31 @@ export interface SettingsSection {
  * Putting the group word into a row the heading already scopes is the
  * inconsistent move, not the consistent one.
  */
+const HOST_OVERVIEW_SECTION: SettingsSection = {
+  id: "host",
+  label: "Overview",
+  icon: Server,
+  group: "host",
+};
+
+// Event policy and automation. Different controls than Application → Sounds
+// and Alerts, so it keeps the generic word and the bell. Account's with
+// environments; a build without them keeps it under the host picker, where it
+// read one host's own policy before environments.
+const NOTIFICATIONS_SECTION: SettingsSection = {
+  id: "notifications",
+  label: "Notifications",
+  icon: Bell,
+  group: UNRELEASED_FEATURES_ENABLED ? "account" : "host",
+};
+
+const WORKTREES_SECTION: SettingsSection = {
+  id: "worktrees",
+  label: "Worktrees",
+  icon: GitBranch,
+  group: "host",
+};
+
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
     id: "getting-started",
@@ -299,15 +337,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Coins,
     group: "account",
   },
-  // Event policy and automation for the account. Different controls than
-  // Application → Sounds and Alerts, so it keeps the generic word and the
-  // bell.
-  {
-    id: "notifications",
-    label: "Notifications",
-    icon: Bell,
-    group: "account",
-  },
+  ...(UNRELEASED_FEATURES_ENABLED ? [NOTIFICATIONS_SECTION] : []),
   // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
   // below). Last in its group because it is the group's one irreversible
   // action, and because appending it keeps Account contiguous without moving
@@ -323,13 +353,20 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // dropdown picks. Personal's pages read through the window's own host and
   // what they save applies wherever the person signs in; a Local row's read
   // through that computer and hide what only a cloud configuration has
-  // (`environmentSectionShown`).
+  // (`environmentSectionShown`). Without environments the host group starts
+  // here, Overview first, and these pages are the picked host's own.
+  ...(UNRELEASED_FEATURES_ENABLED ? [] : [HOST_OVERVIEW_SECTION]),
   {
     id: "providers",
     label: "Providers",
     icon: Boxes,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
+  // Without environments the host group keeps the order it had before them:
+  // Worktrees and Notifications follow Providers.
+  ...(UNRELEASED_FEATURES_ENABLED
+    ? []
+    : [WORKTREES_SECTION, NOTIFICATIONS_SECTION]),
   // MCP servers and Skills were tabs inside each provider. They are pages of
   // their own because each entry is one of the person's settings: managed
   // entries follow them to every host, and a local one is added on a click.
@@ -337,13 +374,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "mcp-servers",
     label: "MCP servers",
     icon: Plug,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   {
     id: "skills",
     label: "Skills",
     icon: Sparkles,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // What an agent may do on its own: the mode a conversation starts in, the
   // judge that reviews actions under the `auto` permission mode, the rules it
@@ -358,7 +395,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     // A key, the common permissions glyph; a gavel at sidebar size read as a
     // broom.
     icon: KeyRound,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // Two tabs over room files: the selection guide agents read to pick a
   // harness, model and effort, and the agent definitions a harness can start.
@@ -366,9 +403,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // identifier on the compatibility boundary and stays put.
   {
     id: "agents",
-    label: "Agents",
+    // "Agent selection" without environments, which brought the Definitions
+    // tab the wider label names.
+    label: UNRELEASED_FEATURES_ENABLED ? "Agents" : "Agent selection",
     icon: Bot,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // "Model routing" and not "Route automatically" - the section is the whole
   // subject, and "Route automatically" is the master toggle INSIDE it, so using
@@ -377,15 +416,16 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "fallback",
     label: "Model routing",
     icon: Waypoints,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // The section `id` stays `shell`; the page now also holds the variables
   // every agent starts with, so the label names both.
   {
     id: "shell",
-    label: "Variables & shells",
+    // "Shell" without environments, as before them.
+    label: UNRELEASED_FEATURES_ENABLED ? "Variables & shells" : "Shell",
     icon: TerminalSquare,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // Whether agents may drive the in-app browser. Not offered in navigation
   // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is the Browser tab of
@@ -394,7 +434,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "browser-agent-access",
     label: "Browser agent access",
     icon: MousePointerClick,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // Where secrets and GitHub access are managed. The page itself lives on the
   // web dashboard; this entry is how Settings reaches it.
@@ -402,7 +442,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "secrets",
     label: "Secrets",
     icon: LockKeyhole,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // Every sandbox on the picked configuration's settings. The page itself is
   // the sandboxes plan's, mounted in the Environment page registry's
@@ -411,7 +451,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "sandboxes",
     label: "Sandboxes",
     icon: Cloud,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // A team's members (P2's page). Offered only while a team is picked
   // (`environmentSectionShown`).
@@ -419,7 +459,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "members",
     label: "Members",
     icon: Users,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // The agent definition files every host gets. Not offered in navigation
   // (`RETIRED_SETTINGS_SECTION_IDS`): they are the Agents page's Definitions
@@ -428,7 +468,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "agent-definitions",
     label: "Agent definitions",
     icon: FileText,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   // The script each computer runs once to set itself up, one per OS. Not
   // offered in navigation (`RETIRED_SETTINGS_SECTION_IDS`); its route still
@@ -437,7 +477,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "machine-setup",
     label: "Machine setup",
     icon: Wrench,
-    group: "personal",
+    group: ENVIRONMENT_PAGES_GROUP,
   },
   {
     id: "dev-artifact-proof",
@@ -452,18 +492,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "app",
   },
   // The host group. Everything here is scoped by the picker that heads it.
-  {
-    id: "host",
-    label: "Overview",
-    icon: Server,
-    group: "host",
-  },
-  {
-    id: "worktrees",
-    label: "Worktrees",
-    icon: GitBranch,
-    group: "host",
-  },
+  // Without environments Overview heads the group and Worktrees follows
+  // Providers (above).
+  ...(UNRELEASED_FEATURES_ENABLED
+    ? [HOST_OVERVIEW_SECTION, WORKTREES_SECTION]
+    : []),
   // Same kind of page as Application → Diagnostics, partitioned by scope, so
   // the same word and icon. Everything left here answers differently per host,
   // which is what earns it a place under the picker.
@@ -543,11 +576,32 @@ export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * section or a link that names it opens that page, as its route redirects
  * there.
  */
+/**
+ * The pages of the features this build does not ship (`unreleased-features.ts`):
+ * sandboxes and their credits, a team's members, the environment's secrets,
+ * the environment-wide MCP servers and Skills pages (each provider's own tab
+ * stays) and the machine setup script. Not offered, and their routes redirect
+ * to Settings.
+ */
+export const UNRELEASED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
+  new Set([
+    "sandboxes",
+    "credits",
+    "members",
+    "secrets",
+    "mcp-servers",
+    "skills",
+    "machine-setup",
+  ]);
+
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {
   "agent-definitions": "agents",
-  "browser-agent-access": "permissions",
+  // The Browser page holds the switch in a build without environments.
+  "browser-agent-access": UNRELEASED_FEATURES_ENABLED
+    ? "permissions"
+    : "browser",
 };
 
 /**
@@ -565,6 +619,8 @@ export const RETIRED_SECTION_REPLACEMENTS: Readonly<
 const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
   (section) =>
     !RETIRED_SETTINGS_SECTION_IDS.has(section.id) &&
+    (UNRELEASED_FEATURES_ENABLED ||
+      !UNRELEASED_SETTINGS_SECTION_IDS.has(section.id)) &&
     (import.meta.env.DEV || !DEV_ONLY_SETTINGS_SECTION_IDS.has(section.id)),
 );
 

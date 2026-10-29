@@ -52,6 +52,7 @@ import {
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
 import {
   TRACY_ENTRY_LABEL,
@@ -237,12 +238,14 @@ export function MobileNavDrawer(): ReactNode {
             <span className="flex-1 text-left">Home</span>
           </Button>
         ) : null}
-        <MobileNavTracyRow
-          onOpen={(botId) => {
-            close();
-            activateTabIntent(navigate, botTabIntent(botId), undefined);
-          }}
-        />
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <MobileNavTracyRow
+            onOpen={(botId) => {
+              close();
+              activateTabIntent(navigate, botTabIntent(botId), undefined);
+            }}
+          />
+        ) : null}
         <Button
           type="button"
           variant="default"

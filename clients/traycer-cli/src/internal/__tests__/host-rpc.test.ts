@@ -44,7 +44,7 @@ import {
   hostNotificationsSubscribeServerFrameSchemaV17,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
-  simulatorSessionsServerFrameSchemaV10,
+  simulatorSessionsServerFrameSchemaV11,
   simulatorStreamServerFrameSchemaV10,
 } from "@traycer/protocol/host/simulator/stream-contracts";
 
@@ -970,15 +970,16 @@ describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
 
 describe("canonical stream frame pairing (simulator streams)", () => {
   // The shared `simulator-*-stream-client.ts` wrappers parse with these two
-  // explicit `V10` schemas; a later minor that leaves them behind would
-  // silently strip its new keys (`protocol/README.md`, "Opening a new minor
-  // on a stream"), so the pin is held here by identity.
-  it("simulatorSessionsServerFrameSchemaV10 is the canonical serverFrameSchema for simulator.sessions", () => {
+  // explicit versioned schemas (sessions `V11`, stream `V10`); a later minor
+  // that leaves them behind would silently strip its new keys
+  // (`protocol/README.md`, "Opening a new minor on a stream"), so the pin is
+  // held here by identity.
+  it("simulatorSessionsServerFrameSchemaV11 is the canonical serverFrameSchema for simulator.sessions", () => {
     expect(
       latestStreamServerFrameSchema(
         hostStreamRpcRegistry["simulator.sessions"],
       ),
-    ).toBe(simulatorSessionsServerFrameSchemaV10);
+    ).toBe(simulatorSessionsServerFrameSchemaV11);
   });
 
   it("simulatorStreamServerFrameSchemaV10 is the canonical serverFrameSchema for simulator.stream", () => {

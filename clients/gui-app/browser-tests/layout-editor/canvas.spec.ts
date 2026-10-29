@@ -790,6 +790,9 @@ test.describe("the canvas at the top placement", () => {
  * The three it does not draw (`homeTab`, `usageLimits`, `resourceMonitor`,
  * plus `railArtifacts` inside Agents' group icon) are shell chrome the app
  * column draws outside the sample tab, which this fixture has no host for.
+ * `railSimulators` is out for a rule of its own: the panel draws where a
+ * machine can run a simulator or the task holds one, and the sample task holds
+ * none on a machine that runs none, so the rail draws no icon for it.
  *
  * Intersected with the product's own `LAYOUT_REGION_IDS` at run time (see
  * `mountedRegions`), so a region the app retires stops being asserted here
@@ -991,6 +994,7 @@ const TERMINALS_ABOVE_THE_DIVIDER = [
   "railTerminals",
   "divider:1",
   "railBrowsers",
+  "railSimulators",
   "railGitDiff",
   "railPullRequests",
   "railFileTree",

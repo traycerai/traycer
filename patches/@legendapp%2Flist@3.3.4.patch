@@ -25,7 +25,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..496fc9ff0af9c8411b44a04bcc04343ccbd8b598 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..3f291d7bab7cc38d0ec4d0e81a5118efaee695d8 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -385,10 +385,8 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..496fc9ff0af9c8411b44a04bcc04343c
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -396,7 +394,9 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..496fc9ff0af9c8411b44a04bcc04343c
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
@@ -425,7 +425,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..496fc9ff0af9c8411b44a04bcc04343c
          columns: [],
          containerItemGenerations: [],
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..64994dfdff1e47d6f60b0b8904ea23a0f87f200c 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..e6081a5efbd15d4f5e9627ec655c16c52fc6e850 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -785,10 +785,8 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..64994dfdff1e47d6f60b0b8904ea23a0
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -796,7 +794,9 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..64994dfdff1e47d6f60b0b8904ea23a0
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
@@ -851,7 +851,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..902106f211774fd8c92c9b04b84784a5c794407c 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..757eee77b9d3740e5b2fe3846b20378f4da892f3 100644
 --- a/react.js
 +++ b/react.js
 @@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -1434,10 +1434,8 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..902106f211774fd8c92c9b04b84784a5
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -1445,7 +1443,9 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..902106f211774fd8c92c9b04b84784a5
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
@@ -1474,7 +1474,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..902106f211774fd8c92c9b04b84784a5
          columns: [],
          containerItemGenerations: [],
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..051b0f0363df835da7bb9f035f041bf17f59a47d 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..6cda1e21381ca39f2f24a6de6b700ed47d863bc1 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -2057,10 +2057,8 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..051b0f0363df835da7bb9f035f041bf1
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -2068,7 +2066,9 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..051b0f0363df835da7bb9f035f041bf1
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left

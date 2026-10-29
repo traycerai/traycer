@@ -2328,7 +2328,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toBe("artifacts");
   });
 
-  it("targets the browser row and panel for a browser tab, leaving the Simulator device as it was", () => {
+  it("targets the browser row and panel for a browser tab, leaving the Open links on device as it was", () => {
     const tabs = [SPEC, BROWSER_TAB];
     seedCanvas(tabs, BROWSER_TAB.instanceId);
     render(groupView(tabs, BROWSER_TAB.instanceId, true));
@@ -2355,12 +2355,13 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     ).toBeUndefined();
   });
 
-  it("targets the simulator row, the Browsers panel, and the tile's host for a simulator tab", () => {
+  it("targets the simulator row in the Mobile simulators panel and writes no Browsers pin for a simulator tab", () => {
     const simulatorTab = makeSimulatorTileRef({
       hostId: "host-C",
       simulatorId: "udid-1",
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     });
     // The spec tab stays active so the simulator tile's renderer never mounts.
     const tabs = [SPEC, simulatorTab];
@@ -2378,13 +2379,15 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
       useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
     ).toEqual({ nodeId: simulatorTab.id, nonce: 1 });
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
-      "browsers",
+      "simulators",
     );
+    // The panel lists every device's sessions, so the tile's host is not
+    // written over the pin that picks where links open.
     expect(
       useSurfaceHostSelectionStore.getState().selections[
         tabSurfaceKey("browsers", VIEW_TAB_ID)
       ],
-    ).toBe("host-C");
+    ).toBeUndefined();
   });
 
   it("writes a node reveal request for an agent tab", () => {

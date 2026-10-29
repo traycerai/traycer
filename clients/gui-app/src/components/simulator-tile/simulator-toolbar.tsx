@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
+import { SimulatorAgentBadge } from "./simulator-agent-badge";
 import {
   hardwareButtonLabel,
   hardwareButtonsForPlatform,
@@ -47,15 +48,23 @@ export interface SimulatorToolbarProps {
   readonly onToggleSettings: (() => void) | null;
   readonly settingsOpen: boolean;
   readonly onPowerOff: (() => void) | null;
+  /**
+   * Whether powering off reaches past this task: on a `@1.1` host it ends
+   * every task's session on the instance and deletes a copy, where a `@1.0`
+   * host's shutdown is this task's own. The confirm says which.
+   */
+  readonly powerOffEndsEveryTask: boolean;
   readonly powerOffPending: boolean;
+  /** The Agent badge, while an agent's session drives this instance. */
+  readonly drivenByAgent: boolean;
   readonly onClose: () => void;
 }
 
 /**
  * The tile's chrome: the device's name, its hardware buttons for the
  * platform it is, rotate, a screenshot, the settings drawer, power off
- * (confirmed, because it shuts the simulator down for every viewer) and close
- * (this tile only).
+ * (always confirmed, because it shuts the simulator down for every viewer,
+ * on whichever host) and close (this tile only).
  */
 export function SimulatorToolbar(props: SimulatorToolbarProps) {
   const [confirmPowerOff, setConfirmPowerOff] = useState(false);
@@ -69,6 +78,7 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
         <span className="min-w-0 truncate font-medium">
           {props.simulatorName}
         </span>
+        {props.drivenByAgent ? <SimulatorAgentBadge /> : null}
         <Badge variant="muted" size="xs" className="shrink-0">
           {simulatorVersionLabel({
             platform: props.platform,
@@ -224,7 +234,11 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
         open={confirmPowerOff}
         onOpenChange={setConfirmPowerOff}
         title={`Power off ${props.simulatorName}?`}
-        description="The simulator shuts down for everyone viewing it in this task. Apps installed on it stay installed."
+        description={
+          props.powerOffEndsEveryTask
+            ? "Power off ends every task's session on it. A copy is deleted when it powers off."
+            : "The simulator shuts down for everyone viewing it in this task. Apps installed on it stay installed."
+        }
         cascadeSummary={null}
         actionLabel="Power off"
         isPending={false}
