@@ -5129,7 +5129,7 @@ describe("useChatTimelineFollowLatch", () => {
       // The list inserts 400px above the reader and compensates, announcing
       // the write as it lands.
       shim.setGeometry(node, { scrollHeight: 1900 });
-      moveChatTimelineScroller(node, () => {
+      moveChatTimelineScroller(node, 1400, () => {
         shim.setGeometry(node, { scrollTop: 1400 });
       });
       fireNativeScroll(node);
