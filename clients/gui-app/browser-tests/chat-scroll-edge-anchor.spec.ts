@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * The element at the viewport's top edge keeps its place while the list
@@ -208,11 +208,13 @@ const edgeAdjusts = (page: Page) =>
     return window.__edge.adjusts;
   });
 
+/** Wheels over the transcript by `deltaY` and returns once the page has
+ *  received it. */
 async function wheelBy(page: Page, deltaY: number): Promise<void> {
   const box = await page.locator(SCROLL).boundingBox();
   if (box === null) throw new Error("no scroll box");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.wheel(0, deltaY);
+  await wheelsDelivered(page, [{ deltaX: 0, deltaY }], 0);
 }
 
 async function settleFrames(page: Page, ms: number): Promise<void> {
@@ -303,9 +305,15 @@ for (const line of ["legacy", "windowed"] as const) {
           const hb = await page.locator(CARD).boundingBox();
           const y = hb === null ? null : hb.y - nodeBox.y;
           if (y !== null && Math.abs(y - headerY) <= 3) break;
-          await page.mouse.wheel(
+          await wheelsDelivered(
+            page,
+            [
+              {
+                deltaX: 0,
+                deltaY: y === null ? -600 : Math.round(y - headerY),
+              },
+            ],
             0,
-            y === null ? -600 : Math.round(y - headerY),
           );
           await nextFrames(page, 20);
         }
@@ -380,7 +388,11 @@ test(`legacy: a block that appears above the edge inside the row leaves the edge
   for (let i = 0; i < 12; i += 1) {
     const top = await rowTopNow();
     if (top !== null && Math.abs(top + 400) <= 3) break;
-    await page.mouse.wheel(0, top === null ? -600 : Math.round(top + 400));
+    await wheelsDelivered(
+      page,
+      [{ deltaX: 0, deltaY: top === null ? -600 : Math.round(top + 400) }],
+      0,
+    );
     await nextFrames(page, 20);
   }
   await settleFrames(page, 600);

@@ -9,7 +9,7 @@ import {
   type ChatScrollView,
   type ReaderIntent,
 } from "./support/chat-scroll-oracle";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * WINDOWED family of the scroll scenario matrix: the transcript line
@@ -73,21 +73,29 @@ async function pointAtTranscript(page: Page): Promise<void> {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 }
 
-async function wheel(page: Page, deltaY: number): Promise<void> {
-  await page.mouse.wheel(0, deltaY);
+/** Wheels by each of `deltaYs`, `gapFrames` frames apart, and returns once
+ *  the page has received them all. */
+async function wheel(
+  page: Page,
+  deltaYs: readonly number[],
+  gapFrames: number,
+): Promise<void> {
+  await wheelsDelivered(
+    page,
+    deltaYs.map((deltaY) => ({ deltaX: 0, deltaY })),
+    gapFrames,
+  );
 }
 
 /** A trackpad flick DOWN: 40 notches of 40px, one per frame, then a
  *  decaying momentum tail. */
 async function wheelDownBurst(page: Page): Promise<void> {
-  for (let step = 0; step < 40; step += 1) {
-    await wheel(page, 40);
-    await nextFrames(page, 1);
-  }
-  for (const delta of [30, 20, 12, 6, 3, 2, 1]) {
-    await wheel(page, delta);
-    await nextFrames(page, 1);
-  }
+  await wheel(
+    page,
+    [...Array.from({ length: 40 }, () => 40), 30, 20, 12, 6, 3, 2, 1],
+    1,
+  );
+  await nextFrames(page, 1);
 }
 
 /** Waits until the row at the top of the viewport is hydrated, then rests. */
@@ -107,10 +115,12 @@ async function restHydrated(page: Page): Promise<ChatScrollView> {
 /** Wheels far up into the scrollback that was cold at mount. */
 async function parkInCold(page: Page, steps: number): Promise<ChatScrollView> {
   await pointAtTranscript(page);
-  for (let step = 0; step < steps; step += 1) {
-    await wheel(page, -1200);
-    await nextFrames(page, 2);
-  }
+  await wheel(
+    page,
+    Array.from({ length: steps }, () => -1200),
+    2,
+  );
+  await nextFrames(page, 2);
   const view = await restHydrated(page);
   expect(view.mode).toBe("free-scrolling");
   return view;
@@ -237,7 +247,7 @@ test.describe("W2: a reader parked on rows a completion snapshot dehydrates", ()
     for (let step = 0; step < 60; step += 1) {
       const ordinal = await readingOrdinal(page);
       if (ordinal !== null && ordinal <= 311) break;
-      await wheel(page, -300);
+      await wheel(page, [-300], 0);
       await nextFrames(page, 2);
     }
     const parked = await restHydrated(page);

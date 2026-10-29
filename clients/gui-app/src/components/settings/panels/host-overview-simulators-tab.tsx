@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import {
   type GatedSimulatorMutation,
   useSimulatorConfigQuery,
@@ -35,6 +36,11 @@ import {
 } from "@/hooks/simulator/use-simulator-mutations";
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatHostProgressBytes } from "@/lib/host/host-progress-copy";
+import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
+import {
+  SimulatorIdleWindowRow,
+  SimulatorRunningNowRow,
+} from "./host-overview-simulator-instances";
 
 /**
  * Overview ▸ Mobile simulators: the one switch of `config.simulator`, what
@@ -111,6 +117,7 @@ function SimulatorSettingsRows(props: {
   const remove = useSimulatorRemoveToolsMutation(client, hostId);
   const switches = simulatorSwitch(config, mutation, remove.mutation.isPending);
   const installed = status.data?.installed ?? null;
+
   return (
     <>
       <SimulatorEnabledRow
@@ -132,6 +139,14 @@ function SimulatorSettingsRows(props: {
           }
         />
       ) : null}
+      {switches.enabled ? (
+        <SimulatorInstanceRows
+          client={client}
+          hostId={hostId}
+          idleMinutes={config.data?.idleMinutes ?? null}
+          mutation={mutation}
+        />
+      ) : null}
       {statusSupported &&
       status.data !== undefined &&
       (switches.enabled || installed !== null) ? (
@@ -140,6 +155,42 @@ function SimulatorSettingsRows(props: {
           status={status.data}
           switches={switches}
           hostName={props.hostName}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Running now and the idle window, while the switch is on. Both exist on a
+ * `@1.1` host only: a `@1.0` one has no instances and refuses the write that
+ * leaves the switch alone.
+ */
+function SimulatorInstanceRows(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly idleMinutes: number | null;
+  readonly mutation: GatedSimulatorMutation<"config.simulator.set">["mutation"];
+}): ReactNode {
+  const { client, hostId, idleMinutes, mutation } = props;
+  const instancesSupported =
+    useHostMethodSupport(hostId, "simulator.instances") === true;
+  const idleWritable =
+    simulatorVerbsAreV11(
+      useHostNegotiatedMethodVersion(client, "config.simulator.set"),
+    ) === true;
+  return (
+    <>
+      {instancesSupported ? (
+        <SimulatorRunningNowRow client={client} hostId={hostId} />
+      ) : null}
+      {idleWritable && idleMinutes !== null ? (
+        <SimulatorIdleWindowRow
+          idleMinutes={idleMinutes}
+          writing={mutation.isPending}
+          write={(minutes) =>
+            mutation.mutate({ enabled: null, idleMinutes: minutes })
+          }
         />
       ) : null}
     </>

@@ -114,13 +114,6 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
   useSurfaceHostClient: () => null,
 }));
 
-// The Simulators group under the browser rows reads its own host stream and
-// has its own suite (`epic-simulator-sidebar.test.tsx`); this one is about the
-// browser rows, so the group renders nothing here.
-vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
-  SimulatorsSidebarGroup: () => null,
-}));
-
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: (hostId: string | null) => ({
     label: hostId === "host-2" ? "Work Mac" : "Home Mac",
@@ -1690,9 +1683,7 @@ describe("BrowsersPanelActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Filter browsers" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: "Simulator device" }),
-    );
+    await user.click(screen.getByRole("menuitem", { name: "Open links on" }));
     expect(
       screen
         .getByTestId("epic-browsers-panel-filter-menu")
@@ -1712,9 +1703,7 @@ describe("BrowsersPanelActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Filter browsers" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: "Simulator device" }),
-    );
+    await user.click(screen.getByRole("menuitem", { name: "Open links on" }));
     fireEvent.click(
       screen.getByRole("menuitemradio", { name: /Follow task device/ }),
     );
@@ -1731,9 +1720,7 @@ describe("BrowsersPanelActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Filter browsers" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: "Simulator device" }),
-    );
+    await user.click(screen.getByRole("menuitem", { name: "Open links on" }));
 
     expect(screen.getByText("Loading hosts…")).toBeTruthy();
   });

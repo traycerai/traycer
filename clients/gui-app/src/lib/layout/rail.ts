@@ -45,6 +45,7 @@ export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
   "railArtifacts",
   "railTerminals",
   "railBrowsers",
+  "railSimulators",
   "railGitDiff",
   "railPullRequests",
   "railFileTree",
@@ -56,7 +57,7 @@ export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
  * The rail regions and the sidebar panels they draw, both ways.
  *
  * Written out twice rather than derived, because deriving the inverse of a
- * `Record` costs a cast and buys nothing: the pair is nine lines that a reader
+ * `Record` costs a cast and buys nothing: the pair is ten lines that a reader
  * checks by looking.
  */
 const PANEL_BY_RAIL_REGION: Readonly<Record<RailRegionId, LeftPanelId>> = {
@@ -64,6 +65,7 @@ const PANEL_BY_RAIL_REGION: Readonly<Record<RailRegionId, LeftPanelId>> = {
   railArtifacts: "artifacts",
   railTerminals: "terminals",
   railBrowsers: "browsers",
+  railSimulators: "simulators",
   railGitDiff: "git-diff",
   railPullRequests: "pull-requests",
   railFileTree: "file-tree",
@@ -82,6 +84,7 @@ export const RAIL_REGION_BY_PANEL: Readonly<Record<LeftPanelId, RailRegionId>> =
     artifacts: "railArtifacts",
     terminals: "railTerminals",
     browsers: "railBrowsers",
+    simulators: "railSimulators",
     "git-diff": "railGitDiff",
     "pull-requests": "railPullRequests",
     "file-tree": "railFileTree",
@@ -102,8 +105,9 @@ export function railRegionForLeftPanelId(panelId: LeftPanelId): RailRegionId {
   return RAIL_REGION_BY_PANEL[panelId];
 }
 
-/** The two panels with a presence rule of their own, and so an `auto` (L-47). */
+/** The panels with a presence rule of their own, and so an `auto` (L-47). */
 export const AUTO_RAIL_REGION_IDS: ReadonlyArray<AutoRailRegionId> = [
+  "railSimulators",
   "railPullRequests",
   "railComments",
 ];
@@ -113,7 +117,7 @@ export function isAutoRailRegionId(id: string): id is AutoRailRegionId {
 }
 
 /**
- * The nine rail regions' `shown` as the sparse show/hide map every sidebar
+ * The ten rail regions' `shown` as the sparse show/hide map every sidebar
  * render path already reads (`isLeftPanelVisible`). An entry is written only
  * where the value departs from the panel's own rule: `hidden` always, `shown`
  * only on the two panels whose rule can leave them out. An always-present
@@ -244,7 +248,7 @@ export function railStackOf(
 }
 
 /**
- * The shipped rail: the nine panels in order, no dividers (L-155), and exactly
+ * The shipped rail: the ten panels in order, no dividers (L-155), and exactly
  * one stack - Agents with Artifacts (L-166).
  *
  * That pair is the one the shipped sidebar drew together, and the owner's
@@ -577,7 +581,7 @@ function normalizedPanelsAndDividers(
  * A stack has no cap (L-181). It had one of four, so each section kept three
  * rows at the window's 600px minimum height, but the sidebar's groups never
  * had one and users stack more: the split shrinks each section toward its
- * header, and a section's own body scrolls. All nine 36px headers fit the
+ * header, and a section's own body scrolls. All ten 36px headers fit the
  * minimum height's ~460px body.
  */
 function withRailStacks(

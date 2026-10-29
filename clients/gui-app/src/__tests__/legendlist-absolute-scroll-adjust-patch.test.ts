@@ -210,11 +210,13 @@ describe("@legendapp/list web patch", () => {
     // holds when the reader scrolls: left alone, it lands after the reader's
     // own scroll and undoes it. The cancel also drops the data change's anchor
     // lock and lets the adjusts a scroll in flight deferred land, and reports
-    // false when nothing was held.
+    // false when nothing was held. It keeps the runner later `scrollToEnd`
+    // commands need: the unmount's cancel drops it, and without it every
+    // later one never ran.
     it(`${file} lets a held scroll command be cancelled and settled`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
-        'cancelPendingScroll: () => {\n      state.mvcpAnchorLock = void 0;\n      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      cancelImperativeScroll(state);\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
+        'cancelPendingScroll: () => {\n      state.mvcpAnchorLock = void 0;\n      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
       );
       expect(source).toContain(
         "      return true;\n    },\n    setScrollProcessingEnabled:",
@@ -231,7 +233,7 @@ describe("@legendapp/list web patch", () => {
     it(`${file} finishes an in-flight first-paint scroll where the reader is when it is cancelled`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
-        "const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      cancelImperativeScroll(state);",
+        "const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;",
       );
       expect(source).toContain(
         "        clearBootstrapInitialScrollSession(state);\n        finishInitialScroll(ctx, {\n          recalculateItems: true,\n          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)\n        });\n      }\n      return true;",
@@ -255,15 +257,18 @@ describe("@legendapp/list web patch", () => {
     // A finished scroll re-estimates every unmeasured row, which can move the
     // rows above the view by tens of thousands of pixels after a long jump.
     // Anchoring that re-layout keeps the rows the scroll left on screen there,
-    // except at the end the reader asked for, where anchoring inflates the
-    // content for a frame.
+    // except at the end, where anchoring inflates the content for a frame.
+    // `react.*` alone holds the estimates above the view in that pass, and
+    // releases them only after the initial scroll to the end.
     it(`${file} recalculates a settled scroll with MVCP unless it finished at the end`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
         "const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;",
       );
       expect(source).toContain(
-        "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });",
+        file.startsWith("react.")
+          ? "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true, refreshEstimatesAtEnd: finishedAtEnd && !!initialScrollToEnd && liveAtEnd });"
+          : "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });",
       );
     });
 

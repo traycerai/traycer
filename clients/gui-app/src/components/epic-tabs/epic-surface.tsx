@@ -18,6 +18,7 @@ import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { AgentBrowserPip } from "@/components/epic-canvas/pip/agent-browser-pip";
 import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import { SimulatorCatalogProvider } from "@/components/epic-canvas/renderers/simulator-catalog-provider";
 
 interface EpicSurfaceProps {
   readonly epicId: string;
@@ -76,7 +77,8 @@ export function EpicSurface(props: EpicSurfaceProps) {
         <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
           <EpicViewTabContext.Provider value={props.tabId}>
             <BrowserSessionsProvider epicId={props.epicId}>
-              {/* Registers the mobile header's right actions (the tab switcher
+              <SimulatorCatalogProvider epicId={props.epicId}>
+                {/* Registers the mobile header's right actions (the tab switcher
                   trigger) for this epic PANE - focused or merely retained - so a
                   focus switch onto an already-retained tab resolves its trigger
                   in that same commit, with no register-on-focus gap. Which pane's
@@ -86,28 +88,29 @@ export function EpicSurface(props: EpicSurfaceProps) {
                   tab but the router boots at `/`, leaving the route-active
                   effects below unmounted. Self-gates on mobile, so desktop
                   registers nothing either way. */}
-              <MobileEpicHeaderActionsBinder tabId={props.tabId} />
-              <EpicSurfaceSheets
-                tabId={props.tabId}
-                sidebarSide={sidebarSide}
-                sidebar={sidebarColumn}
-              >
-                <EpicRouteSessionBody
-                  epicId={props.epicId}
+                <MobileEpicHeaderActionsBinder tabId={props.tabId} />
+                <EpicSurfaceSheets
                   tabId={props.tabId}
-                  active={Boolean(activity.focused && routeMatches)}
-                  focusedAt={activeSearch?.focusedAt}
-                  focusArtifactId={activeSearch?.focusArtifactId}
-                  focusThreadId={activeSearch?.focusThreadId}
-                  focusPaneId={activeSearch?.focusPaneId}
-                  focusTileInstanceId={activeSearch?.focusTileInstanceId}
+                  sidebarSide={sidebarSide}
+                  sidebar={sidebarColumn}
+                >
+                  <EpicRouteSessionBody
+                    epicId={props.epicId}
+                    tabId={props.tabId}
+                    active={Boolean(activity.focused && routeMatches)}
+                    focusedAt={activeSearch?.focusedAt}
+                    focusArtifactId={activeSearch?.focusArtifactId}
+                    focusThreadId={activeSearch?.focusThreadId}
+                    focusPaneId={activeSearch?.focusPaneId}
+                    focusTileInstanceId={activeSearch?.focusTileInstanceId}
+                  />
+                </EpicSurfaceSheets>
+                <AgentBrowserPip
+                  epicId={props.epicId}
+                  viewTabId={props.tabId}
+                  surfaceVisible={activity.visible}
                 />
-              </EpicSurfaceSheets>
-              <AgentBrowserPip
-                epicId={props.epicId}
-                viewTabId={props.tabId}
-                surfaceVisible={activity.visible}
-              />
+              </SimulatorCatalogProvider>
             </BrowserSessionsProvider>
           </EpicViewTabContext.Provider>
         </EpicSessionProvider>

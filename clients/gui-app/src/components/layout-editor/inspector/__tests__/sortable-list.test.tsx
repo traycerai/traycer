@@ -883,6 +883,7 @@ describe("a keyboard step goes past a row that cannot move (G6)", () => {
       "railAgents",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",

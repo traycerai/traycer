@@ -86,6 +86,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         processMemory: null,
         crossHostMessaging: null,
         sessions: null,
+        updatesExternallyManaged: null,
       }),
       "host.notifications.indicatorState": () => ({
         epics: {},
@@ -112,6 +113,9 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     originRequestId: null,
     createdByChatId: THREAD_ID,
     checkins: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
   }),
 );
 

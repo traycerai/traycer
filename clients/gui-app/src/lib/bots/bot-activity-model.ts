@@ -216,6 +216,11 @@ export function taskKindOf(task: BotTaskEntry): string {
   return task.cadence.kind === "every" ? "Automation" : "One-off task";
 }
 
+/** An automation the bot still runs: what Run now, Pause and Stop act on (T92). */
+export function isRunningAutomation(task: BotTaskEntry): boolean {
+  return task.state === "tracking" && task.cadence.kind === "every";
+}
+
 /**
  * One row of an automation's check-ins: a host's report, a stretch no host
  * reported, or, from a host that keeps no history, the last report alone.
@@ -229,6 +234,8 @@ export type BotCheckinRow =
       readonly said: string;
       /** The turn the bot took on it; `null` where the host recorded none. */
       readonly turn: BotCheckinTurn | null;
+      /** The member whose Run now it answered; `null` for a scheduled one. */
+      readonly requestedByUserId: string | null;
     }
   | {
       readonly kind: "missed";
@@ -260,6 +267,7 @@ export function checkinRowsOf(
       hostName: null,
       said: describeLastCheckin(last),
       turn: null,
+      requestedByUserId: null,
     },
   ];
 }
@@ -283,6 +291,7 @@ function checkinRowOf(
     hostName: record.hostName,
     said: describeReport(record),
     turn: record.turn,
+    requestedByUserId: record.requestedByUserId,
   };
 }
 
@@ -335,8 +344,8 @@ function describeCounts(counts: {
 
 /**
  * A task the bot no longer runs, with when it ended as far as the stream
- * says: its latest check-in. `null` for one with no check-in, which only
- * "All finished work" lists.
+ * says: when a member stopped it, else its latest check-in. `null` for one
+ * with neither, which only "All finished work" lists.
  */
 export type BotFinishedTask = {
   readonly task: BotTaskEntry;
@@ -348,7 +357,7 @@ export function finishedTasksOf(
 ): ReadonlyArray<BotFinishedTask> {
   return tasks
     .filter((task) => task.state === "ended")
-    .map((task) => ({ task, endedAt: latestCheckinAt(task) }))
+    .map((task) => ({ task, endedAt: task.stop?.at ?? latestCheckinAt(task) }))
     .sort((a, b) => (b.endedAt ?? -1) - (a.endedAt ?? -1));
 }
 
@@ -378,7 +387,7 @@ export function endedReasonWords(task: BotTaskEntry): string {
     case "completed":
       return "Completed";
     case "by-bot":
-      return "Stopped by the bot";
+      return "Stopped";
     case "deleted":
       return "Deleted";
     case "archived":

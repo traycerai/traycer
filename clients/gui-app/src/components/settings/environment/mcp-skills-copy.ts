@@ -343,6 +343,14 @@ export function removeReach(
     : `This removes ${entry} from every provider on every host running ${name}.`;
 }
 
+export function removeSkillReach(
+  personal: boolean,
+  name: string,
+  entry: string,
+): string {
+  return `${removeReach(personal, name, entry)} Its folder in Traycer's skills folder is deleted on each of them.`;
+}
+
 /** A removed server's secret: one added with it goes, a picked one stays. */
 export function removeSecretLine(secret: string, owned: boolean): string {
   return owned

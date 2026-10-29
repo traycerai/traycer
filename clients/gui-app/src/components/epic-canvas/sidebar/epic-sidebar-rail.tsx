@@ -76,6 +76,7 @@ import {
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
+import { useSimulatorPanelAvailability } from "@/components/epic-canvas/sidebar/use-simulator-panel-availability";
 import {
   LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
   LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
@@ -238,12 +239,16 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   const collapsedById = useEpicLeftPanelStore(
     (s) => s.panelSectionCollapsedByPanelId,
   );
+  const { localHostRunsSimulators, hasSimulatorRecords } =
+    useSimulatorPanelAvailability();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () =>
       retainDisplayedPrPanel(rail, activePanelId, {
         commentsPanelRevealed,
         hasActiveCommentableArtifact,
         hasPullRequests,
+        localHostRunsSimulators,
+        hasSimulatorRecords,
         visibilityOverrideById,
       }),
     [
@@ -252,6 +257,8 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
       commentsPanelRevealed,
       hasActiveCommentableArtifact,
       hasPullRequests,
+      localHostRunsSimulators,
+      hasSimulatorRecords,
       visibilityOverrideById,
     ],
   );

@@ -23,12 +23,14 @@ describe("simulator tile schema", () => {
       simulatorId: UDID,
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     });
     const second = makeSimulatorTileRef({
       hostId: HOST,
       simulatorId: UDID,
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     });
     expect(first.type).toBe(TILE_KIND_SIMULATOR);
     expect(first.id).toBe(simulatorTileId({ hostId: HOST, simulatorId: UDID }));
@@ -40,6 +42,7 @@ describe("simulator tile schema", () => {
         simulatorId: UDID,
         platform: "ios",
         name: "iPhone 16",
+        instanceKey: null,
       }).id,
     ).not.toBe(first.id);
     expect(isSimulatorTileRef(first)).toBe(true);
@@ -53,6 +56,7 @@ describe("simulator tile schema", () => {
       simulatorId: "emulator-5554",
       platform: "android",
       name: "Pixel 8",
+      instanceKey: "Pixel_8_API_35_traycer_2",
     });
     expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
     expect(
@@ -64,8 +68,22 @@ describe("simulator tile schema", () => {
         hostId: HOST,
         simulatorId: "emulator-5554",
         platform: "android",
+        instanceKey: ref.instanceKey,
       }),
     ).toEqual(ref);
+    // A tile stored before the field names no instance, and resolves by its
+    // id alone the way every tile did.
+    expect(
+      parseTileRef({
+        id: ref.id,
+        instanceId: ref.instanceId,
+        type: TILE_KIND_SIMULATOR,
+        name: ref.name,
+        hostId: HOST,
+        simulatorId: "emulator-5554",
+        platform: "android",
+      }),
+    ).toEqual({ ...ref, instanceKey: null });
   });
 
   it("refuses a persisted ref whose platform this build does not know, and names an unnamed one", () => {

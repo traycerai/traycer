@@ -1,5 +1,6 @@
 import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger, describeLogErrorSummary } from "@/lib/logger";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * Eagerly warm the heavy epic route component chunks shortly after startup so
@@ -84,11 +85,16 @@ const DESKTOP_ONLY_WARMERS: ReadonlyArray<RouteChunkWarmer> = [
     load: () => import("@/components/settings/settings-surface"),
   },
   // The bot tab (Tracy Bots): a conversation transcript plus the trunk view,
-  // mounted lazily by its kind module like every other tab surface.
-  {
-    module: "@/components/bots/bot-tab-surface",
-    load: () => import("@/components/bots/bot-tab-surface"),
-  },
+  // mounted lazily by its kind module like every other tab surface. Not
+  // warmed by a build without bots (`unreleased-features.ts`).
+  ...(UNRELEASED_FEATURES_ENABLED
+    ? [
+        {
+          module: "@/components/bots/bot-tab-surface",
+          load: () => import("@/components/bots/bot-tab-surface"),
+        },
+      ]
+    : []),
   // The experimental layout editor's sample workspace (Settings >
   // Appearance). Off by default, and never a phone boot path.
   {

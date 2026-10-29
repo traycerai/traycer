@@ -455,11 +455,11 @@ describe("The Skills page", () => {
   it.each([
     {
       source: personalPoolSource(),
-      line: "This removes review from every provider on every computer and sandbox running Personal.",
+      line: "This removes review from every provider on every computer and sandbox running Personal. Its folder in Traycer's skills folder is deleted on each of them.",
     },
     {
       source: poolSource("editor"),
-      line: "This removes review from every provider on every host running Acme.",
+      line: "This removes review from every provider on every host running Acme. Its folder in Traycer's skills folder is deleted on each of them.",
     },
   ])(
     "asks before removing a written skill: $line",

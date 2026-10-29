@@ -3,6 +3,7 @@ import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
 } from "@/lib/providers/provider-ambient-auth";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The Providers rail's one word of state for a provider, read from its own
@@ -21,9 +22,12 @@ import {
  *   person's account.
  *
  * `null` while nothing above is known yet (a probe still running, a status
- * that is not an answer), so the rail never states a guess.
+ * that is not an answer), so the rail never states a guess. The words came
+ * with the sandbox rows the rail sits beside in the composer; a build without
+ * them (`unreleased-features.ts`) keeps the rail to names, as it was.
  */
 export function providerRailStateWord(state: ProviderCliState): string | null {
+  if (!UNRELEASED_FEATURES_ENABLED) return null;
   if (!state.enabled) return "off";
   const managed = state.profiles.filter(
     (profile) => profile.kind === "managed",

@@ -2,21 +2,25 @@ import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   simulatorSessionsV10,
+  simulatorSessionsV11,
   simulatorStreamV10,
 } from "@traycer/protocol/host/simulator/stream-contracts";
 import { releasedStreamMethodNames } from "./__fixtures__/released-stream-method-names";
 
 /**
- * The two simulator streams: one `@1.0` line each, new names outside the
- * frozen `browser.*` namespace, not yet in the released baseline (which the
- * subset rule allows).
+ * The two simulator streams: new names outside the frozen `browser.*`
+ * namespace, not yet in the released baseline (which the subset rule
+ * allows). `simulator.sessions` is at `@1.1`, `simulator.stream` at `@1.0`.
  */
 describe("simulator stream contracts", () => {
-  it("registers both streams at @1.0 outside the browser namespace", () => {
-    expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(0);
+  it("registers sessions at @1.1 and stream at @1.0 outside the browser namespace", () => {
+    expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(1);
     expect(
       hostStreamRpcRegistry["simulator.sessions"][1].versions[0].contract,
     ).toBe(simulatorSessionsV10);
+    expect(
+      hostStreamRpcRegistry["simulator.sessions"][1].versions[1].contract,
+    ).toBe(simulatorSessionsV11);
     expect(hostStreamRpcRegistry["simulator.stream"][1].latestMinor).toBe(0);
     expect(
       hostStreamRpcRegistry["simulator.stream"][1].versions[0].contract,
@@ -135,5 +139,19 @@ describe("simulator stream contracts", () => {
         extra: true,
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps patch.opening on the @1.1 frame and strips it from @1.0", () => {
+    const frame = {
+      kind: "stateChanged",
+      hasBinaryPayload: false,
+      revision: 5,
+      patch: { opening: [{ requestId: "r1" }] },
+    };
+    expect(simulatorSessionsV11.serverFrameSchema.parse(frame)).toEqual(frame);
+    expect(simulatorSessionsV10.serverFrameSchema.parse(frame)).toEqual({
+      ...frame,
+      patch: {},
+    });
   });
 });

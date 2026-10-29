@@ -34,7 +34,7 @@ import {
  * answered yet is still asked: the stream's own compatibility check closes
  * with `INCOMPATIBLE` for `simulator.sessions` when it cannot serve it, and
  * that close reads `unsupported` the same way - so a surface with no unary
- * traffic of its own (the Browsers panel) still learns the answer.
+ * traffic of its own (the pending-open watcher) still learns the answer.
  */
 export function useSimulatorSessionsForHost(args: {
   readonly hostId: string | null;

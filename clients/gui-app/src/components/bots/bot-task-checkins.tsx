@@ -23,7 +23,7 @@ const NO_IDS: ReadonlyArray<string> = [];
  * A task's check-ins under its row on the bot's Activity page (Tracy Bots
  * T86), newest first: when each came in, the host that reported it and what
  * it said; a stretch no host reported is an amber row with why and when it
- * caught up. The newest few show, and "All N check-ins" the rest of the
+ * caught up, and one a member's Run now asked for names them. The newest few show, and "All N check-ins" the rest of the
  * week the host keeps. A check-in whose turn the bot's host still keeps
  * links to it: the turn opens beside the channel, in Messages. Nothing for a
  * task with none.
@@ -34,8 +34,10 @@ export function BotTaskCheckins(props: {
   readonly task: BotTaskEntry;
   /** Opens a check-in's turn beside the channel. */
   readonly onOpenTurn: (open: BotOpenTurn) => void;
+  /** A member's name, for a check-in that answered their Run now. */
+  readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { botId, hostId, task, onOpenTurn } = props;
+  const { botId, hostId, task, onOpenTurn, nameOf } = props;
   const rows = useMemo(() => checkinRowsOf(task), [task]);
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, RECENT_CHECKINS_SHOWN);
@@ -77,6 +79,7 @@ export function BotTaskCheckins(props: {
                   : null
               }
               onOpenTurn={onOpenTurn}
+              nameOf={nameOf}
             />
           </li>
         ))}
@@ -102,8 +105,9 @@ function CheckinRow(props: {
   /** The check-in's turn as the bot's host keeps it; `null` for none. */
   readonly turnRef: BotTurnRef | null;
   readonly onOpenTurn: (open: BotOpenTurn) => void;
+  readonly nameOf: (userId: string) => string;
 }): ReactNode {
-  const { row, turnRef, onOpenTurn } = props;
+  const { row, turnRef, onOpenTurn, nameOf } = props;
   if (row.kind === "missed") {
     return (
       <p
@@ -128,6 +132,11 @@ function CheckinRow(props: {
       <span className="tabular-nums">{formatAbsoluteDateTime(row.at)}</span>
       {row.hostName === null ? null : <span>· {row.hostName}</span>}
       <span className="text-foreground">· {row.said}</span>
+      {row.requestedByUserId === null ? null : (
+        <span data-testid="bot-task-checkin-requested">
+          · Run now by {nameOf(row.requestedByUserId)}
+        </span>
+      )}
       {turnRef === null ? null : (
         <Button
           type="button"

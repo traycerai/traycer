@@ -63,6 +63,9 @@ const SEEDED_RAIL: ReadonlyArray<RailEntry> = [
   { kind: "panel", id: "railGitDiff" },
   { kind: "panel", id: "railTerminals" },
   { kind: "panel", id: "railBrowsers" },
+  // Seeded like the rest, and never drawn: this machine runs no simulator and
+  // the task holds none, so the panel's own rule leaves its icon out.
+  { kind: "panel", id: "railSimulators" },
   { kind: "panel", id: "railPullRequests" },
   { kind: "panel", id: "railFileTree" },
   { kind: "panel", id: "railComments" },
@@ -154,6 +157,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         processMemory: null,
         crossHostMessaging: null,
         sessions: null,
+        updatesExternallyManaged: null,
       }),
     },
   });

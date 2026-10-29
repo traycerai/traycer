@@ -150,6 +150,11 @@ export function buildOverviewHostFixture(options: {
   readonly storeFormats?: HostStatusStoreFormats | null;
   /** `host.status@1.5`'s install report; `null` (the default) is "not reported". */
   readonly install?: HostStatusInstall | null;
+  /**
+   * `host.status@1.10`'s answer to who owns this host's version; `null` (the
+   * default) is a host that predates the field.
+   */
+  readonly updatesExternallyManaged?: boolean | null;
   readonly installation?: HostGetInstallationInfoResponseV11;
   /**
    * Replaces (rather than merges into) individual method handlers after the
@@ -198,6 +203,7 @@ export function buildOverviewHostFixture(options: {
         processMemory: null,
         crossHostMessaging: null,
         sessions: null,
+        updatesExternallyManaged: options.updatesExternallyManaged ?? null,
       };
     },
     "host.identity.get": () => ({ ...identity }),

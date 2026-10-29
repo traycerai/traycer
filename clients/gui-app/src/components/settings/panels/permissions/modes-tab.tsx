@@ -15,20 +15,62 @@ import { Badge } from "@/components/ui/badge";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The page's one app-scoped region: the mode a new conversation starts in, and
  * what each mode runs without asking.
  *
  * Deliberately NOT behind `HostScopeGate`. The default mode is one preference
- * for this app, not per machine, so it works with no host in scope at all,
- * and its control is captioned "This app only".
+ * for this app, not per machine, so it works with no host in scope at all.
+ * Its control is captioned "This app only"; without environments the row
+ * carries the older "All machines" badge and the note under the tab bar.
  */
 export function ModesTab(): ReactNode {
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const setDefaultPermission = useSettingsStore((s) => s.setDefaultPermission);
+  const picker = (
+    <PermissionsPicker
+      value={defaultPermission}
+      disabled={false}
+      onChange={(next) => {
+        trackSettingChanged("permissions", "defaultPermission");
+        setDefaultPermission(next);
+      }}
+      // No harness scope: the default is install-wide and every option
+      // stays enabled. A provider that does not honour the chosen mode
+      // narrows it in the composer, where a harness is selected.
+      supportedPermissionModes={null}
+      harnessLabel={null}
+      // Install-wide and harness-agnostic, so there is no catalog to
+      // union, no turn to be mid-way through, no one host whose judge
+      // this row could name, and no negotiated catalog line to read.
+      //
+      // `hostKnowsAutoMode={null}` is the THIRD state: `null` means no
+      // host is in scope, exactly as `supportedPermissionModes={null}`
+      // means no harness is. `false` would claim "a machine was asked
+      // and cannot spell `auto`", which gates the option off - and this
+      // row has asked no machine anything. The composer clamps the
+      // default per host at the point a host actually exists.
+      catalogSupportedModes={null}
+      hostKnowsAutoMode={null}
+      turnActive={false}
+      judgeBilling={null}
+      closeFocus="trigger"
+      interactive={false}
+      // A Settings surface must not open Settings.
+      onOpenPermissionSettings={null}
+    />
+  );
   return (
     <div className="flex flex-col gap-5">
+      {/* Without environments the picker above the tabs is the machine picker
+          of before, so the note that it changes nothing here is true again. */}
+      {UNRELEASED_FEATURES_ENABLED ? null : (
+        <p className="px-1 text-ui-xs text-muted-foreground">
+          The machine picker above doesn&apos;t change anything on this tab.
+        </p>
+      )}
       <SettingsGroup
         group={PERMISSIONS.definitions.startingMode}
         showTitle={false}
@@ -38,46 +80,29 @@ export function ModesTab(): ReactNode {
       >
         <SettingsRow
           row={PERMISSIONS.definitions.defaultPermission}
+          // The badge said the default reached every machine; the caption
+          // replaced it once a configuration could hold one per host.
+          labelStatus={
+            UNRELEASED_FEATURES_ENABLED ? null : (
+              <Badge variant="muted" size="xs">
+                All machines
+              </Badge>
+            )
+          }
           control={
-            <div className="flex flex-col items-end gap-1">
-              <PermissionsPicker
-                value={defaultPermission}
-                disabled={false}
-                onChange={(next) => {
-                  trackSettingChanged("permissions", "defaultPermission");
-                  setDefaultPermission(next);
-                }}
-                // No harness scope: the default is install-wide and every option
-                // stays enabled. A provider that does not honour the chosen mode
-                // narrows it in the composer, where a harness is selected.
-                supportedPermissionModes={null}
-                harnessLabel={null}
-                // Install-wide and harness-agnostic, so there is no catalog to
-                // union, no turn to be mid-way through, no one host whose judge
-                // this row could name, and no negotiated catalog line to read.
-                //
-                // `hostKnowsAutoMode={null}` is the THIRD state: `null` means no
-                // host is in scope, exactly as `supportedPermissionModes={null}`
-                // means no harness is. `false` would claim "a machine was asked
-                // and cannot spell `auto`", which gates the option off - and this
-                // row has asked no machine anything. The composer clamps the
-                // default per host at the point a host actually exists.
-                catalogSupportedModes={null}
-                hostKnowsAutoMode={null}
-                turnActive={false}
-                judgeBilling={null}
-                closeFocus="trigger"
-                interactive={false}
-                // A Settings surface must not open Settings.
-                onOpenPermissionSettings={null}
-              />
-              <span
-                className="text-ui-xs text-muted-foreground"
-                data-testid="permissions-default-permission-scope"
-              >
-                This app only
-              </span>
-            </div>
+            UNRELEASED_FEATURES_ENABLED ? (
+              <div className="flex flex-col items-end gap-1">
+                {picker}
+                <span
+                  className="text-ui-xs text-muted-foreground"
+                  data-testid="permissions-default-permission-scope"
+                >
+                  This app only
+                </span>
+              </div>
+            ) : (
+              picker
+            )
           }
         />
       </SettingsGroup>

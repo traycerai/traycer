@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
  * The chat transcript's bottom-follow under real touch input, against the
@@ -19,10 +19,18 @@ interface Geometry {
   readonly clientHeight: number;
 }
 
+/** The row under the scroller's top edge, and its top relative to that edge. */
+interface ReadingRow {
+  readonly id: string;
+  readonly top: number;
+}
+
 declare global {
   interface Window {
     /** Written by the fixture: the list's live scroll geometry. */
     __geometry?: () => Geometry | null;
+    /** Written by the fixture: the row the reader is looking at. */
+    __readingRow?: () => ReadingRow | null;
     /** Written by the fixture: appends one row. */
     __appendRow?: () => void;
     /** Written by the fixture: streams text into the last row. */
@@ -33,6 +41,12 @@ declare global {
 async function geometry(page: Page): Promise<Geometry> {
   const result = await page.evaluate(() => window.__geometry?.() ?? null);
   if (result === null) throw new Error("no scroll node");
+  return result;
+}
+
+async function readingRow(page: Page): Promise<ReadingRow> {
+  const result = await page.evaluate(() => window.__readingRow?.() ?? null);
+  if (result === null) throw new Error("no row under the top edge");
   return result;
 }
 
@@ -107,20 +121,27 @@ async function loadFollowingAtEnd(page: Page): Promise<Geometry> {
   return start;
 }
 
+/**
+ * The reader's position is what they see: the row under the top edge and its
+ * offset. Not raw `scrollTop`, which an anchored refresh of the estimates
+ * above the view moves while nothing on screen does.
+ */
 async function expectReadingPositionKept(
   page: Page,
   start: Geometry,
 ): Promise<void> {
   const afterSwipe = await waitForScrollSettle(page);
   expect(afterSwipe.scrollTop).toBeLessThan(start.scrollTop - 50);
+  const before = await readingRow(page);
 
   await streamContent(page);
   const afterStream = await waitForScrollSettle(page);
   expect(await following(page)).toBe("false");
   expect(afterStream.scrollHeight).toBeGreaterThan(afterSwipe.scrollHeight);
-  expect(
-    Math.abs(afterStream.scrollTop - afterSwipe.scrollTop),
-  ).toBeLessThanOrEqual(2);
+  const after = await readingRow(page);
+  const kept = `the reader's position is kept: ${JSON.stringify({ before, after })}`;
+  expect(after.id, kept).toBe(before.id);
+  expect(Math.abs(after.top - before.top), kept).toBeLessThanOrEqual(2);
 }
 
 // Finger moves DOWN the screen: the content scrolls toward the top.
@@ -176,7 +197,7 @@ test.describe("wheel (desktop control)", () => {
     await page.setViewportSize({ width: 390, height: 700 });
     const start = await loadFollowingAtEnd(page);
     await page.mouse.move(195, 350);
-    await page.mouse.wheel(0, -400);
+    await wheelsDelivered(page, [{ deltaX: 0, deltaY: -400 }], 0);
     await expectReadingPositionKept(page, start);
   });
 });

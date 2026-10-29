@@ -214,6 +214,7 @@ const REGION_PARITY: Readonly<Record<RegionId, ReadonlyArray<ParityCase>>> = {
   railAgents: [railIcon()],
   railTerminals: [railIcon()],
   railBrowsers: [railIcon()],
+  railSimulators: [railIcon()],
   railArtifacts: [railIcon()],
   railGitDiff: [railIcon()],
   railPullRequests: [railIcon()],

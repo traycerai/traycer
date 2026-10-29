@@ -1695,6 +1695,21 @@ export const HOST_METHOD_POLL_TABLE = {
   // (T86): read when those rows change, and again when the bot's activity
   // says a turn settled.
   "bot.turn.locate": { ...LATEST_SCHEDULING, poll: null },
+  // A member's actions on the bot's automations and notification watches
+  // from the Activity page (T92): each writes the bound host's records, so
+  // they queue.
+  "bot.task.runNow": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.task.setPaused": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.task.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.notifications.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // A team's onboarding (T48): the read is refetched when its card mounts or
   // a choice or completion lands; the two writes persist, so they queue.
   "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: null },
@@ -2777,6 +2792,29 @@ export const HOST_METHOD_POLL_TABLE = {
   // ordered so two toggles land in the order the person made them.
   "simulator.detail": { ...LATEST_SCHEDULING, poll: null },
   "simulator.action": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The host-wide instance verbs: the read coalesces, the two writes are
+  // ordered like the session verbs above. The read polls only where a caller
+  // opts in (Host ▸ Overview, the open + picker): an instance's idle
+  // countdown and its holders move with no push to the person's screen.
+  "simulator.instances": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10 * SECOND_MS },
+  },
+  "simulator.powerOff": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "simulator.setKeepRunning": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The task's simulator catalog, refreshed like `browser.catalog.read`.
+  "simulator.catalog.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
   "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
   "config.catalog.set": {
     mode: "fifo",

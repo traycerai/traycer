@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The source store behind `kind: "bot"` tabs (Tracy Bots).
@@ -127,6 +128,16 @@ export const useBotTabsStore = create<BotTabsState>()(
     },
   ),
 );
+
+// A build without bots (`unreleased-features.ts`) mounts no Tracy entry
+// controller, which is what turns the setting off and releases the entry's
+// locks. A pin a previous build persisted is released here instead, so the
+// restored tab is an ordinary, closable one.
+if (
+  !UNRELEASED_FEATURES_ENABLED &&
+  useBotTabsStore.getState().fixedBotId !== null
+)
+  useBotTabsStore.getState().setFixedBotId(null);
 
 /**
  * The record for `botId`, or `null`. An own-property check rather than an

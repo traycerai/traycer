@@ -32,6 +32,7 @@ import {
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);
@@ -143,27 +144,29 @@ export function GeneralSettingsPanel() {
           <ChatAutoArchiveSettingsRow />
         </SettingsGroup>
 
-        <SettingsGroup
-          group={GENERAL.definitions.bots}
-          showTitle
-          tone="default"
-          dataTestId="settings-general-bots"
-          fill={false}
-        >
-          <SettingsRow
-            row={GENERAL.definitions.showTracy}
-            control={
-              <Switch
-                checked={showTracy}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showTracy");
-                  setShowTracy(value);
-                }}
-                aria-label="Show Tracy"
-              />
-            }
-          />
-        </SettingsGroup>
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <SettingsGroup
+            group={GENERAL.definitions.bots}
+            showTitle
+            tone="default"
+            dataTestId="settings-general-bots"
+            fill={false}
+          >
+            <SettingsRow
+              row={GENERAL.definitions.showTracy}
+              control={
+                <Switch
+                  checked={showTracy}
+                  onCheckedChange={(value) => {
+                    trackGeneralSetting("showTracy");
+                    setShowTracy(value);
+                  }}
+                  aria-label="Show Tracy"
+                />
+              }
+            />
+          </SettingsGroup>
+        ) : null}
 
         <DangerZoneSection />
       </div>

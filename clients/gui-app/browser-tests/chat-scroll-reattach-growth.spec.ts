@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 import {
   readView,
   settle,
@@ -203,16 +203,22 @@ async function standShort(
   const box = await page.locator(SCROLL).boundingBox();
   if (box === null) throw new Error("no scroll box");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  for (let i = 0; i < 3; i += 1) {
-    await page.mouse.wheel(0, -500);
-    await nextFrames(page, 10);
-  }
+  await wheelsDelivered(
+    page,
+    Array.from({ length: 3 }, () => ({ deltaX: 0, deltaY: -500 })),
+    10,
+  );
+  await nextFrames(page, 10);
   await settle(page, 12);
   for (let i = 0; i < 12; i += 1) {
     const view = await readView(page);
     const remaining = view.fromEnd - shortPx;
     if (remaining <= 12) break;
-    await page.mouse.wheel(0, Math.min(remaining, 300));
+    await wheelsDelivered(
+      page,
+      [{ deltaX: 0, deltaY: Math.min(remaining, 300) }],
+      0,
+    );
     await nextFrames(page, 10);
   }
   return settle(page, 12);
@@ -295,7 +301,11 @@ for (const line of ["legacy", "windowed"] as const) {
     expect(before.mode, `fromEnd=${before.fromEnd.toFixed(0)}`).toBe(
       "free-scrolling",
     );
-    await page.mouse.wheel(0, Math.round(before.fromEnd));
+    await wheelsDelivered(
+      page,
+      [{ deltaX: 0, deltaY: Math.round(before.fromEnd) }],
+      0,
+    );
     await nextFrames(page, 10);
     const after = await settle(page, 12);
     const report = `reach: from ${before.fromEnd.toFixed(0)} short -> fromEnd=${after.fromEnd.toFixed(0)} mode=${String(after.mode)} pill=${String(after.pill)}`;
@@ -320,7 +330,11 @@ for (const line of ["legacy", "windowed"] as const) {
     // the growth may already have pulled them to the tail (R5).
     const wheeled = grown.mode === "free-scrolling";
     if (wheeled) {
-      await page.mouse.wheel(0, Math.round(grown.fromEnd));
+      await wheelsDelivered(
+        page,
+        [{ deltaX: 0, deltaY: Math.round(grown.fromEnd) }],
+        0,
+      );
       await nextFrames(page, 10);
     }
     const after = await settle(page, 12);
