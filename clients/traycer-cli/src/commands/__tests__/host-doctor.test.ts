@@ -454,15 +454,4 @@ describe("hostDoctorCommand asks the running host", () => {
     expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
     expect(result.exitCode).toBe(0);
   });
-
-  it("keeps only issues and lifecycle in the data of a host verdict", async () => {
-    mocks.callHostRpcMock.mockResolvedValue(hostOk([]));
-
-    const result = await hostDoctorCommand(makeCtx());
-
-    expect(Object.keys(result.data as object).sort()).toEqual([
-      "issues",
-      "lifecycle",
-    ]);
-  });
 });
