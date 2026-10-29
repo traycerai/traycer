@@ -38,7 +38,10 @@ const state = vi.hoisted(() => ({
   supported: true as boolean | null,
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => state.reachability,
 }));
 

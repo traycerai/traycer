@@ -44,6 +44,7 @@ import type {
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /**
  * The Browser page's host-dependent half: the Agents group and Website
@@ -93,15 +94,17 @@ export function BrowserSettingsSection(props: {
 }
 
 /**
- * What a sentence calls a host: its directory label, or its id when it has no
- * label. A blank label is no label - "On ." is not a sentence.
+ * What a sentence calls a host: its directory label, or "the host" when it has
+ * no label - never its id. A blank label is no label - "On ." is not a
+ * sentence. `null` only when there is no host at all.
  */
 function hostNameOf(
   entry: { readonly label: string } | null,
   hostId: string | null,
 ): string | null {
   const label = entry?.label.trim() ?? "";
-  return label.length > 0 ? label : hostId;
+  if (hostId === null) return label.length > 0 ? label : null;
+  return hostNameFromLabel(label, hostId);
 }
 
 function BrowserDevOriginsControl(props: {

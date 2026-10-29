@@ -3,7 +3,6 @@ import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-fo
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
-  HostReachability,
   HostReachabilityHostKind,
   HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
@@ -18,7 +17,6 @@ import {
   chatPreContentHost,
   chatPreContentReport,
   chatPreContentStrip,
-  chatTileHostLabel,
   classifyChatPreContent,
   describeChatPreContent,
   STALLED_CHAT_LOAD_ATTEMPTS,
@@ -1384,43 +1382,6 @@ describe("chatPreContentReport", () => {
   it("never reports a negative elapsed time", () => {
     expect(chatPreContentReport(input({}), -5).message).toContain(
       "elapsedS=0 ",
-    );
-  });
-});
-
-describe("chatTileHostLabel", () => {
-  function reachability(
-    status: HostReachabilityStatus,
-    hostLabel: string,
-  ): HostReachability {
-    return {
-      status,
-      hostLabel,
-      unavailability: null,
-      basis: "directory",
-      hostKind: "remote",
-    };
-  }
-
-  it.each<[string, HostReachabilityStatus, string, string | null]>([
-    ["a real label is kept", "unreachable", "Office Mac", "Office Mac"],
-    [
-      "a label that differs from the id is kept",
-      "reachable",
-      "host-2",
-      "host-2",
-    ],
-    ["the checking state names no host", "checking", "Office Mac", null],
-    [
-      "a label equal to the host id is the id, not a name",
-      "unreachable",
-      "host-1",
-      null,
-    ],
-    ["an empty label names no host", "unreachable", "", null],
-  ])("%s", (_name, status, hostLabel, expected) => {
-    expect(chatTileHostLabel(reachability(status, hostLabel), "host-1")).toBe(
-      expected,
     );
   });
 });

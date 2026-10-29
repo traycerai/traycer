@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
+  hostLabelAtSentenceStart,
   useHostReachability,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
@@ -134,7 +135,7 @@ export function BrowserSessionRow({
           ) : null}
         </div>
         <div className="truncate text-ui-xs text-muted-foreground">
-          {host.hostLabel}
+          {hostLabelAtSentenceStart(host.hostLabel)}
           {originalTabClosed ? " · Original tab closed" : null}
           {status === null ? null : ` · ${status}`}
         </div>
