@@ -56,6 +56,12 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import {
+  fresherSimulatorRead,
+  splitSimulatorDevices,
+  type FresherSimulatorRead,
+  type SimulatorRunningCopy,
+} from "@/lib/simulator-view/simulator-device-split";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { suggestedSimulatorHostId } from "@/lib/simulator-view/suggested-simulator-host";
@@ -103,6 +109,12 @@ function runningRowFromSummary(summary: SimulatorSummary): PickerRunningRow {
     drivenByAgent: false,
     cloneOfName: null,
   };
+}
+
+function runningRow(copy: SimulatorRunningCopy): PickerRunningRow {
+  return copy.kind === "instance"
+    ? runningRowFromInstance(copy.instance)
+    : runningRowFromSummary(copy.device);
 }
 
 function matchesQuery(target: SimulatorOpenTarget, query: string): boolean {
@@ -292,6 +304,16 @@ export function SimulatorCreatePickerBody(props: {
           note={note}
           state={state}
           instances={v11 === true ? (instances.data?.instances ?? null) : null}
+          // The picker holds the two reads separately, so which of them is
+          // current is a question about when each ANSWERED. A Boot sends an
+          // open that asks the device list again, and that answer lands after
+          // the instance read's last poll - so for the seconds until the next
+          // poll the devices are the fresher read, and the instance answer in
+          // hand is one from before the boot.
+          fresher={fresherSimulatorRead({
+            devicesUpdatedAt: list.dataUpdatedAt,
+            instancesUpdatedAt: instances.dataUpdatedAt,
+          })}
           query={query}
           onPick={pick}
         />
@@ -415,64 +437,30 @@ function pickerNote(args: {
 
 type PickInstance = "auto" | "new" | { readonly key: string };
 
-const NO_RUNNING_DEVICES: ReadonlySet<string> = new Set();
-
-/**
- * The devices whose OWN copy is running, under the key a COLD device is
- * listed by: an instance's `instanceKey` is its device's id while that device
- * is cold on both platforms - an iOS udid for life, an Android AVD name until
- * its emulator takes a serial - where the instance's own `simulatorId` is
- * that serial. So this set is only ever probed with a row the device list
- * calls cold, which is all `coldMatches` below asks it, and never with a
- * booted Android row, whose id is a serial no key equals.
- *
- * The picker folds two separately cached reads, and the instance read is the
- * fresher one - it polls while the picker is open, where `simulator.list`
- * neither polls nor follows a boot this client did not send (an agent's,
- * another window's). So a device the instances show running is never offered
- * Boot, however stale the device list's own `booted` flag is; without this
- * the same device was listed twice, once under Running and once with a live
- * Boot button, until the list's 60 s freshness window ran out.
- *
- * A clone is not its source: a device can be cold and bootable while a copy
- * of it runs.
- *
- * Null is no instance read to go on, which is UNKNOWN and not "nothing is
- * running": removing a row needs a read that says the device is up, so while
- * the answer is owed the device list's own flag decides alone, exactly as it
- * did before this set existed. Suppressing on the strength of an owed read
- * would take a bootable device off the picker over a question nobody had
- * answered yet.
- */
-function runningDeviceIds(
-  instances: readonly SimulatorHostInstance[] | null,
-): ReadonlySet<string> {
-  if (instances === null) return NO_RUNNING_DEVICES;
-  return new Set(
-    instances
-      .filter((instance) => instance.cloneOf === null)
-      .map((instance) => instance.instanceKey),
-  );
-}
-
 /**
  * The two sections. `instances` is the `@1.1` host's `simulator.instances`,
  * and null is NO instance read to go on - a `@1.0` host, which has none, or a
  * `@1.1` one that still owes its answer. Both fall back to the device list's
  * own `booted` flag, which is the only thing either has, and both refuse Boot
  * another: a copy is asked for by naming an instance, and neither can.
+ *
+ * ONE verdict per device drives both sections, which is what makes them a
+ * partition of the machine's devices rather than two answers that can leave a
+ * device in neither - see {@link splitSimulatorDevices}, which holds that
+ * invariant and which answer decides.
  */
 function PickerContent(props: {
   readonly note: string | null;
   readonly state: SimulatorListResponse | null;
   readonly instances: readonly SimulatorHostInstance[] | null;
+  readonly fresher: FresherSimulatorRead;
   readonly query: string;
   readonly onPick: (
     target: SimulatorOpenTarget,
     instance: PickInstance,
   ) => void;
 }) {
-  const { note, state, instances, query, onPick } = props;
+  const { note, state, instances, fresher, query, onPick } = props;
   if (note !== null)
     return <p className="px-2 py-3 text-ui-xs text-muted-foreground">{note}</p>;
   if (state === null)
@@ -490,22 +478,16 @@ function PickerContent(props: {
         Loading devices…
       </div>
     );
-  const running: readonly PickerRunningRow[] =
-    instances === null
-      ? state.simulators
-          .filter((simulator) => simulator.booted)
-          .map(runningRowFromSummary)
-      : instances.map(runningRowFromInstance);
-  const runningMatches = running.filter((row) =>
-    matchesQuery(row.target, query),
-  );
-  const runningDevices = runningDeviceIds(instances);
-  const coldMatches = state.simulators.filter(
-    (simulator) =>
-      !simulator.booted &&
-      !simulator.physical &&
-      !runningDevices.has(simulator.simulatorId) &&
-      matchesQuery(simulator, query),
+  const split = splitSimulatorDevices({
+    simulators: state.simulators,
+    instances,
+    fresher,
+  });
+  const runningMatches = split.running
+    .map(runningRow)
+    .filter((row) => matchesQuery(row.target, query));
+  const coldMatches = split.cold.filter((simulator) =>
+    matchesQuery(simulator, query),
   );
   return (
     <>
