@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/auth";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -305,6 +306,26 @@ describe("CreditsSettingsPanel credit offers", () => {
       expect(screen.queryByTestId("credits-offers")).toBeNull();
     },
   );
+
+  it("removes an offer that ends while the panel stays open", () => {
+    vi.useFakeTimers();
+    try {
+      mocks.data = userWithOffers([
+        offer({ endsAt: new Date(Date.now() + 60_000).toISOString() }),
+      ]);
+
+      renderPanel();
+      expect(screen.getByTestId("credits-offer-row")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(2 * 60_000);
+      });
+
+      expect(screen.queryByTestId("credits-offers")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("leaves out an offer that has already ended, and the section with it", () => {
     mocks.data = userWithOffers([
