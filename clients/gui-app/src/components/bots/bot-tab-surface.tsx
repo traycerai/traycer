@@ -145,6 +145,13 @@ export function BotTabSurface(props: {
  * team's main bot still to be set up, whose setup it shows. A bot that is
  * neither is a listed bot's tab all the same, which closes itself once the
  * list does not carry it.
+ *
+ * An unlisted bot is never taken for a deleted one on a list older than the
+ * tab or than the newest setup read: the list is read again first, so a main
+ * bot created since is found rather than its tab closed. Nor while a team
+ * with no bot cannot be told apart (`unresolved`: its setup read failed, or
+ * the host does not answer it): the tab may be that team's main bot, so it
+ * says the setup could not be read and offers to read it again.
  */
 function BotTabRoute(props: {
   readonly botId: string;
@@ -167,16 +174,41 @@ function BotTabRoute(props: {
     [botList.data, environments.data],
   );
   const teamSetups = useTeamSetups({ client, hostId, groups });
+  const unlisted = !listed && groups !== null;
+  const setup = unlisted
+    ? teamSetups.setups.find((entry) => entry.botId === botId)
+    : undefined;
+  // A list read that failed counts as read: the tab does not wait on it.
+  const listReadAt = Math.max(botList.dataUpdatedAt, botList.errorUpdatedAt);
+  const listStale =
+    unlisted &&
+    setup === undefined &&
+    (!botList.isFetchedAfterMount || listReadAt < teamSetups.readAt);
+  const { isFetching: listFetching, refetch: refetchList } = botList;
+  useEffect(() => {
+    if (listStale && !listFetching) void refetchList();
+  }, [listFetching, listStale, refetchList]);
   if (botList.status === "pending" || environments.status === "pending") {
     return <BotTabConnecting />;
   }
   // A list that failed names no setup: the tab opens the bot, which reports
   // what it can.
-  if (!listed && groups !== null) {
-    if (!teamSetups.settled) return <BotTabConnecting />;
-    const setup = teamSetups.setups.find((entry) => entry.botId === botId);
+  if (unlisted) {
     if (setup !== undefined) {
       return <TeamSetupChannel setup={setup} hostId={hostId} />;
+    }
+    if (listStale || !teamSetups.settled) return <BotTabConnecting />;
+    if (teamSetups.unresolved) {
+      return (
+        <ErrorNotice
+          text="Couldn't load your team's setup."
+          onRetry={() => {
+            teamSetups.retry();
+            void refetchList();
+          }}
+          className="m-4"
+        />
+      );
     }
   }
   return <BotTabBody {...props} />;

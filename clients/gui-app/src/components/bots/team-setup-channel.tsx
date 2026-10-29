@@ -61,21 +61,30 @@ export function TeamSetupChannel(props: {
             </h1>
             <MainBotBadge testId="bot-tab-main" tone="muted" />
           </header>
-          <div className="flex min-h-0 flex-1 flex-col justify-end overflow-y-auto px-2 py-3">
-            <ChatBotAppPost name={setup.title} testId="team-setup-post">
-              <div className="flex min-w-0 flex-col gap-2 text-ui-sm text-foreground">
-                <p>
-                  I'm this team's main bot. Tell me here what the team wants
-                  done and I'll set up bots for each area: a channel per bot,
-                  with the work and its reports in it.
-                </p>
-                <p>
-                  Before I can run, the team needs a host: a machine where its
-                  bots execute.
-                </p>
-                <TeamHostOptionsCard />
-              </div>
-            </ChatBotAppPost>
+          {/* The post sits at the bottom, as a channel's newest row does; its
+              top margin, not the column's end alignment, puts it there, so a
+              post taller than the pane overflows downward and scrolls from
+              its top. */}
+          <div
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
+            data-testid="team-setup-scroller"
+          >
+            <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
+              <ChatBotAppPost name={setup.title} testId="team-setup-post">
+                <div className="flex min-w-0 flex-col gap-2 text-ui-sm text-foreground">
+                  <p>
+                    I'm this team's main bot. Tell me here what the team wants
+                    done and I'll set up bots for each area: a channel per bot,
+                    with the work and its reports in it.
+                  </p>
+                  <p>
+                    Before I can run, the team needs a host: a machine where its
+                    bots execute.
+                  </p>
+                  <TeamHostOptionsCard />
+                </div>
+              </ChatBotAppPost>
+            </div>
           </div>
           <BotMessageComposerUnavailable
             placeholder={`Message ${setup.title}`}

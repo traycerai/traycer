@@ -72,6 +72,8 @@ const mocks = vi.hoisted(() => {
       reads,
       /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
       support: null as boolean | null,
+      /** The line the host negotiated for `bot.onboarding.read`. */
+      version: { major: 1, minor: 1 },
     },
     readRequests,
   };
@@ -102,6 +104,7 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => mocks.state.support,
+  useHostMethodSchemaVersion: () => mocks.state.version,
   useHostSupportsMethod: () => true,
 }));
 // The host RPC boundary: `bot.onboarding.read` answers what the test scripted,
@@ -288,6 +291,7 @@ beforeEach(() => {
   mocks.state.connectable = { hostIds: [TAB_HOST, OTHER_HOST], resolved: true };
   mocks.state.epics = {};
   mocks.state.support = true;
+  mocks.state.version = { major: 1, minor: 1 };
   for (const key of Object.keys(mocks.state.reads)) {
     delete mocks.state.reads[key];
   }
@@ -703,6 +707,18 @@ describe("<BotChannelSidebar /> a team that is not to be set up", () => {
       expect(mocks.readRequests).toEqual([]);
     },
   );
+
+  it("shows no setup row and no team + on a host that answers bot.onboarding.read at 1.0, and asks for nothing", () => {
+    mocks.state.version = { major: 1, minor: 0 };
+    mocks.state.reads["env-empty"] = setupRead("Tracy");
+    mount("bot-release");
+
+    expect(screen.queryByTestId("bot-channel-setup-row")).toBeNull();
+    expect(
+      within(section("env-empty")).queryByTestId("bot-channel-section-add"),
+    ).toBeNull();
+    expect(mocks.readRequests).toEqual([]);
+  });
 
   it("shows no setup row and no team + when the read fails", () => {
     mocks.state.reads["env-empty"] = "fails";

@@ -62,6 +62,10 @@ const mocks = vi.hoisted(() => ({
   subscribed: [] as string[],
   /** What `bot.onboarding.read` answers per environment id; absent is pending. */
   reads: {} as Record<string, ReadScript>,
+  /** A read's `refetch`, which Retry calls on a failed `bot.onboarding.read`. */
+  readRefetch: vi.fn<() => void>(),
+  /** The bot list query's `refetch`; a case scripts what a re-read answers. */
+  listRefetch: vi.fn<() => void>(),
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   membersQueries: [] as Array<{
     environmentId: string | null;
@@ -78,6 +82,19 @@ const mocks = vi.hoisted(() => ({
     listedBotIds: undefined as string[] | undefined,
     mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
+    /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
+    onboardingSupport: true,
+    /** The line the host negotiated for `bot.onboarding.read`. */
+    onboardingVersion: { major: 1, minor: 1 },
+    /** When a successful `bot.onboarding.read` answered. */
+    readAt: 1_000,
+    /** The bot list query's freshness, as TanStack reports it. */
+    list: {
+      dataUpdatedAt: 1_000,
+      errorUpdatedAt: 0,
+      isFetchedAfterMount: true,
+      isFetching: false,
+    },
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
     environments: [] as Array<{
@@ -91,10 +108,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
-    return method === "environment.members"
-      ? mocks.state.membersSupport
-      : mocks.state.support;
+    if (method === "environment.members") return mocks.state.membersSupport;
+    if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
+    return mocks.state.support;
   },
+  useHostMethodSchemaVersion: () => mocks.state.onboardingVersion,
   useHostSupportsMethod: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
     return true;
@@ -113,9 +131,20 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
         args.options?.enabled === true
           ? mocks.reads[request.params.environmentId]
           : undefined;
-      if (script === undefined) return { status: "pending", data: undefined };
-      if (script === "fails") return { status: "error", data: undefined };
-      return { status: "success", data: script };
+      const pending = {
+        status: "pending",
+        data: undefined,
+        dataUpdatedAt: 0,
+        refetch: mocks.readRefetch,
+      };
+      if (script === undefined) return pending;
+      if (script === "fails") return { ...pending, status: "error" };
+      return {
+        ...pending,
+        status: "success",
+        data: script,
+        dataUpdatedAt: mocks.state.readAt,
+      };
     }),
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
@@ -214,6 +243,8 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
             })),
             mainBotIds: mocks.state.mainBotIds,
           },
+    ...mocks.state.list,
+    refetch: mocks.listRefetch,
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
@@ -476,6 +507,17 @@ beforeEach(() => {
   mocks.state.listedBotIds = [BOT_ID];
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
+  mocks.state.onboardingSupport = true;
+  mocks.state.onboardingVersion = { major: 1, minor: 1 };
+  mocks.state.readAt = 1_000;
+  mocks.state.list = {
+    dataUpdatedAt: 1_000,
+    errorUpdatedAt: 0,
+    isFetchedAfterMount: true,
+    isFetching: false,
+  };
+  mocks.readRefetch.mockReset();
+  mocks.listRefetch.mockReset();
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   mocks.state.environments = [
     { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
@@ -658,24 +700,169 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
   it.each<readonly [string, ReadScript]>([
     ["the read answers no setup", { setup: null }],
-    ["the read fails", "fails"],
     [
       "the setup names another bot",
       { setup: { botId: OTHER_BOT_ID, title: "Tracy" } },
     ],
   ])(
-    "opens the tab as any unlisted bot's, which closes itself, when %s",
+    "opens the tab as any unlisted bot's, which closes itself, when every read has answered, the list was read since the tab mounted, and %s",
     (_name, script) => {
       mocks.reads["env-new"] = script;
       render(surfaceFor(SETUP_BOT_ID));
 
       expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+      expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+      expect(mocks.listRefetch).not.toHaveBeenCalled();
       expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
       expect(
         lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
       ).toBeNull();
     },
   );
+
+  /**
+   * The team's setup cannot be told from a deleted bot: the read failed, or
+   * the host does not answer it. The tab says so and offers to read again.
+   */
+  it.each<readonly [string, () => void]>([
+    [
+      "the setup read fails",
+      () => {
+        mocks.reads["env-new"] = "fails";
+      },
+    ],
+    [
+      "the host lacks bot.onboarding.read",
+      () => {
+        mocks.state.onboardingSupport = false;
+      },
+    ],
+    [
+      "the host answers bot.onboarding.read at 1.0",
+      () => {
+        mocks.state.onboardingVersion = { major: 1, minor: 0 };
+      },
+    ],
+  ])(
+    "shows the setup could not be read, with Retry, and never opens, subscribes to or closes the tab, when %s",
+    async (_name, script) => {
+      script();
+      const user = userEvent.setup();
+      const view = render(surfaceFor(SETUP_BOT_ID));
+
+      const notice = screen.getByTestId("bot-tab-error");
+      expect(notice.textContent).toContain("Couldn't load your team's setup.");
+      expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+      expect(mocks.open).not.toHaveBeenCalled();
+      expect(mocks.subscribed).toEqual([]);
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+      ).not.toBeNull();
+
+      // Retry reads again (the host now answers, where it did not); once the
+      // read answers the setup, its channel shows.
+      mocks.readRefetch.mockImplementation(() => {
+        mocks.reads["env-new"] = {
+          setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+        };
+      });
+      mocks.state.onboardingSupport = true;
+      mocks.state.onboardingVersion = { major: 1, minor: 1 };
+      mocks.listRefetch.mockClear();
+      await user.click(within(notice).getByRole("button", { name: "Retry" }));
+
+      expect(mocks.listRefetch).toHaveBeenCalled();
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+
+      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+      expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+      expect(mocks.open).not.toHaveBeenCalled();
+      expect(mocks.subscribed).toEqual([]);
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+      ).not.toBeNull();
+    },
+  );
+
+  it("re-reads a failed setup read on Retry", async () => {
+    mocks.reads["env-new"] = "fails";
+    const user = userEvent.setup();
+    render(surfaceFor(SETUP_BOT_ID));
+
+    expect(mocks.readRefetch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(mocks.readRefetch).toHaveBeenCalled();
+  });
+
+  /**
+   * The team's read answers `setup: null` because the bot has been created,
+   * but the cached list was read before that. The tab reads the list again
+   * before it decides the bot is gone.
+   */
+  it.each<readonly [string, () => void]>([
+    [
+      "the list was last read before the setup read answered",
+      () => {
+        mocks.state.list.dataUpdatedAt = 500;
+      },
+    ],
+    [
+      "the list was not fetched since the tab mounted",
+      () => {
+        mocks.state.list.isFetchedAfterMount = false;
+      },
+    ],
+  ])(
+    "reads the list again before closing an unlisted bot whose setup is gone, when %s, and opens the bot once the list carries it",
+    (_name, script) => {
+      mocks.reads["env-new"] = { setup: null };
+      script();
+      mocks.listRefetch.mockImplementation(() => {
+        mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
+        mocks.state.list = {
+          dataUpdatedAt: 2_000,
+          errorUpdatedAt: 0,
+          isFetchedAfterMount: true,
+          isFetching: false,
+        };
+      });
+      const view = render(surfaceFor(SETUP_BOT_ID));
+
+      expect(mocks.listRefetch).toHaveBeenCalled();
+      expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
+      expect(mocks.open).not.toHaveBeenCalled();
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+      ).not.toBeNull();
+
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+
+      expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
+      expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+      ).not.toBeNull();
+    },
+  );
+
+  it("draws the post in a scroller that starts at the top, with the post at the bottom through its own margin", () => {
+    render(surfaceFor(SETUP_BOT_ID));
+
+    // jsdom measures no layout, so the classes that decide it are asserted:
+    // `justify-end` would put an overflowing post's top out of reach, while
+    // `mt-auto` on the post's slot keeps it at the bottom yet lets the
+    // overflow run downward from the top.
+    const scroller = screen.getByTestId("team-setup-scroller");
+    expect(scroller.classList.contains("overflow-y-auto")).toBe(true);
+    expect(scroller.classList.contains("justify-end")).toBe(false);
+    const slot = screen.getByTestId("team-setup-post-slot");
+    expect(slot.parentElement).toBe(scroller);
+    expect(slot.classList.contains("mt-auto")).toBe(true);
+    expect(within(slot).getByTestId("team-setup-post")).toBeTruthy();
+  });
 
   it("opens the bot normally once it exists under the setup's id", () => {
     mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
