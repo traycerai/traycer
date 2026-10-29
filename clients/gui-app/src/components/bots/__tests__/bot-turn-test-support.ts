@@ -39,6 +39,11 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
 export const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** The host serving the tab. */
 export const HOST_ID = "host-tab";
+/** The bot's environment, whose room keeps its memory (T87). */
+export const ENVIRONMENT_ID = "env-1";
+/** Another bot of the environment, a shared memory's writer. */
+export const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
+export const OTHER_BOT_TITLE = "Audit Bot";
 /** The bot's channel chat, where members post. */
 export const CHANNEL_ID = "conversation-channel";
 /** The bot's trunk session, which answers the channel's posts. */

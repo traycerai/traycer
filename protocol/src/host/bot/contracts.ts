@@ -16,6 +16,9 @@ import {
   botListRequestSchema,
   botListResponseSchema,
   botListResponseSchemaV10,
+  botMemorySubscribeClientFrameSchema,
+  botMemorySubscribeOpenRequestSchema,
+  botMemorySubscribeServerFrameSchema,
   botOpenRequestSchema,
   botOpenResponseSchema,
   botReadRequestSchema,
@@ -450,4 +453,18 @@ export const botListChangedV10 = defineStreamRpcContract({
   openRequestSchema: botListChangedOpenRequestSchema,
   serverFrameSchema: botListChangedServerFrameSchema,
   clientFrameSchema: botListChangedClientFrameSchema,
+});
+
+/**
+ * `bot.memory.subscribe@1.0` (T87) - what a bot knows: the entries of the
+ * environment's memory pool tagged the bot or `all`, whole, on open and
+ * after every change to the pool. Read-only: nothing on the stream changes
+ * an entry; the bot writes them through its memory tool.
+ */
+export const botMemorySubscribeV10 = defineStreamRpcContract({
+  method: "bot.memory.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: botMemorySubscribeOpenRequestSchema,
+  serverFrameSchema: botMemorySubscribeServerFrameSchema,
+  clientFrameSchema: botMemorySubscribeClientFrameSchema,
 });

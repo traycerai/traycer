@@ -239,6 +239,10 @@ function mount(openThread: BotOpenThread | null): void {
             trunkChatId="trunk-chat"
             openTurn={null}
             onOpenTurn={vi.fn()}
+            openMemory={null}
+            onOpenMemory={vi.fn()}
+            environmentId="env-1"
+            botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
             openThread={openThread}
