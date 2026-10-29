@@ -174,6 +174,17 @@ export function gettingStartedEntries(
   }));
 }
 
+/**
+ * Every fact the first steps are judged on.
+ *
+ * None of these reads carries an `UNRELEASED_FEATURES_ENABLED` gate of its
+ * own, and none needs one: both surfaces that call this choose between this
+ * checklist and the 1.5.1 guides on that flag
+ * (`home-getting-started-section.tsx`, `getting-started-settings-panel.tsx`),
+ * so a build without environments never renders a caller. The toast in
+ * `first-task-guide.tsx` gates the same move read because ITS tree is mounted
+ * either way.
+ */
 export function useGettingStartedFacts(): GettingStartedFacts {
   const client = useOptionalHostClient();
   const hostId = useRequesterHostId(client);
