@@ -30,20 +30,20 @@ describe("Settings without the unreleased features", () => {
     ).toEqual([]);
   });
 
-  it("puts the Environment pages and Notifications under the host picker, Overview first", () => {
-    const host = visibleSettingsSections()
-      .filter((section) => section.group === "host")
-      .map((section) => section.id);
-    expect(host).toEqual([
-      "host",
-      "providers",
-      "permissions",
-      "agents",
-      "fallback",
-      "shell",
-      "notifications",
-      "worktrees",
-      "diagnostics",
+  it("puts the Environment pages and Notifications under the host picker, in the order and with the labels they had before", () => {
+    const host = visibleSettingsSections().filter(
+      (section) => section.group === "host",
+    );
+    expect(host.map((section) => [section.id, section.label])).toEqual([
+      ["host", "Overview"],
+      ["providers", "Providers"],
+      ["worktrees", "Worktrees"],
+      ["notifications", "Notifications"],
+      ["permissions", "Permissions"],
+      ["agents", "Agent selection"],
+      ["fallback", "Model routing"],
+      ["shell", "Shell"],
+      ["diagnostics", "Diagnostics"],
     ]);
     const account = visibleSettingsSections()
       .filter((section) => section.group === "account")
@@ -58,6 +58,7 @@ describe("Settings without the unreleased features", () => {
     }
     expect([...UNRELEASED_SETTINGS_SECTION_IDS].sort()).toEqual([
       "credits",
+      "machine-setup",
       "mcp-servers",
       "members",
       "sandboxes",

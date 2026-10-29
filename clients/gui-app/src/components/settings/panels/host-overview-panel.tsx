@@ -1996,20 +1996,20 @@ export function HostOverviewPanel(props: {
       >
         {notices}
         {/* The one-time Remote access question, on every tab like the
-            strip above it; it draws nothing once answered on this desktop. */}
-        <RemoteAccessQuestion
-          client={client}
-          hostId={scope.hostId}
-          enabled={usable}
-        />
-        {/* Which configuration this host runs, for the host the picker names,
+            strip above it (it draws nothing once answered on this desktop);
+            which configuration this host runs, for the host the picker names;
             and the settings card on every tab like the lines above it: whether
             this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. Neither in a build without
-            environments (`unreleased-features.ts`): a host there runs its own
-            settings and has nowhere to move them. */}
+            earlier version or stopped. None in a build without environments
+            (`unreleased-features.ts`): a host there runs its own settings,
+            has nowhere to move them, and asks no remote access question. */}
         {UNRELEASED_FEATURES_ENABLED ? (
           <>
+            <RemoteAccessQuestion
+              client={client}
+              hostId={scope.hostId}
+              enabled={usable}
+            />
             <HostEnvironmentSection scope={scope} />
             <HostOverviewSettingsCardSlot
               client={client}
@@ -2040,7 +2040,9 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
-            access: accessTab,
+            // No Access and setup tab in a build without environments
+            // (`HOST_OVERVIEW_TABS`).
+            access: UNRELEASED_FEATURES_ENABLED ? accessTab : null,
             data: dataTab,
             ports: portsTab,
             simulators: simulatorsTab,

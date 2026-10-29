@@ -5,21 +5,23 @@
  * Selects, per build, the features the next release does not ship (sandboxes,
  * environments and bots) by rewriting the one literal every gate reads:
  *
- *   export const UNRELEASED_FEATURES_ENABLED: boolean = false;
+ *   export const UNRELEASED_FEATURES_ENABLED: boolean = true;
  *
- * in each client's `unreleased-features.ts`. The committed value is `false`,
- * so a build that stamps nothing is OFF; `--on` is written only by a staging
- * build (the desktop and CLI `set-deploy-target.cjs` do it for
- * `--target=staging`) or by a developer working on those features locally,
- * who runs `--restore` before committing (the commit hook refuses anything but
- * `false`). There is no runtime lookup.
+ * in each client's `unreleased-features.ts`. The committed value is `true`:
+ * development (the tree as checked out) and the staging builds run with the
+ * features; only a production build writes `false` (the desktop and CLI
+ * `set-deploy-target.cjs` do it for `--target=production`, the mobile
+ * production lane through the internal copy of this script). A developer
+ * comparing against production runs `--off` locally and `--restore` before
+ * committing (the commit hook refuses anything but `true`). There is no
+ * runtime lookup.
  *
  * Owned by the clients tree, like `rewrite-config-target.cjs`, so the client
  * stampers resolve it within this workspace.
  *
  * Usage, from the repository root:
- *   bun clients/scripts/set-unreleased-features.cjs --on            # gui-app and the CLI
- *   bun clients/scripts/set-unreleased-features.cjs --off <file>... # the named files
+ *   bun clients/scripts/set-unreleased-features.cjs --off           # every client file below
+ *   bun clients/scripts/set-unreleased-features.cjs --on <file>...  # the named files
  *   bun clients/scripts/set-unreleased-features.cjs --restore       # the committed value
  */
 
@@ -33,6 +35,8 @@ const CLIENTS_ROOT = path.resolve(__dirname, "..");
 const UNRELEASED_FEATURES_FILES = [
   "gui-app/src/unreleased-features.ts",
   "traycer-cli/src/unreleased-features.ts",
+  "desktop/src/unreleased-features.ts",
+  "shared/unreleased-features.ts",
 ].map((relative) => path.join(CLIENTS_ROOT, relative));
 
 const LITERAL = /(\bUNRELEASED_FEATURES_ENABLED: boolean = )(true|false)(;)/;
@@ -62,8 +66,8 @@ function parseArgs(argv) {
   let enabled = null;
   const files = [];
   for (const arg of argv) {
-    if (arg === "--on") enabled = true;
-    else if (arg === "--off" || arg === "--restore") enabled = false;
+    if (arg === "--on" || arg === "--restore") enabled = true;
+    else if (arg === "--off") enabled = false;
     else if (arg.startsWith("--")) {
       console.error(`${PREFIX} unknown option '${arg}'`);
       process.exit(2);

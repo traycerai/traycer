@@ -1,4 +1,5 @@
 import { cliError, CLI_ERROR_CODES, type CliError } from "./runner/errors";
+import { UNRELEASED_FEATURES_ENABLED } from "./unreleased-features";
 
 /**
  * Which slice of the agent-facing CLI a session is allowed to drive.
@@ -90,10 +91,16 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "agent role claim": "this session can list role claims but cannot make one.",
   "agent role relinquish":
     "this session can list role claims but cannot release one.",
-  "bot post":
-    "this session can read bots but cannot message them - report the message to the user instead.",
-  "bot reply":
-    "this session can read bots but cannot message them - report the message to the user instead.",
+  // Named only by a build with bots (`unreleased-features.ts`), which is the
+  // one that registers the commands.
+  ...(UNRELEASED_FEATURES_ENABLED
+    ? {
+        "bot post":
+          "this session can read bots but cannot message them - report the message to the user instead.",
+        "bot reply":
+          "this session can read bots but cannot message them - report the message to the user instead.",
+      }
+    : {}),
   "worktree delete":
     "remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
   "profile add": PROFILE_CHANGE_REFUSAL,

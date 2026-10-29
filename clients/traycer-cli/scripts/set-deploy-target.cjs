@@ -95,9 +95,11 @@ const production = {
 runConfigTargetCli({
   sourcePath: path.resolve(__dirname, "..", "src", "config.ts"),
   // The features the next release does not ship: on in a staging CLI, off in
-  // a production one and in the committed source.
+  // a production one and in the committed source. Two literals go into this
+  // build: the CLI's own and the shared code's.
   unreleasedFeaturesPaths: [
     path.resolve(__dirname, "..", "src", "unreleased-features.ts"),
+    path.resolve(__dirname, "..", "..", "shared", "unreleased-features.ts"),
   ],
   stringFields: {
     authnBaseUrl: {

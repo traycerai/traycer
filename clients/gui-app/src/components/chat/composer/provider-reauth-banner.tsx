@@ -1057,6 +1057,9 @@ function PastedKeyCustody(props: {
   readonly keyCustody: KeyCustody;
 }): ReactNode {
   const { providerId, keyCustody } = props;
+  // No custody line in a build without environments (`unreleased-features.ts`):
+  // the banner had none before them.
+  if (!UNRELEASED_FEATURES_ENABLED) return null;
   if (providerKeyIsPersonalSecret(providerId, keyCustody.principal)) {
     return (
       <>

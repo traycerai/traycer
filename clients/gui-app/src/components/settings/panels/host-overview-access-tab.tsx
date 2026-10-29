@@ -37,7 +37,6 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   useEnvironmentLocalOverridesRead,
   useEnvironmentNoticesRead,
@@ -158,18 +157,6 @@ function AccessSections(props: {
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
   const localHostId = useReactiveLocalHostId();
-  // A build without environments (`unreleased-features.ts`) has no setup to
-  // finish, no Personal to sign in to and no values kept on one host only:
-  // the tab is the remote access switch.
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return (
-      <RemoteAccessSection
-        client={props.client}
-        hostId={props.hostId}
-        status={props.status.remoteAccess}
-      />
-    );
-  }
   return (
     <>
       <MovedNotice

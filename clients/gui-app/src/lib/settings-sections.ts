@@ -216,6 +216,13 @@ const NOTIFICATIONS_SECTION: SettingsSection = {
   group: UNRELEASED_FEATURES_ENABLED ? "account" : "host",
 };
 
+const WORKTREES_SECTION: SettingsSection = {
+  id: "worktrees",
+  label: "Worktrees",
+  icon: GitBranch,
+  group: "host",
+};
+
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
     id: "getting-started",
@@ -355,6 +362,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Boxes,
     group: ENVIRONMENT_PAGES_GROUP,
   },
+  // Without environments the host group keeps the order it had before them:
+  // Worktrees and Notifications follow Providers.
+  ...(UNRELEASED_FEATURES_ENABLED
+    ? []
+    : [WORKTREES_SECTION, NOTIFICATIONS_SECTION]),
   // MCP servers and Skills were tabs inside each provider. They are pages of
   // their own because each entry is one of the person's settings: managed
   // entries follow them to every host, and a local one is added on a click.
@@ -391,7 +403,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // identifier on the compatibility boundary and stays put.
   {
     id: "agents",
-    label: "Agents",
+    // "Agent selection" without environments, which brought the Definitions
+    // tab the wider label names.
+    label: UNRELEASED_FEATURES_ENABLED ? "Agents" : "Agent selection",
     icon: Bot,
     group: ENVIRONMENT_PAGES_GROUP,
   },
@@ -408,7 +422,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // every agent starts with, so the label names both.
   {
     id: "shell",
-    label: "Variables & shells",
+    // "Shell" without environments, as before them.
+    label: UNRELEASED_FEATURES_ENABLED ? "Variables & shells" : "Shell",
     icon: TerminalSquare,
     group: ENVIRONMENT_PAGES_GROUP,
   },
@@ -477,15 +492,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "app",
   },
   // The host group. Everything here is scoped by the picker that heads it.
+  // Without environments Overview heads the group and Worktrees follows
+  // Providers (above).
   ...(UNRELEASED_FEATURES_ENABLED
-    ? [HOST_OVERVIEW_SECTION]
-    : [NOTIFICATIONS_SECTION]),
-  {
-    id: "worktrees",
-    label: "Worktrees",
-    icon: GitBranch,
-    group: "host",
-  },
+    ? [HOST_OVERVIEW_SECTION, WORKTREES_SECTION]
+    : []),
   // Same kind of page as Application → Diagnostics, partitioned by scope, so
   // the same word and icon. Everything left here answers differently per host,
   // which is what earns it a place under the picker.
@@ -568,8 +579,9 @@ export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
 /**
  * The pages of the features this build does not ship (`unreleased-features.ts`):
  * sandboxes and their credits, a team's members, the environment's secrets,
- * and the environment-wide MCP servers and Skills pages (each provider's own
- * tab stays). Not offered, and their routes redirect to Settings.
+ * the environment-wide MCP servers and Skills pages (each provider's own tab
+ * stays) and the machine setup script. Not offered, and their routes redirect
+ * to Settings.
  */
 export const UNRELEASED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
   new Set([
@@ -579,13 +591,17 @@ export const UNRELEASED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
     "secrets",
     "mcp-servers",
     "skills",
+    "machine-setup",
   ]);
 
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {
   "agent-definitions": "agents",
-  "browser-agent-access": "permissions",
+  // The Browser page holds the switch in a build without environments.
+  "browser-agent-access": UNRELEASED_FEATURES_ENABLED
+    ? "permissions"
+    : "browser",
 };
 
 /**

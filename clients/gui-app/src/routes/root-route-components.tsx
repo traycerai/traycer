@@ -162,7 +162,9 @@ export function RootComponent() {
             <TrayOpenEpicBridge />
             <NotificationFocusBridge />
             <EpicAccessCoordinator />
-            <TeamRemovalTileCloser />
+            {/* No team hosts to close, and no "no longer a member" toast, in
+                a build without them (`unreleased-features.ts`). */}
+            {UNRELEASED_FEATURES_ENABLED ? <TeamRemovalTileCloser /> : null}
             <ProviderProfileAddFlowHost />
           </HostScopeReady>
           <RootSurface

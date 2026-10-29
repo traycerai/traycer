@@ -1,6 +1,14 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  alwaysAvailable,
+  neverOffered,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
+
+/** The Access and setup tab and its groups: not in a build without environments. */
+const ACCESS_TAB_AVAILABLE = UNRELEASED_FEATURES_ENABLED
+  ? alwaysAvailable
+  : neverOffered;
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
 // is not gated. The page's tab triggers render for every host in every
@@ -98,17 +106,18 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "phone",
     ],
   },
-  // The remote access switch alone in a build without environments
-  // (`host-overview-access-tab.tsx`).
+  // Access and setup came with environments (`host-overview-access-tab.tsx`):
+  // a build without them (`unreleased-features.ts`) has no such tab, as the
+  // release before the feature had none, so neither it nor its groups are
+  // offered to search there.
   accessTab: {
     kind: "group",
     search: { anchor: "host-overview-tab-access" },
-    label: UNRELEASED_FEATURES_ENABLED ? "Access and setup" : "Access",
-    description: UNRELEASED_FEATURES_ENABLED
-      ? "Whether other devices and agents can reach this computer, finishing setup, this computer's own sign-ins, and the values kept on this host only."
-      : "Whether other devices and agents can reach this computer.",
+    label: "Access and setup",
+    description:
+      "Whether other devices and agents can reach this computer, finishing setup, this computer's own sign-ins, and the values kept on this host only.",
     breadcrumb: "Overview",
-    availableWhen: alwaysAvailable,
+    availableWhen: ACCESS_TAB_AVAILABLE,
     keywords: [
       "remote access",
       "reach this computer",
@@ -128,7 +137,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     label: "Remote access",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: ACCESS_TAB_AVAILABLE,
     keywords: [],
   },
   remoteAccessRow: {
@@ -137,7 +146,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     search: { contributesTo: "page" },
     label: "Remote access",
     description: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: ACCESS_TAB_AVAILABLE,
     keywords: [],
   },
   hostSetup: {
@@ -146,7 +155,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     label: "Finishing setup",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: ACCESS_TAB_AVAILABLE,
     keywords: [],
   },
   terminalAccounts: {
@@ -155,7 +164,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     label: "Terminal account",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: ACCESS_TAB_AVAILABLE,
     keywords: [],
   },
   localValues: {
@@ -164,7 +173,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     label: "This host's own values",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: ACCESS_TAB_AVAILABLE,
     keywords: [],
   },
   dataTab: {
@@ -470,7 +479,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
  * `tab` names one of these (or a retired name, below); any other name is
  * ignored.
  */
-export const HOST_OVERVIEW_TABS = [
+const EVERY_HOST_OVERVIEW_TAB = [
   "installation",
   "updates",
   "access",
@@ -479,10 +488,20 @@ export const HOST_OVERVIEW_TABS = [
   "simulators",
 ] as const;
 
-export type HostOverviewTab = (typeof HOST_OVERVIEW_TABS)[number];
+export type HostOverviewTab = (typeof EVERY_HOST_OVERVIEW_TAB)[number];
+
+/**
+ * The tabs the build draws: all of them, or, in a build without environments
+ * (`unreleased-features.ts`), all but Access and setup, which came with them.
+ * An open intent or a search anchor naming the missing tab moves nothing.
+ */
+export const HOST_OVERVIEW_TABS: readonly HostOverviewTab[] =
+  UNRELEASED_FEATURES_ENABLED
+    ? EVERY_HOST_OVERVIEW_TAB
+    : EVERY_HOST_OVERVIEW_TAB.filter((tab) => tab !== "access");
 
 /** The tab the page opens on. */
-export const DEFAULT_HOST_OVERVIEW_TAB: HostOverviewTab = HOST_OVERVIEW_TABS[0];
+export const DEFAULT_HOST_OVERVIEW_TAB: HostOverviewTab = "installation";
 
 export function isHostOverviewTab(
   value: string | null,

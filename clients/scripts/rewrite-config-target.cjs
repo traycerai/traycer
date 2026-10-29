@@ -24,7 +24,7 @@
  *   - arrayFields:  { field: { dev, production } } - string[] literals.
  *   - unreleasedFeaturesPaths: `unreleased-features.ts` files whose
  *     `UNRELEASED_FEATURES_ENABLED` literal the target selects: `true` for
- *     staging, `false` for dev and production (`set-unreleased-features.cjs`).
+ *     dev and staging, `false` for production (`set-unreleased-features.cjs`).
  *     `--unreleased-features=on|off` overrides staging or dev, never production.
  *
  * Usage (per-module wrapper):
@@ -110,11 +110,11 @@ function rewriteVersionFieldIfPresent(source, version, sourcePath) {
 }
 
 /**
- * What a target writes into `unreleased-features.ts`: a staging build ships
- * the features the next release does not, dev and production do not. An
- * explicit `--unreleased-features=on|off` overrides staging or dev (a venue
- * that wants a production-configured client against staging endpoints);
- * production is never on, whatever the flag says.
+ * What a target writes into `unreleased-features.ts`: dev and staging builds
+ * ship the features the next release does not (the committed literal), a
+ * production build does not. An explicit `--unreleased-features=on|off`
+ * overrides staging or dev (a venue that wants a production-configured client
+ * against staging endpoints); production is never on, whatever the flag says.
  */
 function unreleasedFeaturesFor(target, override) {
   if (target === "production") {
@@ -126,7 +126,7 @@ function unreleasedFeaturesFor(target, override) {
     }
     return false;
   }
-  return override ?? target === "staging";
+  return override ?? true;
 }
 
 function applyTarget(spec, target, version, unreleasedFeatures) {

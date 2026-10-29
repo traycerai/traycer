@@ -18,6 +18,7 @@ import { Route as SkillsRoute } from "@/routes/settings.skills";
 import { Route as SandboxesRoute } from "@/routes/settings.sandboxes";
 import { Route as MembersRoute } from "@/routes/settings.members";
 import { Route as SecretsRoute } from "@/routes/settings.secrets";
+import { Route as MachineSetupRoute } from "@/routes/settings.machine-setup";
 
 vi.mock("@/unreleased-features", () => ({
   UNRELEASED_FEATURES_ENABLED: false,
@@ -32,6 +33,7 @@ const GUARDED = [
   ["/settings/sandboxes", SandboxesRoute],
   ["/settings/members", MembersRoute],
   ["/settings/secrets", SecretsRoute],
+  ["/settings/machine-setup", MachineSetupRoute],
 ] as const;
 
 // The routes' own `beforeLoad`s, mounted into a throwaway route tree rather

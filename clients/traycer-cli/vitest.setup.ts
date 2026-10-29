@@ -3,12 +3,17 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
-// The suites describe the whole CLI: every command registered, as the build
-// that ships them will have it. The build-time switch
-// (`src/unreleased-features.ts`) is off in the shipping build and would
-// otherwise hide the commands it gates from every suite. A suite of the
-// switched-off build mocks the module itself with `false`.
+// The suites describe the whole CLI: every command registered, as every build
+// but production has it. The build-time switch (`src/unreleased-features.ts`)
+// is committed `true`; the mock keeps the suites on that build in a checkout
+// stamped `--off` for a production comparison. A suite of the production
+// build mocks the module itself with `false`.
 vi.mock("./src/unreleased-features", () => ({
+  UNRELEASED_FEATURES_ENABLED: true,
+}));
+// The shared client library has its own switch, read by the transport the
+// CLI bundles.
+vi.mock("@traycer-clients/shared/unreleased-features", () => ({
   UNRELEASED_FEATURES_ENABLED: true,
 }));
 

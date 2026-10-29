@@ -42,7 +42,6 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
 import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
-import { HostPickAsLocalRow } from "@/components/settings/environment/host-pick-as-local-row";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
@@ -129,9 +128,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
       )}
     >
       <SidebarArtwork />
-      {UNRELEASED_FEATURES_ENABLED ? null : (
-        <HostPickAsLocalRow scope={scope} />
-      )}
       <SettingsSearch query={query} onQueryChange={setQuery} />
       {/* The results took this space. Keeping the section list under them
           would put two competing lists in one column, and the top one already

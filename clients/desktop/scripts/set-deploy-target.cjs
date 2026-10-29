@@ -158,8 +158,9 @@ const production = {
 runConfigTargetCli({
   sourcePath: path.resolve(__dirname, "..", "src", "config.ts"),
   // The features the next release does not ship: on in a staging desktop, off
-  // in a production one and in the committed source. The literal lives in the
-  // gui-app this build bundles; the desktop has none of its own.
+  // in a production one and in the committed source. Three literals go into
+  // this build: the gui-app's (the renderer), the shared code's and the
+  // desktop's own (the main process).
   unreleasedFeaturesPaths: [
     path.resolve(
       __dirname,
@@ -169,6 +170,8 @@ runConfigTargetCli({
       "src",
       "unreleased-features.ts",
     ),
+    path.resolve(__dirname, "..", "..", "shared", "unreleased-features.ts"),
+    path.resolve(__dirname, "..", "src", "unreleased-features.ts"),
   ],
   stringFields: {
     // Per-environment app identity (drives the userData dir + single-instance
