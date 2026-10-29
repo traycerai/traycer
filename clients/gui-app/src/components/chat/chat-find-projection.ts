@@ -1,4 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
+import { botSendSearchText, paintedBotSendOf } from "@/lib/bots/bot-send-tool";
 import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
@@ -809,6 +810,12 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.artifact !== null) return [];
   // The same for an app row: the app is a sandboxed document too.
   if (isMcpAppToolCall(segment)) return [];
+  const send = paintedBotSendOf(segment);
+  if (send !== null) {
+    // A bot's send card paints what it posted; its destination line names
+    // where, which is not the transcript's text.
+    return [normalizeSearchableText(botSendSearchText(send))];
+  }
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not
     // indexed: a find hit on it would highlight nothing. The collapsed

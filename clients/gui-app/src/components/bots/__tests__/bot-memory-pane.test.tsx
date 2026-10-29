@@ -5,7 +5,7 @@
  * store, opened the way the tab opens it), and the pane lists what the
  * `bot.memory.subscribe` stream carries, live. The stream transport is a
  * scripted client; the channel's neighbouring reads are replaced as the
- * turn rail's suite replaces them.
+ * receipt suite replaces them.
  */
 import {
   cleanup,
