@@ -43,6 +43,20 @@ describe("listCreditOffersResponseSchema", () => {
     expect(parsed.campaigns).toEqual([before, after]);
   });
 
+  it.each([
+    ["a date without a time", { endsAt: "2026-12-31" }],
+    ["a locale date", { endsAt: "12/31/2026" }],
+    ["a start that is not a date", { startsAt: "soon" }],
+  ])("drops a card with %s and keeps the cards around it", (_n, dates) => {
+    const kept = card({ id: "kept" });
+
+    const parsed = listCreditOffersResponseSchema.parse({
+      campaigns: [{ ...card({ id: "bad" }), ...dates }, kept],
+    });
+
+    expect(parsed.campaigns).toEqual([kept]);
+  });
+
   it("fails when campaigns is not an array", () => {
     expect(
       listCreditOffersResponseSchema.safeParse({ campaigns: "none" }).success,
