@@ -1376,7 +1376,7 @@ function restoreScrollSnapshot(snapshot: ScrollSnapshot): void {
     return;
   }
   const { container } = snapshot;
-  moveChatTimelineScroller(container, () => {
+  moveChatTimelineScroller(container, snapshot.top, () => {
     container.scrollLeft = snapshot.left;
     container.scrollTop = snapshot.top;
   });
@@ -1409,7 +1409,8 @@ function scrollByAmount(element: HTMLElement | null, top: number): void {
     window.scrollTo({ top: window.scrollY + top, behavior: "auto" });
     return;
   }
-  moveChatTimelineScroller(element, () => {
-    element.scrollTo({ top: element.scrollTop + top, behavior: "auto" });
+  const target = element.scrollTop + top;
+  moveChatTimelineScroller(element, target, () => {
+    element.scrollTo({ top: target, behavior: "auto" });
   });
 }

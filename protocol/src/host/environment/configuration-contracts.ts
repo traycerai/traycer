@@ -9,7 +9,8 @@
  * `environment.configuration.mcpServers.list` / `.put` / `.delete` - the
  * environment's MCP server declarations, a server with its credential.
  * `environment.configuration.skills.upload` / `.list` / `.remove` /
- * `.setProviders` - the environment's skills, on the host that serves it.
+ * `.setProviders` / `.setPolicy` / `.update` / `.restoreBundled` / `.state` /
+ * `.import` - the environment's skills, on the host that serves it.
  * `environment.configuration.policy.put` - the approval policy.
  * `environment.configuration.guide.get` / `.set` / `.reset` - the agent
  * selection guide. `environment.plans.list` / `.unlinkPreview` / `.unlink` -
@@ -31,6 +32,7 @@ import {
   environmentItemKindSchema,
   environmentOsSchema,
 } from "@traycer/protocol/host/environment-schemas";
+import { providerSkillInspectCandidateSchema } from "@traycer/protocol/host/provider-native-schemas";
 
 const environmentIdSchema = lazySchema(() => z.string().min(1));
 const itemKeySchema = lazySchema(() => z.string().min(1).max(3072));
@@ -264,6 +266,14 @@ export const environmentConfigurationMcpServersPutV10 = defineRpcContract({
 export const ENVIRONMENT_SKILL_ARCHIVE_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
+ * Why a write to an environment skill was refused when its update policy
+ * (`auto-update` or `frozen`) takes no edit: a skill upload's `reason`, and
+ * the `detail` of a provider-native `edit`'s `unsupported_action` refusal
+ * inside such a skill.
+ */
+export const ENVIRONMENT_SKILL_READ_ONLY_REASON = "read_only";
+
+/**
  * `environment.configuration.skills.upload@1.0`: authn's `skill-content`
  * route body, a skill folder as a gzipped tar in standard base64, and the
  * skill's name. The host uploads the archive and writes the `skill` item that
@@ -285,6 +295,9 @@ export type EnvironmentConfigurationSkillUploadRequest = z.infer<
 /**
  * A skill upload's answer: the write answer, plus `not_served` when the asked
  * host does not serve that environment's room (the client asks one that does).
+ * A refusal's `reason` is `invalid_name`, `not_ready`, `too_large`,
+ * `invalid_archive`, or {@link ENVIRONMENT_SKILL_READ_ONLY_REASON} for an
+ * upload over a skill whose policy takes no edit.
  */
 export const environmentConfigurationSkillUploadResponseSchema = lazySchema(
   () =>
@@ -537,7 +550,8 @@ const environmentSkillRefusalSchema = lazySchema(() =>
  * One skill in the environment's skills: its folder name, its description,
  * where it came from (`bundled`: Traycer seeded it; `room`: written or added
  * in Settings), whether a person changed a bundled one, and the provider ids
- * (the Providers rail's) it is switched off for.
+ * (the Providers rail's) it is switched off for. The `@1.0` row, frozen when
+ * `@1.1` opened.
  */
 export const environmentSkillSchema = lazySchema(() =>
   z.object({
@@ -636,6 +650,489 @@ export const environmentConfigurationSkillsSetProvidersV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentConfigurationSkillSetProvidersRequestSchema,
   responseSchema: environmentConfigurationSkillSetProvidersResponseSchema,
+});
+
+// ── skills.list@1.1 / setPolicy / update / restoreBundled ───────────────────
+
+/**
+ * A skill's update policy: `auto-update` follows upstream and takes no local
+ * edit, `evolve` takes edits and leaves upstream to a manual update, `frozen`
+ * takes neither.
+ */
+export const ENVIRONMENT_SKILL_POLICIES = [
+  "auto-update",
+  "evolve",
+  "frozen",
+] as const;
+
+export const environmentSkillPolicySchema = lazySchema(() =>
+  z.enum(ENVIRONMENT_SKILL_POLICIES),
+);
+export type EnvironmentSkillPolicy = z.infer<
+  typeof environmentSkillPolicySchema
+>;
+
+/**
+ * One skill on `skills.list@1.1`: the `@1.0` row, plus the policy in force
+ * (for a skill with nothing to follow, neither bundled nor installed from a
+ * source, `auto-update` or no entry reads as `evolve`, while `evolve` and
+ * `frozen` hold as written), its version (the build for a bundled skill, the
+ * installed commit for one from a source, `null` otherwise), whether a newer
+ * upstream is there that the policy holds back, and where a skill from a
+ * source came from.
+ */
+export const environmentSkillSchemaV11 = lazySchema(() =>
+  z.object({
+    name: z.string().min(1).max(128),
+    description: z.string().nullable(),
+    origin: z.enum(["bundled", "room"]),
+    edited: z.boolean(),
+    offFor: z.array(z.string().min(1).max(64)),
+    policy: environmentSkillPolicySchema,
+    version: z.string().min(1).max(256).nullable(),
+    updateAvailable: z.boolean(),
+    upstream: z
+      .object({
+        source: z.string().min(1).max(2048),
+        ref: z.string().min(1).max(256),
+      })
+      .nullable(),
+  }),
+);
+export type EnvironmentSkillV11 = z.infer<typeof environmentSkillSchemaV11>;
+
+/**
+ * `environment.configuration.skills.list@1.1`: the `@1.0` answer with each
+ * skill's policy and version, the policies' revision (null while none was
+ * written), which `setPolicy` quotes, and the bundled skills a person
+ * removed, which `restoreBundled` seeds again.
+ */
+export const environmentConfigurationSkillsListResponseSchemaV11 = lazySchema(
+  () =>
+    z.discriminatedUnion("outcome", [
+      z.object({
+        outcome: z.literal("listed"),
+        revision: z.string().min(1).nullable(),
+        policyRevision: z.string().min(1).nullable(),
+        skills: z.array(environmentSkillSchemaV11),
+        deletedBundled: z.array(z.string().min(1).max(128)),
+      }),
+      z.object({ outcome: z.literal("not_served") }),
+    ]),
+);
+export type EnvironmentConfigurationSkillsListResponseV11 = z.infer<
+  typeof environmentConfigurationSkillsListResponseSchemaV11
+>;
+
+export const environmentConfigurationSkillsListV11 = defineRpcContract({
+  method: "environment.configuration.skills.list",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentConfigurationSkillsListRequestSchema,
+  responseSchema: environmentConfigurationSkillsListResponseSchemaV11,
+});
+
+/**
+ * A `@1.0` answer from a tier that predates the policies, as it behaves: a
+ * bundled skill nobody changed takes each build (`auto-update`), an edited
+ * one and the configuration's own are kept as they are (`evolve`). It names
+ * no version, update, source or removal.
+ */
+export const environmentConfigurationSkillsListUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof environmentConfigurationSkillsListV10,
+    typeof environmentConfigurationSkillsListV11
+  >({
+    from: environmentConfigurationSkillsListV10.schemaVersion,
+    to: environmentConfigurationSkillsListV11.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) =>
+      response.outcome === "not_served"
+        ? response
+        : {
+            outcome: "listed",
+            revision: response.revision,
+            policyRevision: null,
+            skills: response.skills.map((skill) => ({
+              ...skill,
+              policy:
+                skill.origin === "bundled" && !skill.edited
+                  ? "auto-update"
+                  : "evolve",
+              version: null,
+              updateAvailable: false,
+              upstream: null,
+            })),
+            deletedBundled: [],
+          },
+  });
+
+/**
+ * `environment.configuration.skills.setPolicy@1.0`: one skill's update
+ * policy, against the policies' revision the editor read (null: none written
+ * yet), on its serving tier. Freezing pins the skill at its files as they
+ * are. `stale` answers the current revision: the editor lists again.
+ * `not_ready` while the configuration takes no write yet or holds no
+ * policies yet; `policies_unreadable` while the policies it holds cannot be
+ * read, which no retry clears.
+ */
+export const environmentConfigurationSkillSetPolicyRequestSchema = lazySchema(
+  () =>
+    z.object({
+      environmentId: environmentIdSchema,
+      name: z.string().min(1).max(128),
+      policy: environmentSkillPolicySchema,
+      revision: z.string().min(1).nullable(),
+    }),
+);
+export type EnvironmentConfigurationSkillSetPolicyRequest = z.infer<
+  typeof environmentConfigurationSkillSetPolicyRequestSchema
+>;
+
+export const environmentConfigurationSkillSetPolicyResponseSchema = lazySchema(
+  () =>
+    z.object({
+      outcome: z.enum(["saved", "stale", "not_served", "forbidden", "refused"]),
+      revision: z.string().min(1).nullable(),
+      reason: z
+        .enum(["not_ready", "not_found", "invalid_name", "policies_unreadable"])
+        .nullable(),
+    }),
+);
+export type EnvironmentConfigurationSkillSetPolicyResponse = z.infer<
+  typeof environmentConfigurationSkillSetPolicyResponseSchema
+>;
+
+export const environmentConfigurationSkillsSetPolicyV10 = defineRpcContract({
+  method: "environment.configuration.skills.setPolicy",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillSetPolicyRequestSchema,
+  responseSchema: environmentConfigurationSkillSetPolicyResponseSchema,
+});
+
+/**
+ * `environment.configuration.skills.update@1.0`: one skill replaced by its
+ * upstream's current version, on the host that serves the environment.
+ * Under `evolve` a skill with local changes needs `confirm`, else it is
+ * refused `has_edits`; under `frozen` the skill is pinned again at that
+ * version; under `auto-update` the skill already follows it. `applied` once
+ * the skill holds it, `nothing_to_apply` when it already does or nothing
+ * newer can be applied here, `stale` when the skill or the policies changed
+ * under the update (the editor lists again). `no_upstream`: the skill has no
+ * source this host can update it from. `fetch_failed`: its source could not
+ * be reached or no longer holds it.
+ */
+export const environmentConfigurationSkillUpdateRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    name: z.string().min(1).max(128),
+    confirm: z.boolean(),
+  }),
+);
+export type EnvironmentConfigurationSkillUpdateRequest = z.infer<
+  typeof environmentConfigurationSkillUpdateRequestSchema
+>;
+
+export const environmentConfigurationSkillUpdateResponseSchema = lazySchema(
+  () =>
+    z.object({
+      outcome: z.enum([
+        "applied",
+        "nothing_to_apply",
+        "stale",
+        "not_served",
+        "forbidden",
+        "refused",
+      ]),
+      reason: z
+        .enum([
+          "not_ready",
+          "not_found",
+          "invalid_name",
+          "has_edits",
+          "no_upstream",
+          "fetch_failed",
+        ])
+        .nullable(),
+    }),
+);
+export type EnvironmentConfigurationSkillUpdateResponse = z.infer<
+  typeof environmentConfigurationSkillUpdateResponseSchema
+>;
+
+export const environmentConfigurationSkillsUpdateV10 = defineRpcContract({
+  method: "environment.configuration.skills.update",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillUpdateRequestSchema,
+  responseSchema: environmentConfigurationSkillUpdateResponseSchema,
+});
+
+/**
+ * `environment.configuration.skills.restoreBundled@1.0`: a bundled skill a
+ * person removed, seeded again at this build's version under `auto-update`,
+ * on the host that serves the environment. `not_found` for a name this build
+ * ships no skill of, `not_deleted` for one still there; `stale` when the
+ * room changed under the restore.
+ */
+export const environmentConfigurationSkillRestoreBundledRequestSchema =
+  lazySchema(() =>
+    z.object({
+      environmentId: environmentIdSchema,
+      name: z.string().min(1).max(128),
+    }),
+  );
+
+export const environmentConfigurationSkillRestoreBundledResponseSchema =
+  lazySchema(() =>
+    z.object({
+      outcome: z.enum([
+        "restored",
+        "stale",
+        "not_served",
+        "forbidden",
+        "refused",
+      ]),
+      reason: z
+        .enum(["not_ready", "not_found", "invalid_name", "not_deleted"])
+        .nullable(),
+    }),
+  );
+export type EnvironmentConfigurationSkillRestoreBundledResponse = z.infer<
+  typeof environmentConfigurationSkillRestoreBundledResponseSchema
+>;
+
+export const environmentConfigurationSkillsRestoreBundledV10 =
+  defineRpcContract({
+    method: "environment.configuration.skills.restoreBundled",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: environmentConfigurationSkillRestoreBundledRequestSchema,
+    responseSchema: environmentConfigurationSkillRestoreBundledResponseSchema,
+  });
+
+// ── skills.state / import ────────────────────────────────────────────────────
+
+/**
+ * `environment.configuration.skills.state@1.0`: what the host that serves
+ * the environment knows of its skills and the server pool cannot: each
+ * skill's version and whether a newer upstream is there that its policy
+ * holds back, and the built-ins a person removed that this host can restore.
+ * `refresh` checks every skill's source first, rather than answering what
+ * the last check found; only a caller who may edit the environment asks
+ * for one (`forbidden` otherwise). `not_served` on any other host.
+ */
+export const environmentConfigurationSkillsStateRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    refresh: z.boolean(),
+  }),
+);
+export type EnvironmentConfigurationSkillsStateRequest = z.infer<
+  typeof environmentConfigurationSkillsStateRequestSchema
+>;
+
+export const environmentSkillServedStateSchema = lazySchema(() =>
+  z.object({
+    name: z.string().min(1).max(128),
+    version: z.string().min(1).max(256).nullable(),
+    updateAvailable: z.boolean(),
+  }),
+);
+export type EnvironmentSkillServedState = z.infer<
+  typeof environmentSkillServedStateSchema
+>;
+
+export const environmentConfigurationSkillsStateResponseSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("outcome", [
+      z.object({
+        outcome: z.literal("listed"),
+        skills: z.array(environmentSkillServedStateSchema),
+        deletedBundled: z.array(z.string().min(1).max(128)),
+      }),
+      z.object({ outcome: z.literal("not_served") }),
+      z.object({ outcome: z.literal("forbidden") }),
+    ]),
+);
+export type EnvironmentConfigurationSkillsStateResponse = z.infer<
+  typeof environmentConfigurationSkillsStateResponseSchema
+>;
+
+export const environmentConfigurationSkillsStateV10 = defineRpcContract({
+  method: "environment.configuration.skills.state",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillsStateRequestSchema,
+  responseSchema: environmentConfigurationSkillsStateResponseSchema,
+});
+
+/** The most skills one import installs. */
+export const ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS = 64;
+
+/**
+ * `environment.configuration.skills.import@1.0`: skills from a public source
+ * installed into the environment, on the host that serves it, in two steps.
+ * `inspect` reads the source (GitHub's `owner/repo`, or an `https` URL of a
+ * repository or a tree in it, with no credentials) and
+ * answers each skill it holds at the commit it resolved, with a token bound
+ * to that commit; `install` writes the chosen ones (by name) into the
+ * environment's skills, each following its source (`auto-update`), together
+ * or not at all.
+ */
+/**
+ * The inspect token the `inspected` answer hands out and the `install` step
+ * hands back: one schema on both ends, so a token the host issues always
+ * round-trips.
+ */
+const environmentSkillImportTokenSchema = lazySchema(() =>
+  z.string().min(1).max(128),
+);
+
+export const environmentConfigurationSkillImportRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("step", [
+    z.object({
+      step: z.literal("inspect"),
+      environmentId: environmentIdSchema,
+      source: z.string().min(1).max(2048),
+    }),
+    z.object({
+      step: z.literal("install"),
+      environmentId: environmentIdSchema,
+      token: environmentSkillImportTokenSchema,
+      names: z
+        .array(z.string().min(1).max(128))
+        .min(1)
+        .max(ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS),
+    }),
+  ]),
+);
+export type EnvironmentConfigurationSkillImportRequest = z.infer<
+  typeof environmentConfigurationSkillImportRequestSchema
+>;
+
+/**
+ * Why an import was refused:
+ * - `not_ready`: the configuration takes no write yet;
+ * - `invalid_source`: not a public `https` source (another transport, a
+ *   local path, credentials in the URL), or one holding two skills of one
+ *   name;
+ * - `fetch_failed`: the source could not be reached or read;
+ * - `expired`: the token is unknown or its source moved since: inspect again;
+ * - `not_found`: a chosen name is not one the source holds;
+ * - `invalid_name`: a chosen skill's name is not one a skill may have;
+ * - `exists`: the environment holds a skill of a chosen name: remove it first;
+ * - `bundled_name`: a chosen name is a built-in skill's;
+ * - `too_large`: the chosen skills are over the upload cap
+ *   ({@link ENVIRONMENT_SKILL_ARCHIVE_MAX_BYTES}).
+ */
+export const ENVIRONMENT_SKILL_IMPORT_REFUSAL_REASONS = [
+  "not_ready",
+  "invalid_source",
+  "fetch_failed",
+  "expired",
+  "not_found",
+  "invalid_name",
+  "exists",
+  "bundled_name",
+  "too_large",
+] as const;
+export type EnvironmentSkillImportRefusalReason =
+  (typeof ENVIRONMENT_SKILL_IMPORT_REFUSAL_REASONS)[number];
+
+/**
+ * An import's answer: `inspected` with the token and the source's skills
+ * (`installed`: the environment holds one of that name), `installed` with
+ * the names written, `stale` when the environment changed under the install
+ * (inspect is still good: install again). A refusal of a name names it.
+ */
+export const environmentConfigurationSkillImportResponseSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("outcome", [
+      z.object({
+        outcome: z.literal("inspected"),
+        token: environmentSkillImportTokenSchema,
+        commitSha: z.string().regex(/^[0-9a-f]{40}$/),
+        candidates: z.array(providerSkillInspectCandidateSchema),
+      }),
+      z.object({
+        outcome: z.literal("installed"),
+        names: z.array(z.string().min(1).max(128)),
+      }),
+      z.object({
+        outcome: z.literal("refused"),
+        reason: z.enum(ENVIRONMENT_SKILL_IMPORT_REFUSAL_REASONS),
+        name: z.string().min(1).max(128).nullable(),
+      }),
+      z.object({ outcome: z.literal("stale") }),
+      z.object({ outcome: z.literal("not_served") }),
+      z.object({ outcome: z.literal("forbidden") }),
+    ]),
+);
+export type EnvironmentConfigurationSkillImportResponse = z.infer<
+  typeof environmentConfigurationSkillImportResponseSchema
+>;
+
+export const environmentConfigurationSkillsImportV10 = defineRpcContract({
+  method: "environment.configuration.skills.import",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillImportRequestSchema,
+  responseSchema: environmentConfigurationSkillImportResponseSchema,
+});
+
+/** The most results one directory search answers. */
+export const ENVIRONMENT_SKILL_SEARCH_MAX_RESULTS = 20;
+
+/**
+ * `environment.configuration.skills.search@1.0`: the public skills.sh
+ * directory searched for `query` (at least two characters), optionally
+ * within one `owner`'s skills, on the host the page reads from. It sends the
+ * query text and nothing else, and answers each result's id
+ * (`owner/repo/slug`), name, install count and source (`owner/repo`), most
+ * installed first. Only skills held in a GitHub repository are answered, as
+ * an import reads git sources only. `unavailable` when the directory could
+ * not be reached or answered something else: the page shows no results.
+ */
+export const environmentConfigurationSkillSearchRequestSchema = lazySchema(() =>
+  z.object({
+    query: z.string().min(2).max(200),
+    owner: z.string().min(1).max(100).nullable(),
+  }),
+);
+export type EnvironmentConfigurationSkillSearchRequest = z.infer<
+  typeof environmentConfigurationSkillSearchRequestSchema
+>;
+
+/** One directory result. */
+export const environmentSkillSearchResultSchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1).max(512),
+    name: z.string().min(1).max(256),
+    installs: z.number().int().nonnegative(),
+    source: z.string().min(1).max(256),
+  }),
+);
+export type EnvironmentSkillSearchResult = z.infer<
+  typeof environmentSkillSearchResultSchema
+>;
+
+export const environmentConfigurationSkillSearchResponseSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("outcome", [
+      z.object({
+        outcome: z.literal("found"),
+        skills: z
+          .array(environmentSkillSearchResultSchema)
+          .max(ENVIRONMENT_SKILL_SEARCH_MAX_RESULTS),
+      }),
+      z.object({ outcome: z.literal("unavailable") }),
+    ]),
+);
+export type EnvironmentConfigurationSkillSearchResponse = z.infer<
+  typeof environmentConfigurationSkillSearchResponseSchema
+>;
+
+export const environmentConfigurationSkillsSearchV10 = defineRpcContract({
+  method: "environment.configuration.skills.search",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillSearchRequestSchema,
+  responseSchema: environmentConfigurationSkillSearchResponseSchema,
 });
 
 /** authn's cap on a team policy document, in bytes. */

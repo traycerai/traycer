@@ -570,6 +570,8 @@ export type RateLimitUnavailableReasonV1 = z.infer<
 // code gets the new value from the default import path; a
 // `host.getRateLimitUsage@1.2` caller keeps seeing only the frozen v1 enum,
 // via the downgrade bridge in `rate-limit/contracts.ts`.
+//
+// Frozen: every union the 1.5.1 tags and earlier shipped binds this enum.
 export const rateLimitUnavailableReasonSchemaV2 = lazySchema(() =>
   z.enum([
     "cli_not_found",
@@ -583,8 +585,30 @@ export const rateLimitUnavailableReasonSchemaV2 = lazySchema(() =>
     "usage_fetch_failed",
   ]),
 );
+
+// v3 adds `not_signed_in`: the provider CLI has no stored login on this host,
+// so it cannot report the account's usage. Narrower than
+// `rate_limits_not_available`, which the host reports when it cannot tell why.
+// Only the live unavailable arm binds it, so it reaches only the unreleased
+// heads (`host.getRateLimitUsage@6.0`, `agent.getProviderProfileRateLimits@8.0`,
+// `providers.refreshProfileStatus@4.0`); every bridge below them maps it back
+// to `rate_limits_not_available` (`degradeProviderRateLimitsToV151`).
+export const rateLimitUnavailableReasonSchemaV3 = lazySchema(() =>
+  z.enum([
+    "cli_not_found",
+    "unsupported_provider",
+    "invalid_response",
+    "timeout",
+    "connection_failed",
+    "rate_limits_not_available",
+    "sdk_incompatible",
+    "insufficient_permissions",
+    "usage_fetch_failed",
+    "not_signed_in",
+  ]),
+);
 export type RateLimitUnavailableReason = z.infer<
-  typeof rateLimitUnavailableReasonSchemaV2
+  typeof rateLimitUnavailableReasonSchemaV3
 >;
 
 // Any provider/auth combination that can't report rate limits. Its
@@ -601,7 +625,8 @@ export type RateLimitUnavailableReason = z.infer<
 // is split: `unavailableProviderRateLimitsSchemaV1` tags `reason` with the
 // frozen v1 enum (feeds `providerRateLimitsSchemaV1`, which only the v1.2
 // response uses); `unavailableProviderRateLimitsSchemaV2` tags it with the
-// v2 enum used by every frozen newer response and the latest response.
+// v2 enum used by every frozen newer response; the live arm tags it with the
+// v3 enum.
 const unavailableProviderRateLimitsSchemaV1 = lazySchema(() =>
   z.object({
     provider: providerIdSchema,
@@ -618,11 +643,19 @@ const unavailableProviderRateLimitsSchemaV2 = lazySchema(() =>
   }),
 );
 
-const unavailableProviderRateLimitsSchema = lazySchema(() =>
+// The unavailable arm as the 1.5.1 tags shipped it, on the frozen v2 reason
+// enum. Feeds `providerRateLimitsSchemaV151` only.
+const unavailableProviderRateLimitsSchemaV151 = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV2.extend({
     // Present on OpenCode snapshots so renderer retention is scoped to the
     // credential observed by the host. Other providers omit it.
     credentialGeneration: z.string().min(1).optional(),
+  }),
+);
+
+const unavailableProviderRateLimitsSchema = lazySchema(() =>
+  unavailableProviderRateLimitsSchemaV151.extend({
+    reason: rateLimitUnavailableReasonSchemaV3,
   }),
 );
 
@@ -681,7 +714,8 @@ export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 // tag ships one, freeze it against a snapshot (as `host.getRateLimitUsage@5.0`
 // is frozen against `providerRateLimitsSchemaV151`) and open the next major.
 // The Kimi arm is the first added since the 1.5.1 tags shipped 5.0 / 7.0 / 3.0,
-// which is why it opened 6.0 / 8.0 / 4.0.
+// which is why it opened 6.0 / 8.0 / 4.0. The same holds for a reason value:
+// `not_signed_in` rides those three heads too.
 export const providerRateLimitsSchema = lazySchema(() =>
   z.union([
     codexRateLimitsSchema,
@@ -810,7 +844,7 @@ export function mapCursorAvailableToUnavailable(
  * `providerIdSchemaV30` on, so the result reparses cleanly through every older
  * union. Any other snapshot (or `null`) passes through unchanged.
  */
-export function mapKimiAvailableToUnavailable(
+function mapKimiAvailableToUnavailable(
   providerRateLimits: ProviderRateLimits | null,
 ): ProviderRateLimits | null {
   if (
@@ -825,6 +859,38 @@ export function mapKimiAvailableToUnavailable(
     };
   }
   return providerRateLimits;
+}
+
+// The v3-only `not_signed_in` reason maps to `rate_limits_not_available`, the
+// reason a host reported for the same read before the value existed, so an
+// older client sees exactly the row it always did.
+function mapNotSignedInToNotAvailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available === false &&
+    providerRateLimits.reason === "not_signed_in"
+  ) {
+    return { ...providerRateLimits, reason: "rate_limits_not_available" };
+  }
+  return providerRateLimits;
+}
+
+/**
+ * Degrades a live snapshot to one `providerRateLimitsSchemaV151` can parse:
+ * every bridge below `host.getRateLimitUsage@6.0`,
+ * `providers.refreshProfileStatus@4.0` and
+ * `agent.getProviderProfileRateLimits@8.0` runs it before its own frozen-line
+ * degrades and parse. Each map covers one thing the live union added since the
+ * 1.5.1 tags: the Kimi available arm and the `not_signed_in` reason.
+ */
+export function degradeProviderRateLimitsToV151(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  return mapNotSignedInToNotAvailable(
+    mapKimiAvailableToUnavailable(providerRateLimits),
+  );
 }
 
 export function mapOpenCodeAvailableToUnavailable(
@@ -1106,7 +1172,7 @@ export type ProviderRateLimitsV91 = z.infer<typeof providerRateLimitsSchemaV91>;
 
 /**
  * Frozen provider union as the 1.5.1 tags shipped it: every available arm
- * through Antigravity, and the live unavailable arm.
+ * through Antigravity, and the unavailable arm on the v2 reason enum.
  *
  * Bound by `host.getRateLimitUsage@5.0`, `agent.getProviderProfileRateLimits@7.0`
  * and `providers.refreshProfileStatus@3.0`. All three ranged over the live
@@ -1115,8 +1181,8 @@ export type ProviderRateLimitsV91 = z.infer<typeof providerRateLimitsSchemaV91>;
  *
  * The unavailable arm still names the live `providerIdSchema`: no provider id
  * has been added since 1.5.1, so the live set is the shipped set. The next id
- * added must pin this arm first, as `providerIdSchemaV91` pinned the 1.5.0
- * union.
+ * added must pin this arm's `provider` too, as `providerIdSchemaV91` pinned the
+ * 1.5.0 union.
  *
  * Do NOT widen this schema - extend the latest union and use the 6.0 / 8.0 /
  * 4.0 bridges.
@@ -1132,7 +1198,7 @@ export const providerRateLimitsSchemaV151 = lazySchema(() =>
     openCodeRateLimitsSchema,
     cursorRateLimitsSchema,
     antigravityRateLimitsSchema,
-    unavailableProviderRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV151,
   ]),
 );
 export type ProviderRateLimitsV151 = z.infer<
