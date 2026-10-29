@@ -395,6 +395,7 @@ describe("useLandingReturnedSandbox", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
     });
     drafts.setDraftReturnedSandbox(id, returned);
   }

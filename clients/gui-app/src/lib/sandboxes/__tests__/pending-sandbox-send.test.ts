@@ -17,6 +17,7 @@ import {
   confirmPendingSandboxSendEpic,
   endPendingSandboxSend,
   handPendingSandboxSend,
+  pendingSandboxRecoveryDraftId,
   pickedRunSettings,
   requestedAgentReadiness,
   returnPendingSandboxMessage,
@@ -44,10 +45,11 @@ import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import {
-  emptyLandingDraftWorkspaceSnapshot,
   useLandingDraftStore,
+  type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
-import * as promptHandoff from "@/lib/drafts/unrecorded-prompt-handoff";
+import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
+import * as draftImageBytes from "@/lib/drafts/resolve-draft-image-bytes";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { recordMapStorageKey } from "@/lib/persist/keys";
@@ -1157,6 +1159,35 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
       );
     });
 
+    /** Words and one picture that names its bytes by hash. */
+    function imageDoc(hash: string) {
+      return {
+        type: "doc" as const,
+        content: [
+          {
+            type: "paragraph" as const,
+            content: [{ type: "text" as const, text: "fix the login bug" }],
+          },
+          {
+            type: "paragraph" as const,
+            content: [
+              {
+                type: "imageAttachment" as const,
+                attrs: {
+                  id: "img-1",
+                  fileName: "shot.png",
+                  hash,
+                  b64content: null,
+                  mimeType: "image/png",
+                  size: 32,
+                },
+              },
+            ],
+          },
+        ],
+      };
+    }
+
     async function ownedMessageOnItsSandbox(
       stopRequested: boolean,
     ): Promise<() => void> {
@@ -1197,50 +1228,52 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
       release();
     });
 
-    it("puts the sandbox on the landing draft as soon as it is listed, while its image reads are still outstanding", async () => {
+    it("puts the sandbox on the landing draft as soon as it is listed, while its image read is still outstanding", async () => {
       const release = await ownedMessageOnItsSandbox(false);
-      // The handoff's image reads outlive its bound: the text-only draft is
-      // installed and listed in Drafts, and the reads are still running.
-      const reads = Promise.withResolvers<void>();
-      const listed = Promise.withResolvers<string>();
-      vi.spyOn(
-        promptHandoff,
-        "buildUnrecordedPromptHandoff",
-      ).mockImplementation((args) => {
-        const recovery = args.recovery;
-        if (recovery === undefined) throw new Error("expected a recovery");
-        useLandingDraftStore.getState().installLandingDraft({
-          id: recovery.draftId,
-          content: args.content,
-          selection: null,
-          lastTouchedAt: 1,
-          settings: recovery.settings,
-          composerMode: "chat",
-          workspace: emptyLandingDraftWorkspaceSnapshot(),
-          closed: true,
-        });
-        listed.resolve(recovery.draftId);
-        return Promise.resolve({
-          draftId: recovery.draftId,
-          readsSettled: reads.promise,
-        });
+      // A message with a picture whose bytes are slow to arrive: the read
+      // outlives the handoff's bound.
+      const hash = "a".repeat(64);
+      const { sends } = usePendingSandboxSendStore.getState();
+      if (!Object.hasOwn(sends, "send-1")) throw new Error("expected the send");
+      usePendingSandboxSendStore.setState({
+        sends: {
+          ...sends,
+          "send-1": { ...sends["send-1"], content: imageDoc(hash) },
+        },
       });
+      const read = Promise.withResolvers<null>();
+      vi.spyOn(draftImageBytes, "resolveDraftImageBytes").mockReturnValue(
+        read.promise,
+      );
+      const recoveryId = pendingSandboxRecoveryDraftId("send-1");
+      const first: { stored: LandingDraftTab | null } = { stored: null };
+      const stopWatching = useLandingDraftStore.subscribe((state) => {
+        first.stored ??=
+          state.drafts.find((draft) => draft.id === recoveryId) ?? null;
+      });
+      vi.useFakeTimers();
       const returning = returnPendingSandboxMessage("send-1", false, true);
       try {
-        const draftId = await listed.promise;
+        await vi.advanceTimersByTimeAsync(
+          HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50,
+        );
 
-        // Opened from Drafts now, its Send goes to the chat's sandbox.
-        expect(
-          useLandingDraftStore
-            .getState()
-            .drafts.find((draft) => draft.id === draftId)?.returnedSandbox,
-        ).toMatchObject({ target: CHAT_SANDBOX, clientRequestId: null });
-        // The pending copy and its images stay until the reads settle.
+        // Listed in Drafts as the text alone, already on the chat's sandbox:
+        // opened and sent from there, it goes to that sandbox.
+        expect(first.stored).not.toBeNull();
+        expect(first.stored?.returnedSandbox).toEqual({
+          target: CHAT_SANDBOX,
+          clientRequestId: null,
+          userId: "user-1",
+        });
+        // The pending copy and its image roots stay until the read settles.
         expect(
           usePendingSandboxSendStore.getState().sends["send-1"],
         ).toBeDefined();
       } finally {
-        reads.resolve();
+        vi.useRealTimers();
+        stopWatching();
+        read.resolve(null);
         await returning;
         vi.restoreAllMocks();
         release();

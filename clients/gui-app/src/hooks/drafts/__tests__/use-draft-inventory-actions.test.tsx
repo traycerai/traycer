@@ -115,6 +115,7 @@ function installLandingDraft(
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: false,
+    returnedSandbox: null,
     ...overrides,
   });
 }

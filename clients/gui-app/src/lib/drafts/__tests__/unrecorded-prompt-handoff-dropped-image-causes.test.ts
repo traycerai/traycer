@@ -106,6 +106,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
         browserAnnotations: [],
         cause,
         stillCurrent: () => true,
+        returnedSandbox: null,
       });
       notes.set(cause, installedText(draftId));
     }
@@ -122,6 +123,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
         browserAnnotations: [],
         cause,
         stillCurrent: () => true,
+        returnedSandbox: null,
       });
       return installedText(draftId);
     }
@@ -144,6 +146,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
       browserAnnotations: [],
       cause: "capacity",
       stillCurrent: () => true,
+      returnedSandbox: null,
     });
     const text = installedText(draftId);
     expect(text).toContain(TEXT);
@@ -163,6 +166,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
       browserAnnotations: [],
       cause: "capacity",
       stillCurrent: () => true,
+      returnedSandbox: null,
     });
     const draft = useLandingDraftStore
       .getState()
@@ -180,6 +184,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
       browserAnnotations: [],
       cause: "capacity",
       stillCurrent: () => false,
+      returnedSandbox: null,
     });
     expect(draftId).toBeNull();
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
@@ -201,6 +206,7 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
         reason: "Not accepted.",
         cause,
         stillCurrent: () => true,
+        returnedSandbox: null,
       });
       const text = installedText(draftId);
       expect(text).toContain("A browser annotation was not saved with it.");

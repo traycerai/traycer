@@ -1,7 +1,6 @@
 import {
   appendPromptQualification,
   buildUnrecordedPromptHandoff,
-  type PromptHandoffOutcome,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
@@ -763,20 +762,17 @@ async function returnBoundMessage(
   if (toDraft) {
     const recoveryId = pendingSandboxRecoveryDraftId(id);
     const target = draftImageByteTargetForHost(boundMessageHostId(send));
-    const stopStamping = stampDestinationOnInstall(recoveryId, destination);
-    let outcome: PromptHandoffOutcome;
-    try {
-      outcome = await buildUnrecordedPromptHandoff({
-        recovery: { draftId: recoveryId, settings: send.settings },
-        content: send.content,
-        browserAnnotations: request.browserAnnotations ?? [],
-        reason,
-        readHashImage: (hash) => resolveDraftImageBytes(hash, target),
-        stillCurrent: () => boundReturnCurrent(send),
-      });
-    } finally {
-      stopStamping();
-    }
+    // The draft is created on the sandbox: it is listed in Drafts before its
+    // image reads settle.
+    const outcome = await buildUnrecordedPromptHandoff({
+      recovery: { draftId: recoveryId, settings: send.settings },
+      content: send.content,
+      browserAnnotations: request.browserAnnotations ?? [],
+      reason,
+      readHashImage: (hash) => resolveDraftImageBytes(hash, target),
+      stillCurrent: () => boundReturnCurrent(send),
+      returnedSandbox: destination,
+    });
     // The pending copy and its image roots stay until the reads settle.
     await outcome.readsSettled;
     if (outcome.draftId === null || !boundReturnCurrent(send))
@@ -809,26 +805,6 @@ async function returnBoundMessage(
   return returned;
 }
 
-/**
- * Puts `destination` on the recovery draft in the update that installs it,
- * until the returned function stops watching. The handoff lists its draft in
- * Drafts before the draft's image reads settle, so a draft opened from there
- * must already send to the sandbox. The setter writes only a change.
- */
-function stampDestinationOnInstall(
-  draftId: string,
-  destination: ReturnedSandbox | null,
-): () => void {
-  if (destination === null) return () => undefined;
-  const stamp = (): void =>
-    useLandingDraftStore
-      .getState()
-      .setDraftReturnedSandbox(draftId, destination);
-  // A draft an earlier attempt installed is the same send's.
-  stamp();
-  return useLandingDraftStore.subscribe(stamp);
-}
-
 /** The saved recovery draft remains addressable after its pending record is removed. */
 export function pendingSandboxRecoveryDraftId(id: string): string {
   return uuidv5(`pending-sandbox-send:${id}:recovered`, uuidv5.URL);
@@ -850,8 +826,7 @@ function installReturnedLandingDraft(
   send: PendingSandboxSend,
   destination: ReturnedSandbox | null,
 ): void {
-  const drafts = useLandingDraftStore.getState();
-  drafts.installLandingDraft({
+  useLandingDraftStore.getState().installLandingDraft({
     id: draftId,
     content: send.content,
     selection: null,
@@ -861,9 +836,8 @@ function installReturnedLandingDraft(
     // The task's sandbox started empty: the message named no folder here.
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
+    returnedSandbox: destination,
   });
-  if (destination !== null)
-    drafts.setDraftReturnedSandbox(draftId, destination);
 }
 
 /** Preserves an occupied task draft by putting this message in its own closed draft. */
