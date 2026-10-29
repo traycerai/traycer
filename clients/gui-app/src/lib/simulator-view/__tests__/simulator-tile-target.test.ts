@@ -36,7 +36,7 @@ const IPHONE: SimulatorSummary = {
 };
 /** A `@1.0` host, or a `@1.1` one with nothing open on this machine. */
 const NO_SESSIONS: readonly SimulatorSession[] = [];
-/** A `@1.0` host, or a `@1.1` one whose host-wide read has not answered yet. */
+/** A host-wide read that has ANSWERED with nothing booted; `null` is one still owed. */
 const NO_INSTANCES: readonly SimulatorHostInstance[] = [];
 
 describe("findSimulatorForTile", () => {
@@ -323,6 +323,32 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
         },
       ]),
     ).toBeNull();
+  });
+
+  it("decides nothing for a clone's tile named after its source while the host-wide read is owed", () => {
+    // Boot another on the source device names the clone's tile after THAT
+    // device, so the AVD name the fallback matches is the source's own row.
+    // Until the host-wide read answers, no read in hand tells that tile from
+    // the source device's own - and answering with the device would boot it
+    // and attach the clone's tile to its session.
+    const tileNamedAfterSource = {
+      simulatorId: "emulator-5558",
+      platform: "android",
+      name: BOOTED_EMULATOR.name,
+    } as const;
+    expect(
+      findSimulatorForTile([source], tileNamedAfterSource, NO_SESSIONS, null),
+    ).toBeNull();
+    // Answered, and nothing names this serial: the AVD name decides again,
+    // which is what a root device's own stale-serial tile wants.
+    expect(
+      findSimulatorForTile(
+        [source],
+        tileNamedAfterSource,
+        NO_SESSIONS,
+        NO_INSTANCES,
+      ),
+    ).toBe(source);
   });
 
   it("never synthesises a root device from the host-wide read either", () => {

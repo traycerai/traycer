@@ -77,6 +77,8 @@ const fakes = vi.hoisted(() => ({
   sessions: null as SimulatorSessionsState | null,
   /** What `simulator.instances` says is booted on the machine, host-wide. */
   hostInstances: [] as SimulatorHostInstance[],
+  /** Whether that host-wide read has answered yet; false is its first frame. */
+  hostInstancesAnswered: true,
   configSet: vi.fn(),
   open: vi.fn<OpenOnHost>(() => new Promise<SimulatorOpenResponse>(() => {})),
   close: vi.fn(),
@@ -163,7 +165,10 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
     }),
     useSimulatorActionMutation: () => gated(fakes.action),
     useSimulatorInstancesQuery: () => ({
-      data: { instances: fakes.hostInstances },
+      data: fakes.hostInstancesAnswered
+        ? { instances: fakes.hostInstances }
+        : undefined,
+      isError: false,
     }),
     useSimulatorScreenshotMutation: () => gated(vi.fn()),
     useSimulatorDetailQuery: () => ({
@@ -389,6 +394,7 @@ beforeEach(() => {
   fakes.viewerUserId = "user-1";
   fakes.sessions = sessions({});
   fakes.hostInstances = [];
+  fakes.hostInstancesAnswered = true;
   fakes.streamState = STREAMING;
 });
 
@@ -939,6 +945,81 @@ describe("SimulatorTile on a @1.1 host", () => {
     requestId: null,
   };
 
+  /**
+   * An Android device with one clone of its own. The host keys an instance by
+   * its AVD name and lists what runs under the serial its emulator took, so a
+   * clone's key and the serial its tile carries are two different strings -
+   * and the clone is never a device, only a row under its source's
+   * `instances`.
+   */
+  const SOURCE_SERIAL = "emulator-5554";
+  const SOURCE_AVD = "Pixel_8_API_35";
+  const CLONE_AVD = "Pixel_8_API_35_traycer_2";
+  const CLONE_SERIAL = "emulator-5556";
+  const SOURCE_OWN_INSTANCE = {
+    instanceKey: SOURCE_AVD,
+    name: SOURCE_AVD,
+    booted: true,
+    cloneOf: null,
+    drivenByAgent: false,
+    keepRunning: false,
+    idleUntil: null,
+  } as const;
+  const CLONE_INSTANCE = {
+    ...SOURCE_OWN_INSTANCE,
+    instanceKey: CLONE_AVD,
+    name: "Pixel_8_API_35 · 2",
+    cloneOf: SOURCE_AVD,
+    drivenByAgent: true,
+  } as const;
+  const CLONE_STATE: SimulatorState = {
+    ...READY_STATE,
+    platforms: [
+      { platform: "ios", available: true, reason: null },
+      { platform: "android", available: true, reason: null },
+    ],
+    simulators: [
+      ...READY_STATE.simulators,
+      {
+        simulatorId: SOURCE_SERIAL,
+        platform: "android",
+        name: SOURCE_AVD,
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+        instances: [SOURCE_OWN_INSTANCE, CLONE_INSTANCE],
+      },
+    ],
+  };
+  /** The same clone in the host-wide read, which names its serial beside its key. */
+  const CLONE_HOST_WIDE: SimulatorHostInstance = {
+    ...CLONE_INSTANCE,
+    drivenByAgent: false,
+    keepRunning: true,
+    simulatorId: CLONE_SERIAL,
+    platform: "android",
+    version: "Android 15.0",
+    cloneOfName: SOURCE_AVD,
+    bootedByTraycer: true,
+    tasks: [],
+    otherTaskCount: 0,
+  };
+  const onClone = (session: SimulatorSession): SimulatorSession => ({
+    ...session,
+    simulatorId: CLONE_SERIAL,
+    instanceKey: CLONE_AVD,
+    platform: "android",
+  });
+  /** A clone's tile as Boot another on the source device places it: that device's name. */
+  function cloneTileNamedAfterSource(): SimulatorTileRef {
+    return makeSimulatorTileRef({
+      hostId: HOST,
+      simulatorId: CLONE_SERIAL,
+      platform: "android",
+      name: SOURCE_AVD,
+    });
+  }
+
   beforeEach(() => {
     fakes.negotiated = { major: 1, minor: 1 };
   });
@@ -1119,54 +1200,8 @@ describe("SimulatorTile on a @1.1 host", () => {
     // The same case on Android, where the two identifiers differ: the host
     // keys the clone by its AVD name and the tile carries the serial its
     // emulator runs on, so the key alone can never find the instance.
-    const CLONE_AVD = "Pixel_8_API_35_traycer_2";
-    const CLONE_SERIAL = "emulator-5556";
-    const cloneState: SimulatorState = {
-      ...READY_STATE,
-      platforms: [
-        { platform: "ios", available: true, reason: null },
-        { platform: "android", available: true, reason: null },
-      ],
-      simulators: [
-        ...READY_STATE.simulators,
-        {
-          simulatorId: "emulator-5554",
-          platform: "android",
-          name: "Pixel_8_API_35",
-          version: "Android 15.0",
-          booted: true,
-          physical: false,
-          instances: [
-            {
-              instanceKey: "Pixel_8_API_35",
-              name: "Pixel_8_API_35",
-              booted: true,
-              cloneOf: null,
-              drivenByAgent: false,
-              keepRunning: false,
-              idleUntil: null,
-            },
-            {
-              instanceKey: CLONE_AVD,
-              name: "Pixel_8_API_35 · 2",
-              booted: true,
-              cloneOf: "Pixel_8_API_35",
-              drivenByAgent: true,
-              keepRunning: false,
-              idleUntil: null,
-            },
-          ],
-        },
-      ],
-    };
-    const onClone = (session: SimulatorSession): SimulatorSession => ({
-      ...session,
-      simulatorId: CLONE_SERIAL,
-      instanceKey: CLONE_AVD,
-      platform: "android",
-    });
     fakes.sessions = sessions({
-      state: { ...cloneState, sessions: [onClone(PERSON_SESSION)] },
+      state: { ...CLONE_STATE, sessions: [onClone(PERSON_SESSION)] },
     });
     const rerender = renderTileFor(
       makeSimulatorTileRef({
@@ -1179,7 +1214,7 @@ describe("SimulatorTile on a @1.1 host", () => {
     expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
 
     fakes.sessions = sessions({
-      state: { ...cloneState, sessions: [onClone(AGENT_SESSION)] },
+      state: { ...CLONE_STATE, sessions: [onClone(AGENT_SESSION)] },
     });
     rerender();
 
@@ -1193,25 +1228,8 @@ describe("SimulatorTile on a @1.1 host", () => {
     // the AVD-name key to the serial any more - and the clone is still booted,
     // kept running past its idle deadline. The host-wide read names the pair,
     // so the tile still offers Connect rather than calling the clone gone.
-    fakes.hostInstances = [
-      {
-        instanceKey: CLONE_AVD,
-        name: "Pixel_8_API_35 · 2",
-        booted: true,
-        cloneOf: "Pixel_8_API_35",
-        drivenByAgent: false,
-        keepRunning: true,
-        idleUntil: null,
-        simulatorId: CLONE_SERIAL,
-        platform: "android",
-        version: "Android 15.0",
-        cloneOfName: "Pixel_8_API_35",
-        bootedByTraycer: true,
-        tasks: [],
-        otherTaskCount: 0,
-      },
-    ];
-    fakes.sessions = sessions({ state: { ...cloneState, sessions: [] } });
+    fakes.hostInstances = [CLONE_HOST_WIDE];
+    fakes.sessions = sessions({ state: { ...CLONE_STATE, sessions: [] } });
     rerender();
 
     const alone = await screen.findByTestId("simulator-inventory");
@@ -1219,6 +1237,69 @@ describe("SimulatorTile on a @1.1 host", () => {
     expect(screen.getByTestId("simulator-connect").textContent).toContain(
       "Connect",
     );
+  });
+
+  it("waits for the host-wide read before a clone's tile named after its source attaches to that device", async () => {
+    // Boot another on the source device names the clone's tile after THAT
+    // device, so a tile restored with no session has only a device of the
+    // same name to fall back to. Attaching to it would open a session on the
+    // wrong simulator and place its serial's tile beside this one.
+    fakes.hostInstancesAnswered = false;
+    fakes.sessions = sessions({ state: CLONE_STATE });
+    const rerender = renderTileFor(cloneTileNamedAfterSource());
+    await flush();
+
+    expect(fakes.open).not.toHaveBeenCalled();
+
+    // Answered, naming the clone's key beside this tile's serial: now the
+    // tile knows which instance it is and attaches to that one.
+    fakes.hostInstancesAnswered = true;
+    fakes.hostInstances = [CLONE_HOST_WIDE];
+    rerender();
+    await flush();
+
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: CLONE_SERIAL,
+      platform: "android",
+      boot: true,
+    });
+  });
+
+  it("names a clone's instance from the host's own rows when no catalog record does", async () => {
+    // The tile carries the source device's name, and the task catalog lists
+    // nothing for the session - a pane that was never visible, a task host
+    // too old to relay the catalog, the read's own first frame. The session
+    // names its instance key, so the host's nested row answers for the
+    // header instead of the name the tile was placed with.
+    fakes.sessions = sessions({
+      state: { ...CLONE_STATE, sessions: [onClone(PERSON_SESSION)] },
+    });
+    renderTileFor(cloneTileNamedAfterSource());
+
+    const toolbar = await screen.findByTestId("simulator-toolbar");
+    expect(toolbar.textContent).toContain("Pixel_8_API_35 · 2");
+    expect(toolbar.textContent).toContain("Android 15.0");
+    expect(within(toolbar).getByText("Agent")).toBeTruthy();
+  });
+
+  it("sends no power off while the session names no instance to power off", async () => {
+    // `instanceKey` is a `@1.1` field, and the tile's own id is never read as
+    // one: on Android it is the serial its emulator runs on, and only on iOS
+    // does it happen to be the instance's key as well. So the control is
+    // inert rather than asking to power off something it cannot name.
+    const { instanceKey: _unnamed, ...noInstance } = onClone(PERSON_SESSION);
+    fakes.sessions = sessions({
+      state: { ...CLONE_STATE, sessions: [noInstance] },
+    });
+    renderTileFor(cloneTileNamedAfterSource());
+
+    expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+    await flush();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fakes.powerOff).not.toHaveBeenCalled();
   });
 
   it("asks before powering off, names what it reaches, then sends simulator.powerOff by instance key", async () => {

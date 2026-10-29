@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  SimulatorHostInstance,
   SimulatorSession,
   SimulatorState,
   SimulatorSummary,
@@ -201,6 +202,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
         hostId={hostId}
         hostLabel={hostLabel}
         state={state}
+        v11={v11}
         autoAttach={!wasLive}
         connectRequest={connectRequest}
         onConnect={connection.supported ? connection.connect : null}
@@ -440,6 +442,8 @@ function SimulatorInventoryGate(props: {
   readonly hostId: string;
   readonly hostLabel: string;
   readonly state: SimulatorState;
+  /** The host speaks `@1.1`, so it has instances and may have clones. */
+  readonly v11: boolean;
   /** Connect a booted target without a click; false once this tile has been live. */
   readonly autoAttach: boolean;
   /** An explicit open's pending request for this tile, consumed here. */
@@ -453,6 +457,7 @@ function SimulatorInventoryGate(props: {
     node,
     hostId,
     state,
+    v11,
     autoAttach,
     connectRequest,
     onConnect,
@@ -473,6 +478,15 @@ function SimulatorInventoryGate(props: {
   const hostClient = useTabHostClient();
   const visible = useTileBodyVisible();
   const hostInstances = useSimulatorInstancesQuery(hostClient, hostId, visible);
+  // Null while a `@1.1` host still owes its answer: only then can a clone
+  // exist, and until the read lands nothing here tells a clone's tile from
+  // the source device it was named after. A read that FAILED has answered as
+  // far as this goes - the alternative is a root device's own stale-serial
+  // tile losing its Boot and connect over a read it never needed.
+  const instances: readonly SimulatorHostInstance[] | null =
+    !v11 || hostInstances.isError
+      ? []
+      : (hostInstances.data?.instances ?? null);
 
   // By id, or for an Android serial whose emulator has exited, the cold AVD
   // row of the same name: that is what "Boot and connect" boots again. A
@@ -483,7 +497,7 @@ function SimulatorInventoryGate(props: {
     state.simulators,
     node,
     state.sessions,
-    hostInstances.data?.instances ?? [],
+    instances,
   );
   const autoAttached = useRef(false);
   useEffect(() => {

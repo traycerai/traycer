@@ -49,10 +49,6 @@ export interface SimulatorToolbarProps {
   readonly settingsOpen: boolean;
   readonly onPowerOff: (() => void) | null;
   /**
-   * Whether Power off asks here first. A `@1.1` host asks through its own
-   * `confirm-required` answer, only while an agent is mid-turn on it.
-   */
-  /**
    * Whether powering off reaches past this task: on a `@1.1` host it ends
    * every task's session on the instance and deletes a copy, where a `@1.0`
    * host's shutdown is this task's own. The confirm says which.

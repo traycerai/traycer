@@ -1,3 +1,15 @@
+/**
+ * Mapping one of a simulator's identities to another, for the tile.
+ *
+ * THE INVARIANT, for every surface and not only this file: a mapping between
+ * a tile's `simulatorId`, the host's `instanceKey` and a clone's `cloneOf` is
+ * resolved only through a read that names the pair together - this task's
+ * `sessions`, the host-wide `simulator.instances`, or the task catalog's
+ * records - never through a string equality that holds only where the udid IS
+ * the key, never from a read that cannot carry the pair (`simulator.list`'s
+ * nested instances have no `simulatorId`), and never by letting a root device
+ * of the same name stand in for a clone.
+ */
 import type {
   SimulatorHostInstance,
   SimulatorPlatform,
@@ -33,7 +45,15 @@ export function findSimulatorForTile(
     readonly name: string;
   },
   sessions: readonly SimulatorSession[],
-  hostInstances: readonly SimulatorHostInstance[],
+  /**
+   * The host-wide instance read, or null while it is still owed - a `@1.1`
+   * host that has not answered it yet. The AVD-name fallback below waits for
+   * it: a clone's tile is named after whatever the open named, which for Boot
+   * another is the SOURCE DEVICE, so falling back on the name alone would
+   * hand that clone its source's row - the one identity a clone must never be
+   * resolved to.
+   */
+  hostInstances: readonly SimulatorHostInstance[] | null,
 ): SimulatorSummary | null {
   const byId = simulators.find(
     (simulator) => simulator.simulatorId === tile.simulatorId,
@@ -46,7 +66,7 @@ export function findSimulatorForTile(
         (item.cloneOf !== null &&
           hostNamesPair(
             sessions,
-            hostInstances,
+            hostInstances ?? [],
             tile.simulatorId,
             item.instanceKey,
           )),
@@ -61,7 +81,7 @@ export function findSimulatorForTile(
       physical: false,
     };
   }
-  if (tile.platform !== "android") return null;
+  if (tile.platform !== "android" || hostInstances === null) return null;
   return (
     simulators.find(
       (simulator) =>
@@ -107,6 +127,42 @@ function hostNamesPair(
         instance.instanceKey === instanceKey,
     )
   );
+}
+
+/** One instance as the host's own rows describe it. */
+export interface SimulatorInstanceIdentity {
+  readonly name: string;
+  /** Its device row's: an instance carries no version of its own. */
+  readonly version: string;
+  readonly drivenByAgent: boolean;
+}
+
+/**
+ * The host's nested row for one instance, found by the KEY rather than by
+ * any tile's id: a clone is listed under no `simulatorId` at all, and on
+ * Android its key is not even the same string as the serial its tile
+ * carries. The caller holds a read that already named the pair - a live
+ * tile's own session - so the key is the whole question here. A root
+ * device's own instance is listed beside its clones, so one lookup answers
+ * for both. Null when no row carries that key, which is every instance on a
+ * `@1.0` host: there are none there, and no clones either.
+ */
+export function findInstanceForKey(
+  simulators: readonly SimulatorSummary[],
+  instanceKey: string,
+): SimulatorInstanceIdentity | null {
+  for (const source of simulators) {
+    const instance = source.instances?.find(
+      (item) => item.instanceKey === instanceKey,
+    );
+    if (instance === undefined) continue;
+    return {
+      name: instance.name,
+      version: source.version,
+      drivenByAgent: instance.drivenByAgent,
+    };
+  }
+  return null;
 }
 
 /**
