@@ -1026,6 +1026,35 @@ describe("<BotActivityPage /> member actions on an automation", () => {
     ]);
   });
 
+  it("names a member the directory does not know as a member, never by their id", () => {
+    const since = NOW - DAY;
+    mount({
+      tasks: [
+        task("task-auto", {
+          pause: { byUserId: "user-departed", since },
+        }),
+      ],
+    });
+
+    expect(
+      within(taskRow("task-auto")).getByTestId("bot-task-paused").textContent,
+    ).toBe(`Paused by a member since ${formatAbsoluteDateTime(since)}`);
+  });
+
+  it("says on Stop that it ends the automation for good", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(TASK_ACTIONS);
+    mount({ tasks: [task("task-auto", {})] });
+
+    await user.hover(
+      within(taskRow("task-auto")).getByRole("button", { name: "Stop" }),
+    );
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Ends the automation. It can't be resumed.",
+    );
+  });
+
   it("says a Run now this host cannot run waits for the task's next report", () => {
     mount({
       tasks: [

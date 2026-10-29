@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   useBotTaskRunNowMutation,
   useBotTaskSetPausedMutation,
@@ -88,6 +89,7 @@ function TaskActionButtons(props: {
         <ActionButton
           testId="bot-task-run-now"
           label="Run now"
+          description={null}
           pending={runNow.isPending}
           disabled={runWaiting}
           onClick={() => runNow.mutate({ botId, taskId })}
@@ -97,6 +99,7 @@ function TaskActionButtons(props: {
         <ActionButton
           testId="bot-task-pause"
           label={paused ? "Resume" : "Pause"}
+          description={null}
           pending={setPaused.isPending}
           disabled={false}
           onClick={() => setPaused.mutate({ botId, taskId, paused: !paused })}
@@ -106,6 +109,7 @@ function TaskActionButtons(props: {
         <ActionButton
           testId="bot-task-stop"
           label="Stop"
+          description="Ends the automation. It can't be resumed."
           pending={stop.isPending}
           disabled={false}
           onClick={() => stop.mutate({ botId, taskId })}
@@ -118,27 +122,36 @@ function TaskActionButtons(props: {
 function ActionButton(props: {
   readonly testId: string;
   readonly label: string;
+  /** What the action does beyond its label, as its tooltip; `null` for none. */
+  readonly description: string | null;
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly onClick: () => void;
 }): ReactNode {
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="xs"
-      data-testid={props.testId}
-      disabled={props.pending || props.disabled}
-      onClick={props.onClick}
+    <TooltipWrapper
+      label={props.description}
+      side="top"
+      sideOffset={6}
+      align={undefined}
     >
-      {props.label}
-      {props.pending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
-    </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="xs"
+        data-testid={props.testId}
+        disabled={props.pending || props.disabled}
+        onClick={props.onClick}
+      >
+        {props.label}
+        {props.pending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+      </Button>
+    </TooltipWrapper>
   );
 }

@@ -46,7 +46,7 @@ import {
   threadOpenOf,
 } from "@/lib/bots/bot-trunk-model";
 import {
-  botMemberName,
+  botActivityMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import { postTextOf } from "@/lib/bots/reply-row";
@@ -116,7 +116,7 @@ export function BotActivityPage(props: {
   const userId = viewer?.userId ?? null;
   const nameOf = useCallback(
     (memberId: string): string =>
-      botMemberName(memberId, viewer, resolveMember),
+      botActivityMemberName(memberId, viewer, resolveMember),
     [resolveMember, viewer],
   );
   const taskIds = useMemo(() => tasks.map((task) => task.taskId), [tasks]);
