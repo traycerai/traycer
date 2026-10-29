@@ -1,6 +1,7 @@
 import {
   appendPromptQualification,
   buildUnrecordedPromptHandoff,
+  type PromptHandoffOutcome,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
@@ -762,22 +763,24 @@ async function returnBoundMessage(
   if (toDraft) {
     const recoveryId = pendingSandboxRecoveryDraftId(id);
     const target = draftImageByteTargetForHost(boundMessageHostId(send));
-    const outcome = await buildUnrecordedPromptHandoff({
-      recovery: { draftId: recoveryId, settings: send.settings },
-      content: send.content,
-      browserAnnotations: request.browserAnnotations ?? [],
-      reason,
-      readHashImage: (hash) => resolveDraftImageBytes(hash, target),
-      stillCurrent: () => boundReturnCurrent(send),
-    });
+    const stopStamping = stampDestinationOnInstall(recoveryId, destination);
+    let outcome: PromptHandoffOutcome;
+    try {
+      outcome = await buildUnrecordedPromptHandoff({
+        recovery: { draftId: recoveryId, settings: send.settings },
+        content: send.content,
+        browserAnnotations: request.browserAnnotations ?? [],
+        reason,
+        readHashImage: (hash) => resolveDraftImageBytes(hash, target),
+        stillCurrent: () => boundReturnCurrent(send),
+      });
+    } finally {
+      stopStamping();
+    }
+    // The pending copy and its image roots stay until the reads settle.
     await outcome.readsSettled;
     if (outcome.draftId === null || !boundReturnCurrent(send))
       return { kind: "none" };
-    // Stamped before the pending copy ends: the draft is where it goes now.
-    if (destination !== null)
-      useLandingDraftStore
-        .getState()
-        .setDraftReturnedSandbox(outcome.draftId, destination);
     returned = { kind: "landing-draft", draftId: outcome.draftId };
   } else {
     const qualified =
@@ -804,6 +807,26 @@ async function returnBoundMessage(
     return { kind: "none" };
   recordCancelledSandboxSend(send, returned);
   return returned;
+}
+
+/**
+ * Puts `destination` on the recovery draft in the update that installs it,
+ * until the returned function stops watching. The handoff lists its draft in
+ * Drafts before the draft's image reads settle, so a draft opened from there
+ * must already send to the sandbox. The setter writes only a change.
+ */
+function stampDestinationOnInstall(
+  draftId: string,
+  destination: ReturnedSandbox | null,
+): () => void {
+  if (destination === null) return () => undefined;
+  const stamp = (): void =>
+    useLandingDraftStore
+      .getState()
+      .setDraftReturnedSandbox(draftId, destination);
+  // A draft an earlier attempt installed is the same send's.
+  stamp();
+  return useLandingDraftStore.subscribe(stamp);
 }
 
 /** The saved recovery draft remains addressable after its pending record is removed. */

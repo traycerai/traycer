@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -43,7 +43,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import * as promptHandoff from "@/lib/drafts/unrecorded-prompt-handoff";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { recordMapStorageKey } from "@/lib/persist/keys";
@@ -1191,6 +1195,57 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
           ?.returnedSandbox,
       ).toMatchObject({ target: CHAT_SANDBOX, clientRequestId: null });
       release();
+    });
+
+    it("puts the sandbox on the landing draft as soon as it is listed, while its image reads are still outstanding", async () => {
+      const release = await ownedMessageOnItsSandbox(false);
+      // The handoff's image reads outlive its bound: the text-only draft is
+      // installed and listed in Drafts, and the reads are still running.
+      const reads = Promise.withResolvers<void>();
+      const listed = Promise.withResolvers<string>();
+      vi.spyOn(
+        promptHandoff,
+        "buildUnrecordedPromptHandoff",
+      ).mockImplementation((args) => {
+        const recovery = args.recovery;
+        if (recovery === undefined) throw new Error("expected a recovery");
+        useLandingDraftStore.getState().installLandingDraft({
+          id: recovery.draftId,
+          content: args.content,
+          selection: null,
+          lastTouchedAt: 1,
+          settings: recovery.settings,
+          composerMode: "chat",
+          workspace: emptyLandingDraftWorkspaceSnapshot(),
+          closed: true,
+        });
+        listed.resolve(recovery.draftId);
+        return Promise.resolve({
+          draftId: recovery.draftId,
+          readsSettled: reads.promise,
+        });
+      });
+      const returning = returnPendingSandboxMessage("send-1", false, true);
+      try {
+        const draftId = await listed.promise;
+
+        // Opened from Drafts now, its Send goes to the chat's sandbox.
+        expect(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((draft) => draft.id === draftId)?.returnedSandbox,
+        ).toMatchObject({ target: CHAT_SANDBOX, clientRequestId: null });
+        // The pending copy and its images stay until the reads settle.
+        expect(
+          usePendingSandboxSendStore.getState().sends["send-1"],
+        ).toBeDefined();
+      } finally {
+        reads.resolve();
+        await returning;
+        vi.restoreAllMocks();
+        release();
+      }
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
 
     it.each([
