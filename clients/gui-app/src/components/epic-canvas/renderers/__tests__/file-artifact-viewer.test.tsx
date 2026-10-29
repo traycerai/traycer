@@ -43,6 +43,9 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(blob: Blob, name: string, host: unknown) => Promise<null>>(),
   fileSave: null as IFileSaveHost | null,
   runnerHost: null as IRunnerHost | null,
+  // The viewer renders for "host-1"; a native shell serves its own host's
+  // objects itself and streams another host's published ones from the cloud.
+  localHostId: "host-1" as string | null,
   // A fixed query result for the tests that watch the renewal timer; `null`
   // lets the adapter below run a real query against `urlResponse`.
   hostQuery: null as {
@@ -56,6 +59,16 @@ const mocks = vi.hoisted(() => ({
   } as EpicReadArtifactObjectResponse,
   urlRequests: [] as unknown[],
   hostQueryParams: [] as unknown[],
+  // What this machine's host answers when the player asks whether it holds
+  // the object: a byte means it is on disk, `downloading` means not yet.
+  probeResponse: {
+    kind: "bytes",
+    bytesBase64: "",
+    offset: 0,
+    totalBytes: 0,
+    mediaType: "video/mp4",
+  } as EpicReadArtifactObjectResponse,
+  probeRequests: [] as unknown[],
   createdUrls: [] as string[],
   revokedUrls: [] as string[],
 }));
@@ -85,6 +98,9 @@ vi.mock("@/components/epic-canvas/docx-preview/docx-preview-lazy", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => mocks.runnerHost,
 }));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => mocks.localHostId,
+}));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -94,23 +110,32 @@ vi.mock("@/hooks/host/use-host-query", async () => {
   const { useQuery } = await import("@tanstack/react-query");
   return {
     useHostQuery: (input: {
-      readonly params: unknown;
+      readonly params: { readonly want: { readonly kind: string } };
       readonly options: {
         readonly enabled: boolean | undefined;
         readonly staleTime: number | undefined;
       };
     }) => {
-      mocks.hostQueryParams.push(input.params);
+      // The one-byte probe and the URL read are both this method; the
+      // fixed `hostQuery` stands in for the URL read only.
+      const isProbe = input.params.want.kind === "range";
+      if (!isProbe) mocks.hostQueryParams.push(input.params);
       const real = useQuery({
-        queryKey: ["media-url", input.params],
+        queryKey: [isProbe ? "media-probe" : "media-url", input.params],
         queryFn: () => {
+          if (isProbe) {
+            mocks.probeRequests.push(input.params);
+            return Promise.resolve(mocks.probeResponse);
+          }
           mocks.urlRequests.push(input.params);
           return Promise.resolve(mocks.urlResponse);
         },
-        enabled: mocks.hostQuery === null && input.options.enabled !== false,
+        enabled:
+          (isProbe || mocks.hostQuery === null) &&
+          input.options.enabled !== false,
         staleTime: input.options.staleTime,
       });
-      return mocks.hostQuery ?? real;
+      return isProbe ? real : (mocks.hostQuery ?? real);
     },
   };
 });
@@ -152,10 +177,19 @@ afterEach(() => {
   mocks.saveBlobToDisk.mockReset();
   mocks.fileSave = null;
   mocks.runnerHost = null;
+  mocks.localHostId = "host-1";
   mocks.hostQuery = null;
   mocks.urlResponse = { kind: "unavailable", reason: "missing" };
   mocks.urlRequests.length = 0;
   mocks.hostQueryParams.length = 0;
+  mocks.probeResponse = {
+    kind: "bytes",
+    bytesBase64: "",
+    offset: 0,
+    totalBytes: 0,
+    mediaType: "video/mp4",
+  };
+  mocks.probeRequests.length = 0;
   mocks.createdUrls.length = 0;
   mocks.revokedUrls.length = 0;
 });
@@ -557,11 +591,51 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
       expect(container.querySelector(tag)?.getAttribute("src")).toBe(
         `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
       );
-      // A five-gigabyte recording must cost nothing until the player asks.
+      // This machine's host was asked for one byte, which proved the file
+      // is on its disk; a five-gigabyte recording must cost nothing more
+      // until the player asks.
+      expect(mocks.probeRequests).toEqual([
+        {
+          epicId: "epic-1",
+          sha256: MEDIA_SHA,
+          want: { kind: "range", offset: 0, length: 1 },
+        },
+      ]);
       expect(spans).toEqual([]);
       expect(mocks.createdUrls).toEqual([]);
     },
   );
+
+  it("plays from the cloud while this machine's host is still fetching the file, without waiting for it", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.probeResponse = {
+      kind: "downloading",
+      receivedBytes: 10,
+      totalBytes: HUGE_MEDIA_BYTES,
+    };
+    const signed = "https://cdn.example.test/clip.mp4?sig=fetching";
+    mocks.hostQuery = {
+      data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const { readSpan, spans } = recordedMediaSpans();
+
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      ),
+    );
+    expect(bridge.registered).toEqual([]);
+    expect(spans).toEqual([]);
+  });
 
   it("shows the player only after the shell has registered the mount", async () => {
     const bridge = mediaBridge(true);
@@ -637,6 +711,54 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
       );
     },
   );
+
+  it("streams a published object on another machine's host from its signed URL instead of relaying spans", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.localHostId = "host-2";
+    const signed = "https://cdn.example.test/clip.mp4?sig=remote";
+    mocks.hostQuery = {
+      data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const { readSpan, spans } = recordedMediaSpans();
+
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      ),
+    );
+    expect(bridge.registered).toEqual([]);
+    expect(spans).toEqual([]);
+    // Another machine's disk is not the viewer's: no probe, straight to the cloud.
+    expect(mocks.probeRequests).toEqual([]);
+  });
+
+  it("keeps serving an unpublished object from another machine's host itself, since no URL exists for it yet", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.localHostId = "host-2";
+    const { readSpan } = recordedMediaSpans();
+
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("queued", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+    expect(bridge.registered).toHaveLength(1);
+    expect(mocks.hostQueryParams).toEqual([]);
+  });
 
   it("keeps the same mount when only the object's status moves from queued to published", async () => {
     const bridge = mediaBridge(false);

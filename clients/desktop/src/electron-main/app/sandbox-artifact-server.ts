@@ -2,7 +2,7 @@ import { normalizeSandboxArtifactPath } from "./sandbox-artifact-path";
 import { randomUUID } from "node:crypto";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import {
-  SANDBOX_ARTIFACT_SPAN_BYTES,
+  ARTIFACT_OBJECT_SPAN_BYTES,
   type SandboxArtifactReply,
   type SandboxArtifactCancel,
   type SandboxArtifactRequest,
@@ -187,7 +187,7 @@ export class SandboxArtifactServer {
 
     const range = request.headers.get("Range");
     let offset = 0;
-    let length = SANDBOX_ARTIFACT_SPAN_BYTES;
+    let length = ARTIFACT_OBJECT_SPAN_BYTES;
     if (range !== null) {
       const match = /^bytes=(\d+)-(\d*)$/.exec(range);
       if (match === null) return errorResponse(416, "Invalid artifact range");
@@ -251,14 +251,14 @@ export class SandboxArtifactServer {
               windowId,
               path,
               position,
-              SANDBOX_ARTIFACT_SPAN_BYTES,
+              ARTIFACT_OBJECT_SPAN_BYTES,
               signal,
             );
             if (
               next.kind !== "bytes" ||
               next.totalBytes !== totalBytes ||
               next.mediaType !== mediaType ||
-              !validSpan(next, position, SANDBOX_ARTIFACT_SPAN_BYTES)
+              !validSpan(next, position, ARTIFACT_OBJECT_SPAN_BYTES)
             ) {
               // Headers have already left; an interrupted stream must fail, never look complete.
               controller.error(new Error("Artifact stream unavailable"));

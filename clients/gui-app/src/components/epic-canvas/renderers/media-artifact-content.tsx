@@ -8,6 +8,7 @@ import {
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
@@ -32,11 +33,67 @@ export function MediaArtifactContent(props: {
   readonly readSpan: ArtifactReadSpan;
 }) {
   const runnerHost = useRunnerHostOrNull();
-  return runnerHost !== null && runnerHost.sandboxArtifacts !== null ? (
+  const bridge = runnerHost?.sandboxArtifacts ?? null;
+  const source = useMediaSource(props, bridge !== null);
+  if (source === null) return <MediaStatus loading />;
+  return source === "host" && runnerHost !== null && bridge !== null ? (
     <NativeMediaContent {...props} runnerHost={runnerHost} />
   ) : (
     <CloudMediaContent {...props} />
   );
+}
+
+type MediaSource = "host" | "cloud";
+
+/**
+ * Where this viewing takes its bytes from, settled once so an object that
+ * publishes while it plays keeps its mount.
+ *
+ * A published object's bytes live in the cloud, and every host mirrors them
+ * to its own disk in the background. The player should never wait on that
+ * mirror, and never route bytes through a machine whose disk is not the
+ * viewer's: relaying spans through another host hands the player base64
+ * unary replies under the 30 s remote deadline, which is how a 5 MB recording
+ * became unplayable on a bad link. So another machine's host answers with
+ * its cloud URL, and this machine's host is asked for one byte: the byte
+ * means the file is on its disk and plays from there for free, "downloading"
+ * means it plays from the cloud this time while the host finishes fetching
+ * it for the next. An unpublished object exists only on its host.
+ */
+function useMediaSource(
+  props: {
+    readonly epicId: string;
+    readonly hostId: string;
+    readonly object: MediaObject;
+  },
+  hasBridge: boolean,
+): MediaSource | null {
+  const localHostId = useReactiveLocalHostId();
+  const [source, setSource] = useState<MediaSource | null>(() => {
+    if (!hasBridge) return "cloud";
+    if (props.object.status !== "published") return "host";
+    return props.hostId === localHostId ? null : "cloud";
+  });
+  const client = useHostClientForHostId(props.hostId);
+  const probe = useHostQuery({
+    client,
+    method: "epic.readArtifactObject",
+    params: {
+      epicId: props.epicId,
+      sha256: props.object.sha256,
+      want: { kind: "range", offset: 0, length: 1 },
+    },
+    cacheKeyIdentity: undefined,
+    options: { enabled: source === null, staleTime: 0 },
+  });
+  // Latched from the first answer during render: the method's policy keeps
+  // polling a `downloading` answer, and a later "bytes" must not move a
+  // playing element off the cloud.
+  const answer = probe.data?.kind;
+  if (source === null && answer !== undefined) {
+    setSource(answer === "downloading" ? "cloud" : "host");
+  }
+  return source;
 }
 
 function NativeMediaContent(props: {

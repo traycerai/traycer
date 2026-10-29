@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  SANDBOX_ARTIFACT_SPAN_BYTES,
+  ARTIFACT_OBJECT_SPAN_BYTES,
   type SandboxArtifactCancel,
   type SandboxArtifactRequest,
 } from "../../../ipc-contracts/sandbox-artifact-types";
@@ -335,7 +335,7 @@ describe("SandboxArtifactServer: fetch range responses", () => {
     expect(sent[0]?.request.length).toBe(100);
   });
 
-  it("caps a requested span at SANDBOX_ARTIFACT_SPAN_BYTES (4 MiB)", async () => {
+  it("caps a requested span at ARTIFACT_OBJECT_SPAN_BYTES", async () => {
     const totalBytes = 10_000_000;
     const { server, sent } = buildAutoRespondingServer(totalBytes, "text/html");
     server.register("mount1", "window-a");
@@ -345,12 +345,12 @@ describe("SandboxArtifactServer: fetch range responses", () => {
       }),
     );
     expect(response.status).toBe(206);
-    expect(sent[0]?.request.length).toBe(SANDBOX_ARTIFACT_SPAN_BYTES);
+    expect(sent[0]?.request.length).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
     expect(response.headers.get("Content-Length")).toBe(
-      String(SANDBOX_ARTIFACT_SPAN_BYTES),
+      String(ARTIFACT_OBJECT_SPAN_BYTES),
     );
     expect(response.headers.get("Content-Range")).toBe(
-      `bytes 0-${SANDBOX_ARTIFACT_SPAN_BYTES - 1}/${totalBytes}`,
+      `bytes 0-${ARTIFACT_OBJECT_SPAN_BYTES - 1}/${totalBytes}`,
     );
   });
 
@@ -390,9 +390,9 @@ describe("SandboxArtifactServer: fetch range responses", () => {
     );
     expect(response.status).toBe(206);
     expect(sent[0]?.request.offset).toBe(100);
-    expect(sent[0]?.request.length).toBe(SANDBOX_ARTIFACT_SPAN_BYTES);
+    expect(sent[0]?.request.length).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
     expect(response.headers.get("Content-Range")).toBe(
-      `bytes 100-${100 + SANDBOX_ARTIFACT_SPAN_BYTES - 1}/${totalBytes}`,
+      `bytes 100-${100 + ARTIFACT_OBJECT_SPAN_BYTES - 1}/${totalBytes}`,
     );
   });
 
@@ -436,7 +436,7 @@ describe("SandboxArtifactServer: fetch range responses", () => {
 
 describe("SandboxArtifactServer: fetch full (non-range) responses", () => {
   it("streams a file larger than one span as two spans, closing after the exact byte count", async () => {
-    const totalBytes = SANDBOX_ARTIFACT_SPAN_BYTES + 100;
+    const totalBytes = ARTIFACT_OBJECT_SPAN_BYTES + 100;
     const { server, sent } = buildAutoRespondingServer(totalBytes, "text/html");
     server.register("mount1", "window-a");
     const response = await server.fetch(
@@ -448,13 +448,13 @@ describe("SandboxArtifactServer: fetch full (non-range) responses", () => {
     expect(body.byteLength).toBe(totalBytes);
     expect(sent).toHaveLength(2);
     expect(sent[0]?.request.offset).toBe(0);
-    expect(sent[0]?.request.length).toBe(SANDBOX_ARTIFACT_SPAN_BYTES);
-    expect(sent[1]?.request.offset).toBe(SANDBOX_ARTIFACT_SPAN_BYTES);
-    expect(sent[1]?.request.length).toBe(SANDBOX_ARTIFACT_SPAN_BYTES);
+    expect(sent[0]?.request.length).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
+    expect(sent[1]?.request.offset).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
+    expect(sent[1]?.request.length).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
   });
 
   it("errors the stream, rather than truncating it, if a later span disagrees with the first on totalBytes", async () => {
-    const totalBytes = SANDBOX_ARTIFACT_SPAN_BYTES + 100;
+    const totalBytes = ARTIFACT_OBJECT_SPAN_BYTES + 100;
     let callCount = 0;
     const server = new SandboxArtifactServer((windowId, _channel, payload) => {
       if (!isArtifactRequest(payload)) return true;
@@ -502,7 +502,7 @@ describe("SandboxArtifactServer: fetch full (non-range) responses", () => {
   });
 
   it("errors the stream if a later span disagrees with the first on mediaType", async () => {
-    const totalBytes = SANDBOX_ARTIFACT_SPAN_BYTES + 100;
+    const totalBytes = ARTIFACT_OBJECT_SPAN_BYTES + 100;
     let callCount = 0;
     const server = new SandboxArtifactServer((windowId, _channel, payload) => {
       if (!isArtifactRequest(payload)) return true;
@@ -829,7 +829,7 @@ describe("SandboxArtifactServer: cancellation", () => {
   });
 
   it("cancelling the stream reader sends sandboxArtifactCancel for the span still in flight", async () => {
-    const totalBytes = SANDBOX_ARTIFACT_SPAN_BYTES + 100;
+    const totalBytes = ARTIFACT_OBJECT_SPAN_BYTES + 100;
     const cancels: SandboxArtifactCancel[] = [];
     let secondRequestId = "";
     let resolveSecondSpanStarted: () => void = () => undefined;
@@ -848,7 +848,7 @@ describe("SandboxArtifactServer: cancellation", () => {
             {
               requestId: payload.requestId,
               kind: "bytes",
-              bytes: new Uint8Array(SANDBOX_ARTIFACT_SPAN_BYTES).fill(1),
+              bytes: new Uint8Array(ARTIFACT_OBJECT_SPAN_BYTES).fill(1),
               offset: 0,
               totalBytes,
               mediaType: "text/html",
