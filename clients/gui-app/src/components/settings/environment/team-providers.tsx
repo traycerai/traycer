@@ -45,7 +45,10 @@ import { EnvironmentProviderSkillsTab } from "./environment-skills";
 import { teamProviderStateWord } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { usePickedTeamLabel } from "./team-pick-label";
-import { providerEnvSubtitle } from "@/components/settings/panels/provider-env-subtitle";
+import {
+  providerEnvSubtitle,
+  providerNativeConfigOnlyEnvSubtitle,
+} from "@/components/settings/panels/provider-env-subtitle";
 import {
   useConfigurationIsPersonal,
   useConfigurationSource,
@@ -103,6 +106,10 @@ export function TeamProviders(): ReactNode {
       ...(packId === null ? [] : [packId]),
     ]),
   ];
+  const nativeConfigOnly =
+    catalog.data?.providers.find(
+      (provider) => provider.providerId === providerId,
+    )?.nativeCapabilities.envOverrideScope === "native-config-only";
   return (
     <SettingsPanelShell
       title="Providers"
@@ -216,7 +223,7 @@ export function TeamProviders(): ReactNode {
                   className="text-ui-xs text-muted-foreground"
                   data-testid="team-provider-env-subtitle"
                 >
-                  {providerEnvSubtitle(
+                  {providerEnvSubtitleFor(nativeConfigOnly)(
                     providerDisplayName(providerId),
                     personal
                       ? { kind: "personal" }
@@ -266,6 +273,16 @@ export function TeamProviders(): ReactNode {
       )}
     </SettingsPanelShell>
   );
+}
+
+/** `providerEnvSubtitle`, or its native-config-only sibling when the
+ *  provider's Env override never reaches its conversations (NEW-154-15). */
+function providerEnvSubtitleFor(
+  nativeConfigOnly: boolean,
+): typeof providerEnvSubtitle {
+  return nativeConfigOnly
+    ? providerNativeConfigOnlyEnvSubtitle
+    : providerEnvSubtitle;
 }
 
 function providerState(

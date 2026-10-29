@@ -33,6 +33,29 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+/** What the NEW-154-9(c) pending label reads: controlled per test. */
+const hostsRunningPersonalMock = vi.hoisted(
+  (): {
+    current: {
+      readonly hosts: readonly { readonly hostId: string }[];
+      readonly state: "loading" | "ready" | "failed";
+    };
+  } => ({
+    current: { hosts: [], state: "ready" },
+  }),
+);
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      ...hostsRunningPersonalMock.current,
+      collisions: [],
+      retry: () => {},
+      reread: () => {},
+    }),
+  }),
+);
+
 import { act, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -121,6 +144,7 @@ afterEach(() => {
   hostBindingMock.current = null;
   vi.clearAllMocks();
   mocks.credentialRefusal = null;
+  hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
@@ -1054,6 +1078,61 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         fireEvent.click(within(note).getByRole("button", { name: "Secrets" }));
         expect(navigation.toSection).toHaveBeenCalledWith("secrets");
       });
+
+      it("control: an explicit Unset of the same name gets no shadow note - it receives no value from anything", async () => {
+        renderClaudeEnvTab(
+          { localOverrides: [], secrets: [unrelatedSecretNamedTheSame] },
+          [{ key: SHADOW_KEY, value: null }],
+        );
+
+        await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
+        expect(screen.queryByTestId("env-row-note")).toBeNull();
+      });
+    });
+
+    describe("the pending SET label's host count (NEW-154-9c)", () => {
+      function pendingSetOverride(): () => void {
+        let resolveSave: (() => void) | undefined;
+        mocks.setOverrideMutate.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveSave = resolve;
+            }),
+        );
+        return () => resolveSave?.();
+      }
+
+      it("names the real host count once the list is ready", async () => {
+        hostsRunningPersonalMock.current = {
+          hosts: [{ hostId: "host-a" }, { hostId: "host-b" }],
+          state: "ready",
+        };
+        pendingSetOverride();
+        renderProviderEnvTab("cursor", null, []);
+        await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
+
+        expect(screen.getByRole("status").textContent).toBe(
+          "Applying on 2 hosts…",
+        );
+      });
+
+      it.each([
+        { label: "loading", state: "loading" as const },
+        { label: "failed", state: "failed" as const },
+      ])(
+        "keeps the plain label while the host list is $label, never an understated count",
+        async ({ state }) => {
+          hostsRunningPersonalMock.current = { hosts: [], state };
+          pendingSetOverride();
+          renderProviderEnvTab("cursor", null, []);
+          await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
+
+          expect(screen.getByRole("status").textContent).toBe(
+            "CURSOR_BASE_URL · Adding",
+          );
+          expect(screen.queryByText(/Applying on/)).toBeNull();
+        },
+      );
     });
   });
 });

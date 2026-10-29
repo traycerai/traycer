@@ -9,12 +9,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import {
   registerDetailsProvider,
   type DetailsProvider,
 } from "@/lib/settings-details-entry";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { reachableHost } from "./mcp-skills-test-support";
 import {
   configurationItem,
   mountTeamPage,
@@ -101,6 +104,33 @@ const environments = {
     },
   ],
 };
+
+/** A `providers.list` row whose Env override only reaches Traycer's own
+ *  native config (MCP setup), never the provider's conversations - Cursor's
+ *  actual `envOverrideScope`, as `providerNativeConfigOnlyEnvSubtitle` names
+ *  it (NEW-154-15 class sweep). */
+function cursorProviderListRow(): ProviderCliState {
+  return {
+    providerId: "cursor",
+    enabled: true,
+    disabledBy: null,
+    nativeCapabilities: {
+      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      envOverrideScope: "native-config-only",
+    },
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: [],
+  };
+}
 
 function handlers(items: () => EnvironmentConfigurationItem[]) {
   return {
@@ -275,6 +305,28 @@ describe("TeamProviders items", () => {
       /^Set for .+ each time it starts, on every host running Acme\. Unset removes a variable .+ would otherwise get from the shell\.$/,
     );
     expect(subtitle.textContent).not.toContain("Personal");
+  });
+
+  it("says on its Env tab that a native-config-only provider's variables never reach its conversations (NEW-154-15)", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => []),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "providers.list": () => ({
+        providers: [cursorProviderListRow()],
+        native: null,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Cursor/ }),
+    );
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+
+    const subtitle = await screen.findByTestId("team-provider-env-subtitle");
+    expect(subtitle.textContent).toBe(
+      "Set for Cursor when Traycer sets up its tools, such as MCP servers, on every host running Acme. Cursor's conversations don't get them. Unset removes a variable Cursor would otherwise get from the shell.",
+    );
   });
 
   it("edits a pack policy against its revision for an editor and shows a viewer the text", async () => {

@@ -176,9 +176,15 @@ export function ProviderEnvOverridesSection({
   const secretNames = useSecretNames();
   // The hosts this save propagates to, for the pending row's own label; a
   // Local row's save reaches only this computer, so it keeps the plain
-  // Adding/Saving/Removing text instead.
+  // Adding/Saving/Removing text instead. Only once the list has actually
+  // answered - `loading` or `failed` is not a count, and presenting an
+  // unresolved or stale read as an exact "on N hosts" would understate the
+  // reach the save really has.
   const hostsRunningPersonal = useHostsRunningPersonal();
-  const applyingHostsCount = local ? null : hostsRunningPersonal.hosts.length;
+  const applyingHostsCount =
+    local || hostsRunningPersonal.state !== "ready"
+      ? null
+      : hostsRunningPersonal.hosts.length;
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -305,10 +311,12 @@ function ProviderEnvSubtitleLine(props: {
 }
 
 /**
- * Adds a {@link ShadowedSecretNote} for every override that shares a
+ * Adds a {@link ShadowedSecretNote} for every SET override that shares a
  * Personal secret's own name without that secret claiming it, skipping a key
- * that already carries a note (a host's own value, say) or that the secret
- * does claim (`EnvClaimedRow` already says so).
+ * that already carries a note (a host's own value, say), that the secret
+ * does claim (`EnvClaimedRow` already says so), or an explicit Unset (`value
+ * === null`): it receives no value from anything, so there is nothing to
+ * say the provider gets "instead of the secret".
  */
 function addShadowedSecretNotes(props: {
   readonly rowNotes: Map<string, ReactNode>;
@@ -322,6 +330,7 @@ function addShadowedSecretNotes(props: {
 }): void {
   const { rowNotes, claimedBy, secretNames, providerName } = props;
   for (const entry of props.overrides) {
+    if (entry.value === null) continue;
     if (rowNotes.has(entry.key)) continue;
     if (claimedBy.has(entry.key)) continue;
     if (!secretNames.has(entry.key)) continue;

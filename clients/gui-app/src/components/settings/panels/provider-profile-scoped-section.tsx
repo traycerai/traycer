@@ -604,15 +604,14 @@ function EmptyProviderProfiles(props: {
     <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="text-ui-sm font-medium text-foreground">Profiles</div>
-        {/* Same gate as the non-empty arm above: Personal already carries
-            every profile to every computer running it, so this build's own
-            copy of the sync entry point has nothing to offer here either. */}
-        {UNRELEASED_FEATURES_ENABLED ? null : (
-          <ProfileSyncEntryButton
-            hostId={props.hostId}
-            providerId={props.state.providerId}
-          />
-        )}
+        {/* No gate needed: the caller above only reaches this component when
+            UNRELEASED_FEATURES_ENABLED is already false, so a second check
+            of that same build constant here could never take its other
+            branch - see the P1-c note in the PR body. */}
+        <ProfileSyncEntryButton
+          hostId={props.hostId}
+          providerId={props.state.providerId}
+        />
       </div>
       <p className="text-ui-xs text-muted-foreground">
         No profiles on this device.
