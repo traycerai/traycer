@@ -2568,9 +2568,11 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
   },
+  // Read beside the list it overlays, on the same cadence, so another
+  // editor's update or restore reaches this page's versions and Restore.
   "environment.configuration.skills.state": {
     ...LATEST_SCHEDULING,
-    poll: null,
+    poll: CONFIGURATION_READ_POLL,
   },
   "environment.configuration.skills.search": {
     ...LATEST_SCHEDULING,

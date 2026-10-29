@@ -84,6 +84,11 @@ export function useEnvironmentSkillsStateQuery(
     },
     preflight: cloudVerdictPreflight("environment.configuration.skills.state"),
     options: {
+      // On the list's cadence: the page overlays each row with this state,
+      // and another editor's update or restore moves it while the page is
+      // open. `refresh: false` reads what the last check found, no source
+      // is asked.
+      poll: true,
       enabled:
         enabled &&
         client !== null &&

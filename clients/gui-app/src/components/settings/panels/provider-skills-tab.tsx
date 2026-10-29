@@ -460,7 +460,11 @@ function ProviderSkillsTabBody({
             actionError={detailError}
             lockedNote={openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null}
             canEdit={openSkillEditable}
-            editRevokedNote={null}
+            // A draft held while the skill became one of the person's
+            // settings says why Save is off, as the read-only detail does.
+            editRevokedNote={
+              openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null
+            }
             onDraftHeldChange={null}
             canUpdate={openSkillUpdatable}
             origin={skillOriginDisplay(openSkill)}
