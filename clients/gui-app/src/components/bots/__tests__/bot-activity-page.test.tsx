@@ -56,6 +56,8 @@ const mocks = vi.hoisted(() => {
       rows,
       /** Task titles by task id, as the task-context read answers them. */
       taskTitles,
+      /** The variables of each member action still pending, by method. */
+      pending: new Map<string, unknown>(),
     },
   };
 });
@@ -85,12 +87,16 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     mocks.state.supported.has(method),
 }));
-// The member actions' writes: each records the method and what it was sent.
+// The member actions' writes: each records the method and what it was sent,
+// and stays pending with those variables while the case's `pending` holds it.
 vi.mock("@/hooks/bots/use-bot-task-action-mutations", () => {
   const recording = (method: string) => () => ({
-    mutate: (variables: unknown) => mocks.actions.push({ method, variables }),
-    isPending: false,
-    variables: undefined,
+    mutate: (variables: unknown) => {
+      mocks.actions.push({ method, variables });
+      mocks.state.pending.set(method, variables);
+    },
+    isPending: mocks.state.pending.has(method),
+    variables: mocks.state.pending.get(method),
   });
   return {
     useBotTaskRunNowMutation: recording("bot.task.runNow"),
@@ -389,6 +395,7 @@ beforeEach(() => {
   mocks.locateAsked.length = 0;
   mocks.actions.length = 0;
   mocks.state.supported = new Set();
+  mocks.state.pending.clear();
   __resetAgentActivityStoreForTests();
 });
 
@@ -812,6 +819,47 @@ describe("<BotActivityPage /> notifications", () => {
         },
       },
     ]);
+  });
+
+  it("keeps the pending Stop watching on its watch when a snapshot re-reads the watches", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(["bot.notifications.stop"]);
+    const watches = (): ReadonlyArray<BotNotificationSubscription> => [
+      {
+        target: { kind: "thread", threadId: "thread-a" },
+        attentionOnly: false,
+        everySeconds: null,
+        since: NOW - DAY,
+        digests: null,
+      },
+      {
+        target: { kind: "thread", threadId: "thread-b" },
+        attentionOnly: false,
+        everySeconds: null,
+        since: NOW - DAY,
+        digests: null,
+      },
+    ];
+    const { rerender } = render(
+      <Page {...NONE} notificationSubscriptions={watches()} />,
+    );
+    await user.click(
+      within(screen.getAllByTestId("bot-notification-watch")[0]).getByRole(
+        "button",
+        { name: "Stop watching" },
+      ),
+    );
+
+    // The next snapshot frame parses the watches into new objects while the
+    // stop is still pending.
+    rerender(<Page {...NONE} notificationSubscriptions={watches()} />);
+    const [stopping, other] = screen.getAllByTestId("bot-notification-watch");
+    expect(
+      within(stopping).queryByTestId("bot-notification-stop-pending"),
+    ).not.toBeNull();
+    expect(
+      within(other).queryByTestId("bot-notification-stop-pending"),
+    ).toBeNull();
   });
 
   it("offers no Stop watching from a host that does not run the bot, and lists a stopped watch with who stopped it", () => {

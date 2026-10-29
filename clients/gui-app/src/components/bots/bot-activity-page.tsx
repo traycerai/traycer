@@ -665,10 +665,11 @@ function NotificationsSection(props: {
                   >
                     Stop watching
                     {stopWatching.isPending &&
-                    stopWatching.variables.target === target ? (
+                    targetKey(stopWatching.variables.target) ===
+                      targetKey(target) ? (
                       <AgentSpinningDots
                         className={undefined}
-                        testId={undefined}
+                        testId="bot-notification-stop-pending"
                         variant={undefined}
                       />
                     ) : null}
