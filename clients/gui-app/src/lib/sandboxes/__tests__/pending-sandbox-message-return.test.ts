@@ -167,7 +167,7 @@ describe("returnPendingSandboxMessage into a free chat composer", () => {
       browserAnnotations: [ANNOTATION],
     });
 
-    const returned = await returnPendingSandboxMessage(SEND_ID, false);
+    const returned = await returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(returned).toMatchObject({ kind: "chat", chatId: CHAT_ID });
     const draft = useComposerDraftStore.getState().drafts[CHAT_ID];
@@ -184,8 +184,8 @@ describe("returnPendingSandboxMessage into a free chat composer", () => {
       chatId: CHAT_ID,
     });
 
-    const first = returnPendingSandboxMessage(SEND_ID, false);
-    const second = returnPendingSandboxMessage(SEND_ID, false);
+    const first = returnPendingSandboxMessage(SEND_ID, false, true);
+    const second = returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(second).toBe(first);
     await first;
@@ -202,7 +202,7 @@ describe("returnPendingSandboxMessage into a free chat composer", () => {
       worktreeIntent: INTENT,
     });
 
-    await returnPendingSandboxMessage(SEND_ID, false);
+    await returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
@@ -218,7 +218,7 @@ describe("returnPendingSandboxMessage qualifies what cannot come back", () => {
       worktreeIntent: INTENT,
     });
 
-    await returnPendingSandboxMessage(SEND_ID, false);
+    await returnPendingSandboxMessage(SEND_ID, false, true);
 
     const rendered = JSON.stringify(
       useComposerDraftStore.getState().drafts[CHAT_ID]?.content,
@@ -236,7 +236,7 @@ describe("returnPendingSandboxMessage qualifies what cannot come back", () => {
       chatId: CHAT_ID,
     });
 
-    await returnPendingSandboxMessage(SEND_ID, false);
+    await returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
       MESSAGE_CONTENT,
@@ -257,7 +257,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
     const reads = deferred<void>();
     handoff.mockReturnValue(outcome.promise);
 
-    const returning = returnPendingSandboxMessage(SEND_ID, false);
+    const returning = returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(handoff).toHaveBeenCalledTimes(1);
     const input = handoff.mock.calls[0][0];
@@ -299,7 +299,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
       readsSettled: Promise.resolve(),
     });
 
-    const returned = await returnPendingSandboxMessage(SEND_ID, true);
+    const returned = await returnPendingSandboxMessage(SEND_ID, true, true);
 
     expect(returned).toEqual({
       kind: "landing-draft",
@@ -320,8 +320,8 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
     const outcome = deferred<PromptHandoffOutcome>();
     handoff.mockReturnValue(outcome.promise);
 
-    const first = returnPendingSandboxMessage(SEND_ID, false);
-    const second = returnPendingSandboxMessage(SEND_ID, false);
+    const first = returnPendingSandboxMessage(SEND_ID, false, true);
+    const second = returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(second).toBe(first);
     expect(handoff).toHaveBeenCalledTimes(1);
@@ -343,11 +343,11 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
     const outcome = deferred<PromptHandoffOutcome>();
     handoff.mockReturnValue(outcome.promise);
 
-    const returning = returnPendingSandboxMessage(SEND_ID, true);
+    const returning = returnPendingSandboxMessage(SEND_ID, true, true);
 
     expect(
       usePendingSandboxSendStore.getState().sends[SEND_ID]?.returnRequested,
-    ).toEqual({ saveInDrafts: true });
+    ).toEqual({ saveInDrafts: true, destination: null });
     // Settle it: a per-id return left pending would be joined by every later
     // case that reuses this send id.
     outcome.resolve({
@@ -378,7 +378,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
       readsSettled: Promise.resolve(),
     });
 
-    const returned = await returnPendingSandboxMessage(SEND_ID, false);
+    const returned = await returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(handoff).toHaveBeenCalledTimes(1);
     expect(returned).toEqual({
@@ -406,7 +406,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
       readsSettled: Promise.resolve(),
     });
 
-    const returned = await returnPendingSandboxMessage(SEND_ID, false);
+    const returned = await returnPendingSandboxMessage(SEND_ID, false, true);
 
     expect(handoff).toHaveBeenCalledTimes(1);
     expect(returned).toEqual({

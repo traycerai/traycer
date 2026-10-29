@@ -140,9 +140,11 @@ import {
   completePendingSandboxTerminal,
   canWithdrawPendingSandboxSend,
   returnPendingSandboxSend,
+  resumePendingSandboxMessageReturn,
   returnPendingSandboxMessage,
   returnPendingSandboxSendToDraft,
   returnPendingSandboxSendToSandbox,
+  returnPendingSandboxSendOnItsSandbox,
   pendingSandboxRecoveryDraftId,
   requestedAgentReadiness,
   type ReturnedPendingSandboxSend,
@@ -179,6 +181,7 @@ import {
   type HandoffOwnerWatch,
   type StagedSandbox,
   type StagedSandboxFailure,
+  type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -234,7 +237,7 @@ function returnStoppedPendingSend(id: string): void {
     const saveInDrafts =
       attention === undefined ||
       attention.userId !== (useAuthStore.getState().profile?.userId ?? null);
-    void returnPendingSandboxMessage(id, saveInDrafts)
+    void returnPendingSandboxMessage(id, saveInDrafts, false)
       .then((returned) => {
         if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
           return;
@@ -348,9 +351,8 @@ function PendingMessageReturnDriver(props: {
   const { id, returnRequested } = props.send;
   useEffect(() => {
     if (returnRequested === undefined) return;
-    void returnPendingSandboxMessage(id, returnRequested.saveInDrafts).catch(
-      () => undefined,
-    );
+    // As it was decided when it began, sandbox and all.
+    void resumePendingSandboxMessageReturn(id).catch(() => undefined);
   }, [id, returnRequested]);
   return null;
 }
@@ -451,7 +453,7 @@ function usePendingSendRecovery(
       plan.effects.includes("return-message") ||
       plan.effects.includes("remove")
     )
-      returnPendingSandboxSend(id);
+      returnPendingSandboxSendOnItsSandbox(id);
     if (plan.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
   }, [id, send, stage]);
@@ -516,6 +518,7 @@ function PendingSendDelivery(
     surfaceKey,
     send,
   );
+  const { rowState } = sandbox;
   const { client, requested, model, environment } = usePendingDeliveryReadiness(
     send,
     stage,
@@ -544,7 +547,12 @@ function PendingSendDelivery(
     });
   }, [polling, refetchAgent, refetchSandboxes]);
   useEffect(() => {
-    const resolved = pendingStageObservation(send.id, stage, environment);
+    const resolved = pendingStageObservation(
+      send.id,
+      stage,
+      environment,
+      rowState,
+    );
     if (resolved === null || executePendingStageDecision(resolved, runner))
       return;
     executePendingReadiness({
@@ -567,6 +575,7 @@ function PendingSendDelivery(
     runner,
     requested.profiles,
     requested.readiness,
+    rowState,
     send,
     stage,
     surfaceKey,
@@ -580,6 +589,8 @@ interface PendingStageObservation {
   readonly action: PendingStageRetryAction;
   readonly manualRetry: boolean;
   readonly decision: PendingSendTransition;
+  /** The row the decision observed; a withdrawal keeps a resting sandbox. */
+  readonly rowState: HostSandboxState | null;
 }
 
 /** Resolve and acknowledge the current mailbox before executing any accepted intent. */
@@ -587,6 +598,7 @@ function pendingStageObservation(
   id: string,
   captured: StagedSandbox,
   environment: PendingSendFacts,
+  rowState: HostSandboxState | null,
 ): PendingStageObservation | null {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return null;
@@ -618,7 +630,14 @@ function pendingStageObservation(
   );
   if (!acknowledgePendingStageRetry(surfaceKey, retry?.id, decision))
     return null;
-  return { send, stage, action, manualRetry: requestedRetry, decision };
+  return {
+    send,
+    stage,
+    action,
+    manualRetry: requestedRetry,
+    decision,
+    rowState,
+  };
 }
 
 /** A failed acknowledgement may hold an accepted action, never a refused observation. */
@@ -647,7 +666,7 @@ function executePendingStageDecision(
   plan: PendingStageObservation,
   runner: StagedSandboxRunner,
 ): boolean {
-  const { send, stage, action, manualRetry, decision } = plan;
+  const { send, stage, action, manualRetry, decision, rowState } = plan;
   if (
     decision.effects.includes("retry") &&
     usePendingSandboxSendStore.getState().holdObservation(send.id, decision) ===
@@ -669,7 +688,7 @@ function executePendingStageDecision(
     decision.effects.includes("return-message") ||
     decision.effects.includes("remove")
   ) {
-    returnPendingSandboxSend(send.id);
+    returnWatchedSend(send, stage, rowState);
     return true;
   }
   return false;
@@ -1092,6 +1111,7 @@ function useWatchedSandboxRow(
   readonly ready: boolean;
   readonly refetch: () => Promise<unknown>;
   readonly environment: PendingSendFacts;
+  readonly rowState: HostSandboxState | null;
 } {
   const stage = readStagedSandbox(surfaceKey) ?? send?.stopStage ?? null;
   const row = usePendingSandboxRowFacts(
@@ -1157,6 +1177,7 @@ function useWatchedSandboxRow(
     ready: row.ready,
     refetch: row.refetch,
     environment,
+    rowState,
   };
 }
 
@@ -1178,6 +1199,15 @@ function returnWatchedSend(
 ): void {
   if (send.stopRequested === true) {
     returnStoppedPendingSend(send.id);
+    return;
+  }
+  // Ended with its sandbox still up: its task is gone, so the saved draft
+  // keeps the sandbox.
+  if (
+    send.ended === true &&
+    (rowState === "awake" || restingVerb(rowState) !== null)
+  ) {
+    returnPendingSandboxSendOnItsSandbox(send.id);
     return;
   }
   if (
@@ -1218,23 +1248,20 @@ function returnedSandboxPick(
         ? null
         : stage.clientRequestId,
     };
-  if (state === "awake") return { kind: "host", hostId: createdHostId };
-  return {
-    kind: "stage",
-    target: {
-      kind: "existing",
-      hostId: createdHostId,
-      sandboxId: createdSandboxId,
-      name:
-        target.name.length > 0
-          ? target.name
-          : stagedSandboxFallbackName(send.text),
-      configuration: target.configuration,
-      // Still on its way up: waking it joins that.
-      verb: restingVerb(state) ?? "resume",
-    },
-    clientRequestId: null,
+  const created: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+    kind: "existing",
+    hostId: createdHostId,
+    sandboxId: createdSandboxId,
+    name:
+      target.name.length > 0
+        ? target.name
+        : stagedSandboxFallbackName(send.text),
+    configuration: target.configuration,
+    // Still on its way up, or awake: waking it joins that, or finds it up.
+    verb: restingVerb(state) ?? "resume",
   };
+  if (state === "awake") return { kind: "host", target: created };
+  return { kind: "stage", target: created, clientRequestId: null };
 }
 
 /** Persist the kernel's live blocker in the setup line's existing representation. */
@@ -2545,13 +2572,10 @@ function PendingMessageReturnItem(props: {
   const { send } = props;
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // As it was decided when it began, sandbox and all.
   const giveBack = useCallback(
-    () =>
-      returnPendingSandboxMessage(
-        send.id,
-        send.returnRequested?.saveInDrafts ?? false,
-      ),
-    [send.id, send.returnRequested],
+    () => resumePendingSandboxMessageReturn(send.id),
+    [send.id],
   );
   useEffect(() => {
     let disposed = false;
@@ -2650,6 +2674,7 @@ function usePendingStagedSendRetry(
           action,
           manualRetry: true,
           decision: plan,
+          rowState: null,
         },
         runner,
       );
@@ -2900,11 +2925,14 @@ function pendingMessageRemedies(
   if (request.kind !== "message") return otherwise;
   return {
     onChooseModel: () => {
-      void returnPendingSandboxMessage(send.id, false).catch(() => undefined);
+      void returnPendingSandboxMessage(send.id, false, true).catch(
+        () => undefined,
+      );
       openActiveModelPickerForHarness("traycer", null, offeredAgents);
     },
     onChooseAnotherHost: () => {
-      void returnPendingSandboxMessage(send.id, false).then(
+      // Another host is the person's choice: a draft keeps no sandbox.
+      void returnPendingSandboxMessage(send.id, false, false).then(
         (returned) => {
           if (returned.kind === "chat") openChatClone(request.chatId);
         },
@@ -3111,7 +3139,7 @@ function PendingStagedSendItem(props: {
             onKeepWaiting: () => retrySend("keep-waiting"),
             onCancel: () => {
               if (send.request.kind === "message") {
-                void returnPendingSandboxMessage(send.id, false).catch(
+                void returnPendingSandboxMessage(send.id, false, true).catch(
                   () => undefined,
                 );
                 return;

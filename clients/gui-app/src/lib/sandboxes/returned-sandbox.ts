@@ -3,6 +3,7 @@ import type {
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import type { DesktopJsonValue } from "@/lib/windows/types";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   StagedSandbox,
   StagedSandboxTarget,
@@ -17,6 +18,43 @@ import type {
 export interface ReturnedSandbox {
   readonly target: StagedSandboxTarget;
   readonly clientRequestId: string | null;
+}
+
+/**
+ * A returned sandbox as a draft keeps it, with the account it was returned
+ * under. Drafts are this window's, not an account's: only that account's
+ * composer restores it, so the next account never sends into its team or
+ * names its create again.
+ */
+export interface StoredReturnedSandbox extends ReturnedSandbox {
+  readonly userId: string | null;
+}
+
+/**
+ * Stamps a returned sandbox with the signed-in account. One already stored
+ * keeps its own: an undo puts it back as it was.
+ */
+export function storeReturnedSandbox(
+  returned: ReturnedSandbox | StoredReturnedSandbox,
+): StoredReturnedSandbox {
+  return {
+    target: returned.target,
+    clientRequestId: returned.clientRequestId,
+    userId:
+      "userId" in returned
+        ? returned.userId
+        : (useAuthStore.getState().contextMetadata?.userId ?? null),
+  };
+}
+
+/** The draft's returned sandbox if `userId`'s account returned it, else null. */
+export function returnedSandboxFor(
+  stored: StoredReturnedSandbox | null,
+  userId: string | null,
+): StoredReturnedSandbox | null {
+  return stored !== null && userId !== null && stored.userId === userId
+    ? stored
+    : null;
 }
 
 const supersedeBySurface = new Map<string, () => void>();
@@ -57,14 +95,18 @@ export function markReturnedSandboxRestored(
   restoredBySurface.set(surfaceKey, returned);
 }
 
-/** Drops the surface's mark, and says whether it was `returned`'s. */
+/**
+ * Takes the surface's mark if it is `returned`'s, and says whether it was. A
+ * different one is a newer restore's, and stays for it to release.
+ */
 export function takeReturnedSandboxRestored(
   surfaceKey: string,
   returned: ReturnedSandbox,
 ): boolean {
-  const restored = restoredBySurface.get(surfaceKey) ?? null;
+  if (!sameReturnedSandbox(restoredBySurface.get(surfaceKey) ?? null, returned))
+    return false;
   restoredBySurface.delete(surfaceKey);
-  return sameReturnedSandbox(restored, returned);
+  return true;
 }
 
 /**
@@ -92,16 +134,29 @@ export function stageIsReturnedSandbox(
   );
 }
 
+/** Whether two returned sandboxes name the same destination and create key. */
 export function sameReturnedSandbox(
   a: ReturnedSandbox | null,
   b: ReturnedSandbox | null,
 ): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  if (a === null || b === null) return a === b;
+  return (
+    a.clientRequestId === b.clientRequestId &&
+    JSON.stringify(a.target) === JSON.stringify(b.target)
+  );
+}
+
+/** The same destination, returned under the same account. */
+export function sameStoredReturnedSandbox(
+  a: StoredReturnedSandbox | null,
+  b: StoredReturnedSandbox | null,
+): boolean {
+  return sameReturnedSandbox(a, b) && a?.userId === b?.userId;
 }
 
 /** The destination as plain JSON, for a store that takes no interfaces. */
 export function returnedSandboxToJson(
-  returned: ReturnedSandbox,
+  returned: StoredReturnedSandbox,
 ): DesktopJsonValue {
   const { target } = returned;
   const configuration: DesktopJsonValue =
@@ -131,11 +186,17 @@ export function returnedSandboxToJson(
             wakeString: target.wakeString,
           },
     clientRequestId: returned.clientRequestId,
+    userId: returned.userId,
   };
 }
 
-/** Rebuilds a persisted destination field by field: storage is untrusted. */
-export function parseReturnedSandbox(value: unknown): ReturnedSandbox | null {
+/**
+ * Rebuilds a persisted destination field by field: storage is untrusted. One
+ * kept without an account is no account's, and is never restored.
+ */
+export function parseReturnedSandbox(
+  value: unknown,
+): StoredReturnedSandbox | null {
   if (!isRecord(value)) return null;
   const target = parseTarget(value.target);
   if (target === null) return null;
@@ -143,6 +204,7 @@ export function parseReturnedSandbox(value: unknown): ReturnedSandbox | null {
     target,
     clientRequestId:
       typeof value.clientRequestId === "string" ? value.clientRequestId : null,
+    userId: typeof value.userId === "string" ? value.userId : null,
   };
 }
 

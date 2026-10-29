@@ -23,6 +23,7 @@ import {
   newChatTarget,
   requiredChatTarget,
 } from "@/lib/drafts/draft-write-codec";
+import { returnedSandboxFor } from "@/lib/sandboxes/returned-sandbox";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import {
   openEpicTabIntent,
@@ -34,6 +35,7 @@ import {
   useComposerDraftStore,
   type DraftState,
 } from "@/stores/composer/composer-draft-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
@@ -168,16 +170,19 @@ export function openNewChatDraftRow(
     undefined,
   );
   // A message given back on a sandbox opens unnamed, as its give-back does:
-  // the composer then stages that sandbox again, so Send goes there.
-  const returned =
+  // the composer then stages that sandbox again, so Send goes there. Only
+  // for the account it was returned under: another's is never restored.
+  const returned = returnedSandboxFor(
     useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId]
-      ?.returnedSandbox;
+      ?.returnedSandbox ?? null,
+    useAuthStore.getState().contextMetadata?.userId ?? null,
+  );
   useNewConversationModalOpenStore.getState().open({
     epicId: row.epicId,
     tabId,
     placement: null,
     parentId: null,
-    hostId: returned === undefined ? row.ownerHostId : null,
+    hostId: returned === null ? row.ownerHostId : null,
   });
   return true;
 }
@@ -232,8 +237,7 @@ export function deleteLandingDraftRow(
  */
 function restoreLandingDraft(draft: LandingDraftTab): void {
   const id = mintDraftId();
-  const store = useLandingDraftStore.getState();
-  store.installLandingDraft({
+  useLandingDraftStore.getState().installLandingDraft({
     id,
     content: draft.content,
     selection: draft.selection,
@@ -242,8 +246,11 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
     composerMode: draft.composerMode,
     workspace: draft.workspace,
     closed: draft.closed,
+    // Stored: it keeps the account it was returned under.
+    returnedSandbox: draft.returnedSandbox,
+    // The deleted row is gone: memory is the last copy of it.
+    durability: "in-memory",
   });
-  store.setDraftReturnedSandbox(id, draft.returnedSandbox);
 }
 
 /**

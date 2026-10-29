@@ -1,6 +1,6 @@
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
@@ -10,8 +10,27 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
-import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
+import {
+  useLandingReturnedSandbox,
+  useNewConversationReturnedSandbox,
+} from "@/hooks/sandboxes/use-returned-sandbox-stage";
+import {
+  recoverPendingSandboxSendsAfterTaskLoss,
+  returnPendingSandboxSendOnItsSandbox,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   openSandboxDetails,
@@ -338,6 +357,147 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  describe("an account's accepted sandbox create across a switch", () => {
+    const SEND_ID = "send-alice";
+    const PENDING = pendingSendSurfaceKey(SEND_ID);
+    const NEW_TARGET: StagedSandboxTarget = {
+      kind: "new",
+      configuration: { kind: "personal" },
+      name: "build-box",
+      wakeString: null,
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+    };
+    const locks = Object.getOwnPropertyDescriptor(navigator, "locks");
+
+    /** Alice's send, its create accepted by the server and not yet answered. */
+    function acceptedCreate(): void {
+      usePendingSandboxSendStore
+        .getState()
+        .add(pendingSend({ id: SEND_ID, userId: "user-alice" }));
+      const staged = useStagedSandboxStore.getState();
+      staged.stage(PENDING, NEW_TARGET);
+      staged.report(PENDING, {
+        phase: "creating",
+        clientRequestId: "accepted-create",
+      });
+    }
+
+    function switchTo(email: string, userId: string): void {
+      act(() => resetAuth("signed-in", email, userId));
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(navigator, "locks", {
+        configurable: true,
+        value: {
+          request: (
+            _name: string,
+            _options: LockOptions,
+            callback: () => Promise<void>,
+          ) => callback(),
+        },
+      });
+    });
+
+    afterEach(() => {
+      if (locks === undefined) Reflect.deleteProperty(navigator, "locks");
+      else Object.defineProperty(navigator, "locks", locks);
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useNewConversationModalStore.getState().resetForTests();
+    });
+
+    it("keeps the send's stage and create key, through a reload, for its own account to take up again", async () => {
+      acceptedCreate();
+      const owner = holdPendingSandboxSendOwnership(SEND_ID);
+      try {
+        expect(await owner.ready).toBe(true);
+        render(
+          <EpicSessionLifecycleBridge>
+            <div />
+          </EpicSessionLifecycleBridge>,
+        );
+
+        switchTo("bob@example.com", "user-bob");
+        switchTo("alice@example.com", "user-alice");
+        // A reload: the window's memory is gone, storage is read back.
+        const storage = window.localStorage;
+        const saved = Array.from({ length: storage.length }, (_, index) => {
+          const key = storage.key(index) ?? "";
+          return [key, storage.getItem(key) ?? ""] as const;
+        });
+        useStagedSandboxStore.setState({ bySurface: {} });
+        storage.clear();
+        for (const [key, value] of saved) storage.setItem(key, value);
+        await useStagedSandboxStore.persist.rehydrate();
+
+        expect(readStagedSandbox(PENDING)).toMatchObject({
+          phase: "creating",
+          target: NEW_TARGET,
+          clientRequestId: "accepted-create",
+        });
+        expect(returnPendingSandboxSendOnItsSandbox(SEND_ID).kind).toBe("task");
+        expect(
+          useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+            ?.returnedSandbox,
+        ).toMatchObject({
+          target: NEW_TARGET,
+          clientRequestId: "accepted-create",
+        });
+      } finally {
+        owner.release();
+      }
+    });
+
+    it("gives the next account nothing of it to see, stage, retry or take back", async () => {
+      acceptedCreate();
+      useStagedSandboxStore.getState().stage("composer:w1", NEW_TARGET);
+      render(
+        <EpicSessionLifecycleBridge>
+          <div />
+        </EpicSessionLifecycleBridge>,
+      );
+
+      switchTo("bob@example.com", "user-bob");
+      const kept = readStagedSandbox(PENDING);
+      renderHook(() => {
+        useNewConversationReturnedSandbox("epic-1", null);
+        useLandingReturnedSandbox("composer:w1", null, true);
+      });
+      const asBob = await useStagedSandboxStore
+        .getState()
+        .requestRetry(PENDING, "user-bob", "retry-creation");
+      const asAlice = await useStagedSandboxStore
+        .getState()
+        .requestRetry(PENDING, "user-alice", "retry-creation");
+      recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-bob");
+      recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-alice");
+
+      expect(Object.keys(useStagedSandboxStore.getState().bySurface)).toEqual([
+        PENDING,
+      ]);
+      expect(readStagedSandbox(PENDING)).toBe(kept);
+      expect(kept).toMatchObject({ clientRequestId: "accepted-create" });
+      expect(readStagedSandbox(newConversationSurfaceKey("epic-1"))).toBeNull();
+      expect(asBob).toBeNull();
+      expect(asAlice).toBeNull();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toBeUndefined();
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toMatchObject({ userId: "user-alice", delivery: null });
+    });
   });
 
   it("keeps an undelivered message waiting on a sandbox for its own account on user-switch, and drops a delivered one's ready line", () => {

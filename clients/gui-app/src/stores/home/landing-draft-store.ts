@@ -66,8 +66,10 @@ import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   parseReturnedSandbox,
   returnedSandboxToJson,
-  sameReturnedSandbox,
+  sameStoredReturnedSandbox,
+  storeReturnedSandbox,
   type ReturnedSandbox,
+  type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
 import {
   landingPlacementHostId,
@@ -133,7 +135,7 @@ export interface LandingDraftTab {
    * to this device: the landing composer stages it again while it holds no
    * pick of its own, so the draft's Send goes there even after a reload.
    */
-  readonly returnedSandbox: ReturnedSandbox | null;
+  readonly returnedSandbox: StoredReturnedSandbox | null;
 }
 
 export type LandingDraftAdoption =
@@ -161,6 +163,15 @@ export interface LandingDraftWorkspaceSnapshot {
   readonly primaryPath: string | null;
 }
 
+/**
+ * What an install must be to count, when storage refuses its row. `"saved"`:
+ * the row is taken back out and the install throws - for a caller that keeps
+ * a saved source to retry from until the row is saved. `"in-memory"`: the row
+ * stays, readable until the window closes, and the install throws - for a
+ * caller whose source is already gone, so that row is the last copy there is.
+ */
+export type LandingDraftDurability = "saved" | "in-memory";
+
 /** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
 export interface InstallLandingDraftInput {
   readonly id: string;
@@ -171,6 +182,13 @@ export interface InstallLandingDraftInput {
   readonly composerMode: ComposerMode;
   readonly workspace: LandingDraftWorkspaceSnapshot;
   readonly closed: boolean;
+  /**
+   * Where the draft's message goes, created with the draft in the same
+   * write. Stamped with the signed-in account as `setDraftReturnedSandbox`
+   * stamps it; a stored record keeps its own.
+   */
+  readonly returnedSandbox: ReturnedSandbox | StoredReturnedSandbox | null;
+  readonly durability: LandingDraftDurability;
 }
 
 interface LandingDraftStoreState {
@@ -205,6 +223,8 @@ interface LandingDraftStoreState {
    * touching `activeDraftId` - the stash migration installs many rows at
    * once and Undo restores one the user is not looking at, so neither may
    * hijack the composer. False when `id` is retired or already present.
+   * Throws when storage refuses the row; `durability` says whether the row
+   * stays in memory.
    *
    * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
    * then clears the active draft, and fires an image reconcile between the
@@ -266,12 +286,13 @@ interface LandingDraftStoreState {
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
   /**
-   * Records or forgets where the draft's given-back message was going. Not an
-   * edit: nothing is published, and the draft's place in the LRU stays.
+   * Records, under the signed-in account, or forgets where the draft's
+   * given-back message was going. Not an edit: nothing is published, and the
+   * draft's place in the LRU stays.
    */
   setDraftReturnedSandbox: (
     id: string,
-    returned: ReturnedSandbox | null,
+    returned: ReturnedSandbox | StoredReturnedSandbox | null,
   ) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
@@ -738,11 +759,33 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // adopts and publishes it on the next sweep.
           generation: 1,
           closed: input.closed,
+          returnedSandbox:
+            input.returnedSandbox === null
+              ? null
+              : storeReturnedSandbox(input.returnedSandbox),
         };
-        // Partial set: `activeDraftId` is deliberately left where it is.
-        set((state) => ({
-          drafts: [...uniqueLandingDrafts(state.drafts), next],
-        }));
+        const before = get().drafts;
+        try {
+          // Partial set: `activeDraftId` is deliberately left where it is.
+          set((state) => ({
+            drafts: [...uniqueLandingDrafts(state.drafts), next],
+          }));
+        } catch (error: unknown) {
+          // persist sets memory first, then writes storage, and a refused
+          // write throws out of `set` with the row already in memory. For a
+          // saved install, take it back out: a row only memory holds is gone
+          // on reload, and a caller that saw it would end the only copy that
+          // is saved.
+          if (input.durability === "saved") {
+            try {
+              set({ drafts: before });
+            } catch {
+              // Storage still holds the snapshot from before the refused
+              // write.
+            }
+          }
+          throw error;
+        }
         notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;
@@ -957,9 +1000,13 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         notifyDraftLocalEdit(id);
       },
 
-      setDraftReturnedSandbox: (id, returned) => {
+      setDraftReturnedSandbox: (id, given) => {
         const draft = get().drafts.find((d) => d.id === id);
-        if (!draft || sameReturnedSandbox(draft.returnedSandbox, returned))
+        const returned = given === null ? null : storeReturnedSandbox(given);
+        if (
+          !draft ||
+          sameStoredReturnedSandbox(draft.returnedSandbox, returned)
+        )
           return;
         set((state) => ({
           drafts: state.drafts.map((d) =>
@@ -1156,7 +1203,7 @@ function areLandingDraftsEqual(
     }
     if (left[index].closed !== right[index].closed) return false;
     if (
-      !sameReturnedSandbox(
+      !sameStoredReturnedSandbox(
         left[index].returnedSandbox,
         right[index].returnedSandbox,
       )
@@ -1966,7 +2013,7 @@ function incomingClosedState(
  */
 function keptReturnedSandbox(
   existing: LandingDraftTab | undefined,
-): ReturnedSandbox | null {
+): StoredReturnedSandbox | null {
   return existing?.returnedSandbox ?? null;
 }
 

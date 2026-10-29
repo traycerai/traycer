@@ -614,19 +614,28 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       await waitFor(() => {
         expect(usePendingSandboxSendStore.getState().sends).toEqual({});
       });
-      expect(readStagedSandbox(SURFACE)).toMatchObject({
-        target,
-        phase: "staged",
-        sendTaken: false,
-      });
+      // The give-back records the sandbox on the draft and stages nothing.
+      expect(readStagedSandbox(SURFACE)).toBeNull();
       expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
       expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
         content: MESSAGE_CONTENT,
         settings: PICKED_SETTINGS,
         closed: false,
+        returnedSandbox: { target },
       });
       const returnedDraft = useLandingDraftStore.getState().drafts[0];
-      const requestId = readStagedSandbox(SURFACE)?.clientRequestId;
+      const requestId = returnedDraft.returnedSandbox?.clientRequestId ?? null;
+      // The composer showing the draft stages it.
+      const shown = renderHook(() =>
+        useLandingReturnedSandbox(SURFACE, returnedDraft.id, true),
+      );
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        target,
+        phase: "staged",
+        sendTaken: false,
+        clientRequestId: requestId,
+      });
+      shown.unmount();
       // A reload before the second Send: the draft puts its sandbox back on
       // the composer, create key and all.
       await reloadWindow();
@@ -667,7 +676,8 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         readStagedSandbox(pendingSendSurfaceKey(secondSend.id)),
       ).toMatchObject({
         target,
-        clientRequestId: requestId,
+        // A new sandbox's create is named again; a resting one only wakes.
+        ...(requestId === null ? {} : { clientRequestId: requestId }),
       });
       const creates = landingMocks.request.mock.calls.filter(
         ([method]) => method === "epic.create",
@@ -712,9 +722,9 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
     const returnedDraft = useLandingDraftStore.getState().drafts[0];
-    const requestId = readStagedSandbox(SURFACE)?.clientRequestId;
-    if (requestId === null || requestId === undefined)
-      throw new Error("expected the create's key back on the composer");
+    const requestId = returnedDraft.returnedSandbox?.clientRequestId ?? null;
+    if (requestId === null)
+      throw new Error("expected the create's key on the returned draft");
     useLandingDraftStore.getState().installLandingDraft({
       id: "draft-other",
       content: MESSAGE_CONTENT,
@@ -724,6 +734,8 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
+      durability: "saved",
     });
     const composer = renderHook<void, { readonly draftId: string }>(
       (props) => useLandingReturnedSandbox(SURFACE, props.draftId, true),
@@ -742,7 +754,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     queryClient.clear();
   });
 
-  it("gives the sandbox back as a fresh stage, carrying only the create's key", async () => {
+  it("gives a sandbox the send created back as that sandbox, staged fresh when its draft is shown", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
     const attach = deferred<unknown>();
     landingMocks.request.mockImplementation((method: string) =>
@@ -801,10 +813,32 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
+    // The sandbox exists now: the draft records it, to wake, with no create
+    // key. The give-back stages nothing.
+    expect(requestId).not.toBeNull();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    const returnedDraft = useLandingDraftStore.getState().drafts[0];
+    const created = {
+      kind: "existing",
+      hostId: "sbx-9-host",
+      sandboxId: "sbx-9",
+      name: TEAM_TARGET.name,
+      configuration: TEAM_TARGET.configuration,
+      verb: "resume",
+    };
+    expect(returnedDraft.returnedSandbox).toMatchObject({
+      target: created,
+      clientRequestId: null,
+    });
+    // Shown, a fresh stage on it: nothing of the send's progress, failure or
+    // timing carries over.
+    renderHook(() =>
+      useLandingReturnedSandbox(SURFACE, returnedDraft.id, true),
+    );
     expect(readStagedSandbox(SURFACE)).toMatchObject({
-      target: TEAM_TARGET,
+      target: created,
       phase: "staged",
-      clientRequestId: requestId,
+      clientRequestId: null,
       sendTaken: false,
       startedAt: null,
       stepAt: null,
@@ -1007,19 +1041,23 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       await waitFor(() => {
         expect(usePendingSandboxSendStore.getState().sends).toEqual({});
       });
-      expect(readStagedSandbox(SURFACE)).toMatchObject({
-        target: NEW_TARGET,
-        phase: "staged",
-        sendTaken: false,
-      });
       // The send held the message's only copy: it is a draft again, with the
-      // agent and model it was sent with, and the window goes to that draft.
+      // agent and model it was sent with and its sandbox, and the window goes
+      // to that draft. The composer stages the sandbox when it shows it.
+      expect(readStagedSandbox(SURFACE)).toBeNull();
       const drafts = useLandingDraftStore.getState().drafts;
       expect(drafts).toHaveLength(1);
       expect(drafts[0]).toMatchObject({
         content: MESSAGE_CONTENT,
         settings: PICKED_SETTINGS,
         closed: false,
+        returnedSandbox: { target: NEW_TARGET },
+      });
+      renderHook(() => useLandingReturnedSandbox(SURFACE, drafts[0].id, true));
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        target: NEW_TARGET,
+        phase: "staged",
+        sendTaken: false,
       });
       expect(landingMocks.navigate).toHaveBeenLastCalledWith(
         expect.objectContaining({

@@ -816,6 +816,8 @@ describe("a returned sandbox on the open landing draft", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
+      durability: "saved",
     });
     useLandingDraftStore.getState().setDraftReturnedSandbox(DRAFT_ID, RETURNED);
   });
@@ -876,6 +878,8 @@ describe("a returned sandbox on the open landing draft", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
+      durability: "saved",
     });
     drafts.setDraftReturnedSandbox("draft-other", otherDraft);
     function ShownDraft(props: { readonly draftId: string }): null {
@@ -905,7 +909,7 @@ describe("a returned sandbox on the open landing draft", () => {
       useLandingDraftStore
         .getState()
         .drafts.find((draft) => draft.id === "draft-other")?.returnedSandbox,
-    ).toEqual(otherDraft);
+    ).toEqual({ ...otherDraft, userId: "u1" });
   });
 
   it("never releases the person's pick of the same sandbox a draft had returned", () => {
@@ -918,6 +922,8 @@ describe("a returned sandbox on the open landing draft", () => {
       composerMode: "chat",
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
+      returnedSandbox: null,
+      durability: "saved",
     });
     function ShownDraft(props: { readonly draftId: string }): null {
       useLandingReturnedSandbox(SURFACE, props.draftId, true);
@@ -1000,6 +1006,51 @@ describe("useSandboxStaging host picks", () => {
     act(() => store.report(SURFACE, { phase: "handoff", step: "delivering" }));
 
     expect(staging().composer.stagedLabel).toBe("box-stopped · awake");
+  });
+
+  // A draft's returned sandbox comes back with the verb its give-back knew;
+  // the chip says what the sandbox is now.
+  it.each([
+    { row: AWAKE, label: "box-awake · awake" },
+    { row: STOPPED, label: "box-stopped · stopped, starts on send" },
+    { row: SUSPENDED, label: "box-suspended · suspended, resumes on send" },
+  ])(
+    "labels a restored sandbox by its row's state: $label",
+    ({ row, label }) => {
+      mount([LAPTOP, row]);
+
+      act(() =>
+        useStagedSandboxStore.getState().stage(SURFACE, {
+          kind: "existing",
+          hostId: row.hostId,
+          sandboxId: `sbx-${row.hostId}`,
+          name: row.hostId,
+          configuration: { kind: "personal" },
+          verb: "resume",
+        }),
+      );
+
+      expect(staging().composer.stagedLabel).toBe(label);
+    },
+  );
+
+  it("labels a restored sandbox by its verb while no row is listed for it", () => {
+    mount([LAPTOP]);
+
+    act(() =>
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "existing",
+        hostId: "box-unlisted",
+        sandboxId: "sbx-box-unlisted",
+        name: "box-unlisted",
+        configuration: { kind: "personal" },
+        verb: "start",
+      }),
+    );
+
+    expect(staging().composer.stagedLabel).toBe(
+      "box-unlisted · stopped, starts on send",
+    );
   });
 
   it("stages a stopped sandbox to start", () => {

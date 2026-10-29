@@ -30,8 +30,10 @@ import {
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import {
   parseReturnedSandbox,
-  sameReturnedSandbox,
+  sameStoredReturnedSandbox,
+  storeReturnedSandbox,
   type ReturnedSandbox,
+  type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
@@ -89,7 +91,7 @@ export interface NewConversationModalDraftPatch {
    * composer stages it again while it holds no pick of its own. Local to
    * this device, like the stage it restores; absent on any other draft.
    */
-  readonly returnedSandbox?: ReturnedSandbox;
+  readonly returnedSandbox?: StoredReturnedSandbox;
 }
 
 /**
@@ -177,12 +179,13 @@ interface NewConversationModalStore {
   readonly clearWorkspace: (epicId: string) => void;
   readonly clearDraft: (epicId: string) => void;
   /**
-   * Records or drops the draft's returned sandbox. Not an edit: the draft
-   * stays as clean or dirty as it was, and no draft is made for it.
+   * Records, under the signed-in account, or drops the draft's returned
+   * sandbox. Not an edit: the draft stays as clean or dirty as it was, and no
+   * draft is made for it.
    */
   readonly setReturnedSandbox: (
     epicId: string,
-    returned: ReturnedSandbox | null,
+    returned: ReturnedSandbox | StoredReturnedSandbox | null,
   ) => void;
   readonly resetForTests: () => void;
 }
@@ -399,12 +402,13 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           return { draftPatchesByEpicId };
         });
       },
-      setReturnedSandbox: (epicId, returned) =>
+      setReturnedSandbox: (epicId, given) =>
         set((state) => {
           const current = state.draftPatchesByEpicId[epicId];
+          const returned = given === null ? null : storeReturnedSandbox(given);
           if (
             current === undefined ||
-            sameReturnedSandbox(current.returnedSandbox ?? null, returned)
+            sameStoredReturnedSandbox(current.returnedSandbox ?? null, returned)
           )
             return state;
           const { returnedSandbox: _previous, ...rest } = current;
