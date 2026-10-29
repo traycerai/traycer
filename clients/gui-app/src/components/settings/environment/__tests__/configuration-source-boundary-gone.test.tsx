@@ -212,7 +212,11 @@ describe("a team the environment list no longer carries", () => {
         options: { id: "environment-left:env-a" },
       },
     ]);
-    // Nothing of the dead team is left on the page the person lands on.
+    // The page the person lands on has mounted — Personal's own, read from
+    // the cloud — and carries nothing of the dead team.
+    await waitFor(() =>
+      expect(screen.getByTestId("probe").textContent).toBe("env-personal"),
+    );
     expect(document.body.textContent).not.toContain("Acme");
     expect(document.body.textContent).not.toContain("You're no longer in");
   });
@@ -310,7 +314,7 @@ describe("a team the environment list no longer carries", () => {
     });
   });
 
-  it("claims no removal, and moves nothing, while the invitations read is failing", async () => {
+  it("claims no removal on a read that failed, and asks again no more than once", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -318,9 +322,11 @@ describe("a team the environment list no longer carries", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
+    let asked = 0;
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
       "environment.invitations.list": () => {
+        asked += 1;
         throw new Error("down");
       },
     });
@@ -333,11 +339,73 @@ describe("a team the environment list no longer carries", () => {
       { wrapper: harness.Wrapper },
     );
 
-    // The list says the team is gone, but a failed invitations read is no
-    // answer about an invitation, so nothing is claimed and the selection the
-    // person made stays put.
+    // Every request has finished failing, so what follows is the settled
+    // state and not a moment inside it.
+    await waitFor(() => {
+      expect(asked).toBeGreaterThan(0);
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    const askedOnce = asked;
+
+    // The list says the team is gone, but a read that failed is no answer
+    // about an invitation: nothing is claimed, and the selection the person
+    // made stays put.
     expect(
       await screen.findByText("These settings are no longer available."),
+    ).toBeTruthy();
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
+
+    // A failed reply ends the asking rather than starting another, so the
+    // page holds without turning into a stream of account-wide requests.
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    expect(asked).toBe(askedOnce);
+  });
+
+  it("asks again on the membership answer after a failed read, and keeps the invited team", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const invitationsFail = { current: true };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+      "environment.invitations.list": () => {
+        if (invitationsFail.current) throw new Error("down");
+        return { invitations: [INVITATION] };
+      },
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+    expect(
+      await screen.findByText("These settings are no longer available."),
+    ).toBeTruthy();
+
+    // The next membership answer is a new question, so the read is asked
+    // again — this time it answers, and names the invitation.
+    invitationsFail.current = false;
+    await harness.queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("environment.list"),
+    });
+
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
     ).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({

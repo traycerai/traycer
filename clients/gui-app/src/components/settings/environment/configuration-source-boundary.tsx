@@ -179,6 +179,32 @@ type ReadLabel = {
   readonly label: string;
 };
 
+/**
+ * The invitations read asked for on account of one membership answer, named by
+ * when that answer arrived: `asking` while its reply is outstanding,
+ * `answered` once it arrives, `unanswered` when it fails. Only an `answered`
+ * reply to the current membership answer can say a team is gone.
+ */
+type AskedInvitations = {
+  readonly listedAt: number;
+  readonly state: "asking" | "answered" | "unanswered";
+};
+
+/**
+ * The read asked for on account of the membership answer now in hand, or
+ * `null` where none has been: one asked for an earlier answer says nothing
+ * about this one, so a new membership answer asks again. Nothing else
+ * refreshes that read — it does not poll, it does not refresh on focus, and
+ * the configuration invalidator leaves it alone.
+ */
+function answerFor(
+  asked: AskedInvitations | null,
+  listedAt: number,
+): AskedInvitations | null {
+  if (asked === null || asked.listedAt !== listedAt) return null;
+  return asked;
+}
+
 /** The remembered label, where it still names the configuration on screen. */
 function labelOf(
   remembered: ReadLabel | null,
@@ -237,32 +263,52 @@ function useGoneConfiguration(input: {
     environmentId,
     invitations.data?.invitations ?? [],
   );
-  // The invitations read answers a question the membership list raised, so it
-  // has to be no older than the list: nothing else refreshes it — it does not
-  // poll, it does not refresh on focus, and the configuration invalidator
-  // leaves it alone — so a team removed and invited back would otherwise be
-  // judged against the empty answer read before any of it happened.
-  const answeredAfterList = invitations.dataUpdatedAt >= listedAt;
-  const { isFetching: readingInvitations, refetch: readInvitations } =
-    invitations;
+  const { refetch: readInvitations } = invitations;
   const absent = settled && listed === null && environmentId !== null;
-  // The team that is gone, where one is. Nothing is gone until that read has
-  // answered, and a read that failed is not an answer: an invitation the page
-  // could not read is not "no longer in". A removal claimed on either would
-  // move the selection off a team the person is about to be told they can
-  // rejoin. The page says it cannot be read meanwhile, and the selection
-  // stays where the person put it.
-  const goneId =
-    absent && invitations.isSuccess && answeredAfterList && invitation === null
-      ? environmentId
-      : null;
+  const [asked, setAsked] = useState<AskedInvitations | null>(null);
+  const answer = answerFor(asked, listedAt);
+
+  // Asked once per membership answer, and only once the list stops carrying
+  // the team: the read is account-wide, and nothing else has reason to
+  // refresh it. Marked while rendering, like the label above it, so the
+  // request below has one state to act on and cannot be started twice for
+  // the same answer.
+  if (absent && answer === null) setAsked({ listedAt, state: "asking" });
 
   useEffect(() => {
-    // Asked for once the list stops carrying the team, and only then: the
-    // read is account-wide, and nothing else has reason to refresh it.
-    if (!absent || answeredAfterList || readingInvitations) return;
-    void readInvitations();
-  }, [absent, answeredAfterList, readingInvitations, readInvitations]);
+    if (answer?.state !== "asking") return;
+    // A reply that fails ends the asking rather than starting another, so a
+    // read that keeps failing cannot turn into a stream of requests; the next
+    // membership answer is a new question, and asks again.
+    void readInvitations({ cancelRefetch: true }).then((result) => {
+      setAsked({
+        listedAt,
+        state: result.isSuccess ? "answered" : "unanswered",
+      });
+    });
+  }, [answer?.state, listedAt, readInvitations]);
+
+  // The team that is gone, where one is. Nothing is gone until the read asked
+  // for this answer has answered: an invitation the page could not read is
+  // not "no longer in", and neither is one it has not asked about yet. A
+  // removal claimed on either would move the selection off a team the person
+  // is about to be told they can rejoin. The page says it cannot be read
+  // meanwhile, and the selection stays where the person put it.
+  //
+  // What that leaves is an invitation written after this read answered: it is
+  // not in the reply, so a removal and a re-invitation that cross here read as
+  // a plain removal. The toast names the team, the selection moves to
+  // Personal, and the Accept this page would have offered is not offered. It
+  // returns without a reload, from the environment picker: neither route of
+  // the invitations read sets a `staleTime`, so it takes the app's 60s
+  // default, and `TeamRows` lives in the picker's dropdown content, which
+  // mounts afresh on each open — the first open past that reads invitations
+  // again, and the team is a row there, marked `invited`, carrying the same
+  // Review that opens `InviteAcceptDialog`.
+  const goneId =
+    absent && answer?.state === "answered" && invitation === null
+      ? environmentId
+      : null;
 
   // Captured while rendering, as the members page captures its settled read,
   // so the name is already in hand on the render that finds the team gone.
