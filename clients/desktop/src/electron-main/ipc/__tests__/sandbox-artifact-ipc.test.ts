@@ -335,23 +335,27 @@ describe("SandboxArtifactServer: fetch range responses", () => {
     expect(sent[0]?.request.length).toBe(100);
   });
 
-  it("caps a requested span at ARTIFACT_OBJECT_SPAN_BYTES", async () => {
+  it("streams a bounded range wider than one span as successive spans, the last one trimmed to the range", async () => {
     const totalBytes = 10_000_000;
-    const { server, sent } = buildAutoRespondingServer(totalBytes, "text/html");
+    const { server, sent } = buildAutoRespondingServer(totalBytes, "video/mp4");
     server.register("mount1", "window-a");
+    const end = ARTIFACT_OBJECT_SPAN_BYTES + 99;
     const response = await server.fetch(
-      new Request("traycer-sandbox://artifact-report--mount1/report.html", {
-        headers: { Range: "bytes=0-9999999" },
+      new Request("traycer-sandbox://artifact-report--mount1/clip.mp4", {
+        headers: { Range: `bytes=0-${end}` },
       }),
     );
     expect(response.status).toBe(206);
-    expect(sent[0]?.request.length).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
-    expect(response.headers.get("Content-Length")).toBe(
-      String(ARTIFACT_OBJECT_SPAN_BYTES),
-    );
+    expect(response.headers.get("Content-Length")).toBe(String(end + 1));
     expect(response.headers.get("Content-Range")).toBe(
-      `bytes 0-${ARTIFACT_OBJECT_SPAN_BYTES - 1}/${totalBytes}`,
+      `bytes 0-${end}/${totalBytes}`,
     );
+    const body = new Uint8Array(await response.arrayBuffer());
+    expect(body.byteLength).toBe(end + 1);
+    expect(sent.map((entry) => entry.request)).toMatchObject([
+      { offset: 0, length: ARTIFACT_OBJECT_SPAN_BYTES },
+      { offset: ARTIFACT_OBJECT_SPAN_BYTES, length: 100 },
+    ]);
   });
 
   it("answers 416 for a malformed Range header, with no Content-Range since the total is not known yet", async () => {
@@ -379,21 +383,34 @@ describe("SandboxArtifactServer: fetch range responses", () => {
     expect(response.headers.get("Content-Range")).toBe("bytes */1000");
   });
 
-  it("answers 206 for an open-ended range (bytes=N-), capped at one span", async () => {
-    const totalBytes = 10_000_000;
-    const { server, sent } = buildAutoRespondingServer(totalBytes, "text/html");
+  // The media loader opens a recording with `bytes=N-` and drops a source
+  // whose 206 stops before the end of the file, so the reply must run to EOF.
+  it("streams an open-ended range (bytes=N-) span by span to the end of the file", async () => {
+    const totalBytes = 2 * ARTIFACT_OBJECT_SPAN_BYTES + 50;
+    const { server, sent } = buildAutoRespondingServer(totalBytes, "video/mp4");
     server.register("mount1", "window-a");
     const response = await server.fetch(
-      new Request("traycer-sandbox://artifact-report--mount1/report.html", {
+      new Request("traycer-sandbox://artifact-report--mount1/clip.mp4", {
         headers: { Range: "bytes=100-" },
       }),
     );
     expect(response.status).toBe(206);
-    expect(sent[0]?.request.offset).toBe(100);
-    expect(sent[0]?.request.length).toBe(ARTIFACT_OBJECT_SPAN_BYTES);
     expect(response.headers.get("Content-Range")).toBe(
-      `bytes 100-${100 + ARTIFACT_OBJECT_SPAN_BYTES - 1}/${totalBytes}`,
+      `bytes 100-${totalBytes - 1}/${totalBytes}`,
     );
+    expect(response.headers.get("Content-Length")).toBe(
+      String(totalBytes - 100),
+    );
+    const body = new Uint8Array(await response.arrayBuffer());
+    expect(body.byteLength).toBe(totalBytes - 100);
+    // The second span runs past the end of the file and the renderer trims it.
+    expect(sent.map((entry) => entry.request)).toMatchObject([
+      { offset: 100, length: ARTIFACT_OBJECT_SPAN_BYTES },
+      {
+        offset: 100 + ARTIFACT_OBJECT_SPAN_BYTES,
+        length: ARTIFACT_OBJECT_SPAN_BYTES,
+      },
+    ]);
   });
 
   it.each([

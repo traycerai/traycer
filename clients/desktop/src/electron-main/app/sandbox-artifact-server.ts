@@ -187,28 +187,31 @@ export class SandboxArtifactServer {
 
     const range = request.headers.get("Range");
     let offset = 0;
-    let length = ARTIFACT_OBJECT_SPAN_BYTES;
+    // The last byte the caller asked for; `null` is "to the end of the file".
+    let last: number | null = null;
     if (range !== null) {
       const match = /^bytes=(\d+)-(\d*)$/.exec(range);
       if (match === null) return errorResponse(416, "Invalid artifact range");
       offset = Number(match[1]);
-      const end = match[2] === "" ? offset + length - 1 : Number(match[2]);
+      last = match[2] === "" ? null : Number(match[2]);
       if (
         !Number.isSafeInteger(offset) ||
-        !Number.isSafeInteger(end) ||
-        end < offset
+        (last !== null && (!Number.isSafeInteger(last) || last < offset))
       )
         return errorResponse(416, "Invalid artifact range");
-      length = Math.min(length, end - offset + 1);
     }
     const cancellation = new AbortController();
     const signal = AbortSignal.any([request.signal, cancellation.signal]);
+    const spanLength = (position: number): number =>
+      last === null
+        ? ARTIFACT_OBJECT_SPAN_BYTES
+        : Math.min(ARTIFACT_OBJECT_SPAN_BYTES, last - position + 1);
     const first = await this.requestSpan(
       host.mountId,
       windowId,
       path,
       offset,
-      length,
+      spanLength(offset),
       signal,
     );
     if (first.kind === "unavailable")
@@ -218,25 +221,21 @@ export class SandboxArtifactServer {
       response.headers.set("Content-Range", `bytes */${first.totalBytes}`);
       return response;
     }
-    if (!validSpan(first, offset, length))
+    if (!validSpan(first, offset, spanLength(offset)))
       return errorResponse(503, "Invalid artifact span");
-    const headers = responseHeaders(first.mediaType);
-    if (range !== null) {
-      headers.set(
-        "Content-Range",
-        `bytes ${offset}-${offset + first.bytes.byteLength - 1}/${first.totalBytes}`,
-      );
-      headers.set("Content-Length", String(first.bytes.byteLength));
-      return new Response(new Uint8Array(first.bytes), {
-        status: 206,
-        headers,
-      });
-    }
     const totalBytes = first.totalBytes;
     const mediaType = first.mediaType;
-    headers.set("Content-Length", String(totalBytes));
+    // A range reply covers everything asked for, span by span: the media
+    // loader opens a recording with `bytes=N-` and treats a 206 that stops
+    // short of the file's end as a failed source, not as an invitation to ask
+    // for the rest.
+    const end = Math.min(last ?? totalBytes - 1, totalBytes - 1);
+    const headers = responseHeaders(mediaType);
+    headers.set("Content-Length", String(end - offset + 1));
+    if (range !== null)
+      headers.set("Content-Range", `bytes ${offset}-${end}/${totalBytes}`);
     let buffered: Uint8Array | null = first.bytes;
-    let position = 0;
+    let position = offset;
     const body = new ReadableStream<Uint8Array>(
       {
         pull: async (controller) => {
@@ -245,20 +244,21 @@ export class SandboxArtifactServer {
             buffered = null;
             position += bytes.byteLength;
             if (bytes.byteLength > 0) controller.enqueue(bytes);
-          } else if (position < totalBytes) {
+          } else if (position <= end) {
+            const length = spanLength(position);
             const next = await this.requestSpan(
               host.mountId,
               windowId,
               path,
               position,
-              ARTIFACT_OBJECT_SPAN_BYTES,
+              length,
               signal,
             );
             if (
               next.kind !== "bytes" ||
               next.totalBytes !== totalBytes ||
               next.mediaType !== mediaType ||
-              !validSpan(next, position, ARTIFACT_OBJECT_SPAN_BYTES)
+              !validSpan(next, position, length)
             ) {
               // Headers have already left; an interrupted stream must fail, never look complete.
               controller.error(new Error("Artifact stream unavailable"));
@@ -267,13 +267,13 @@ export class SandboxArtifactServer {
             position += next.bytes.byteLength;
             controller.enqueue(next.bytes);
           }
-          if (position >= totalBytes) controller.close();
+          if (position > end) controller.close();
         },
         cancel: () => cancellation.abort(),
       },
       { highWaterMark: 0 },
     );
-    return new Response(body, { status: 200, headers });
+    return new Response(body, { status: range === null ? 200 : 206, headers });
   }
 }
 
