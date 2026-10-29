@@ -526,13 +526,13 @@ describe("negotiated-version visibility projection", () => {
     }
   });
 
-  it("keeps a fully-capable caller's exclusion empty", () => {
+  it("keeps a fully-capable caller's exclusion to the retired kinds", () => {
     expect(
       hiddenHostNotificationKinds(
         { method: "host.notifications.cloudFeed.subscribe" },
         { major: 1, minor: 6 },
       ),
-    ).toEqual([]);
+    ).toEqual(["environment.apply.failed", "sandbox.notice"]);
   });
 
   it("covers every kind the entry unions can carry", () => {

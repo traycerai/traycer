@@ -147,7 +147,6 @@ function storageCredits(
 export function SandboxSessionsBlock(props: {
   readonly report: SandboxSessionReport;
   readonly countLine: boolean;
-  readonly trailing: string | null;
   readonly hostId: string;
   readonly onNavigate: () => void;
 }): ReactNode {
@@ -186,9 +185,7 @@ export function SandboxSessionsBlock(props: {
         />
       )}
       <p className="text-ui-xs text-muted-foreground">
-        {props.trailing === null
-          ? SANDBOX_SESSIONS_CAPTION
-          : `${SANDBOX_SESSIONS_CAPTION} ${props.trailing}`}
+        {SANDBOX_SESSIONS_CAPTION}
       </p>
     </div>
   );
@@ -201,7 +198,6 @@ function VerbConfirmDialog(
     readonly verb: "suspend" | "stop";
     readonly title: string;
     readonly outcome: string;
-    readonly told: string | null;
     readonly actionLabel: string;
   },
 ): ReactNode {
@@ -230,7 +226,6 @@ function VerbConfirmDialog(
         <SandboxSessionsBlock
           report={report}
           countLine
-          trailing={props.told}
           hostId={props.sandbox.hostId}
           onNavigate={() => props.onOpenChange(false)}
         />
@@ -298,11 +293,6 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
       verb="suspend"
       title={`Suspend ${props.sandbox.displayName}?`}
       outcome={outcome}
-      told={
-        team
-          ? "They and you are told who suspended it and whether it completed."
-          : null
-      }
       actionLabel="Suspend"
     />
   );
@@ -312,7 +302,6 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
   const now = useSampledNow();
-  const team = configuration.kind === "team";
   const destroyed = sandboxStopDestroySentence(
     props.sandbox.destroyAfterRestingMinutes,
     now,
@@ -329,11 +318,6 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
       ]
         .filter((part): part is string => part !== null)
         .join(" ")}
-      told={
-        team
-          ? "They and you are told who stopped it and whether it completed."
-          : null
-      }
       actionLabel="Stop"
     />
   );
@@ -392,7 +376,6 @@ export function SandboxDestroyDialog(
         <SandboxSessionsBlock
           report={report}
           countLine={false}
-          trailing={team ? "Affected members are told who destroyed it." : null}
           hostId={props.sandbox.hostId}
           onNavigate={() => {
             setTyped("");
@@ -1043,7 +1026,6 @@ function SandboxBatchDestroyConfirmationTarget(props: {
       <SandboxSessionsBlock
         report={report}
         countLine
-        trailing={null}
         hostId={sandbox.hostId}
         onNavigate={props.onNavigate}
       />

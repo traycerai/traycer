@@ -11,7 +11,6 @@ function input(
 ): NotificationLifecycleInput {
   return {
     readAt: null,
-    resolvedAt: null,
     ...overrides,
   };
 }
@@ -20,20 +19,7 @@ describe("classifyNotificationLifecycle", () => {
   it("places unresolved host needs_action rows in attention as blocking", () => {
     expect(
       classifyNotificationLifecycle(
-        input({ source: "host", severity: "needs_action", resolvedAt: null }),
-      ),
-    ).toEqual({ section: "attention", tier: "blocking" });
-  });
-
-  it("keeps unread resolved host prompts in attention", () => {
-    expect(
-      classifyNotificationLifecycle(
-        input({
-          source: "host",
-          severity: "needs_action",
-          resolvedAt: 1_000,
-          readAt: null,
-        }),
+        input({ source: "host", severity: "needs_action" }),
       ),
     ).toEqual({ section: "attention", tier: "blocking" });
   });
@@ -78,7 +64,7 @@ describe("classifyNotificationLifecycle", () => {
     ).toEqual({ section: "recent" });
     expect(
       classifyNotificationLifecycle(
-        input({ source: "global", severity: "needs_action", resolvedAt: null }),
+        input({ source: "global", severity: "needs_action" }),
       ),
     ).toEqual({ section: "recent" });
     expect(
@@ -107,33 +93,10 @@ describe("classifyNotificationLifecycle", () => {
         input({
           source: "host",
           severity: "needs_action",
-          resolvedAt: null,
           readAt: 10,
         }),
       ),
     ).toEqual({ section: "recent" });
-  });
-
-  it("classifies notification awareness independently of workflow resolution", () => {
-    const readUnresolved = input({
-      source: "host",
-      severity: "needs_action",
-      resolvedAt: null,
-      readAt: 10,
-    });
-    const unreadResolved = input({
-      source: "host",
-      severity: "needs_action",
-      resolvedAt: 20,
-      readAt: null,
-    });
-    expect(classifyNotificationLifecycle(readUnresolved)).toEqual({
-      section: "recent",
-    });
-    expect(classifyNotificationLifecycle(unreadResolved)).toEqual({
-      section: "attention",
-      tier: "blocking",
-    });
   });
 
   it("places an unread bot answer in attention as its own, last tier, and a read one in recent", () => {
@@ -157,19 +120,6 @@ describe("classifyNotificationLifecycle", () => {
         }),
       ),
     ).toEqual({ section: "recent" });
-  });
-
-  it("ignores resolvedAt for failure rows (readAt is the gate)", () => {
-    expect(
-      classifyNotificationLifecycle(
-        input({
-          source: "host",
-          severity: "failure",
-          readAt: null,
-          resolvedAt: 10,
-        }),
-      ),
-    ).toEqual({ section: "attention", tier: "failure" });
   });
 });
 

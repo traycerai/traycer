@@ -1,12 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -347,7 +339,6 @@ vi.mock(
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
-import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
@@ -540,8 +531,6 @@ describe("<SandboxesSettingsPanel />", () => {
     harness = null;
     useSandboxesPageStore.setState({
       requestedConfiguration: null,
-      revealSandboxId: null,
-      revealConfigurationPending: false,
     });
     useSettingsEnvironmentPickStore.setState({
       pick: null,
@@ -1217,6 +1206,12 @@ describe("<SandboxesSettingsPanel />", () => {
     );
 
     it("confirms the enumerated filtered names and count without Automations, then keeps that set", async () => {
+      mocks.configurations.push({
+        kind: "team",
+        teamId: "t1",
+        teamName: "Acme",
+        environmentId: TEAM_ENV,
+      });
       const { binding, client } = mount([
         first,
         second,
@@ -1224,12 +1219,6 @@ describe("<SandboxesSettingsPanel />", () => {
         row("elsewhere", { state: "suspended", environmentId: TEAM_ENV }),
         row("awake", { state: "awake" }),
       ]);
-      mocks.configurations.push({
-        kind: "team",
-        teamId: "t1",
-        teamName: "Acme",
-        environmentId: TEAM_ENV,
-      });
       await screen.findByText("idle-a");
       await choose("state", "suspended");
       const dialog = await confirmIdle();
@@ -1504,94 +1493,6 @@ describe("<SandboxesSettingsPanel />", () => {
         [first.id, true],
       ]);
     });
-  });
-
-  it("scrolls a revealed row into view once per reveal, not again on each refetch", () => {
-    const scrolled: string[] = [];
-    const scrollIntoView = vi
-      .spyOn(Element.prototype, "scrollIntoView")
-      .mockImplementation(function record(this: Element) {
-        scrolled.push(this.getAttribute("data-sandbox-row") ?? "");
-      });
-    onTestFinished(() => scrollIntoView.mockRestore());
-    let open: (sandboxId: string) => void = () => undefined;
-    function Opener() {
-      open = useOpenSandboxesPage();
-      return null;
-    }
-    const page = (
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>
-    );
-    mocks.sandboxes = [row("box-a", { burst: false })];
-    const { rerender } = renderUi(page);
-
-    act(() => open("box-a"));
-    expect(scrolled).toEqual(["box-a"]);
-
-    // A refetch answers with a new list while the reader scrolls elsewhere.
-    mocks.sandboxes = [row("box-a", { burst: false })];
-    rerender(
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>,
-    );
-    expect(scrolled).toEqual(["box-a"]);
-
-    // Asked for again, it scrolls again.
-    act(() => open("box-a"));
-    expect(scrolled).toEqual(["box-a", "box-a"]);
-  });
-
-  it("reveals a notification's team row on its team once a list that had not answered settles", () => {
-    mocks.configurations = [
-      { kind: "personal" },
-      {
-        kind: "team",
-        teamId: "team-1",
-        teamName: "Acme",
-        environmentId: "env-acme",
-      },
-    ];
-    mocks.listed = false;
-    let open: (sandboxId: string) => void = () => undefined;
-    function Opener() {
-      open = useOpenSandboxesPage();
-      return null;
-    }
-    const { rerender } = renderUi(
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>,
-    );
-    act(() => open("team-box"));
-
-    mocks.listed = true;
-    mocks.realActions = false;
-    mocks.sandboxes = [
-      row("team-box", {
-        environmentId: "env-acme",
-        burst: false,
-        state: "suspended",
-      }),
-    ];
-    rerender(
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>,
-    );
-
-    // The page moved the Environment group's pick to the row's team.
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-      kind: "team",
-      environmentId: "env-acme",
-    });
-    expect(rowOf("team-box").className).toContain("bg-info/10");
   });
 
   it("lists the Environment group's picked configuration, with no picker of its own", () => {
