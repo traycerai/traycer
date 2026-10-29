@@ -12,6 +12,7 @@ import { useLandingComposerActions } from "@/components/home/hooks/use-landing-c
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
@@ -131,11 +132,21 @@ function useTestPlacementTarget(): LandingPlacementTarget {
   };
 }
 
+/** The second argument the saved-in-Drafts toast passes `toast`. */
+interface OpenDraftToastOptions {
+  readonly action: { readonly label: string; readonly onClick: () => void };
+}
+
+const { toastMessage } = vi.hoisted(() => ({
+  toastMessage:
+    vi.fn<(message: string, options: OpenDraftToastOptions) => void>(),
+}));
+
 vi.mock("sonner", () => ({
-  toast: {
+  toast: Object.assign(toastMessage, {
     error: vi.fn(),
     info: vi.fn(),
-  },
+  }),
 }));
 
 const imageStoreMocks = vi.hoisted(() => ({
@@ -955,6 +966,83 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       queryClient.clear();
     },
   );
+
+  it("saves the message in Drafts with its sandbox when the task is refused after the source picked another", async () => {
+    useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    const create = deferred<unknown>();
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.create" ? create.promise : Promise.resolve({}),
+    );
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: null,
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+    await waitFor(() =>
+      expect(
+        landingMocks.request.mock.calls.some(
+          ([method]) => method === "epic.create",
+        ),
+      ).toBe(true),
+    );
+    const requestId = readStagedSandbox(
+      pendingSendSurfaceKey(onlyPendingSend().id),
+    )?.clientRequestId;
+    // The person is already composing the next message, on another sandbox.
+    useStagedSandboxStore.getState().stage(SURFACE, RESUME_TARGET);
+    const newerStage = readStagedSandbox(SURFACE);
+    const navigationsBefore = landingMocks.navigate.mock.calls.length;
+
+    await act(async () => {
+      create.resolve({
+        roomInfo: null,
+        refusal: {
+          kind: "local-store-unavailable",
+          message: "Traycer can't open this device's local store.",
+          remedy: "Quit the other Traycer on this machine, then rebind.",
+        },
+      });
+      await create.promise;
+    });
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(readStagedSandbox(SURFACE)).toBe(newerStage);
+    const drafts = useLandingDraftStore.getState().drafts;
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      settings: PICKED_SETTINGS,
+      closed: true,
+      returnedSandbox: { target: NEW_TARGET, clientRequestId: requestId },
+    });
+    // Saved, not opened: the composer stays on the newer message.
+    expect(landingMocks.navigate.mock.calls.length).toBe(navigationsBefore);
+    const toastCall = toastMessage.mock.calls.at(-1);
+    if (toastCall === undefined) throw new Error("expected a toast");
+    expect(toastCall[0]).toBe(returnedSandboxMessageLine(true));
+    expect(toastCall[1].action.label).toBe("Open draft");
+    act(() => {
+      toastCall[1].action.onClick();
+    });
+    expect(landingMocks.navigate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        to: "/draft/$draftId",
+        params: { draftId: drafts[0].id },
+      }),
+    );
+    queryClient.clear();
+  });
 
   it.each([
     ["no host at all", null, null],
