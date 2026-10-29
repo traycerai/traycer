@@ -162,9 +162,7 @@ function CreditsBody(props: {
           />
         )}
       </div>
-      {props.offers.length === 0 ? null : (
-        <CreditOffers offers={props.offers} installedApp={props.installedApp} />
-      )}
+      <CreditOffers offers={props.offers} installedApp={props.installedApp} />
     </div>
   );
 }
@@ -179,6 +177,11 @@ function CreditOffers(props: {
   readonly installedApp: boolean;
 }): ReactNode {
   const headingId = useId();
+  // The auth user does not poll, so an offer that ends while the panel is open
+  // leaves on the shared minute clock rather than on the next refresh.
+  const now = useSampledNow();
+  const live = props.offers.filter((offer) => Date.parse(offer.endsAt) > now);
+  if (live.length === 0) return null;
   return (
     // A container, so a narrow pane (the phone, a slim modal) moves the time
     // under the offer's name instead of squeezing the name into a sliver.
@@ -216,7 +219,7 @@ function CreditOffers(props: {
       {/* Subgrid rows: the figure column is as wide as the widest figure, so
           every row's name starts at the same edge. */}
       <ul className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 divide-y divide-border/60 rounded-lg border border-border/60 bg-card/40 px-5 @md:grid-cols-[auto_minmax(0,1fr)_auto]">
-        {props.offers.map((offer) => (
+        {live.map((offer) => (
           <CreditOfferRow
             key={offer.campaignId}
             offer={offer}
@@ -293,10 +296,6 @@ function CreditOfferRow(props: {
 function CreditOfferTimeLeft(props: { readonly endsAt: string }): ReactNode {
   const now = useSampledNow();
   const end = Date.parse(props.endsAt);
-  // The wire carries the end as a bare string; an unreadable one has no time
-  // to show, and must not take the panel down with a RangeError.
-  if (Number.isNaN(end)) return null;
-  const ended = end <= now;
   return (
     <TooltipWrapper
       label={CREDITS_PAGE.offerEnds(offerEndFormat.format(end))}
@@ -312,9 +311,7 @@ function CreditOfferTimeLeft(props: { readonly endsAt: string }): ReactNode {
       >
         <Timer aria-hidden className="size-3.5" />
         <time dateTime={props.endsAt}>
-          {ended
-            ? CREDITS_PAGE.offerEnded
-            : CREDITS_PAGE.offerTimeLeft(formatDistanceStrict(end, now))}
+          {CREDITS_PAGE.offerTimeLeft(formatDistanceStrict(end, now))}
         </time>
       </button>
     </TooltipWrapper>

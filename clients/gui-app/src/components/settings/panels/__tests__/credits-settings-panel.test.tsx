@@ -221,6 +221,17 @@ describe("CreditsSettingsPanel credit offers", () => {
     },
   );
 
+  it("leaves out an offer that has already ended, and the section with it", () => {
+    mocks.data = userWithOffers([
+      offer({ endsAt: new Date(Date.now() - 60 * 1000).toISOString() }),
+    ]);
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-ready")).toBeTruthy();
+    expect(screen.queryByTestId("credits-offers")).toBeNull();
+  });
+
   it("lists each offer in dollars with its name, description and time left", () => {
     mocks.data = userWithOffers([
       offer({}),

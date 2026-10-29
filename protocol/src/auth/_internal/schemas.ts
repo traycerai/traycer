@@ -305,9 +305,9 @@ const campaignCreditSchema = lazySchema(() =>
     campaignId: z.string(),
     name: z.string(),
     description: z.string().nullable(),
-    grantCredits: z.number(),
-    remainingCredits: z.number(),
-    endsAt: z.string(),
+    grantCredits: z.number().nonnegative(),
+    remainingCredits: z.number().nonnegative(),
+    endsAt: z.iso.datetime({ offset: true }),
   }),
 );
 

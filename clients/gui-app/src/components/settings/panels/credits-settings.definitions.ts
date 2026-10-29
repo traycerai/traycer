@@ -18,7 +18,6 @@ export const CREDITS_PAGE = {
   offerGrant: (grant: string): string => `of ${grant}`,
   offerTimeLeft: (distance: string): string => `${distance} left`,
   offerEnds: (at: string): string => `Ends ${at}`,
-  offerEnded: "Ended",
   keywords: [
     "credits",
     "billing",
