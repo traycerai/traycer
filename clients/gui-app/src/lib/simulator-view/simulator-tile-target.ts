@@ -20,6 +20,21 @@ import type {
 } from "@traycer/protocol/host/simulator/schemas";
 
 /**
+ * What the tile shows and opens. A clone is listed under no device id of its
+ * own, so its `summary` is synthesised and carries the tile's own id, which
+ * is only an address while the copy is still up: a clone dies with its last
+ * session, and the id its exited emulator held names nothing on the host. So
+ * `sourceSimulatorId` travels with it - the device whose `instances` list
+ * this clone, which is the one address a gone copy still has, and the only
+ * thing an open can name to make another.
+ */
+export interface SimulatorTileTarget {
+  readonly summary: SimulatorSummary;
+  /** The device this is a copy OF; null when the tile is on a device itself. */
+  readonly sourceSimulatorId: string | null;
+}
+
+/**
  * The host's row for a tile's simulator. An iOS udid never changes, so the
  * row is the one with the tile's id. An Android emulator is listed under its
  * serial while it runs and under its AVD name once it has exited (the host
@@ -64,11 +79,11 @@ export function findSimulatorForTile(
    * resolved to.
    */
   hostInstances: readonly SimulatorHostInstance[] | null,
-): SimulatorSummary | null {
+): SimulatorTileTarget | null {
   const byId = simulators.find(
     (simulator) => simulator.simulatorId === tile.simulatorId,
   );
-  if (byId !== undefined) return byId;
+  if (byId !== undefined) return { summary: byId, sourceSimulatorId: null };
   for (const source of simulators) {
     const instance = source.instances?.find(
       (item) =>
@@ -84,21 +99,26 @@ export function findSimulatorForTile(
     );
     if (instance === undefined) continue;
     return {
-      simulatorId: tile.simulatorId,
-      platform: source.platform,
-      name: instance.name,
-      version: source.version,
-      booted: instance.booted,
-      physical: false,
+      summary: {
+        simulatorId: tile.simulatorId,
+        platform: source.platform,
+        name: instance.name,
+        version: source.version,
+        booted: instance.booted,
+        physical: false,
+      },
+      // Only a COPY needs its source: a root device's own instance is
+      // addressed by the device, which is what this tile's id already names.
+      sourceSimulatorId: instance.cloneOf === null ? null : source.simulatorId,
     };
   }
   if (tile.platform !== "android" || hostInstances === null) return null;
-  return (
-    simulators.find(
-      (simulator) =>
-        simulator.platform === "android" && simulator.name === tile.name,
-    ) ?? null
+  const byName = simulators.find(
+    (simulator) =>
+      simulator.platform === "android" && simulator.name === tile.name,
   );
+  if (byName === undefined) return null;
+  return { summary: byName, sourceSimulatorId: null };
 }
 
 /**
