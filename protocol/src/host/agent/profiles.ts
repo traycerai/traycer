@@ -1344,9 +1344,10 @@ export const agentGetProviderProfileRateLimitsUpgradeV70ToV80 =
 // (`degradeProviderRateLimitsToV151`: a Kimi-available snapshot becomes the
 // `unsupported_provider` row a pre-Kimi-usage host returned, since `"kimi"` is
 // in every older provider enum, and `not_signed_in` becomes
-// `rate_limits_not_available`), then passes the response through or refuses it. The negotiator looks up one direct bridge
-// per target major, so each older major gets its own. The message names no
-// provider so it stays honest as the enum grows.
+// `rate_limits_not_available`), then passes the response through or refuses
+// it. The negotiator looks up one direct bridge per target major, so each
+// older major gets its own. The message names no provider so it stays honest
+// as the enum grows.
 const RATE_LIMITS_REQUIRE_NEWER_CLIENT = {
   code: "DOWNGRADE_UNSUPPORTED" as const,
   message:
