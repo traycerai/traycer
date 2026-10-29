@@ -231,6 +231,7 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,

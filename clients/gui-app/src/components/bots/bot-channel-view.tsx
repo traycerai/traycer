@@ -14,7 +14,10 @@ import {
   type BotThreadListResponse,
   type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotSurfaceActionState,
+  BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -22,12 +25,17 @@ import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   BotChatTranscript,
+  type BotTranscriptLanding,
   type BotTranscriptSurface,
   type BotTurnOpen,
   type QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { BotTurnPanel } from "@/components/bots/bot-turn-panel";
+import {
+  BotMemoryPanel,
+  type BotMemoryNavigation,
+} from "@/components/bots/bot-memory-panel";
 import {
   BotMessageComposer,
   type BotComposerEdit,
@@ -46,6 +54,11 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotSurfaceActMutation } from "@/hooks/bots/use-bot-surface-act";
+import {
+  BotSurfaceCardsContext,
+  type BotSurfaceCards,
+} from "@/components/bots/bot-surface-card-context";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import {
@@ -68,6 +81,7 @@ import {
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type {
+  BotOpenMemory,
   BotOpenThread,
   BotOpenTurn,
 } from "@/stores/bots/bot-open-thread-store";
@@ -170,14 +184,30 @@ export function BotChannelView(props: {
   /** The bot's trunk session, which answers the channel's direct posts. */
   readonly trunkChatId: string;
   readonly resolveMember: BotMemberResolver;
-  /** The bot's tasks: the open thread lists the ones it set up. */
+  /**
+   * The bot's tasks: the open thread lists the ones it set up, and a surface
+   * post's card reads what each task waits on.
+   */
   readonly tasks: ReadonlyArray<BotTaskEntry>;
+  /**
+   * The viewer's own answers and decisions from surface cards still on
+   * their way to a task, as the serving host holds them; `null` from a host
+   * that predates them.
+   */
+  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
   /** The thread open beside the channel; `null` for none. */
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
   /** The turn open beside the channel in the thread's place; `null` for none. */
   readonly openTurn: BotOpenTurn | null;
   readonly onOpenTurn: (open: BotOpenTurn | null) => void;
+  /** The bot's memory open beside the channel in the thread's place; `null` for none. */
+  readonly openMemory: BotOpenMemory | null;
+  readonly onOpenMemory: (open: BotOpenMemory | null) => void;
+  /** The bot's environment, whose room keeps its memory. */
+  readonly environmentId: string;
+  /** Another bot of the environment by its id, for a shared memory's writer. */
+  readonly botNameOf: (botId: string) => string | null;
   /** Opens the bot's Activity tab, from the open thread's header. */
   readonly onOpenActivity: () => void;
 }): ReactNode {
@@ -192,10 +222,15 @@ export function BotChannelView(props: {
     trunkChatId,
     resolveMember,
     tasks,
+    surfaceActions,
     openThread: open,
     onOpenThread,
     openTurn,
     onOpenTurn,
+    openMemory,
+    onOpenMemory,
+    environmentId,
+    botNameOf,
     onOpenActivity,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
@@ -374,8 +409,32 @@ export function BotChannelView(props: {
   const { openTurnFromChannel, openTurnFromThread } = useRailTurnOpeners({
     open,
     openTurn,
+    openMemory,
     onOpenTurn,
   });
+  // A memory's link to the post it was learned from shows the channel there,
+  // each follow a new visit, so the same link followed again lands again.
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(null);
+  const memoryNavigation = useMemo(
+    (): BotMemoryNavigation => ({
+      openThread: (anchorMessageId) =>
+        onOpenThread({
+          anchorMessageId,
+          announcement: false,
+          answer: false,
+          sent: null,
+        }),
+      showInChannel: (messageId) => {
+        onOpenMemory(null);
+        if (messageId === null) return;
+        setLanding((previous) => ({
+          messageId,
+          visit: (previous?.visit ?? 0) + 1,
+        }));
+      },
+    }),
+    [onOpenMemory, onOpenThread],
+  );
   const surface = useMemo<BotTranscriptSurface>(
     () => ({
       kind: "channel",
@@ -441,13 +500,23 @@ export function BotChannelView(props: {
     ],
   );
 
+  const surfaceCards = useSurfaceCards({
+    client,
+    hostId,
+    botId,
+    viewer,
+    resolveMember,
+    tasks,
+    surfaceActions,
+  });
+
   const trunkReply = channelTrunkReply(activity);
 
-  // The rail holds one of a thread or a turn: a turn open leaves no thread
-  // open (`open` is `null`).
+  // The rail holds one of a thread, a turn or the memory: a turn or the
+  // memory open leaves no thread open (`open` is `null`).
   const railThreadPostId = threadListSupported ? openThreadPostId : null;
   const threadOpen = railThreadPostId !== null;
-  const railOpen = threadOpen || openTurn !== null;
+  const railOpen = threadOpen || openTurn !== null || openMemory !== null;
   const openThread =
     openThreadPostId === null
       ? null
@@ -539,110 +608,187 @@ export function BotChannelView(props: {
     );
   }
   return (
-    <div className="@container flex min-h-0 flex-1">
-      <div className="flex min-h-0 w-full">
-        <section
-          ref={setChannelSection}
-          aria-label={botTitle}
-          data-testid="bot-channel"
-          data-conversation-id={channel.conversationId}
-          className={cn(
-            "min-h-0 min-w-0 flex-1 flex-col",
-            railOpen ? "hidden @3xl:flex" : "flex",
-          )}
-        >
-          <BotChatTranscript
-            botId={botId}
-            chatId={channel.conversationId}
-            hostId={hostId}
-            title={botTitle}
-            instanceId={`bot-channel:${botId}`}
-            surface={surface}
-            resolveMember={resolveMember}
-            showConnecting
-            landOnMessageId={null}
-          />
-          <BotReplyingStrip
-            botTitle={botTitle}
-            activity={trunkReply}
-            testId="bot-channel-replying"
-          />
-          <BotRoutingCard
-            botId={botId}
-            hostId={hostId}
-            sessionChatId={trunkChatId}
-          />
-          <BotMessageComposer
-            botId={botId}
-            conversationId={channel.conversationId}
-            threadId={null}
-            announcementId={null}
-            sendable
-            placeholder={`Message ${botTitle}`}
-            label={`Message ${botTitle}`}
-            testId="bot-channel-composer"
-            failure={sendFailure}
-            edit={edit}
-            onEditEnd={endEdit}
-            seed={null}
-            keptDraft={null}
-            onSent={openPostedThread}
-          />
-        </section>
-        <ChannelTurnPane
-          botId={botId}
-          hostId={hostId}
-          botTitle={botTitle}
-          channelId={channel.conversationId}
-          turn={openTurn}
-          resolveMember={resolveMember}
-          onOpenThread={onOpenThread}
-          onOpenTurn={onOpenTurn}
-        />
-        <ChannelThreadPane
-          postId={railThreadPostId}
-          render={(postId) => (
-            <BotThreadPanel
-              key={postId}
+    <BotSurfaceCardsContext.Provider value={surfaceCards}>
+      <div className="@container flex min-h-0 flex-1">
+        <div className="flex min-h-0 w-full">
+          <section
+            ref={setChannelSection}
+            aria-label={botTitle}
+            data-testid="bot-channel"
+            data-conversation-id={channel.conversationId}
+            className={cn(
+              "min-h-0 min-w-0 flex-1 flex-col",
+              railOpen ? "hidden @3xl:flex" : "flex",
+            )}
+          >
+            <BotChatTranscript
+              botId={botId}
+              chatId={channel.conversationId}
+              hostId={hostId}
+              title={botTitle}
+              instanceId={`bot-channel:${botId}`}
+              surface={surface}
+              resolveMember={resolveMember}
+              showConnecting
+              landOn={landing}
+            />
+            <BotReplyingStrip
+              botTitle={botTitle}
+              activity={trunkReply}
+              testId="bot-channel-replying"
+            />
+            <BotRoutingCard
               botId={botId}
               hostId={hostId}
-              boundHostId={boundHostId}
-              botTitle={botTitle}
-              conversationId={channel.conversationId}
-              originMessageId={postId}
-              sent={open?.sent ?? null}
-              thread={panelThread}
-              tasks={tasks}
-              anchorSenderLabel={anchorSenderLabel}
-              resolveMember={resolveMember}
-              onClose={() => onOpenThread(null)}
-              onOpenActivity={onOpenActivity}
-              onEditPost={editPostFromThread}
-              onOpenTurn={openTurnFromThread}
+              sessionChatId={trunkChatId}
             />
-          )}
-        />
+            <BotMessageComposer
+              botId={botId}
+              conversationId={channel.conversationId}
+              threadId={null}
+              announcementId={null}
+              sendable
+              placeholder={`Message ${botTitle}`}
+              label={`Message ${botTitle}`}
+              testId="bot-channel-composer"
+              failure={sendFailure}
+              edit={edit}
+              onEditEnd={endEdit}
+              seed={null}
+              keptDraft={null}
+              onSent={openPostedThread}
+            />
+          </section>
+          <ChannelTurnPane
+            botId={botId}
+            hostId={hostId}
+            botTitle={botTitle}
+            channelId={channel.conversationId}
+            turn={openTurn}
+            resolveMember={resolveMember}
+            onOpenThread={onOpenThread}
+            onOpenTurn={onOpenTurn}
+          />
+          <ChannelMemoryPane
+            memory={openMemory}
+            render={(memory) => (
+              <BotMemoryPanel
+                botId={botId}
+                hostId={hostId}
+                environmentId={environmentId}
+                botTitle={botTitle}
+                channelId={channel.conversationId}
+                trunkChatId={trunkChatId}
+                threads={threadList.data?.threads ?? null}
+                botNameOf={botNameOf}
+                back={memory.back}
+                onBack={
+                  memory.back === null ? null : () => onOpenThread(memory.back)
+                }
+                onClose={() => onOpenMemory(null)}
+                navigation={memoryNavigation}
+              />
+            )}
+          />
+          <ChannelThreadPane
+            postId={railThreadPostId}
+            render={(postId) => (
+              <BotThreadPanel
+                key={postId}
+                botId={botId}
+                hostId={hostId}
+                boundHostId={boundHostId}
+                botTitle={botTitle}
+                conversationId={channel.conversationId}
+                originMessageId={postId}
+                sent={open?.sent ?? null}
+                thread={panelThread}
+                tasks={tasks}
+                anchorSenderLabel={anchorSenderLabel}
+                resolveMember={resolveMember}
+                onClose={() => onOpenThread(null)}
+                onOpenActivity={onOpenActivity}
+                onEditPost={editPostFromThread}
+                onOpenTurn={openTurnFromThread}
+              />
+            )}
+          />
+        </div>
       </div>
-    </div>
+    </BotSurfaceCardsContext.Provider>
+  );
+}
+
+/**
+ * What a surface post's card reads and sends (T89): each task's open
+ * surfaces and the viewer's forwarded actions from the bot's subscription,
+ * and the send through the tab's host, which offers it only where that host
+ * takes it.
+ */
+function useSurfaceCards(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string;
+  readonly botId: string;
+  readonly viewer: AuthProfile | null;
+  readonly resolveMember: BotMemberResolver;
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
+  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
+}): BotSurfaceCards {
+  const {
+    client,
+    hostId,
+    botId,
+    viewer,
+    resolveMember,
+    tasks,
+    surfaceActions,
+  } = args;
+  const actSupported = useHostMethodSupport(hostId, "bot.surface.act") === true;
+  const { mutateAsync: actAsync } = useBotSurfaceActMutation(client);
+  return useMemo<BotSurfaceCards>(
+    () => ({
+      botId,
+      viewerUserId: viewer?.userId ?? null,
+      memberName: (userId) => botMemberName(userId, viewer, resolveMember),
+      openSurfaces: (taskId) =>
+        tasks.find((task) => task.taskId === taskId)?.inputNeeded ?? null,
+      hostAction: (actionId) =>
+        surfaceActions?.find((action) => action.actionId === actionId) ?? null,
+      postActions: (messageId) =>
+        surfaceActions?.filter((action) => action.messageId === messageId) ??
+        [],
+      act: actSupported && client !== null ? actAsync : null,
+    }),
+    [
+      actAsync,
+      actSupported,
+      botId,
+      client,
+      resolveMember,
+      surfaceActions,
+      tasks,
+      viewer,
+    ],
   );
 }
 
 /**
  * How a receipt opens its turn in the rail's one slot: in place of the
  * thread open there, which the turn's header brings back. A turn opened from
- * the channel over a turn keeps the thread the first displaced; one opened
- * from the thread's panel displaces that thread.
+ * the channel over a turn or the memory keeps the thread the first
+ * displaced; one opened from the thread's panel displaces that thread.
  */
 function useRailTurnOpeners(args: {
   readonly open: BotOpenThread | null;
   readonly openTurn: BotOpenTurn | null;
+  readonly openMemory: BotOpenMemory | null;
   readonly onOpenTurn: (open: BotOpenTurn | null) => void;
 }): {
   readonly openTurnFromChannel: BotTurnOpen;
   readonly openTurnFromThread: BotTurnOpen;
 } {
-  const { open, openTurn, onOpenTurn } = args;
-  const displaced = openTurn?.back ?? open;
+  const { open, openTurn, openMemory, onOpenTurn } = args;
+  const displaced = openTurn?.back ?? openMemory?.back ?? open;
   const openTurnOver = useCallback(
     (back: BotOpenThread | null): BotTurnOpen =>
       (ref, question) =>
@@ -658,6 +804,27 @@ function useRailTurnOpeners(args: {
     [open, openTurnOver],
   );
   return { openTurnFromChannel, openTurnFromThread };
+}
+
+/** The bot's memory open in the rail; nothing for none (`null`). */
+function ChannelMemoryPane(props: {
+  readonly memory: BotOpenMemory | null;
+  readonly render: (memory: BotOpenMemory) => ReactNode;
+}): ReactNode {
+  const { memory, render } = props;
+  if (memory === null) return null;
+  return (
+    <BotResizablePane
+      pane="thread"
+      edge="left"
+      label="Resize panel"
+      className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60"
+      handleClassName="hidden @3xl:block"
+      testId="bot-memory-pane"
+    >
+      {render(memory)}
+    </BotResizablePane>
+  );
 }
 
 /** The thread open in the rail, by its post's id; nothing for none (`null`). */

@@ -440,8 +440,13 @@ function mountChannel(openThread: BotOpenThread | null): {
               trunkChatId="trunk-chat"
               openTurn={null}
               onOpenTurn={vi.fn()}
+              openMemory={null}
+              onOpenMemory={vi.fn()}
+              environmentId="env-1"
+              botNameOf={() => null}
               resolveMember={resolveMember}
               tasks={[]}
+              surfaceActions={null}
               openThread={open}
               onOpenThread={onOpenThread}
               onOpenActivity={vi.fn()}

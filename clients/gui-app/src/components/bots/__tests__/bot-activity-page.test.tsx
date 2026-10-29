@@ -162,6 +162,7 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -633,6 +634,7 @@ describe("<BotActivityPage /> tasks and automations", () => {
       tasks: [
         task("task-old-host", {
           checkins: null,
+          inputNeeded: null,
           lastCheckin: lastCheckin(NOW - 1_000, ["Fix flaky shard"], []),
         }),
         task("task-empty-history", {
