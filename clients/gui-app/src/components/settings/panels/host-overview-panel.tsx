@@ -1275,12 +1275,19 @@ export function HostOverviewPanel(props: {
     // without this the one shot is spent on a dialog closed in the same pass
     // for a retirement that ends a few seconds later.
     //
+    // The catalog's FIRST answer too (`awaitingFirstAnswer`): until it lands
+    // the region is un-retired only because it has not asked, and the check
+    // is a CLI spawn that always answers after the status read that put the
+    // park on screen - so without this the shot fires in that window and the
+    // first `cli-unavailable` closes it, the exact sequence above.
+    //
     // A foreground run on this machine too: the rule after the restart
     // confirm's closes any offer opened under one, so firing now would spend
     // the one shot on a dialog nobody sees.
     gateArmed:
       anyPending ||
       updates.degrade !== null ||
+      updates.awaitingFirstAnswer ||
       restartDegrade === "terminal-run",
     supported: updates.activate !== null,
     dispatch: updateDispatch,
