@@ -34,9 +34,9 @@ import {
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  degradeProviderRateLimitsToV151,
   mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
-  mapKimiAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   type ProviderRateLimits,
   providerRateLimitsSchema,
@@ -1334,29 +1334,32 @@ export const agentGetProviderProfileRateLimitsUpgradeV70ToV80 =
   >({
     from: { major: 7, minor: 0 },
     to: { major: 8, minor: 0 },
-    // Request shape is identical - only the response's union grows (kimi).
+    // Request shape is identical - only the response's union grows (kimi,
+    // `not_signed_in`).
     upgradeRequest: (request) => request,
     upgradeResponse: (response) => response,
   });
 
-// A Kimi-available snapshot has no arm on any older line, but `"kimi"` is in
-// every older provider enum, so every 8.0 bridge degrades it to the
-// `unsupported_provider` row a pre-Kimi-usage host returned, then passes the
-// response through or refuses it. The negotiator looks up one direct bridge
-// per target major, so each older major gets its own. The message names no
-// provider so it stays honest as the enum grows.
+// Every 8.0 bridge first degrades what the live union added since 1.5.1
+// (`degradeProviderRateLimitsToV151`: a Kimi-available snapshot becomes the
+// `unsupported_provider` row a pre-Kimi-usage host returned, since `"kimi"` is
+// in every older provider enum, and `not_signed_in` becomes
+// `rate_limits_not_available`), then passes the response through or refuses
+// it. The negotiator looks up one direct bridge per target major, so each
+// older major gets its own. The message names no provider so it stays honest
+// as the enum grows.
 const RATE_LIMITS_REQUIRE_NEWER_CLIENT = {
   code: "DOWNGRADE_UNSUPPORTED" as const,
   message:
     "Reading this provider's rate limits requires a newer Traycer client.",
 };
 
-function withKimiProfileDegraded(
+function profileDegradedToV151(
   response: AgentGetProviderProfileRateLimitsResponse,
 ): { rateLimits: ProviderRateLimits | null; usageUpdatedAt: number | null } {
   return {
     ...response,
-    rateLimits: mapKimiAvailableToUnavailable(response.rateLimits),
+    rateLimits: degradeProviderRateLimitsToV151(response.rateLimits),
   };
 }
 
@@ -1381,7 +1384,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV70 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV7.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
@@ -1397,7 +1400,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV60 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV6.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
@@ -1413,7 +1416,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV50 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV5.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
@@ -1429,7 +1432,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV40 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV4.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
@@ -1445,7 +1448,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV30 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
@@ -1461,7 +1464,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV20 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
@@ -1477,7 +1480,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV80ToV10 =
     downgradeResponse: (response) =>
       passOrRefuse(
         agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse(
-          withKimiProfileDegraded(response),
+          profileDegradedToV151(response),
         ),
       ),
   });
