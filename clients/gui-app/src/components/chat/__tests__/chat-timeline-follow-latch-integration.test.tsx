@@ -1282,6 +1282,9 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       expectAtTrueEnd(node);
     });
   });
+  // jsdom lays nothing out: these show the patched list announces each write
+  // with its offsets, not that the latch tells a browser's clamp from a pan
+  // (the composer cells of `chat-send-follow.spec.ts` do).
   describe("the list announces the writes it makes to its scroller", () => {
     async function mountDetachedAt(scrollTop: number) {
       const rowCount = 36;
@@ -1317,20 +1320,6 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       });
 
       expect(moves).toEqual([{ from: 1500, fromEnd: end, to: 1620 }]);
-    });
-
-    it("announces the release of the temporary end padding an adjustment past the end needed", async () => {
-      const { node, list, moves } = await mountDetachedAt(2560);
-
-      act(() => {
-        list.setVisibleContentAnchorOffset(120);
-      });
-      expect(moves).toHaveLength(1);
-      await settleLegendList();
-
-      expect(moves).toHaveLength(2);
-      expect(moves[1]).toMatchObject({ from: 2680, to: 2680 });
-      expect(node.scrollTop).toBe(2680);
     });
 
     it("announces a scroll to the end from where the reader was", async () => {

@@ -4083,6 +4083,48 @@ describe("useChatTimelineFollowLatch", () => {
       expect(mounted.onReaderGesture).not.toHaveBeenCalled();
     });
 
+    it("is not the reader's when an elastic overscroll sprang back after the content grew", () => {
+      const mounted = followingWithLiveLedger();
+
+      // iOS reports the rubber band past the end (max 1000).
+      shim.setGeometry(mounted.node, { scrollTop: 1030 });
+      fireNativeScroll(mounted.node);
+      // Streaming grows the content before the spring-back report: 1000 is no
+      // longer the strict bottom.
+      shim.setGeometry(mounted.node, { scrollHeight: 1600 });
+      shim.setGeometry(mounted.node, { scrollTop: 1000 });
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
+    it("is not the reader's when an observation saw the overscroll and the spring-back followed the growth", () => {
+      const mounted = followingWithLiveLedger();
+
+      shim.setGeometry(mounted.node, { scrollTop: 1030 });
+      mounted.result.current.followEndIfPermitted();
+      shim.setGeometry(mounted.node, { scrollHeight: 1600 });
+      shim.setGeometry(mounted.node, { scrollTop: 1000 });
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
+    it("is not the reader's when the view bounced past the top of content that fits it", () => {
+      const mounted = followingWithLiveLedger();
+
+      // The content fits the view: the strict bottom is also the top.
+      shim.setGeometry(mounted.node, {
+        scrollHeight: 500,
+        scrollTop: 0,
+      });
+      fireNativeScroll(mounted.node);
+      shim.setGeometry(mounted.node, { scrollTop: -30 });
+      fireNativeScroll(mounted.node);
+
+      expectNotDeparted(mounted);
+    });
+
     it("publishes a detached reader's further pan once, not again", () => {
       const mounted = followingWithLiveLedger();
       shim.setGeometry(mounted.node, { scrollTop: 970 });

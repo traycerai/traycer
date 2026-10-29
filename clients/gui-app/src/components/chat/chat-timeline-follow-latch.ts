@@ -74,8 +74,7 @@ interface ChatTimelineScrollerMove {
 }
 
 /** Dispatched on the scroll node for every write the app or the list makes to
- *  it. `@legendapp/list` (patched) announces each of its own, the release of
- *  its temporary end padding among them. */
+ *  it. `@legendapp/list` (patched) announces each of its own. */
 export const CHAT_TIMELINE_SCROLLER_MOVED_EVENT = "legend-list-scroller-moved";
 
 /** Writes a scroll node and announces the write, as the list announces its
@@ -95,6 +94,15 @@ export function moveChatTimelineScroller(
   };
   node.dispatchEvent(
     new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, { detail }),
+  );
+}
+
+/** Where the view rests: iOS reports an elastic overscroll past either edge,
+ *  and the browser springs it back by itself. */
+function restingScrollTop(geometry: ChatTimelineScrollGeometry): number {
+  return Math.max(
+    0,
+    Math.min(geometry.scrollTop, geometry.scrollHeight - geometry.clientHeight),
   );
 }
 
@@ -1215,7 +1223,7 @@ export function useChatTimelineFollowLatch(
         expectedScrollTopRef.current !== null &&
         isChatTimelineAtStrictBottom(geometry)
       ) {
-        expectedScrollTopRef.current = geometry.scrollTop;
+        expectedScrollTopRef.current = restingScrollTop(geometry);
       }
     },
     [],
@@ -1227,10 +1235,11 @@ export function useChatTimelineFollowLatch(
   const noteReportMovement = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       const expected = expectedScrollTopRef.current;
-      expectedScrollTopRef.current = geometry.scrollTop;
+      const resting = restingScrollTop(geometry);
+      expectedScrollTopRef.current = resting;
       return (
         expected !== null &&
-        geometry.scrollTop < expected - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+        resting < expected - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
     [],

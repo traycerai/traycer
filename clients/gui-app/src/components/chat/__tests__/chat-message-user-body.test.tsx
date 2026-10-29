@@ -937,6 +937,11 @@ describe("<UserMessageBody /> agent messages", () => {
         writable: true,
         value: 300,
       });
+      // A real scroller lands on the offset it is asked for, so the announced
+      // move's end is the write's own target.
+      scrollTo.mockImplementation((options: ScrollToOptions) => {
+        if (options.top !== undefined) scroller.scrollTop = options.top;
+      });
       // The scroller's viewport ends at 500; the edited row will end 120px
       // below it. iOS WebKit lands a relative `scrollBy` twice, so the reveal
       // must write the absolute target: the current offset plus the overflow
@@ -954,7 +959,7 @@ describe("<UserMessageBody /> agent messages", () => {
         drainFrames();
         expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
-      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 300 }]);
+      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 436 }]);
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );

@@ -25,7 +25,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4b116ef86 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..761f12e7e326062e23757193a0865fc42f061ccb 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -346,19 +346,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6436,7 +6626,10 @@ function ScrollAdjust() {
-             resetPaddingRafRef.current = requestAnimationFrame(() => {
-               resetPaddingRafRef.current = void 0;
-               resetPaddingBaselineRef.current = void 0;
--              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              // Patched: the release can clamp the view onto the lower end.
-+              moveScrollerAnnounced(el, () => {
-+                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              });
-             });
-           } else {
-             scrollBy();
-@@ -6757,6 +6950,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6757,6 +6947,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -366,7 +354,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7195,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7192,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -374,7 +362,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7103,7 +7298,15 @@ var ScrollAdjustHandler = class {
+@@ -7103,7 +7295,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -391,7 +379,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7486,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7483,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -404,7 +392,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7542,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7539,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -412,7 +400,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7580,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7577,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -421,7 +409,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7660,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7657,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -457,7 +445,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7845,6 +8086,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8083,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -468,7 +456,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..7f2f7c95e47efda09c5a6e246d060db4
          columns: [],
          containerItemGenerations: [],
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b065a5b7f2 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..4ad86b56a0478f6beda10212bd5c4e5237e8d501 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -789,19 +777,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6415,7 +6605,10 @@ function ScrollAdjust() {
-             resetPaddingRafRef.current = requestAnimationFrame(() => {
-               resetPaddingRafRef.current = void 0;
-               resetPaddingBaselineRef.current = void 0;
--              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              // Patched: the release can clamp the view onto the lower end.
-+              moveScrollerAnnounced(el, () => {
-+                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              });
-             });
-           } else {
-             scrollBy();
-@@ -6736,6 +6929,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6736,6 +6926,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -809,7 +785,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7174,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7171,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -817,7 +793,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7082,7 +7277,15 @@ var ScrollAdjustHandler = class {
+@@ -7082,7 +7274,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -834,7 +810,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7465,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7462,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -847,7 +823,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7521,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7518,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -855,7 +831,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7559,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7556,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -864,7 +840,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7639,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7636,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -900,7 +876,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..2060c6266b376a6cb21a63f2a2c835b0
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7824,6 +8065,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8062,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -937,7 +913,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e0482452e237 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..5578599c53375aeaf08db6749ed316cbeb2f5aad 100644
 --- a/react.js
 +++ b/react.js
 @@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -1471,19 +1447,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6436,7 +6712,10 @@ function ScrollAdjust() {
-             resetPaddingRafRef.current = requestAnimationFrame(() => {
-               resetPaddingRafRef.current = void 0;
-               resetPaddingBaselineRef.current = void 0;
--              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              // Patched: the release can clamp the view onto the lower end.
-+              moveScrollerAnnounced(el, () => {
-+                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              });
-             });
-           } else {
-             scrollBy();
-@@ -6757,6 +7036,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6757,6 +7033,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1491,7 +1455,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7281,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7278,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -1499,7 +1463,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7054,7 +7335,8 @@ var ScheduledWork = class {
+@@ -7054,7 +7332,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -1509,7 +1473,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
      }
    }
    has(key) {
-@@ -7103,7 +7385,15 @@ var ScrollAdjustHandler = class {
+@@ -7103,7 +7382,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -1526,7 +1490,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7573,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7570,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -1539,7 +1503,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7629,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7626,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1547,7 +1511,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7667,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7664,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -1556,7 +1520,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7747,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7744,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1592,7 +1556,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7845,6 +8173,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8170,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -1603,7 +1567,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..815d590ca9f5e5c47a7fc5645171e048
          columns: [],
          containerItemGenerations: [],
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f27310c47f 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..d202b8b3ed9e266050f47bb9de0c6ae3f15297e3 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -2137,19 +2101,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6415,7 +6691,10 @@ function ScrollAdjust() {
-             resetPaddingRafRef.current = requestAnimationFrame(() => {
-               resetPaddingRafRef.current = void 0;
-               resetPaddingBaselineRef.current = void 0;
--              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              // Patched: the release can clamp the view onto the lower end.
-+              moveScrollerAnnounced(el, () => {
-+                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
-+              });
-             });
-           } else {
-             scrollBy();
-@@ -6736,6 +7015,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6736,6 +7012,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2157,7 +2109,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7260,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7257,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -2165,7 +2117,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7033,7 +7314,8 @@ var ScheduledWork = class {
+@@ -7033,7 +7311,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -2175,7 +2127,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
      }
    }
    has(key) {
-@@ -7082,7 +7364,15 @@ var ScrollAdjustHandler = class {
+@@ -7082,7 +7361,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -2192,7 +2144,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7552,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7549,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -2205,7 +2157,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7608,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7605,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2213,7 +2165,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7646,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7643,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -2222,7 +2174,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7726,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7723,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -2258,7 +2210,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..772b33adceff30fb74d06091316df4f2
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7824,6 +8152,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8149,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
