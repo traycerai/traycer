@@ -41,3 +41,23 @@
     padding-inline-end: 2.5rem;
   }
 }
+
+/*
+ * The toaster takes the pointer while a modal is open.
+ *
+ * A Radix modal (the Drafts dialog, any `modal` Dialog) puts
+ * `pointer-events: none` on `body`, and sonner's stylesheet gives the toaster
+ * no `pointer-events` of its own, so the toaster inherited `none`: a click on a
+ * toast's Undo landed on the dialog's overlay instead, counted as outside the
+ * dialog and closed it, and only a second click reached the toast. The
+ * toaster is already a `DismissableLayer.Branch` (`sonner.tsx`), so a press
+ * inside it is not "outside" the dialog; that only works if it can receive the
+ * press. Unlayered, like the rules above, because sonner's own stylesheet is.
+ *
+ * Nothing hidden becomes clickable: sonner keeps `pointer-events: none` on a
+ * hidden toast (`[data-visible=false]`), and a collapsed stack's back close
+ * buttons keep theirs (`TOAST_CLOSE_BUTTON_CLASS_NAME`).
+ */
+[data-sonner-toaster] {
+  pointer-events: auto;
+}
