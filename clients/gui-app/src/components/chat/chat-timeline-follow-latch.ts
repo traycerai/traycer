@@ -1561,6 +1561,7 @@ export function useChatTimelineFollowLatch(
       if (!gestureScrollLanded(armedDeparture, geometry)) return;
       armedReaderDepartureRef.current = null;
       readerDepartureScrollTopRef.current = geometry.scrollTop;
+      departureAwaitsReportRef.current = false;
     },
     [],
   );

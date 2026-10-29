@@ -5437,6 +5437,55 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     });
 
+    // Their wheel's next frame lands farther up: the departure moves there,
+    // so the end coming to them mid-turn still holds them.
+    it("a free reader's wheel whose next frame lands farther up stays held when the end comes to them mid-turn, and follows at rest", () => {
+      let turnRunning = true;
+      const { node, listRef, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 900, scrollHeight: 1500, clientHeight: 500 },
+        () => turnRunning,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+      shim.setGeometry(node, { scrollTop: 860 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 820 });
+      fireNativeScroll(node);
+
+      shim.setGeometry(node, { scrollHeight: 1320 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      shim.setGeometry(node, { scrollHeight: 1360 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(820);
+
+      shim.setGeometry(node, { scrollHeight: 1320 });
+      turnRunning = false;
+      result.current.reconcileTurnAtRest();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    // The landing's report is the departure, not ahead of it: no report of
+    // theirs is owed, so the end meeting them at rest follows them.
+    it("guard: with no turn running, the end meeting a free reader where their wheel landed follows them", () => {
+      const { node, onFollowIntentChange, result } = freeReader(
+        { scrollTop: 900, scrollHeight: 1500, clientHeight: 500 },
+        () => false,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollTop: 860 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      shim.setGeometry(node, { scrollHeight: 1360 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
     it("spends an awaiting arm at the turn's rest once a report has followed it", () => {
       const { node, onFollowIntentChange, result } = freeReader(
         { scrollTop: 1000, scrollHeight: 1500, clientHeight: 500 },
