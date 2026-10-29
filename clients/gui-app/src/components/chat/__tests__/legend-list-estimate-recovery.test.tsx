@@ -800,4 +800,57 @@ describe("LegendList estimate recovery", () => {
       expect(scrollNode.scrollTop).toBeCloseTo(wheeledTo + growth, 0);
     });
   });
+
+  /**
+   * Cancelling a reader-ended command must not take the runner that later
+   * `scrollToEnd` commands go through: once it is gone, every later
+   * `scrollToEnd` never runs, so its promise never settles and the view stays
+   * where it was.
+   */
+  describe("a scrollToEnd after a cancelled one", () => {
+    it("still lands at the end and settles", async () => {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      // A scrollToEnd waiting for its commit, ended by the reader.
+      let cancelled = false;
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+        cancelled = list.cancelPendingScroll();
+      });
+      expect(cancelled).toBe(true);
+      await settleLegendList();
+
+      act(() => {
+        void list.scrollToIndex({ animated: false, index: 10 });
+      });
+      await settleLegendList();
+      const scrollNode = list.getScrollableNode();
+      const away = scrollNode.scrollTop;
+      expect(away).toBeLessThan(
+        scrollNode.scrollHeight - scrollNode.clientHeight - 1,
+      );
+
+      let settled = false;
+      act(() => {
+        void list.scrollToEnd({ animated: false }).then(() => {
+          settled = true;
+        });
+      });
+      await settleLegendList();
+
+      expect(scrollNode.scrollTop).toBeGreaterThan(away);
+      expect(list.getState().isAtEnd).toBe(true);
+      expect(settled).toBe(true);
+    });
+  });
 });

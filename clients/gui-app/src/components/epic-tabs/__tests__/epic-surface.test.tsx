@@ -130,6 +130,19 @@ vi.mock(
   },
 );
 
+// The task's simulator catalog, the provider beside the browser sessions one:
+// it reads `simulator.catalog` through a host query, which a mount with no
+// `QueryClientProvider` cannot serve. Its context defaults to `null`, which is
+// what every consumer below reads here.
+vi.mock(
+  "@/components/epic-canvas/renderers/simulator-catalog-provider",
+  () => ({
+    SimulatorCatalogProvider: (props: { readonly children: ReactNode }) => (
+      <>{props.children}</>
+    ),
+  }),
+);
+
 vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
   EpicRouteSessionBody: (props: { readonly tabId: string }) => (
     <div data-testid={`epic-canvas-body-${props.tabId}`} />

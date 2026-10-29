@@ -240,12 +240,17 @@ function bootstrapMain(config: BootstrapConfig): void {
     { passive: false },
   );
   // A swipe cannot be handed over without losing its momentum, so it chains
-  // natively and only its direction is reported.
+  // natively and only its direction is reported. The browser gives a swipe
+  // to the scroller that can take its first move, for the whole contact: one
+  // the page scrolls never reaches the transcript, and reporting it would
+  // leave the transcript waiting for a scroll that never comes.
   let touchY: number | null = null;
+  let swipeChains: boolean | null = null;
   window.addEventListener(
     "touchstart",
     (event) => {
       touchY = event.touches.item(0)?.clientY ?? null;
+      swipeChains = null;
     },
     { capture: true, passive: true },
   );
@@ -257,6 +262,8 @@ function bootstrapMain(config: BootstrapConfig): void {
       if (clientY === undefined || previous === null) return;
       touchY = clientY;
       if (clientY === previous) return;
+      swipeChains ??= !canScrollInside(event.target, true, previous - clientY);
+      if (!swipeChains) return;
       notify("traycer/notifications/scroll-gesture", {
         direction: clientY < previous ? "toward-end" : "away-from-end",
       });
