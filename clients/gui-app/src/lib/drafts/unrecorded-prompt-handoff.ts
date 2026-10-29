@@ -136,9 +136,14 @@ const DROPPED_IMAGE_CLAUSE: Readonly<Record<DroppedImageCause, string>> = {
   unprepared: "it could not be prepared for a draft",
 };
 
+/**
+ * The one draft every install of a handoff lands in. `settings` are the
+ * draft's run settings, or `null` for this window's global run settings, read
+ * at the install.
+ */
 export interface PromptHandoffRecovery {
   readonly draftId: string;
-  readonly settings: ChatRunSettings;
+  readonly settings: ChatRunSettings | null;
 }
 
 /**
@@ -509,11 +514,10 @@ function installHandoffDraft(args: {
     selection: null,
     lastTouchedAt: Date.now(),
     settings:
-      args.recovery === undefined
-        ? useComposerRunSettingsStore
-            .getState()
-            .getGlobalRunSettings(readComposerHostIdSnapshot())
-        : args.recovery.settings,
+      args.recovery?.settings ??
+      useComposerRunSettingsStore
+        .getState()
+        .getGlobalRunSettings(readComposerHostIdSnapshot()),
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
