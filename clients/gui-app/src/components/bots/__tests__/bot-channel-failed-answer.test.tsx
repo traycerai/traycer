@@ -408,7 +408,7 @@ function mountChannelWith(
               tasks={[]}
               openThread={openThread}
               onOpenThread={onOpenThread}
-              onOpenUnderTheHood={vi.fn()}
+              onOpenActivity={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>

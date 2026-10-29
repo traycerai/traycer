@@ -34,6 +34,8 @@ import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
+import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
 import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import {
   useBotDeleteMutation,
@@ -64,6 +66,8 @@ const BOT_TITLE_MAX = 500;
  *   personal bot answers posts (T52), and a team's members;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
+ * - Usage: what the bot's chats have cost, in the usage graph (decision 118),
+ *   where the tab's host can read it;
  * - Advanced, collapsed: the model the bot runs on and whether it is its
  *   environment's main bot;
  * - deleting the bot, behind a confirmation.
@@ -146,6 +150,7 @@ export function BotChannelSettingsPanel(props: {
         {personal || environmentBots === null ? null : (
           <BotsInChannel bots={environmentBots} />
         )}
+        <BotUsageSection botId={bot.botId} />
         <BotAdvancedSettings bot={bot} isMain={isMain} />
         <BotDeleteSection bot={bot} />
       </div>
@@ -170,6 +175,39 @@ function SettingsGroup(props: {
       </h3>
       {props.children}
     </section>
+  );
+}
+
+/**
+ * What the bot has cost, behind a button: the usage graph of everything its
+ * chats ran, opened on demand. Nothing where the tab's host cannot read it.
+ */
+function BotUsageSection(props: { readonly botId: string }): ReactNode {
+  const client = useTabHostClient();
+  const hostId = useTabHostId();
+  const supported = useUsageSummarySupported(hostId);
+  const [open, setOpen] = useState(false);
+  if (!supported) return null;
+  return (
+    <SettingsGroup title="Usage" testId="bot-settings-usage">
+      <div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="bot-settings-usage-open"
+          onClick={() => setOpen(true)}
+        >
+          View usage
+        </Button>
+      </div>
+      <EpicUsageDialog
+        epicId={props.botId}
+        client={client}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </SettingsGroup>
   );
 }
 
@@ -358,7 +396,6 @@ function BotsInChannelRow(props: { readonly bot: BotRecord }): ReactNode {
       botId: bot.botId,
       title: bot.title,
       owner: surface?.owner ?? null,
-      openActivity: null,
     }),
     [bot.botId, bot.title, surface?.owner],
   );

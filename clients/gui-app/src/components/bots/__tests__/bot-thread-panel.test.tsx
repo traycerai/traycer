@@ -419,7 +419,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               }
               resolveMember={resolveMember}
               onClose={vi.fn()}
-              onOpenUnderTheHood={vi.fn()}
+              onOpenActivity={vi.fn()}
               onEditPost={onEditPost}
             />
           </ChatExpansionTestProviders>
@@ -1015,7 +1015,6 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
 
     view.rerender(panelTree(listed("user-teammate")));
 
-    expect(screen.getByTestId("bot-thread-under-the-hood")).toBeTruthy();
     expect(screen.getByTestId("bot-thread-replies")).toBeTruthy();
     expect(replyBox()).toBe(box);
     expect(box.value).toBe("And the nightly?");
@@ -1289,7 +1288,6 @@ describe("<BotThreadPanel /> the anchor", () => {
             name: "Olive Owner",
             avatarUrl: null,
           },
-          openActivity: null,
         }}
       >
         {panelTree(listed(null))}
@@ -1931,6 +1929,7 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       label: null,
       originRequestId: null,
       createdByChatId: THREAD_ID,
+      checkins: null,
       ...overrides,
     };
   }
