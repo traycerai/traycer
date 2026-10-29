@@ -824,10 +824,10 @@ describe("Agents opener sub-page", () => {
     expect(matched?.hostBadge).toBeUndefined();
   });
 
-  it("falls back to the raw hostId when the directory-listed label is blank", () => {
+  it('badges "the host", never the raw hostId, when the directory-listed label is blank', () => {
     const items = renderItems(useAgentsOpenerItems);
     const blankLabel = items.find((i) => i.id === "open:chats:c3");
-    expect(blankLabel?.hostBadge).toBe("blank-label-host");
+    expect(blankLabel?.hostBadge).toBe("the host");
   });
 
   it("does not badge any chat while the active host id is still unresolved", () => {

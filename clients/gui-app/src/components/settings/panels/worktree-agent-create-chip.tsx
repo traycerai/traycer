@@ -20,7 +20,10 @@ import {
   resolveAutoCleanupGate,
   type AutoCleanupGate,
 } from "@/components/settings/panels/worktree-auto-cleanup-gate";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  hostLabelAtSentenceStart,
+  useHostReachability,
+} from "@/hooks/agent/use-host-reachability";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -155,7 +158,7 @@ function agentWorktreesUnavailableCopy(
   if (gate === "offline") {
     return `The agent worktrees setting is unavailable while ${hostLabel} is offline.`;
   }
-  return `${hostLabel} is running a version without the agent worktrees setting. Update the host to choose whether agents may create worktrees.`;
+  return `${hostLabelAtSentenceStart(hostLabel)} is running a version without the agent worktrees setting. Update the host to choose whether agents may create worktrees.`;
 }
 
 function AgentWorktreesPolicyChip(props: {

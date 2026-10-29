@@ -15,6 +15,10 @@ import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/run
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
+  hostNameFromLabel,
+  UNNAMED_HOST_LABEL,
+} from "@/hooks/agent/use-host-reachability";
+import {
   deriveHostHealth,
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
@@ -237,7 +241,7 @@ function unenrolledSandboxOption(
 ): HostScopeOption {
   return {
     hostId: summary.hostId,
-    name: summary.displayName.length > 0 ? summary.displayName : summary.hostId,
+    name: hostNameFromLabel(summary.displayName, summary.hostId),
     isLocalMachine: false,
     isActive: summary.hostId === input.activeHostId,
     connectable: false,
@@ -427,8 +431,10 @@ export function isAdministrableRoute(
 
 /**
  * A name a person recognizes, in descending order of how deliberate it is:
- * the registry display name, then the directory label, then the raw id as a
- * last resort.
+ * the registry display name, then the directory label, then "the host"
+ * (`UNNAMED_HOST_LABEL`) as a last resort - never the raw id, and never a
+ * label that IS the id (`hostNameFromLabel`). Keys, selection and dedupe read
+ * `hostId`, never this.
  *
  * This is the UNREACHABLE-host half of the naming rule. The host itself is the
  * master copy — `host.identity.get` answers `effectiveName`, and a surface with
@@ -454,10 +460,9 @@ function resolveHostName(
   entry: HostDirectoryEntry | null,
   item: HostListItem | null,
 ): string {
-  const registryName = item?.displayName ?? null;
-  if (registryName !== null && registryName.length > 0) return registryName;
-  if (entry !== null && entry.label.length > 0) return entry.label;
-  return hostId;
+  const registryName = hostNameFromLabel(item?.displayName ?? null, hostId);
+  if (registryName !== UNNAMED_HOST_LABEL) return registryName;
+  return hostNameFromLabel(entry?.label ?? null, hostId);
 }
 
 /**

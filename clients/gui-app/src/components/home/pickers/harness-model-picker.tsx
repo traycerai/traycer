@@ -111,6 +111,7 @@ import { useProviderProfileEnablementPending } from "@/hooks/providers/use-provi
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
+  hostLabelAtSentenceStart,
   useHostReachability,
   type HostReachability,
 } from "@/hooks/agent/use-host-reachability";
@@ -2218,7 +2219,7 @@ function modelPickerHostUnavailableLabel(
   if (hostId === null) return "No device available";
   if (reachability.status === "checking") return "Checking device";
   if (reachability.status === "unreachable") {
-    return `${reachability.hostLabel} is offline`;
+    return `${hostLabelAtSentenceStart(reachability.hostLabel)} is offline`;
   }
-  return `${reachability.hostLabel} is starting`;
+  return `${hostLabelAtSentenceStart(reachability.hostLabel)} is starting`;
 }
