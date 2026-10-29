@@ -19,6 +19,7 @@ import type {
   ListCreditOffersFetchResult,
 } from "@traycer-clients/shared/auth/credit-offers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import {
   teamSubscription,
   userSubscription,
@@ -339,8 +340,9 @@ describe("CreditsSettingsPanel credit offers", () => {
   });
 
   it("lists each offer in dollars with its name, description and time left", () => {
+    const launch = offer({});
     mocks.data = userWithOffers([
-      offer({}),
+      launch,
       offer({
         campaignId: "c2",
         name: "Plain offer",
@@ -366,6 +368,21 @@ describe("CreditsSettingsPanel credit offers", () => {
     expect(
       first.querySelector("[data-testid=credits-offer-time-left]")?.textContent,
     ).toBe("5 days left");
+    // The bar is the share left: 12.50 of 25.
+    expect(
+      first.querySelector<HTMLElement>('[aria-hidden="true"] > div')?.style
+        .width,
+    ).toBe("50%");
+    const timeLeft = first.querySelector("[data-testid=credits-offer-time-left]");
+    if (timeLeft === null) throw new Error("no time-left trigger");
+    expect(tooltipTextFor(timeLeft)).toBe(
+      CREDITS_PAGE.offerEnds(
+        new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date(launch.endsAt)),
+      ),
+    );
     // A null description adds no line: the row is figures, name and time.
     expect(second.textContent).toBe("$4.00of $10.00Plain offer5 days left");
   });
