@@ -1377,3 +1377,115 @@ export const botListChangedClientFrameSchema = lazySchema(() =>
 export type BotListChangedClientFrame = z.infer<
   typeof botListChangedClientFrameSchema
 >;
+
+// ---- bot.memory.subscribe (T87) ----------------------------------------- //
+
+/**
+ * One bot's memory as the person reads it (Tracy Bots T87): opened with the
+ * bot and the environment whose room keeps the pool. The serving host reads
+ * the room it holds for that environment; the environment's every member
+ * may read it.
+ */
+export const botMemorySubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    environmentId: z.string().min(1).max(36),
+  }),
+);
+export type BotMemorySubscribeOpenRequest = z.infer<
+  typeof botMemorySubscribeOpenRequestSchema
+>;
+
+/**
+ * Who wrote an entry: the bot and its chat (its trunk, or a thread's
+ * session), and the member's post the chat was answering, by its request
+ * id. `botId` and `chatId` are `null` for an entry copied in from the bots'
+ * earlier notes; `requestId` is `null` for one written before entries
+ * recorded it, or by a turn that answered no post.
+ */
+export const botMemoryWriterSchema = lazySchema(() =>
+  z.object({
+    botId: z.string().min(1).nullable(),
+    chatId: z.string().min(1).nullable(),
+    requestId: z.string().min(1).nullable(),
+  }),
+);
+export type BotMemoryWriter = z.infer<typeof botMemoryWriterSchema>;
+
+/**
+ * One entry of the pool. `at` is when it was written and `confirmedAt` when
+ * a bot last said it still holds, each `null` where the room gives no time
+ * a reader can use. `tags` names the bots it is for: bot ids, and `all` for
+ * every bot of the environment.
+ */
+export const botMemoryEntrySchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    text: z.string(),
+    tags: z.array(z.string().min(1)),
+    writtenBy: botMemoryWriterSchema,
+    at: z.number().nullable(),
+    confirmedAt: z.number().nullable(),
+  }),
+);
+export type BotMemoryEntry = z.infer<typeof botMemoryEntrySchema>;
+
+/**
+ * What one tag holds against its ceiling: its entries, the characters they
+ * take, and the characters it may take before the bot is told to tidy it.
+ */
+export const botMemoryTagUsageSchema = lazySchema(() =>
+  z.object({
+    entries: z.number().int().nonnegative(),
+    chars: z.number().int().nonnegative(),
+    ceiling: z.number().int().positive(),
+  }),
+);
+export type BotMemoryTagUsage = z.infer<typeof botMemoryTagUsageSchema>;
+
+/**
+ * The entries the bot reads before every reply - those tagged its id and
+ * those tagged `all` - and the usage of each of the two tags.
+ */
+export const botMemorySchema = lazySchema(() =>
+  z.object({
+    entries: z.array(botMemoryEntrySchema),
+    own: botMemoryTagUsageSchema,
+    shared: botMemoryTagUsageSchema,
+  }),
+);
+export type BotMemory = z.infer<typeof botMemorySchema>;
+
+/**
+ * `snapshot` carries the bot's memory whole, on open and again after every
+ * change to the pool, from any host or bot. `memory` is `null` while the
+ * serving host cannot read the environment's room.
+ */
+export const botMemorySubscribeServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      memory: botMemorySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotMemorySubscribeServerFrame = z.infer<
+  typeof botMemorySubscribeServerFrameSchema
+>;
+
+export const botMemorySubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotMemorySubscribeClientFrame = z.infer<
+  typeof botMemorySubscribeClientFrameSchema
+>;

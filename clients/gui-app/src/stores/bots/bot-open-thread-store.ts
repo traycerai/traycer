@@ -64,12 +64,40 @@ export interface BotOpenTurn {
 }
 
 /**
- * What the rail beside a bot's channel holds: one slot, a thread or one
- * turn, the newer replacing the older.
+ * What the bot knows, open in the rail (Tracy Bots T87): read-only, and the
+ * thread it displaced, which its back button restores (`null` when it
+ * displaced none).
+ */
+export interface BotOpenMemory {
+  readonly back: BotOpenThread | null;
+}
+
+/**
+ * What the rail beside a bot's channel holds: one slot, a thread, one turn
+ * or the bot's memory, the newer replacing the older.
  */
 export type BotRail =
   | ({ readonly kind: "thread" } & BotOpenThread)
-  | ({ readonly kind: "turn" } & BotOpenTurn);
+  | ({ readonly kind: "turn" } & BotOpenTurn)
+  | ({ readonly kind: "memory" } & BotOpenMemory);
+
+/**
+ * The memory opened over what the rail holds (the bot's profile card): it
+ * takes the one slot and keeps for its back button the thread it displaces,
+ * or the one a turn or the memory already open there displaced.
+ */
+export function memoryRailOver(rail: BotRail | null): BotRail {
+  if (rail === null) return { kind: "memory", back: null };
+  if (rail.kind === "thread") return { kind: "memory", back: threadOf(rail) };
+  return { kind: "memory", back: rail.back };
+}
+
+function threadOf(
+  rail: { readonly kind: "thread" } & BotOpenThread,
+): BotOpenThread {
+  const { kind: _kind, ...thread } = rail;
+  return thread;
+}
 
 interface BotOpenThreadState {
   readonly byBotId: Readonly<Record<string, BotRail>>;

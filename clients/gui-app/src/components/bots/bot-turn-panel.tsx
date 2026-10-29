@@ -261,6 +261,7 @@ function TurnPanelHeader(props: {
                 channelId={channelId}
                 anchorMessageId={back.anchorMessageId}
                 onBack={onBack}
+                testId="bot-turn-crumb"
               />
               <span aria-hidden="true">·</span>
             </>
@@ -285,14 +286,15 @@ function TurnPanelHeader(props: {
 }
 
 /** The displaced thread, named by its post's first line; it brings the thread back. */
-function ThreadCrumb(props: {
+export function ThreadCrumb(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly channelId: string;
   readonly anchorMessageId: string;
   readonly onBack: () => void;
+  readonly testId: string;
 }): ReactNode {
-  const { botId, hostId, channelId, anchorMessageId, onBack } = props;
+  const { botId, hostId, channelId, anchorMessageId, onBack, testId } = props;
   return (
     <ChannelPost
       botId={botId}
@@ -306,7 +308,7 @@ function ThreadCrumb(props: {
         return (
           <button
             type="button"
-            data-testid="bot-turn-crumb"
+            data-testid={testId}
             onClick={onBack}
             className="min-w-0 truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
           >

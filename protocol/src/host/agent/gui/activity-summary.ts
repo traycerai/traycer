@@ -7,6 +7,7 @@
  */
 
 import { activityToolKind } from "@traycer/protocol/host/agent/gui/activity-step-label";
+import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 
 /** One step of a turn's activity, as far as its label counts it. */
 export type ActivitySummaryStep =
@@ -28,7 +29,9 @@ export type ActivitySummaryStep =
   | { readonly kind: "subagent" }
   | { readonly kind: "approval"; readonly approved: boolean }
   | { readonly kind: "monitor_update" }
-  | { readonly kind: "shell_update" };
+  | { readonly kind: "shell_update" }
+  /** A write to the bot's memory ({@link isMemoryUpdateToolCall}). */
+  | { readonly kind: "memory_update" };
 
 type Counts = {
   // Summed duration of every finished, measured reasoning block.
@@ -56,6 +59,7 @@ type Counts = {
   usedTools: number;
   monitorUpdates: number;
   shellUpdates: number;
+  memoryUpdates: number;
 };
 
 /**
@@ -104,6 +108,7 @@ export function activitySummaryOf(
     usedTools: 0,
     monitorUpdates: 0,
     shellUpdates: 0,
+    memoryUpdates: 0,
   };
   steps.forEach((step) => countStep(counts, step));
   const parts = [
@@ -118,6 +123,7 @@ export function activitySummaryOf(
     countPhrase(counts.spawnedSubagents, "spawned", "subagent", "subagents"),
     countPhrase(counts.approved, "approved", "request", "requests"),
     countPhrase(counts.denied, "denied", "request", "requests"),
+    countPhrase(counts.memoryUpdates, "updated", "memory", "memories"),
     countPhrase(counts.usedTools, "used", "tool", "tools"),
     counts.monitorUpdates > 0
       ? `${counts.monitorUpdates} monitor ${counts.monitorUpdates === 1 ? "update" : "updates"}`
@@ -155,6 +161,9 @@ function countStep(counts: Counts, step: ActivitySummaryStep): void {
       return;
     case "shell_update":
       counts.shellUpdates += 1;
+      return;
+    case "memory_update":
+      counts.memoryUpdates += 1;
       return;
     case "tool":
       countTool(counts, step.toolName, step.editKey);
@@ -221,4 +230,31 @@ function thinkingPhrase(counts: Counts): string | null {
   }
   if (counts.thinkingCompleted) return "thought";
   return "thinking";
+}
+
+/** The memory tool's actions that change an entry; `list` only reads. */
+const MEMORY_UPDATE_ACTIONS: ReadonlySet<string> = new Set([
+  "add",
+  "remove",
+  "confirm",
+]);
+
+/**
+ * Whether a tool call wrote the bot's memory: a `traycer_memory` call, bare
+ * or server-prefixed as each harness reports it, whose `action` adds,
+ * removes or confirms an entry and which did not fail. Such a call is its
+ * own clause of the label ("updated 1 memory"), never "used 1 tool".
+ */
+export function isMemoryUpdateToolCall(call: {
+  readonly toolName: string;
+  readonly inputDetail: ToolInputDetail | null;
+  readonly error: string | null;
+}): boolean {
+  if (call.error !== null || call.inputDetail?.kind !== "fields") return false;
+  const name = call.toolName.toLowerCase().replaceAll("-", "_");
+  if (!/(^|[_/.])traycer_memory$/.test(name)) return false;
+  const action = call.inputDetail.entries.find(
+    (entry) => entry.key === "action",
+  );
+  return action !== undefined && MEMORY_UPDATE_ACTIONS.has(action.value);
 }

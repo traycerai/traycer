@@ -770,6 +770,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "agent.inbox.subscribe": "target-host",
   "artifact.subscribe": "target-host",
   "bot.listChanged": "target-host",
+  "bot.memory.subscribe": "target-host",
   "bot.subscribe": "target-host",
   "browser.screencast": "target-host",
   "browser.sessions": "target-host",

@@ -1329,6 +1329,26 @@ describe("chat activity grouping", () => {
     );
   });
 
+  it("names the bot's memory writes as their own clause, a read or a refused write as a tool, whatever the harness calls the tool", () => {
+    expect(
+      activityGroupSummary([
+        toolSegment("tool-1", "mcp__traycer_a2a__traycer_memory", {
+          action: "add",
+          text: "the codex hold is lifted",
+        }),
+        toolSegment("tool-2", "traycer_a2a/traycer_memory", {
+          action: "confirm",
+          id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        }),
+        toolSegment("tool-3", "traycer_memory", { action: "list", tag: "all" }),
+        {
+          ...toolSegment("tool-4", "traycer_memory", { action: "remove" }),
+          error: "not yours to remove",
+        },
+      ]),
+    ).toBe("Updated 2 memories, used 2 tools");
+  });
+
   it("groups web_fetch alongside web_search in the search bucket", () => {
     expect(
       activityGroupSummary([

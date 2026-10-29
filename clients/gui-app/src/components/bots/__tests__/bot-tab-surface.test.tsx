@@ -171,6 +171,10 @@ vi.mock(
     usePaneVisible: () => mocks.state.paneVisible,
   }),
 );
+// The card's memory row is driven in `bot-memory-pane.test.tsx`.
+vi.mock("@/hooks/bots/use-bot-memory", () => ({
+  useBotMemory: () => ({ kind: "unsupported" }),
+}));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   useBotSubscriptionForHost: () => ({
     snapshot: mocks.state.snapshot,
