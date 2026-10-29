@@ -18,7 +18,15 @@
  * R5F1 - a document that merely "looks right" to a mock can still be one the
  * real destination refuses, and here there is no gap between the two.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatRunSettings,
@@ -31,7 +39,12 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
-import { LANDING_DRAFT_PERSIST_KEY } from "@/stores/home/landing-draft-store";
+import {
+  deleteLandingDraftOnHost,
+  LANDING_DRAFT_PERSIST_KEY,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
 
 import {
   createChatSessionStore,
@@ -66,6 +79,15 @@ import {
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
 }));
+
+// Ids the next `uuid` v4 calls answer with, oldest first; empty means real ids.
+// A send's `clientActionId` is the first v4 it draws, so queueing one here
+// makes a second chat send under an action id a first chat already used.
+const pinnedV4Ids = vi.hoisted((): string[] => []);
+vi.mock("uuid", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("uuid")>();
+  return { ...actual, v4: () => pinnedV4Ids.shift() ?? actual.v4() };
+});
 
 const originalCreateImageBitmap = globalThis.createImageBitmap;
 
@@ -1099,5 +1121,140 @@ describe("a disposed chat's prompt whose draft the browser refuses to save", () 
     } finally {
       refuse.mockRestore();
     }
+  });
+
+  describe("with every landing write refused", () => {
+    const REFUSED_TEXT = "unrecorded message the browser cannot save";
+
+    let landingWriteRefusal: MockInstance<Storage["setItem"]> | null = null;
+
+    beforeEach(() => {
+      landingWriteRefusal = null;
+      resetLandingDraftRetirementsForTests();
+      pinnedV4Ids.length = 0;
+    });
+
+    afterEach(() => {
+      landingWriteRefusal?.mockRestore();
+      landingWriteRefusal = null;
+      resetLandingDraftRetirementsForTests();
+      pinnedV4Ids.length = 0;
+    });
+
+    function rowsHolding(text: string) {
+      return useLandingDraftStore
+        .getState()
+        .drafts.filter((draft) => JSON.stringify(draft.content).includes(text));
+    }
+
+    function refuseLandingWrites(): void {
+      const write = localStorage.setItem.bind(localStorage);
+      landingWriteRefusal = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation((name, value) => {
+          if (name === LANDING_DRAFT_PERSIST_KEY)
+            throw new DOMException("No room", "QuotaExceededError");
+          write(name, value);
+        });
+    }
+
+    /**
+     * Disposes a chat holding a rejected prompt, with the browser refusing
+     * the landing-draft key. Resolves once the handoff chain has finished:
+     * nothing after the first install is anything but a microtask (a catch,
+     * a second install, a rejection), so a macrotask turn cannot overtake it.
+     * Every state the landing store passes through on the way is recorded.
+     */
+    async function disposeRefusedChat(
+      text: string,
+      content: JsonContent,
+    ): Promise<{ readonly clientActionId: string; readonly seen: string[][] }> {
+      harness = createHarness();
+      emitOwnerSnapshot(harness.callbacks());
+      const action = sendMessageWithContent(harness, content);
+      rejectPlain(
+        harness,
+        action.clientActionId,
+        "The host refused the message.",
+      );
+      refuseLandingWrites();
+      // The ids of the rows holding the prompt after EVERY change, so a copy
+      // that exists only between two attempts is still seen.
+      const seen: string[][] = [];
+      const stop = useLandingDraftStore.subscribe(() => {
+        seen.push(rowsHolding(text).map((row) => row.id));
+      });
+      try {
+        harness.handle.dispose();
+        await waitForHandedOffDraft(text, 1000);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      } finally {
+        stop();
+      }
+      return { clientActionId: action.clientActionId, seen };
+    }
+
+    it("leaves exactly one readable copy, at every step of the teardown", async () => {
+      const { seen } = await disposeRefusedChat(
+        REFUSED_TEXT,
+        plainContent(REFUSED_TEXT),
+      );
+
+      const rows = rowsHolding(REFUSED_TEXT);
+      expect(rows).toHaveLength(1);
+      expect(JSON.stringify(rows[0]?.content)).toContain(REFUSED_TEXT);
+      // Between the first attempt landing and the second chance running, the
+      // store never held a second row, nor a different id for the prompt.
+      expect(seen.length).toBeGreaterThan(0);
+      expect(new Set(seen.flat()).size).toBe(1);
+      expect(Math.max(...seen.map((ids) => ids.length))).toBe(1);
+    });
+
+    it("still leaves one copy when the image read fails and the second chance runs", async () => {
+      // A hash no store holds and no host serves: the real resolver answers
+      // nothing, the import throws, and the first write of the shared id is
+      // the text-only install in the handoff's own catch. Its row lands in
+      // memory, the refused write throws, and the teardown's second chance
+      // runs against that row.
+      const { seen } = await disposeRefusedChat(
+        REFUSED_TEXT,
+        hashOnlyContent("a".repeat(64), REFUSED_TEXT),
+      );
+
+      const rows = rowsHolding(REFUSED_TEXT);
+      expect(rows).toHaveLength(1);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(new Set(seen.flat()).size).toBe(1);
+      expect(Math.max(...seen.map((ids) => ids.length))).toBe(1);
+    });
+
+    it("does not bring the prompt back once the person deleted it from Drafts", async () => {
+      const { clientActionId } = await disposeRefusedChat(
+        REFUSED_TEXT,
+        plainContent(REFUSED_TEXT),
+      );
+      const copies = rowsHolding(REFUSED_TEXT);
+      expect(copies.length).toBeGreaterThan(0);
+      // The person frees some room before deleting, so the delete itself is
+      // not what the browser refuses; the second teardown meets a full one.
+      landingWriteRefusal?.mockRestore();
+      for (const copy of copies) deleteLandingDraftOnHost(copy.id, HOST_ID);
+      expect(rowsHolding(REFUSED_TEXT)).toHaveLength(0);
+
+      // Another chat sends under the same action id and is disposed the same
+      // way: the same prompt, already discarded by the person.
+      refuseLandingWrites();
+      pinnedV4Ids.push(clientActionId);
+      const second = createHarness();
+      secondHarness = second;
+      emitOwnerSnapshot(second.callbacks());
+      const again = sendMessageWithContent(second, plainContent(REFUSED_TEXT));
+      expect(again.clientActionId).toBe(clientActionId);
+      rejectPlain(second, again.clientActionId, "The host refused it.");
+      second.handle.dispose();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(rowsHolding(REFUSED_TEXT)).toHaveLength(0);
+    });
   });
 });
