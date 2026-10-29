@@ -108,7 +108,7 @@ const environments = {
 /** A `providers.list` row whose Env override only reaches Traycer's own
  *  native config (MCP setup), never the provider's conversations - Cursor's
  *  actual `envOverrideScope`, as `providerNativeConfigOnlyEnvSubtitle` names
- *  it (NEW-154-15 class sweep). */
+ *  it. */
 function cursorProviderListRow(): ProviderCliState {
   return {
     providerId: "cursor",
@@ -330,7 +330,7 @@ describe("TeamProviders items", () => {
     expect(subtitle.textContent).not.toContain("conversations");
   });
 
-  it("says on its Env tab that a native-config-only provider's variables never reach its conversations (NEW-154-15)", async () => {
+  it("says on its Env tab that a native-config-only provider's variables never reach its conversations", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => []),
       "environment.host.list": () => ({ hosts: [reachableHost] }),

@@ -33,7 +33,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-/** What the NEW-154-9(c) pending label reads: controlled per test. */
+/** What the pending SET label's host count reads: controlled per test. */
 const hostsRunningPersonalMock = vi.hoisted(
   (): {
     current: {
@@ -181,7 +181,7 @@ function renderSection(input: {
 }
 
 describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
-  it("states the variables are used to set Cursor's tools up, not its conversations (NEW-154-15)", () => {
+  it("states the variables are used to set Cursor's tools up, not its conversations", () => {
     // Cursor is the production carrier of this scope, but the copy must be
     // driven by the descriptor — not by providerId === "cursor".
     renderSection({
@@ -1045,11 +1045,14 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       });
     });
 
-    describe("a saved variable that shares a Personal secret's own name without being claimed (NEW-154-11)", () => {
+    describe("a saved variable that shadows a Personal secret's own binding without being claimed", () => {
       const SHADOW_KEY = "ENV_R2_S3_CLAIM";
-      const unrelatedSecretNamedTheSame: EnvironmentSecretV12 = {
+      // `name` is deliberately NOT `SHADOW_KEY`: the note must read the
+      // secret's actual name from its binding (`variables`), never assume
+      // the key and the secret's display name coincide.
+      const secretBoundGlobally: EnvironmentSecretV12 = {
         secretId: "sec-shadow",
-        name: SHADOW_KEY,
+        name: "R2 access",
         kind: "api_key",
         protocol: null,
         destinations: [],
@@ -1058,19 +1061,19 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         currentVersionId: "ver-shadow",
         revoked: false,
         updatedAt: 1,
-        variables: [],
+        variables: [SHADOW_KEY],
         providerVariables: [],
       };
 
       it("notes that the provider gets this value instead of the secret, with a link to Secrets", async () => {
         renderClaudeEnvTab(
-          { localOverrides: [], secrets: [unrelatedSecretNamedTheSame] },
+          { localOverrides: [], secrets: [secretBoundGlobally] },
           [{ key: SHADOW_KEY, value: "r2-override" }],
         );
 
         const note = await screen.findByTestId("env-row-note");
         expect(note.textContent).toBe(
-          `Claude Code gets this value instead of the secret ${SHADOW_KEY} · Secrets`,
+          `Claude Code gets this value instead of the secret R2 access · Secrets`,
         );
         expect(screen.queryByTestId("env-claimed-row")).toBeNull();
         expect(screen.getByLabelText(`Value for ${SHADOW_KEY}`)).toBeTruthy();
@@ -1081,8 +1084,24 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
       it("control: an explicit Unset of the same name gets no shadow note - it receives no value from anything", async () => {
         renderClaudeEnvTab(
-          { localOverrides: [], secrets: [unrelatedSecretNamedTheSame] },
+          { localOverrides: [], secrets: [secretBoundGlobally] },
           [{ key: SHADOW_KEY, value: null }],
+        );
+
+        await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
+        expect(screen.queryByTestId("env-row-note")).toBeNull();
+      });
+
+      it("control: a secret merely named the same, bound to nothing, is not a shadow - its display name is not a binding", async () => {
+        const unboundSecretNamedTheSame: EnvironmentSecretV12 = {
+          ...secretBoundGlobally,
+          secretId: "sec-unbound",
+          name: SHADOW_KEY,
+          variables: [],
+        };
+        renderClaudeEnvTab(
+          { localOverrides: [], secrets: [unboundSecretNamedTheSame] },
+          [{ key: SHADOW_KEY, value: "r2-override" }],
         );
 
         await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
@@ -1090,7 +1109,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       });
     });
 
-    describe("the pending SET label's host count (NEW-154-9c)", () => {
+    describe("the pending SET label's host count", () => {
       function pendingSetOverride(): () => void {
         let resolveSave: (() => void) | undefined;
         mocks.setOverrideMutate.mockImplementationOnce(
@@ -1112,13 +1131,14 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
         expect(screen.getByRole("status").textContent).toBe(
-          "Applying on 2 hosts…",
+          "CURSOR_BASE_URL · Applying on 2 hosts…",
         );
       });
 
       it.each([
         { label: "loading", state: "loading" as const },
         { label: "failed", state: "failed" as const },
+        { label: "ready with none answered yet", state: "ready" as const },
       ])(
         "keeps the plain label while the host list is $label, never an understated count",
         async ({ state }) => {

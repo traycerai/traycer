@@ -20,10 +20,11 @@ import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
  *   login, which it does not check until a run) counts, as the Profiles
  *   card's own-login row reads it. Not for Traycer, whose sign-in is the
  *   person's account.
- * - `not checked`: the provider has a terminal login to check (an `ambient`
- *   profile row), the check is not still running, and it settled on neither
- *   a signed-out nor a signed-in verdict - the probe itself failed, which the
- *   Profiles card's own-login row answers with its Retry.
+ * - `not checked`: the provider has a terminal login to check
+ *   (`loginCapability` is not `null`), the check is not still running, and it
+ *   settled on neither a signed-out nor a signed-in verdict - the probe
+ *   itself failed, which the Profiles card's own-login row answers with its
+ *   Retry.
  *
  * `null` while nothing above is known yet (a probe still running, a status
  * that is not an answer), so the rail never states a guess. The words came
@@ -46,13 +47,15 @@ export function providerRailStateWord(state: ProviderCliState): string | null {
   ) {
     return "own login";
   }
-  const hasAmbientProfile = state.profiles.some(
-    (profile) => profile.kind === "ambient",
-  );
   // Pending stays `null`, never a guess: a still-running probe is not a
   // failed one, and a surface that wants to say "checking" while it waits
-  // reads `authPending` itself.
-  if (hasAmbientProfile && !state.authPending) return "not checked";
+  // reads `authPending` itself. `loginCapability` is null for a provider
+  // with no terminal login to probe at all (an API-key-only provider, or
+  // Traycer's own account) - the host emits an ambient profile row for every
+  // provider regardless, so that row alone is not the right gate.
+  if (state.loginCapability !== null && !state.authPending) {
+    return "not checked";
+  }
   return null;
 }
 

@@ -1547,10 +1547,13 @@ function ProviderDetail({
           // by the body, the clip edge and the rule are the same line.
           className="flex flex-1 flex-col gap-0 md:min-h-0"
         >
-          {/* The one reason every tab below is greyed, named once at the top
+          {/* The one reason every OTHER tab is greyed, named once at the top
               rather than left for the pointer-events-none pane to explain on
-              its own - the inert styling alone gave no reason at all. */}
-          {detailPaneInert ? (
+              its own - the inert styling alone gave no reason at all. Usage
+              stays off this gate the same way it stays off the inert styling
+              below: it is deliberately still usable while the provider is
+              off, so a reader on it is not told to turn the provider on. */}
+          {detailPaneInert && activeTab !== "usage" ? (
             <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
               {PROVIDER_DISPLAY_NAMES[providerId]} is off. Turn it on to add a
               key or change its settings.

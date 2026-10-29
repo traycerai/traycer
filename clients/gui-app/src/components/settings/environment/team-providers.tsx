@@ -285,9 +285,7 @@ type EnvSubtitleScope = "config-only" | "normal" | "unknown";
  * Whether the selected provider's Env override reaches its conversations,
  * per its row in the team's own `providers.list` catalog read - "unknown"
  * without a row to read (the catalog hasn't resolved, or there is no
- * reachable viewing host to read it from at all), never a guess either way
- * (NEW-154-15 class sweep; a Codex review round on this same PR flagged the
- * no-host case reading as a confirmed, possibly wrong, "normal").
+ * reachable viewing host to read it from at all), never a guess either way.
  */
 function providerEnvSubtitleScope(
   providers: readonly ProviderCliState[] | undefined,
@@ -301,7 +299,7 @@ function providerEnvSubtitleScope(
 }
 
 /** `providerEnvSubtitle`, or one of its siblings for a confirmed
- *  native-config-only provider or an unconfirmed scope (NEW-154-15). */
+ *  native-config-only provider or an unconfirmed scope. */
 function providerEnvSubtitleFor(
   scope: EnvSubtitleScope,
 ): typeof providerEnvSubtitle {

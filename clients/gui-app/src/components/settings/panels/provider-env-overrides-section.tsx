@@ -17,10 +17,7 @@ import {
   usePersonalRowNotes,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import {
-  useSecretClaimedNames,
-  useSecretNames,
-} from "@/components/settings/personal/use-secret-claimed-names";
+import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
 import { useHostBinding } from "@/lib/host";
@@ -169,22 +166,27 @@ export function ProviderEnvOverridesSection({
     keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
   });
   const claimedBy = useSecretClaimedNames({ kind: "provider", providerId });
-  // Every Personal secret's own name, so a plain override of the same name -
-  // one this provider's secret binding does NOT claim - can be told apart
-  // from an unrelated variable: it shadows the secret rather than reads from
-  // it, and the row says so.
-  const secretNames = useSecretNames();
+  // Every name a Personal secret is set under in Variables & shells, which
+  // every provider's env inherits regardless of its own bindings: a plain
+  // override of the same name - one this provider's OWN binding (claimedBy)
+  // does not claim - shadows that secret rather than reading from it, and
+  // the row says so.
+  const globalClaims = useSecretClaimedNames({ kind: "variable" });
   // The hosts this save propagates to, for the pending row's own label; a
   // Local row's save reaches only this computer, so it keeps the plain
   // Adding/Saving/Removing text instead. Only once the list has actually
-  // answered - `loading` or `failed` is not a count, and presenting an
-  // unresolved or stale read as an exact "on N hosts" would understate the
-  // reach the save really has.
+  // answered with at least one host - `loading`/`failed` is not a count, and
+  // `ready` with zero is not either: the list goes `ready` as soon as the
+  // cloud read answers, while this computer's own status can still be
+  // unresolved and held out of `hosts` a moment longer - presenting any of
+  // that as an exact "on N hosts" would misstate the reach the save has.
   const hostsRunningPersonal = useHostsRunningPersonal();
   const applyingHostsCount =
-    local || hostsRunningPersonal.state !== "ready"
-      ? null
-      : hostsRunningPersonal.hosts.length;
+    !local &&
+    hostsRunningPersonal.state === "ready" &&
+    hostsRunningPersonal.hosts.length > 0
+      ? hostsRunningPersonal.hosts.length
+      : null;
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -201,7 +203,7 @@ export function ProviderEnvOverridesSection({
     rowNotes,
     overrides,
     claimedBy,
-    secretNames,
+    globalClaims,
     providerName,
   });
 
@@ -311,12 +313,14 @@ function ProviderEnvSubtitleLine(props: {
 }
 
 /**
- * Adds a {@link ShadowedSecretNote} for every SET override that shares a
- * Personal secret's own name without that secret claiming it, skipping a key
- * that already carries a note (a host's own value, say), that the secret
- * does claim (`EnvClaimedRow` already says so), or an explicit Unset (`value
- * === null`): it receives no value from anything, so there is nothing to
- * say the provider gets "instead of the secret".
+ * Adds a {@link ShadowedSecretNote} for every SET override whose key is a
+ * name some Personal secret is set under in Variables & shells - which every
+ * provider's env inherits - without this provider's own binding claiming it,
+ * skipping a key that already carries a note (a host's own value, say), that
+ * this provider's own binding does claim (`EnvClaimedRow` already says so),
+ * or an explicit Unset (`value === null`): it receives no value from
+ * anything, so there is nothing to say the provider gets "instead of the
+ * secret".
  */
 function addShadowedSecretNotes(props: {
   readonly rowNotes: Map<string, ReactNode>;
@@ -325,27 +329,32 @@ function addShadowedSecretNotes(props: {
     readonly value: string | null;
   }[];
   readonly claimedBy: ReadonlyMap<string, string>;
-  readonly secretNames: ReadonlySet<string>;
+  readonly globalClaims: ReadonlyMap<string, string>;
   readonly providerName: string;
 }): void {
-  const { rowNotes, claimedBy, secretNames, providerName } = props;
+  const { rowNotes, claimedBy, globalClaims, providerName } = props;
   for (const entry of props.overrides) {
     if (entry.value === null) continue;
     if (rowNotes.has(entry.key)) continue;
     if (claimedBy.has(entry.key)) continue;
-    if (!secretNames.has(entry.key)) continue;
+    const secretName = globalClaims.get(entry.key);
+    if (secretName === undefined) continue;
     rowNotes.set(
       entry.key,
-      <ShadowedSecretNote providerName={providerName} secretName={entry.key} />,
+      <ShadowedSecretNote
+        providerName={providerName}
+        secretName={secretName}
+      />,
     );
   }
 }
 
 /**
- * A row note for a plain override that happens to share a Personal secret's
- * own name without being one of the names that secret is bound to: accepted
- * as an ordinary variable, but worth saying so, since the person may expect
- * the secret's value here instead.
+ * A row note for a plain override whose key is a name some Personal secret
+ * is set under in Variables & shells, which every provider's env inherits,
+ * without this provider's own binding claiming it: accepted as an ordinary
+ * variable, but worth saying so, since the person may expect the secret's
+ * value here instead.
  */
 function ShadowedSecretNote(props: {
   readonly providerName: string;

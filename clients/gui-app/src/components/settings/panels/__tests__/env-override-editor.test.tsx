@@ -128,7 +128,7 @@ describe("EnvOverrideEditor", () => {
     expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("reads a pending SET save as Applying on <n> hosts…, not the row's name (NEW-154-9c)", async () => {
+  it("reads a pending SET save as <key> · Applying on <n> hosts…", async () => {
     let finishRead: () => void = () => {
       throw new Error("read has not started");
     };
@@ -155,8 +155,9 @@ describe("EnvOverrideEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
-    expect(screen.getByRole("status").textContent).toBe("Applying on 3 hosts…");
-    expect(screen.queryByText(/ANTHROPIC_BASE_URL · Adding/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "ANTHROPIC_BASE_URL · Applying on 3 hosts…",
+    );
 
     await act(async () => {
       view.rerender(
@@ -173,7 +174,7 @@ describe("EnvOverrideEditor", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("reads a single applying host without the plural (NEW-154-9c)", () => {
+  it("reads a single applying host without the plural", () => {
     const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
     renderEditor({
       overrides: [],
@@ -188,7 +189,9 @@ describe("EnvOverrideEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
-    expect(screen.getByRole("status").textContent).toBe("Applying on 1 host…");
+    expect(screen.getByRole("status").textContent).toBe(
+      "ANTHROPIC_BASE_URL · Applying on 1 host…",
+    );
   });
 
   it("control: with no host count, a pending SET save keeps the plain Adding text", () => {

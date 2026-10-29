@@ -3244,13 +3244,14 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(container2.querySelector("[inert]")).toBeNull();
     });
 
-    it("names the reason at the top of the greyed tabs (NEW-154-12)", () => {
+    it("names the reason at the top of the greyed tabs", () => {
       singleProvider({ enabled: false });
       render(
         <TooltipProvider>
           <ProvidersSettingsPanel />
         </TooltipProvider>,
       );
+      selectTab("CLI & Args");
 
       expect(
         screen.getByText(
@@ -3269,9 +3270,22 @@ describe("<ProvidersSettingsPanel />", () => {
 
       expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
     });
+
+    it("names no reason on the Usage tab, which stays usable while the provider is off", () => {
+      singleProvider({ enabled: false });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      selectTab("Profiles & Limits");
+
+      expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
+    });
   });
 
-  it("describes Cursor as its coding agent, signed in with its own API key (NEW-154-15)", () => {
+  it("describes Cursor as its coding agent, signed in with its own API key", () => {
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -4372,7 +4386,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // `isProviderAmbientAuthenticated`) are driven from the SAME status here,
     // as a real `providers.list` row keeps them: the top-level summary and
     // the ambient profile row answer together, never one lagging the other
-    // in a fixture that only varies one of the two (NEW-154-10).
+    // in a fixture that only varies one of the two.
     function renderOwnLogin(
       authStatus: ProviderProfile["auth"]["status"],
     ): HTMLElement {
@@ -4462,7 +4476,7 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(within(row).queryByText(/Couldn't check/)).toBeNull();
     });
 
-    it("shows no own-login row for a definitively signed-out login, only Sign in (NEW-154-10)", () => {
+    it("shows no own-login row for a definitively signed-out login, only Sign in", () => {
       const row = renderOwnLogin("unauthenticated");
 
       expect(within(row).getByText(/isn't signed in on/)).toBeDefined();
@@ -4477,7 +4491,7 @@ describe("<ProvidersSettingsPanel />", () => {
       ).toBeDefined();
     });
 
-    it("says a failed check couldn't be checked, never Unavailable, and Retry refreshes the providers (NEW-154-10)", () => {
+    it("says a failed check couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
       const row = renderOwnLogin("unavailable");
 
       expect(within(row).getByText(/Couldn't check/)).toBeDefined();

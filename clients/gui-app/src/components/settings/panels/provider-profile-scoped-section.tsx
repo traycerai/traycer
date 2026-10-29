@@ -607,7 +607,7 @@ function EmptyProviderProfiles(props: {
         {/* No gate needed: the caller above only reaches this component when
             UNRELEASED_FEATURES_ENABLED is already false, so a second check
             of that same build constant here could never take its other
-            branch - see the P1-c note in the PR body. */}
+            branch. */}
         <ProfileSyncEntryButton
           hostId={props.hostId}
           providerId={props.state.providerId}

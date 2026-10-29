@@ -26,7 +26,7 @@ describe("providerEnvSubtitle", () => {
   });
 });
 
-describe("providerNativeConfigOnlyEnvSubtitle (NEW-154-15)", () => {
+describe("providerNativeConfigOnlyEnvSubtitle", () => {
   it("names the configuration's tools, not its conversations, for Personal", () => {
     expect(
       providerNativeConfigOnlyEnvSubtitle("Cursor", { kind: "personal" }),
