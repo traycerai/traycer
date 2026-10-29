@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { fixture, nextFrames } from "./support/fixtures.ts";
+import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures.ts";
 
 // A wheel UP right after a send: the reader must stay where the wheel left
 // them. The owner's "stuck after send", against the fixture in
@@ -122,19 +122,21 @@ async function mark(page: Page, step: string): Promise<void> {
   }, step);
 }
 
+/** Returns once every notch has landed: the view right after the burst is
+ *  where the wheel left the reader. */
 async function nudge(page: Page, shape: Shape): Promise<void> {
   if (shape === "notch") {
-    await page.mouse.wheel(0, -120);
+    await wheelsDelivered(page, [{ deltaX: 0, deltaY: -120 }], 0);
     return;
   }
-  for (let i = 0; i < 18; i += 1) {
-    await page.mouse.wheel(0, -40);
-    await nextFrames(page, 1);
-  }
-  for (const d of [30, 20, 12, 6, 3, 2, 1]) {
-    await page.mouse.wheel(0, -d);
-    await nextFrames(page, 1);
-  }
+  await wheelsDelivered(
+    page,
+    [...Array.from({ length: 18 }, () => 40), 30, 20, 12, 6, 3, 2, 1].map(
+      (d) => ({ deltaX: 0, deltaY: -d }),
+    ),
+    1,
+  );
+  await nextFrames(page, 1);
 }
 
 async function host(
