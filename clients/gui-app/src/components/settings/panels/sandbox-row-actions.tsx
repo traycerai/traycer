@@ -37,6 +37,7 @@ import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-mode
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import {
+  sandboxOperationShown,
   useSandboxOperation,
   type SandboxRowVerb,
 } from "@/hooks/sandboxes/use-sandbox-operation";
@@ -94,6 +95,33 @@ interface SandboxRowActionsProps {
 }
 
 /**
+ * The row action each confirmation confirms. Rename and Idle settings are
+ * editors and stay open through a state change: closing one would drop what
+ * was typed.
+ */
+const CONFIRMS: Partial<Record<RowDialog, SandboxRowAction>> = {
+  suspend: "suspend",
+  stop: "stop",
+  destroy: "destroy",
+  keep: "keep",
+};
+
+/**
+ * The row's open dialog. A confirmation closes once the row stops offering
+ * what it confirms, and the row's state line says where the sandbox went.
+ * Cleared during render, not masked, so a row that comes back never reopens
+ * it.
+ */
+function useRowDialog(
+  offered: (action: SandboxRowAction) => boolean,
+): readonly [RowDialog | null, (dialog: RowDialog | null) => void] {
+  const [dialog, setDialog] = useState<RowDialog | null>(null);
+  const confirming = dialog === null ? undefined : CONFIRMS[dialog];
+  if (confirming !== undefined && !offered(confirming)) setDialog(null);
+  return [dialog, setDialog];
+}
+
+/**
  * One row's actions, by Flow 6's matrix: the primary button, `Give it another
  * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
@@ -122,7 +150,6 @@ function SandboxLifecycleRowActions(
   props: SandboxRowActionsProps & { readonly inlineDetails: boolean },
 ): ReactNode {
   const { summary, configuration } = props;
-  const [dialog, setDialog] = useState<RowDialog | null>(null);
   const verb = useSandboxVerb(summary.id);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
@@ -154,6 +181,10 @@ function SandboxLifecycleRowActions(
   });
   const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
+  const offered = (action: SandboxRowAction): boolean =>
+    actions.primary === action || actions.menu.includes(action);
+  const [dialog, setDialog] = useRowDialog(offered);
+  const shownOperation = sandboxOperationShown(operation, offered);
   const busy =
     pendingVerb !== null ||
     patch.isPending ||
@@ -314,7 +345,7 @@ function SandboxLifecycleRowActions(
         sandboxId={summary.id}
         name={summary.displayName}
         configuration={configuration}
-        operation={operation}
+        operation={shownOperation}
         busy={busy}
         onRetry={(pressed) => {
           if (pressed === "destroy")

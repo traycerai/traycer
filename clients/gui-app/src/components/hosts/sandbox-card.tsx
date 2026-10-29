@@ -53,6 +53,7 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxRunwayWarning } from "@/hooks/sandboxes/use-sandbox-runway-warning";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import {
+  sandboxOperationShown,
   useSandboxOperation,
   type SandboxRowOperation,
 } from "@/hooks/sandboxes/use-sandbox-operation";
@@ -895,7 +896,10 @@ function SandboxCardFooter(props: {
   readonly teamOwned: boolean;
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
-  const operation = useSandboxOperation(props.summary.id);
+  const operation = sandboxOperationShown(
+    useSandboxOperation(props.summary.id),
+    (verb) => props.actions.includes(verb),
+  );
   if (props.actions.length === 0 && operation === null) return null;
   return (
     <CardFooter className="flex flex-wrap gap-2">
