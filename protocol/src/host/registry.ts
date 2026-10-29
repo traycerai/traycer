@@ -14616,7 +14616,8 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         4: {
           contract: hostNotificationsCloudFeedSubscribeV14,
         },
-        // `sandbox.notice`; `@1.4` is on staging desktops.
+        // `sandbox.notice`, which the server no longer writes; `@1.4` is on
+        // staging desktops.
         5: {
           contract: hostNotificationsCloudFeedSubscribeV15,
         },

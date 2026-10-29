@@ -153,8 +153,6 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "dispatched only from the cloud-feed code path, itself entered only once host.notifications.cloudFeed.subscribe negotiates (merged-notifications.ts / notification-feed-mode.ts)",
   "host.notifications.cloudFeed.markAllRead":
     "same cloud-feed-gated path as host.notifications.cloudFeed.markRead",
-  "host.notifications.cloudFeed.resolve":
-    "same cloud-feed-gated path as host.notifications.cloudFeed.markRead; retireNotice returns unless feedMode === 'cloud' (merged-notifications.ts), and resolve shipped with cloudFeed.subscribe in #813",
   "host.notifications.cloudFeed.clear":
     "same cloud-feed-gated path as host.notifications.cloudFeed.markRead",
   "host.notifications.cloudFeed.clearAll":

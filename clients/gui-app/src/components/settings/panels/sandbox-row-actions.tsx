@@ -99,7 +99,6 @@ export function SandboxRowActions(props: {
   readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
   readonly settingsFailed: boolean;
-  readonly onSettingsApplied?: () => void;
 }): ReactNode {
   const { summary, configuration } = props;
   const [dialog, setDialog] = useState<RowDialog | null>(null);
@@ -203,15 +202,7 @@ export function SandboxRowActions(props: {
               },
             },
           ),
-    "retry-applying": () =>
-      repair.mutate(
-        {},
-        {
-          onSuccess: (outcome) => {
-            if (outcome.settingsApplied) props.onSettingsApplied?.();
-          },
-        },
-      ),
+    "retry-applying": () => repair.mutate({}),
     "repair-setup": () => repairGuestSetup.mutate({}),
     "open-tab": () =>
       openOnLanding(summary, configuration, { terminal: false }),

@@ -40,8 +40,6 @@ import {
 import {
   classifyNotificationLifecycle,
   compareAttentionTiers,
-  isActionableNotice,
-  isRetiredNotice,
   compareFeedIdAscending,
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
@@ -62,7 +60,6 @@ import {
   selectHostNotificationUnreadRecentHasLoadedOnce,
   useHostNotificationById,
   useHostNotificationIds,
-  useHostNotificationUnreadCount,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import {
@@ -95,13 +92,13 @@ import {
   type HostNotificationChatStoppedPayload,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
-  type HostNotificationSandboxNoticePayload,
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsCloudFeedRowV16,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
+  type HostNotificationsSummary,
   HOST_NOTIFICATIONS_HOME_ORDER,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
@@ -123,6 +120,10 @@ import {
   type EnvironmentNotificationDetail,
 } from "@/lib/notifications/environment-notification-detail";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import {
+  isDroppedNotification,
+  notificationSummaryContribution,
+} from "@/lib/notifications/dropped-notification-kinds";
 
 export type MergedNotificationSource =
   | "host"
@@ -149,9 +150,6 @@ export interface MergedNotificationRow {
   readonly secrets?: SecretsNotificationDetail | null;
   /** Extra content for P2's five environment / team / secret-removed rows. */
   readonly environmentDetail?: EnvironmentNotificationDetail | null;
-  /** A `sandbox.notice` row's sandbox and what happened to it, for its
-   * actions. Absent or `null` on every other row. */
-  readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
   /** A bot's answer to the person: Attention's last class while unread.
    * Absent or `false` on every other row. */
   readonly botAnswer?: boolean;
@@ -183,33 +181,12 @@ export interface MergedNotificationRow {
   readonly category: NotificationCategory;
 }
 
-/**
- * The sandbox a sandbox row names, or `null` for any other row: a
- * `sandbox.notice` row's payload, else a push's per-occurrence entry key
- * (`sandbox-<kind>:<sandboxId>:<stage>`, and the older
- * `sandbox-day-30:<sandboxId>:<days>`). Its destination is Settings ›
- * Sandboxes with that row revealed.
- */
-export function sandboxIdOfNotificationRow(
-  row: Pick<MergedNotificationRow, "source" | "sourceId" | "sandboxNotice">,
-): string | null {
-  const notice = row.sandboxNotice ?? null;
-  if (notice !== null) return notice.sandboxId;
-  if (row.source !== "cloud" || !row.sourceId.startsWith("sandbox-")) {
-    return null;
-  }
-  const id = row.sourceId.split(":")[1] ?? "";
-  return id.length === 0 ? null : id;
-}
-
 function isHostUnsupportedError(error: unknown): boolean {
   return error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED";
 }
 
 export interface MergedNotificationsActions {
   readonly markAsRead: (row: MergedNotificationRow | string) => void;
-  /** The notice's action succeeded or its sandbox moved on: it leaves the bell. */
-  readonly retireNotice: (row: MergedNotificationRow) => void;
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
@@ -365,18 +342,7 @@ export function mergedUnreadCount(input: {
 /** Every merged row, newest-first across the active feed plus renderer-local
  * failures - the shared base the id/Attention/Recent projections all derive
  * from without recomputing their own source subscriptions. */
-/** Every row the bell shows: a retired notice has left it. */
 export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
-  const rows = useMergedNotificationRowsWithRetired();
-  return useMemo(() => rows.filter((row) => !isRetiredNotice(row)), [rows]);
-}
-
-/**
- * The merged rows with retired notices still in them, for the one reader
- * that must see them: the bell's count, whose relay summary may still count
- * a retired notice an older writer resolved without reading.
- */
-function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   // The host that SERVED these rows, not whichever host is app-wide active -
   // `originHostId` routes activation and names the machine in the row, so the
@@ -407,7 +373,7 @@ function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificatio
       // the `home: local` partition rows (empty while the cloud lane serves).
       const rows: MergedNotificationRow[] = [
         ...hostIds
-          .filter((id) => !isAutomaticAgentRecovery(hostById[id]))
+          .filter((id) => isShownHostEntry(hostById[id]))
           .map((id) =>
             rowFromHostEntryForOrigin(hostById[id], notificationHostId),
           ),
@@ -426,7 +392,7 @@ function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificatio
     if (feedMode === "upgrade-required") return [];
     const rows: MergedNotificationRow[] = [
       ...hostIds
-        .filter((id) => !isAutomaticAgentRecovery(hostById[id]))
+        .filter((id) => isShownHostEntry(hostById[id]))
         .map((id) =>
           rowFromHostEntryForOrigin(hostById[id], notificationHostId),
         ),
@@ -491,7 +457,6 @@ export function useBlockingAttentionCount(): number {
       rows.filter((row) => {
         const classification = classifyNotificationLifecycle(row);
         return (
-          !isActionableNotice(row) &&
           classification.section === "attention" &&
           classification.tier === "blocking"
         );
@@ -657,8 +622,7 @@ function rowFromLocalFeedId(input: {
   if (input.feedMode === "upgrade-required") return null;
   switch (input.parsed.source) {
     case "host":
-      return input.hostEntry === null ||
-        isAutomaticAgentRecovery(input.hostEntry)
+      return input.hostEntry === null || !isShownHostEntry(input.hostEntry)
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
@@ -685,6 +649,29 @@ function rowFromCloudFeedId(input: {
   )
     return null;
   return rowFromCloudFeedRow(input.cloudRow);
+}
+
+/** A host row the merged list shows: neither an automatic recovery nor a
+ * kind the center no longer carries. */
+function isShownHostEntry(entry: HostNotificationFeedEntry): boolean {
+  return (
+    !isAutomaticAgentRecovery(entry) && !isDroppedNotification(entry, null)
+  );
+}
+
+/** What the host summary counts for held rows the merged list drops. */
+function droppedHostSummaryContribution(
+  hostById: Readonly<Record<string, HostNotificationFeedEntry>>,
+): { readonly unread: number; readonly attention: number } {
+  let unread = 0;
+  let attention = 0;
+  for (const entry of Object.values(hostById)) {
+    if (!isDroppedNotification(entry, null)) continue;
+    const counted = notificationSummaryContribution(entry);
+    unread += counted.unread;
+    attention += counted.attention;
+  }
+  return { unread, attention };
 }
 
 /** A successful non-human turn advances terminal glyph chronology but is not
@@ -735,9 +722,40 @@ export function useMergedNotificationRow(
   });
 }
 
+/**
+ * The host summary less the held rows the merged list drops: the one adjusted
+ * host summary behind the bell, the unread count and the Mark-all gate. A
+ * host whose protocol hides those kinds already leaves them out of its
+ * summary, so nothing is subtracted there; this is the fallback for an older
+ * host.
+ */
+function useShownHostNotificationSummary(): HostNotificationsSummary | null {
+  const rawHostSummary = useHostNotificationsStore(
+    selectHostNotificationSummary,
+  );
+  const hostById = useHostNotificationsStore((state) => state.byId);
+  return useMemo(() => {
+    if (rawHostSummary === null) return null;
+    const dropped = droppedHostSummaryContribution(hostById);
+    return {
+      ...rawHostSummary,
+      unreadCount: Math.max(0, rawHostSummary.unreadCount - dropped.unread),
+      attentionCount: Math.max(
+        0,
+        rawHostSummary.attentionCount - dropped.attention,
+      ),
+    };
+  }, [rawHostSummary, hostById]);
+}
+
+/** The host plane's unread count as the merged list shows it. */
+export function useShownHostNotificationUnreadCount(): number {
+  return useShownHostNotificationSummary()?.unreadCount ?? 0;
+}
+
 export function useMergedNotificationUnreadCount(): number {
   const feedMode = useNotificationFeedMode();
-  const hostUnread = useHostNotificationUnreadCount();
+  const hostUnread = useShownHostNotificationUnreadCount();
   const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
@@ -787,36 +805,20 @@ export type NotificationBellState =
  */
 export function useNotificationBellState(): NotificationBellState {
   const feedMode = useNotificationFeedMode();
-  const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
+  // The cloud store's summary already leaves the dropped kinds out.
+  const hostSummary = useShownHostNotificationSummary();
   // App-local rows are always severity "failure" (`rowFromAppLocalEntry`
   // hardcodes it), so the app-local unread count already IS its
   // unread-failure count - no extra filter needed to fold it into attention.
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  const rows = useMergedNotificationRowsWithRetired();
-  // The relay summary counts unread severities. These notices instead stay
-  // actionable after reading and leave attention only when retired. Adjust
-  // their known contribution without discarding any unseen summary rows.
-  const noticeAdjustment = rows.reduce((delta, row) => {
-    if (
-      (row.source !== "cloud" && row.source !== "host") ||
-      !isActionableNotice(row)
-    )
-      return delta;
-    const active = row.resolvedAt === null ? 1 : 0;
-    const countedBySummary = row.readAt === null ? 1 : 0;
-    return delta + active - countedBySummary;
-  }, 0);
   if (feedMode === "cloud") {
     if (hostSummary === null || cloudSummary === null) {
       return { kind: "unknown" };
     }
     const attention =
-      hostSummary.attentionCount +
-      cloudSummary.attentionCount +
-      appLocalUnread +
-      noticeAdjustment;
+      hostSummary.attentionCount + cloudSummary.attentionCount + appLocalUnread;
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
@@ -830,8 +832,7 @@ export function useNotificationBellState(): NotificationBellState {
   }
   if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
-  const attention =
-    hostSummary.attentionCount + appLocalUnread + noticeAdjustment;
+  const attention = hostSummary.attentionCount + appLocalUnread;
   if (attention > 0) return { kind: "attention", count: attention };
   const unread = mergedUnreadCount({
     hostUnread: hostSummary.unreadCount,
@@ -1182,48 +1183,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
                 ids: [row.id],
               });
           }
-        }
-      },
-      onError: (error, _variables, context) => {
-        if (error instanceof NotificationFeedChangedError) return;
-        if (context !== undefined && isCurrentCloudMutation(context.current)) {
-          markCloudUnavailable();
-        }
-      },
-    },
-  });
-  const cloudResolve = useHostMutation<
-    HostRpcRegistry,
-    "host.notifications.cloudFeed.resolve",
-    CloudFeedMutationScope,
-    CloudFeedEntryVariables
-  >({
-    client,
-    method: "host.notifications.cloudFeed.resolve",
-    mapVariables: (variables) => {
-      if (
-        !canMutateCloudEntry(
-          variables.entryId,
-          variables.mutationContext.originatingAccountId,
-        )
-      ) {
-        throw new NotificationFeedChangedError(
-          "host.notifications.cloudFeed.resolve",
-        );
-      }
-      variables.mutationContext.current = captureCloudMutationContext();
-      return { entryId: variables.entryId };
-    },
-    options: {
-      mutationKey: notificationsMutationKeys.cloudResolve(),
-      onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, variables, context) => {
-        if (!isCurrentCloudMutation(context.current)) return;
-        handleCloudMutationResult(data);
-        if (data.status === "applied") {
-          useCloudNotificationsStore
-            .getState()
-            .resolveNoticeLocally(variables.entryId, Date.now());
         }
       },
       onError: (error, _variables, context) => {
@@ -1770,29 +1729,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 
   return useMemo(
     () => ({
-      retireNotice: (row) => {
-        if (
-          row.source !== "cloud" ||
-          !isActionableNotice(row) ||
-          !canMutateCloudEntry(row.sourceId, originatingAccountId)
-        )
-          return;
-        // Retire immediately even while an older relay omits resolvedAt or
-        // the marker writes are unavailable: a resolved notice is retired.
-        useCloudNotificationsStore
-          .getState()
-          .resolveNoticeLocally(row.sourceId, Date.now());
-        cloudResolve.mutate({
-          entryId: row.sourceId,
-          mutationContext: { originatingAccountId, current: null },
-        });
-        // The clear takes it out of every device's feed, an older client's
-        // included, which would otherwise keep a resolved notice in Recent.
-        cloudClear.mutate({
-          entryId: row.sourceId,
-          mutationContext: { originatingAccountId, current: null },
-        });
-      },
       markAsRead: (target) => {
         if (liveFeedMode.current === "upgrade-required") return;
         const feedId = typeof target === "string" ? target : target.feedId;
@@ -2196,7 +2132,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       captureCloudMutationContext,
       isCurrentCloudMutation,
       cloudMarkRead,
-      cloudResolve,
       cloudMarkAllRead,
       cloudClear,
       cloudClearAll,
@@ -2284,7 +2219,6 @@ function rowFromHostEntryForOrigin(
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     environmentDetail: environmentNotificationDetail(entry.kind, entry.payload),
-    sandboxNotice: sandboxNoticeFromHostEntry(entry),
     botAnswer: isBotThreadVerdictNotification(entry),
     hostKind: entry.kind,
     appLocalKind: null,
@@ -2378,7 +2312,6 @@ export function rowFromCloudFeedRow(
       row.entry.kind,
       row.entry.payload,
     ),
-    sandboxNotice: sandboxNoticeFromHostEntry(row.entry),
     botAnswer: isBotThreadVerdictNotification(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
@@ -2509,16 +2442,6 @@ function payloadFromHostEntry(
     entry.payload,
   );
   return known === null ? null : navigationPayloadFromKnown(known);
-}
-
-function sandboxNoticeFromHostEntry(
-  entry: HostNotificationFeedEntry,
-): HostNotificationSandboxNoticePayload | null {
-  const known = parseKnownHostNotificationPayloadForKind(
-    entry.kind,
-    entry.payload,
-  );
-  return known?.kind === "sandbox_notice" ? known : null;
 }
 
 function agentSurfaceFromHostEntry(

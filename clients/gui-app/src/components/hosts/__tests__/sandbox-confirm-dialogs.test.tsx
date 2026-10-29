@@ -427,13 +427,46 @@ describe("sandbox confirm dialogs", () => {
       });
     });
 
-    it("keeps the Destroy dialog's team sentence after the caption", () => {
+    it.each([
+      ["Suspend", SandboxSuspendDialog],
+      ["Stop", SandboxStopDialog],
+    ])(
+      "ends a team %s dialog's sessions block at the caption, with no sentence about who is told",
+      (_name, Dialog) => {
+        mocks.configuration = {
+          kind: "team",
+          teamId: "team-1",
+          teamName: "acme",
+          environmentId: null,
+        };
+        mocks.report = liveSessionReport(
+          { agents: [agentSessionFixture({})], terminals: [] },
+          true,
+        );
+        render(<Dialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+
+        expect(
+          screen.getByText(
+            "Known running agents and Task terminals. Other sessions may also be interrupted.",
+          ),
+        ).toBeDefined();
+        expect(
+          screen.getByTestId("sandbox-confirm-sessions").textContent,
+        ).not.toContain("told");
+      },
+    );
+
+    it("ends a team Destroy dialog's sessions block at the caption, with no sentence about who is told", () => {
       mocks.configuration = {
         kind: "team",
         teamId: "team-1",
         teamName: "acme",
         environmentId: null,
       };
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({})], terminals: [] },
+        true,
+      );
       render(
         <SandboxDestroyDialog
           sandbox={SANDBOX}
@@ -443,10 +476,13 @@ describe("sandbox confirm dialogs", () => {
         />,
       );
       expect(
+        screen.getByText(
+          "Known running agents and Task terminals. Other sessions may also be interrupted.",
+        ),
+      ).toBeDefined();
+      expect(
         screen.getByTestId("sandbox-confirm-sessions").textContent,
-      ).toContain(
-        "Known running agents and Task terminals. Other sessions may also be interrupted. Affected members are told who destroyed it.",
-      );
+      ).not.toContain("told");
     });
   });
 

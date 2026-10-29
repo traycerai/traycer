@@ -719,50 +719,6 @@ describe("cloud notifications store", () => {
     close();
   });
 
-  it("lands a snapshot carrying a sandbox.notice row instead of rejecting the feed", () => {
-    const client = new ControlledWsStreamClient();
-    const close = openCloudNotificationsStream(
-      reconnectEngine,
-      client,
-      "user-a",
-      null,
-      null,
-    );
-    const base = cloudRow("entry-notice", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV16 = {
-      ...base,
-      coalesceKey: "sandbox-notice:sbx-1",
-      entry: {
-        ...base.entry,
-        kind: "sandbox.notice",
-        severity: "info",
-        outcome: "completed",
-        payload: {
-          kind: "sandbox_notice",
-          sandboxId: "sbx-1",
-          sandboxName: "build box",
-          notice: { kind: "resting_destroyed" },
-        },
-      },
-    };
-
-    client.sessions[0].emitServerFrame({
-      kind: "snapshot",
-      hasBinaryPayload: false,
-      connectionState: "connected",
-      version: 4,
-      rows: [row],
-      summary,
-    });
-
-    const state = useCloudNotificationsStore.getState();
-    expect(state.rows).toEqual({
-      [cloudNotificationFeedId("entry-notice")]: row,
-    });
-    expect(state.connectionState).toBe("connected");
-    close();
-  });
-
   it("reports baseline rows as a snapshot even when there are no arrivals", () => {
     const client = new ControlledWsStreamClient();
     const onSnapshot = vi.fn();

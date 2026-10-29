@@ -41,11 +41,9 @@ import {
   globalFeedId,
   hostFeedId,
   notificationBellAccessibleLabel,
-  sandboxIdOfNotificationRow,
   useAttentionNotificationIds,
   useMergedNotificationIds,
   useMergedNotificationRow,
-  useMergedNotificationRows,
   useMergedNotificationUnreadCount,
   useNotificationBellState,
   useNotificationCenterHostState,
@@ -780,30 +778,6 @@ describe("cloud feed projection authority", () => {
     // local mode.
     expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
     expect(result.current.hostState.isPartial).toBe(false);
-  });
-
-  it("keeps a resting warning and the destroy of one sandbox as two rows, each naming the sandbox", () => {
-    const warning = cloudDone("sandbox-resting-warning:sbx_9:7d", 90, null);
-    const destroyed = cloudDone(
-      "sandbox-resting-destroyed:sbx_9:done",
-      95,
-      null,
-    );
-    useCloudNotificationsStore.getState().applySnapshot({
-      rows: [warning, destroyed],
-      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
-      version: 3,
-    });
-
-    const { result } = renderHook(() => useMergedNotificationRows());
-
-    const sandboxRows = result.current.filter(
-      (row) => sandboxIdOfNotificationRow(row) === "sbx_9",
-    );
-    expect(sandboxRows.map((row) => row.sourceId)).toEqual([
-      destroyed.entryId,
-      warning.entryId,
-    ]);
   });
 
   it("sums exact mixed unread and attention from both partition summaries without double counting", () => {

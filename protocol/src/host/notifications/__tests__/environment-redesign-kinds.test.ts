@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/versioned-rpc";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
+  ALL_HOST_NOTIFICATION_KINDS,
+  RELEASED_HOST_NOTIFICATION_KINDS,
+  RETIRED_HOST_NOTIFICATION_KINDS,
   V23_HOST_NOTIFICATION_KINDS,
   V24_HOST_NOTIFICATION_KINDS,
   formatHostNotificationPresentation,
@@ -146,7 +149,8 @@ describe("visibility of the five environments-redesign kinds", () => {
     const hidden = hiddenHostNotificationKinds(surface, version);
     for (const kind of NEW_KINDS) {
       expect(visible).toContain(kind);
-      expect(hidden).not.toContain(kind);
+      // Retired kinds are visible to the wire but hidden from every read.
+      expect(hidden.includes(kind)).toBe(kind === "environment.apply.failed");
     }
     // `sandbox.notice` is cloud-feed only and `notification.hooks.removed` is
     // origin-store only from list @2.5 / feed @1.7; the five are not what
@@ -154,9 +158,38 @@ describe("visibility of the five environments-redesign kinds", () => {
     expect(
       hidden.filter(
         (kind) =>
-          kind !== "sandbox.notice" && kind !== "notification.hooks.removed",
+          kind !== "environment.apply.failed" &&
+          kind !== "sandbox.notice" &&
+          kind !== "notification.hooks.removed",
       ),
     ).toEqual([]);
+  });
+
+  it.each([
+    ["list 2.5", LIST, { major: 2, minor: 5 }],
+    ["feed 1.7", FEED, { major: 1, minor: 7 }],
+    ["cloudFeed 1.6", CLOUD_FEED, { major: 1, minor: 6 }],
+    [
+      "subscribe 1.0",
+      { method: "host.notifications.subscribe" } as const,
+      { major: 1, minor: 0 },
+    ],
+  ] as const)(
+    "hides both retired kinds at the newest version of %s",
+    (_label, surface, version) => {
+      expect(hiddenHostNotificationKinds(surface, version)).toEqual(
+        expect.arrayContaining([...RETIRED_HOST_NOTIFICATION_KINDS]),
+      );
+    },
+  );
+
+  it("keeps the released feed.subscribe 1.0 exclusion as it was", () => {
+    const hidden = hiddenHostNotificationKinds(FEED, { major: 1, minor: 0 });
+    expect(hidden).toEqual(
+      ALL_HOST_NOTIFICATION_KINDS.filter(
+        (kind) => !RELEASED_HOST_NOTIFICATION_KINDS.includes(kind),
+      ),
+    );
   });
 
   it("freezes V23_HOST_NOTIFICATION_KINDS as what list 2.3, feed 1.4-1.5 and cloudFeed 1.3 carry", () => {
