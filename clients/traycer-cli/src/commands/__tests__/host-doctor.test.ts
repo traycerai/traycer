@@ -238,6 +238,10 @@ describe("hostDoctorCommand human output", () => {
 const LOCAL_ONLY_NOTICE =
   "Checked on this machine only; problems only the running host can see may be missing.";
 
+// The host's own limit on the doctor run it answers `host.doctor` with
+// (`MAX_HOST_CLI_RUNTIME_MS` in the host's maintenance resolvers).
+const HOST_DOCTOR_RUN_CAP_MS = 60_000;
+
 function issue(
   code: DoctorIssueCode,
   severity: HostDoctorIssue["severity"],
@@ -302,6 +306,13 @@ describe("hostDoctorCommand asks the running host", () => {
       {},
       expect.objectContaining({ failFast: true }),
     );
+    // The host caps its own doctor run at 60s before answering; a shorter
+    // wait here would drop a healthy host's answer for the local verdict.
+    expect(mocks.callHostRpcMock.mock.calls[0]?.[2]).toMatchObject({
+      responseTimeoutMs: expect.toSatisfy(
+        (ms: unknown) => typeof ms === "number" && ms > HOST_DOCTOR_RUN_CAP_MS,
+      ),
+    });
     expect(result.data).toEqual({ issues: [credentialIssue], lifecycle });
     expect(result.human).toContain("HOST_CREDENTIAL_SAVE_FAILED");
     expect(result.human).not.toContain(LOCAL_ONLY_NOTICE);

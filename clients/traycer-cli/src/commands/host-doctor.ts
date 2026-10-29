@@ -26,6 +26,15 @@ interface HostDoctorReport {
   readonly lifecycle: DoctorResult["lifecycle"];
 }
 
+/**
+ * How long to wait for the host's answer. The host answers `host.doctor` by
+ * running this whole command as its child, which on a healthy host can
+ * outlast the transport's 15s default (two sequential 10s `systemctl` probes
+ * on Linux alone), and caps that child at 60s before answering `cli-failed`.
+ * Just above the host's cap, so a host that answers is always heard.
+ */
+const HOST_DOCTOR_RESPONSE_BUDGET_MS = 65_000;
+
 /** Printed above a report the running host did not supply. */
 const LOCAL_ONLY_NOTICE =
   "Checked on this machine only; problems only the running host can see may be missing.";
@@ -92,7 +101,8 @@ export const hostDoctorCommand: CommandFn = async (
  * spawn is this slot's CLI, so it finds the lease held by the run that asked
  * and reports locally, which ends the chain at one extra hop whatever sits
  * between host and CLI. A lease left by a run that died is taken over. The
- * cost is that of two runs at the same moment, the second reports locally.
+ * cost is that of two runs whose calls overlap - each call can hold the lease
+ * for the whole response budget - the second reports locally.
  */
 async function readRunningHostIssues(): Promise<
   readonly HostDoctorIssue[] | null
@@ -108,12 +118,16 @@ async function readRunningHostIssues(): Promise<
         pollIntervalMs: 0,
       },
       () =>
-        // Fail fast: one attempt within the transport's dial and response
-        // deadlines, so a wedged host costs one wait before the local verdict.
+        // Fail fast: one attempt, so a wedged host costs one response budget
+        // before the local verdict.
         callHostRpcWithDispatch(
           "host.doctor",
           {},
-          { ...PLAIN_DISPATCH, failFast: true },
+          {
+            ...PLAIN_DISPATCH,
+            responseTimeoutMs: HOST_DOCTOR_RESPONSE_BUDGET_MS,
+            failFast: true,
+          },
         ),
     );
     if (leased.kind === "busy") return null;
