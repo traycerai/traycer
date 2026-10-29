@@ -61,9 +61,8 @@ function isDroppedHostOperation(payload: unknown): boolean {
  * whatever its row kind, so its `entryId` drops it too; host rows have no
  * such key and pass `null`.
  *
- * The read policy. {@link isLiveAnnouncedNotification} is the narrower one the
- * live surfaces take: a row this answers `true` for is announced nowhere, and
- * neither is a kind in {@link NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS}.
+ * The read policy, not the live-display gate — that is the narrower
+ * {@link isLiveAnnouncedNotification}.
  */
 export function isDroppedNotification(
   entry: { readonly kind: HostNotificationKind; readonly payload: unknown },
