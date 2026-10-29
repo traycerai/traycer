@@ -233,6 +233,8 @@ const opens: unknown[] = [];
 const shutdowns: unknown[] = [];
 /** Whether the host's instance read refuses, as a dropped dial does. */
 const instancesFail = { on: false };
+/** Whether it never answers at all, which is its own first frame. */
+const instancesOwed = { on: false };
 /** Whether the picker reached the host at all: the read that handshakes it. */
 const reads = { list: 0 };
 
@@ -370,6 +372,7 @@ describe("SimulatorCreatePicker", () => {
     opens.length = 0;
     shutdowns.length = 0;
     instancesFail.on = false;
+    instancesOwed.on = false;
     reads.list = 0;
     resetBootState();
     pack.state = READY_PACK;
@@ -388,6 +391,8 @@ describe("SimulatorCreatePicker", () => {
         "simulator.status": () => statusNow(),
         "simulator.instances": () => {
           if (instancesFail.on) throw new Error("dial refused");
+          if (instancesOwed.on)
+            return new Promise<SimulatorInstancesResponse>(() => {});
           return instancesNow();
         },
         "config.simulator.set": () => {
@@ -611,6 +616,27 @@ describe("SimulatorCreatePicker", () => {
     await user.keyboard("{Escape}");
   });
 
+  it("falls back to the device list's own flag while a `@1.1` host still owes its instance read", async () => {
+    // The read is not refused, just not back yet. Reading that as "nothing
+    // is running" is this surface answering a question nobody has answered:
+    // it would draw an empty Running section for a machine with a device up,
+    // and it is the same mistake in the other direction that would suppress
+    // a cold device's Boot on the strength of an owed read.
+    instancesOwed.on = true;
+    const user = await openPicker();
+
+    expect(
+      await screen.findByTestId("simulator-picker-running-udid-1"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Nothing running.")).toBeNull();
+    // And the cold device keeps its Boot: taking a row away needs a read
+    // that says the device is up, and none has come back.
+    expect(
+      screen.queryByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+    await user.keyboard("{Escape}");
+  });
+
   it("says it couldn't reach the machine when the instance read stops answering, rather than drawing its last instances", async () => {
     const user = await openPicker();
     await screen.findByTestId("simulator-picker-running-udid-1");
@@ -720,6 +746,7 @@ describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
     opens.length = 0;
     shutdowns.length = 0;
     instancesFail.on = false;
+    instancesOwed.on = false;
     reads.list = 0;
     resetBootState();
     pack.state = READY_PACK;

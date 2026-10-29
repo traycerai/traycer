@@ -8,6 +8,7 @@ import type {
 import {
   findSessionFor,
   findSimulatorForTile,
+  type SimulatorTileTarget,
 } from "@/lib/simulator-view/simulator-tile-target";
 
 const COLD_AVD: SimulatorSummary = {
@@ -39,6 +40,11 @@ const NO_SESSIONS: readonly SimulatorSession[] = [];
 /** A host-wide read that has ANSWERED with nothing booted; `null` is one still owed. */
 const NO_INSTANCES: readonly SimulatorHostInstance[] = [];
 
+/** A device's own row answering for a tile: its own id is the whole address. */
+function deviceRow(summary: SimulatorSummary): SimulatorTileTarget {
+  return { summary, sourceSimulatorId: null };
+}
+
 describe("findSimulatorForTile", () => {
   it("matches by id first, and an Android serial's tile by AVD name once the serial is gone", () => {
     const serialTile = {
@@ -54,7 +60,7 @@ describe("findSimulatorForTile", () => {
         NO_SESSIONS,
         NO_INSTANCES,
       ),
-    ).toBe(BOOTED_EMULATOR);
+    ).toEqual(deviceRow(BOOTED_EMULATOR));
     // Powered off: the host lists the AVD cold under its name.
     expect(
       findSimulatorForTile(
@@ -63,12 +69,12 @@ describe("findSimulatorForTile", () => {
         NO_SESSIONS,
         NO_INSTANCES,
       ),
-    ).toBe(COLD_AVD);
+    ).toEqual(deviceRow(COLD_AVD));
     // Booted again elsewhere under a new serial: that row, to connect to.
     const rebooted = { ...BOOTED_EMULATOR, simulatorId: "emulator-5556" };
     expect(
       findSimulatorForTile([rebooted], serialTile, NO_SESSIONS, NO_INSTANCES),
-    ).toBe(rebooted);
+    ).toEqual(deviceRow(rebooted));
     expect(
       findSimulatorForTile([IPHONE], serialTile, NO_SESSIONS, NO_INSTANCES),
     ).toBeNull();
@@ -124,12 +130,15 @@ describe("findSimulatorForTile on a @1.1 host", () => {
     expect(
       findSimulatorForTile([source], cloneTile, NO_SESSIONS, NO_INSTANCES),
     ).toEqual({
-      simulatorId: "udid-clone",
-      platform: "ios",
-      name: "iPhone 16 · 2",
-      version: "18.0",
-      booted: true,
-      physical: false,
+      summary: {
+        simulatorId: "udid-clone",
+        platform: "ios",
+        name: "iPhone 16 · 2",
+        version: "18.0",
+        booted: true,
+        physical: false,
+      },
+      sourceSimulatorId: source.simulatorId,
     });
   });
 
@@ -227,12 +236,15 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
         NO_INSTANCES,
       ),
     ).toEqual({
-      simulatorId: cloneTile.simulatorId,
-      platform: "android",
-      name: "Pixel_8_API_35 · 3",
-      version: "Android 15.0",
-      booted: true,
-      physical: false,
+      summary: {
+        simulatorId: cloneTile.simulatorId,
+        platform: "android",
+        name: "Pixel_8_API_35 · 3",
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+      },
+      sourceSimulatorId: source.simulatorId,
     });
   });
 
@@ -282,12 +294,15 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
         NO_INSTANCES,
       ),
     ).toEqual({
-      simulatorId: cloneTile.simulatorId,
-      platform: "android",
-      name: "Pixel_8_API_35 · 3",
-      version: "Android 15.0",
-      booted: false,
-      physical: false,
+      summary: {
+        simulatorId: cloneTile.simulatorId,
+        platform: "android",
+        name: "Pixel_8_API_35 · 3",
+        version: "Android 15.0",
+        booted: false,
+        physical: false,
+      },
+      sourceSimulatorId: source.simulatorId,
     });
   });
 
@@ -311,7 +326,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
         NO_SESSIONS,
         NO_INSTANCES,
       ),
-    ).toBe(cold);
+    ).toEqual(deviceRow(cold));
   });
 
   it("still boots a cold AVD by name for a root device's serial tile", () => {
@@ -330,7 +345,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
     } as const;
     expect(
       findSimulatorForTile([cold], serialTile, [personOnSource], NO_INSTANCES),
-    ).toBe(cold);
+    ).toEqual(deviceRow(cold));
   });
 
   /**
@@ -365,12 +380,15 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
         cloneRunningHostWide,
       ]),
     ).toEqual({
-      simulatorId: cloneTile.simulatorId,
-      platform: "android",
-      name: "Pixel_8_API_35 · 3",
-      version: "Android 15.0",
-      booted: true,
-      physical: false,
+      summary: {
+        simulatorId: cloneTile.simulatorId,
+        platform: "android",
+        name: "Pixel_8_API_35 · 3",
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+      },
+      sourceSimulatorId: source.simulatorId,
     });
   });
 
@@ -413,7 +431,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
         NO_SESSIONS,
         NO_INSTANCES,
       ),
-    ).toBe(source);
+    ).toEqual(deviceRow(source));
   });
 
   it("never synthesises a root device from the host-wide read either", () => {
@@ -442,7 +460,7 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
           simulatorId: serialTile.simulatorId,
         },
       ]),
-    ).toBe(cold);
+    ).toEqual(deviceRow(cold));
   });
 });
 

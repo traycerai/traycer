@@ -3,12 +3,13 @@
  *
  * THE INVARIANT, for every surface and not only this file: a mapping between
  * a tile's `simulatorId`, the host's `instanceKey` and a clone's `cloneOf` is
- * resolved only through a read that names the pair together - this task's
- * `sessions`, the host-wide `simulator.instances`, or the task catalog's
- * records - never through a string equality that holds only where the udid IS
- * the key, never from a read that cannot carry the pair (`simulator.list`'s
- * nested instances have no `simulatorId`), and never by letting a root device
- * of the same name stand in for a clone.
+ * resolved only from something that NAMED that pair - a read carrying both
+ * (this task's `sessions`, the host-wide `simulator.instances`, the task
+ * catalog's records) or a tile's own record of the answer that placed it -
+ * except where the protocol makes the two one string, which is an iOS udid
+ * and never an Android serial. Never from a read that cannot carry the pair
+ * (`simulator.list`'s nested instances have no `simulatorId`), and never by
+ * letting a root device of the same name stand in for a clone.
  */
 import type {
   SimulatorHostInstance,
@@ -17,6 +18,21 @@ import type {
   SimulatorState,
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
+
+/**
+ * What the tile shows and opens. A clone is listed under no device id of its
+ * own, so its `summary` is synthesised and carries the tile's own id, which
+ * is only an address while the copy is still up: a clone dies with its last
+ * session, and the id its exited emulator held names nothing on the host. So
+ * `sourceSimulatorId` travels with it - the device whose `instances` list
+ * this clone, which is the one address a gone copy still has, and the only
+ * thing an open can name to make another.
+ */
+export interface SimulatorTileTarget {
+  readonly summary: SimulatorSummary;
+  /** The device this is a copy OF; null when the tile is on a device itself. */
+  readonly sourceSimulatorId: string | null;
+}
 
 /**
  * The host's row for a tile's simulator. An iOS udid never changes, so the
@@ -63,11 +79,11 @@ export function findSimulatorForTile(
    * resolved to.
    */
   hostInstances: readonly SimulatorHostInstance[] | null,
-): SimulatorSummary | null {
+): SimulatorTileTarget | null {
   const byId = simulators.find(
     (simulator) => simulator.simulatorId === tile.simulatorId,
   );
-  if (byId !== undefined) return byId;
+  if (byId !== undefined) return { summary: byId, sourceSimulatorId: null };
   for (const source of simulators) {
     const instance = source.instances?.find(
       (item) =>
@@ -83,21 +99,26 @@ export function findSimulatorForTile(
     );
     if (instance === undefined) continue;
     return {
-      simulatorId: tile.simulatorId,
-      platform: source.platform,
-      name: instance.name,
-      version: source.version,
-      booted: instance.booted,
-      physical: false,
+      summary: {
+        simulatorId: tile.simulatorId,
+        platform: source.platform,
+        name: instance.name,
+        version: source.version,
+        booted: instance.booted,
+        physical: false,
+      },
+      // Only a COPY needs its source: a root device's own instance is
+      // addressed by the device, which is what this tile's id already names.
+      sourceSimulatorId: instance.cloneOf === null ? null : source.simulatorId,
     };
   }
   if (tile.platform !== "android" || hostInstances === null) return null;
-  return (
-    simulators.find(
-      (simulator) =>
-        simulator.platform === "android" && simulator.name === tile.name,
-    ) ?? null
+  const byName = simulators.find(
+    (simulator) =>
+      simulator.platform === "android" && simulator.name === tile.name,
   );
+  if (byName === undefined) return null;
+  return { summary: byName, sourceSimulatorId: null };
 }
 
 /**

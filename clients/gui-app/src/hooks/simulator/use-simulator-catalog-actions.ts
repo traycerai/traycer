@@ -5,8 +5,9 @@ import type { SimulatorCatalogRecord } from "@traycer/protocol/host/simulator/ca
 import { useHostBinding, useHostClient, useHostDirectory } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { simulatorMutationKeys } from "@/lib/query-keys";
+import { hostQueryKeys, simulatorMutationKeys } from "@/lib/query-keys";
 import { isSimulatorCatalogQueryKey } from "@/lib/query-keys/host-query-keys";
+import { SESSION_INVALIDATIONS } from "@/hooks/simulator/use-simulator-mutations";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { closeSimulatorCatalogSessions } from "@/lib/simulator-view/simulator-catalog-owner-action";
@@ -74,7 +75,17 @@ export function useSimulatorCatalogActions(epicId: string) {
       }
       if (outcome.failures.length > 0) throw outcome.failures[0];
     },
-    onSettled: () => {
+    onSettled: (_data, _error, { hostId }) => {
+      // The host-wide instance read names who holds each instance across
+      // every task (`tasks`, `otherTaskCount`, `drivenByAgent`), and this
+      // row's Close ends the agent's session beside the person's - so it is
+      // moved by the same write, and nothing else asks it again inside the
+      // freshness window. See `SESSION_INVALIDATIONS`.
+      for (const method of SESSION_INVALIDATIONS) {
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(hostId, method),
+        });
+      }
       if (userId === null) return;
       void queryClient.invalidateQueries({
         predicate: (query) =>

@@ -1288,39 +1288,157 @@ describe("SimulatorTile on a @1.1 host", () => {
     });
   });
 
-  it("offers an exited clone's own tile its Boot and connect, off the instance the tile names", async () => {
+  /** The same device with its clone's emulator exited, its ledger row left. */
+  function cloneExited(): SimulatorState {
+    return {
+      ...CLONE_STATE,
+      simulators: CLONE_STATE.simulators.map((simulator) =>
+        simulator.simulatorId === SOURCE_SERIAL
+          ? {
+              ...simulator,
+              instances: [
+                SOURCE_OWN_INSTANCE,
+                { ...CLONE_INSTANCE, booted: false },
+              ],
+            }
+          : simulator,
+      ),
+    };
+  }
+
+  it("tells an exited clone's own tile the copy is gone, off the instance the tile names", async () => {
     // The clone's emulator has exited: no session, and the host-wide read has
     // ANSWERED with nothing booted, so neither read ties its key to this
     // tile's serial any more and the AVD-name fallback is free to match the
     // source device. The tile recorded that pair when its open answered, and
     // the device rows still carry the clone's cold ledger row - so it is
     // resolved as the clone it is, not as the device it is named after.
-    fakes.sessions = sessions({
-      state: {
-        ...CLONE_STATE,
-        simulators: CLONE_STATE.simulators.map((simulator) =>
-          simulator.simulatorId === SOURCE_SERIAL
-            ? {
-                ...simulator,
-                instances: [
-                  SOURCE_OWN_INSTANCE,
-                  { ...CLONE_INSTANCE, booted: false },
-                ],
-              }
-            : simulator,
-        ),
-      },
-    });
+    fakes.sessions = sessions({ state: cloneExited() });
     renderTileFor(cloneTileNamingItsInstance());
     await flush();
 
     const inventory = await screen.findByTestId("simulator-inventory");
     expect(inventory.textContent).not.toContain("no longer lists");
     expect(inventory.textContent).toContain("Pixel_8_API_35 · 2");
+    // A clone dies with its last session, so there is no copy to power on
+    // again - the offer is another copy, and the words say which.
+    expect(inventory.textContent).toContain("This copy is gone");
     expect(screen.getByTestId("simulator-connect").textContent).toContain(
-      "Boot and connect",
+      "Boot another copy",
     );
     expect(fakes.open).not.toHaveBeenCalled();
+  });
+
+  it("asks the source device for a new copy when an exited Android clone's tile boots", async () => {
+    // The serial this tile carries is the one its exited emulator held, and
+    // the host lists it nowhere once that emulator is gone: not as a device,
+    // not as any instance's key. The clone's own key is no address either -
+    // the host removes a clone with its last session. The device it was made
+    // from is the one identity that outlives the copy, so that is what the
+    // open names, and `new` is what it asks that device for.
+    fakes.sessions = sessions({ state: cloneExited() });
+    renderTileFor(cloneTileNamingItsInstance());
+    await flush();
+
+    fireEvent.click(await screen.findByTestId("simulator-connect"));
+    await flush();
+
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: SOURCE_SERIAL,
+      platform: "android",
+      boot: true,
+      instance: "new",
+    });
+  });
+
+  it("asks the source device for a new copy when an exited iOS clone's tile boots", async () => {
+    // An iOS clone's key IS the udid its tile carries, so the tile finds its
+    // own ledger row by id alone and never needed the recorded key. It needs
+    // the same open: the copy is gone, and a udid the host has deleted boots
+    // no more than a dead serial does.
+    const cloneUdid = "udid-1-clone-2";
+    const exitedClone = {
+      instanceKey: cloneUdid,
+      name: "iPhone 16 · 2",
+      booted: false,
+      cloneOf: UDID,
+      drivenByAgent: false,
+      keepRunning: false,
+      idleUntil: null,
+    } as const;
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        simulators: READY_STATE.simulators.map((simulator) =>
+          simulator.simulatorId === UDID
+            ? { ...simulator, instances: [exitedClone] }
+            : simulator,
+        ),
+      },
+    });
+    renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: cloneUdid,
+        platform: "ios",
+        name: "iPhone 16 · 2",
+        instanceKey: cloneUdid,
+      }),
+    );
+    await flush();
+
+    expect(
+      (await screen.findByTestId("simulator-inventory")).textContent,
+    ).toContain("This copy is gone");
+    fireEvent.click(screen.getByTestId("simulator-connect"));
+    await flush();
+
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: UDID,
+      platform: "ios",
+      boot: true,
+      instance: "new",
+    });
+  });
+
+  it("places the answer's own tile for the new copy, naming its instance", async () => {
+    // The copy the host makes is not the one this tile was on: a new serial
+    // or udid, and a new key. Class H records the pair on the tile it places,
+    // so the new copy's tile can resolve itself the way this one just did.
+    fakes.sessions = sessions({ state: cloneExited() });
+    const REBOOTED_SERIAL = "emulator-5560";
+    const REBOOTED_AVD = "Pixel_8_API_35_traycer_4";
+    fakes.open.mockResolvedValue({
+      session: {
+        ...onClone(PERSON_SESSION),
+        simulatorId: REBOOTED_SERIAL,
+        instanceKey: REBOOTED_AVD,
+      },
+      simulator: {
+        simulatorId: REBOOTED_SERIAL,
+        platform: "android",
+        name: "Pixel_8_API_35 · 4",
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+      },
+    });
+    renderTileFor(cloneTileNamingItsInstance());
+    await flush();
+
+    fireEvent.click(await screen.findByTestId("simulator-connect"));
+    await flush();
+
+    expect(fakes.openTile.mock.calls.at(-1)?.at(0)).toMatchObject({
+      node: {
+        type: "simulator",
+        hostId: HOST,
+        simulatorId: REBOOTED_SERIAL,
+        instanceKey: REBOOTED_AVD,
+      },
+    });
   });
 
   it("names a clone's instance from the host's own rows when no catalog record does", async () => {

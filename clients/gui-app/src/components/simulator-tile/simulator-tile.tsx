@@ -34,6 +34,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   takeSimulatorConnectRequest,
@@ -43,6 +44,7 @@ import { nextOrientation } from "@/lib/simulator-view/simulator-input-encoding";
 import {
   findSessionFor,
   findSimulatorForTile,
+  type SimulatorTileTarget,
 } from "@/lib/simulator-view/simulator-tile-target";
 import { useSimulatorInventoryRefreshOnMount } from "@/lib/simulator-view/use-simulator-inventory-refresh";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
@@ -311,6 +313,39 @@ function useSessionMemory(session: SimulatorSession | null): {
 }
 
 /**
+ * The open that reaches `target`.
+ *
+ * A COPY that is not running is gone, not asleep: the host removes a clone
+ * when its last session ends, so neither identity it had is an address any
+ * more - its key resolves to nothing, and the serial its emulator held names
+ * nothing either. What the person is asking for is a copy of that device, so
+ * the open names the DEVICE the copy was made from and asks for a new one.
+ *
+ * A copy that is still up is reached by the id its tile carries, like any
+ * other, and a device is its own address.
+ */
+function openFor(
+  epicId: string,
+  target: SimulatorTileTarget,
+): RequestOfMethod<HostRpcRegistry, "simulator.open"> {
+  const { summary, sourceSimulatorId } = target;
+  if (sourceSimulatorId === null || summary.booted)
+    return {
+      epicId,
+      simulatorId: summary.simulatorId,
+      platform: summary.platform,
+      boot: true,
+    };
+  return {
+    epicId,
+    simulatorId: sourceSimulatorId,
+    platform: summary.platform,
+    boot: true,
+    instance: "new",
+  };
+}
+
+/**
  * This tile's `simulator.open`, held by the tile rather than by the inventory
  * gate that triggers it: the session the host records usually reaches the
  * tile on the sessions stream BEFORE the RPC answers, and the gate unmounts
@@ -338,7 +373,7 @@ function useSimulatorConnect(args: {
   readonly onOpened: () => void;
   readonly placeTile: (ref: SimulatorTileRef) => void;
 }): {
-  readonly connect: (target: SimulatorSummary) => void;
+  readonly connect: (target: SimulatorTileTarget) => void;
   readonly connecting: boolean;
   readonly supported: boolean;
 } {
@@ -350,7 +385,7 @@ function useSimulatorConnect(args: {
   // session the open asked for is here, so nothing is awaited any more.
   if (awaiting && session !== null) setAwaiting(false);
   const connect = useCallback(
-    (target: SimulatorSummary) => {
+    (target: SimulatorTileTarget) => {
       setAwaiting(true);
       // The answer is read off the mutation's OWN promise, never off
       // `mutate`'s per-call callbacks. Those reach only an observer that is
@@ -361,12 +396,7 @@ function useSimulatorConnect(args: {
       // tile that booted its own simulator read as having merely attached.
       // The failure itself is already toasted by the mutation; here it only
       // ends the wait.
-      void mutateAsync({
-        epicId,
-        simulatorId: target.simulatorId,
-        platform: target.platform,
-        boot: true,
-      })
+      void mutateAsync(openFor(epicId, target))
         .then(
           (response) => {
             onOpened();
@@ -450,7 +480,7 @@ function SimulatorInventoryGate(props: {
   /** An explicit open's pending request for this tile, consumed here. */
   readonly connectRequest: number | null;
   /** Sends this tile's `simulator.open`; `null` when the host lacks the verb. */
-  readonly onConnect: ((target: SimulatorSummary) => void) | null;
+  readonly onConnect: ((target: SimulatorTileTarget) => void) | null;
   readonly connecting: boolean;
   readonly onPlaceTile: (ref: SimulatorTileRef) => void;
 }) {
@@ -509,9 +539,9 @@ function SimulatorInventoryGate(props: {
       connectRequest !== null &&
       takeSimulatorConnectRequest(node.id, connectRequest);
     if (onConnect === null || target === null) return;
-    if (state.booting.includes(target.simulatorId)) return;
+    if (state.booting.includes(target.summary.simulatorId)) return;
     if (!requested) {
-      if (autoAttached.current || !autoAttach || !target.booted) return;
+      if (autoAttached.current || !autoAttach || !target.summary.booted) return;
     }
     autoAttached.current = true;
     onConnect(target);
@@ -523,7 +553,7 @@ function SimulatorInventoryGate(props: {
       simulators={state.simulators}
       booting={state.booting}
       target={target}
-      targetName={target?.name ?? node.name}
+      targetName={target?.summary.name ?? node.name}
       onConnect={onConnect}
       connecting={connecting}
       onOpen={onConnect === null ? null : openOther}
