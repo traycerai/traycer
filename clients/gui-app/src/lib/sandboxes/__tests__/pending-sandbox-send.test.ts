@@ -1078,6 +1078,8 @@ describe("returnPendingSandboxSend for a message to an existing chat", () => {
   });
 
   afterEach(() => {
+    // A case's overrides (the image byte resolver) end with it.
+    vi.restoreAllMocks();
     if (originalLocks === undefined) {
       Reflect.deleteProperty(navigator, "locks");
     } else {
