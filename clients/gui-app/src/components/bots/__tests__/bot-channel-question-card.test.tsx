@@ -1081,6 +1081,39 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
     expect(questionThreadBox().value).toBe("");
   });
 
+  /** The Discuss draft sent from the question's thread, the thread closed and opened again while the send is held. */
+  async function sentThenReopened(): Promise<void> {
+    const user = userEvent.setup();
+    heldSends = [];
+    const view = await overtakenBoth("Hold the migration");
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    view.reopen(null);
+    view.reopen(QUESTION_THREAD);
+    expect(questionThreadBox().value).toBe("Hold the migration");
+  }
+
+  it("empties the box opened again while the send was in flight once it lands, so the sent draft is not offered twice", async () => {
+    await sentThenReopened();
+
+    await land();
+
+    expect(questionThreadBox().value).toBe("");
+    expect(screen.getByTestId("bot-thread-composer-send").disabled).toBe(true);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("keeps what was typed in the box opened again after the send left, when the send lands", async () => {
+    const user = userEvent.setup();
+    await sentThenReopened();
+    await user.type(questionThreadBox(), " today");
+
+    await land();
+
+    expect(questionThreadBox().value).toBe("Hold the migration today");
+  });
+
   it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
     const user = userEvent.setup();
     heldSends = [];
@@ -1251,6 +1284,41 @@ describe("<BotChannelView /> a question a thread's session asks in its thread", 
     requestId: REPLY_REQUEST,
     reason: null,
   };
+
+  it("keeps an edit opened in the thread's box opened again, when a send from the box before it closed lands", async () => {
+    const user = userEvent.setup();
+    heldSends = [];
+    activityStore.setState({
+      activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
+    });
+    mocks.threads = [postThread()];
+    session(CHANNEL_ID, [memberPost()]);
+    session(THREAD_ID, [failedReply()]);
+    const view = mountChannel(POST_THREAD);
+    const box = (): HTMLTextAreaElement => {
+      const element = within(screen.getByTestId("bot-thread-panel")).getByRole(
+        "textbox",
+        { name: "Reply in the thread" },
+      );
+      if (!(element instanceof HTMLTextAreaElement)) throw new Error("no box");
+      return element;
+    };
+    await user.type(box(), "Ship it today");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    view.reopen(null);
+    view.reopen(POST_THREAD);
+    await user.click(
+      within(screen.getByTestId("bot-thread-replies")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+    expect(box().value).toBe("Hold for now");
+
+    await land();
+
+    expect(box().value).toBe("Hold for now");
+    expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+  });
 
   it("starts a new message when Discuss puts a draft in the box while it edits a failed reply: what is sent replaces nothing", async () => {
     const user = userEvent.setup();

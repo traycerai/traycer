@@ -73,7 +73,11 @@ export function BotMessageComposer(props: {
   readonly edit: BotComposerEdit | null;
   /** The edit was sent or cancelled. */
   readonly onEditEnd: () => void;
-  /** A draft to put in the box, unsent; each new one (by its `id`) replaces what the box holds. `null` for none. */
+  /**
+   * A draft to put in the box, unsent; each new one (by its `id`) replaces
+   * what the box holds. `null` for none; a draft kept outside the box that
+   * goes away empties it, unless it is editing a failed message.
+   */
   readonly seed: BotComposerSeed | null;
   /** Where the box's draft is kept outside it, while it is not editing a failed message; `null` where none is. */
   readonly keptDraft: BotKeptDraft | null;
@@ -118,7 +122,10 @@ export function BotMessageComposer(props: {
       setGeneration((current) => current + 1);
     }
   }
-  // As does a new seed.
+  // As does a new seed. A kept draft that goes away was what the box showed,
+  // as the box keeps what it holds there while it edits nothing: a send of
+  // it spent it, from this box closed and opened again since, so the box
+  // empties rather than offer it again.
   const seedId = seed?.id ?? null;
   const [loadedSeedId, setLoadedSeedId] = useState<number | null>(null);
   if (seedId !== loadedSeedId) {
@@ -126,6 +133,8 @@ export function BotMessageComposer(props: {
     if (seed !== null) {
       setText(seed.text);
       setGeneration((current) => current + 1);
+    } else if (edit === null) {
+      setText("");
     }
   }
   const inputRef = useRef<HTMLTextAreaElement>(null);
