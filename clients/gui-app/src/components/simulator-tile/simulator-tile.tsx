@@ -24,6 +24,7 @@ import {
   useSimulatorActionMutation,
   useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
+  useSimulatorInstancesQuery,
   useSimulatorOpenMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
@@ -465,13 +466,25 @@ function SimulatorInventoryGate(props: {
     },
     [open, onPlaceTile],
   );
+  // The host-wide read is what resolves an Android clone still booted with no
+  // session left on it - this task's `sessions` no longer name its serial.
+  // Polled while the tile is on screen, because an instance powering off on
+  // its idle deadline is not pushed anywhere.
+  const hostClient = useTabHostClient();
+  const visible = useTileBodyVisible();
+  const hostInstances = useSimulatorInstancesQuery(hostClient, hostId, visible);
 
   // By id, or for an Android serial whose emulator has exited, the cold AVD
   // row of the same name: that is what "Boot and connect" boots again. A
   // clone has no row of its own, so its instance is resolved out of the
-  // source's `instances` - for Android, through the sessions that name its
-  // key and this tile's serial together.
-  const target = findSimulatorForTile(state.simulators, node, state.sessions);
+  // source's `instances` - for Android, through whichever read names its key
+  // and this tile's serial together.
+  const target = findSimulatorForTile(
+    state.simulators,
+    node,
+    state.sessions,
+    hostInstances.data?.instances ?? [],
+  );
   const autoAttached = useRef(false);
   useEffect(() => {
     // The request is taken whether or not it can be acted on: a target the
