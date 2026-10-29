@@ -44,7 +44,10 @@ import { formatAbsoluteDateTime, useSampledNow } from "@/lib/relative-time";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotOpenThread,
+  BotOpenTurn,
+} from "@/stores/bots/bot-open-thread-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
 const EMPTY_STOP_IDS: ReadonlySet<string> = new Set();
@@ -77,6 +80,8 @@ export function BotActivityPage(props: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   /** Opens a post's thread beside the channel, in Messages. */
   readonly onOpenPost: (open: BotOpenThread) => void;
+  /** Opens a check-in's turn beside the channel, in Messages. */
+  readonly onOpenTurn: (open: BotOpenTurn) => void;
 }): ReactNode {
   const {
     botId,
@@ -88,6 +93,7 @@ export function BotActivityPage(props: {
     summary,
     threads,
     onOpenPost,
+    onOpenTurn,
   } = props;
   const userId = useAuthStore((s) => s.profile?.userId ?? null);
   const taskIds = useMemo(() => tasks.map((task) => task.taskId), [tasks]);
@@ -101,8 +107,8 @@ export function BotActivityPage(props: {
   );
   const tracking = useMemo(() => trackingTasksOf(tasks), [tasks]);
   const place = useMemo(
-    () => ({ kind: "bot" as const, channelId, onOpenPost }),
-    [channelId, onOpenPost],
+    () => ({ kind: "bot" as const, channelId, onOpenPost, onOpenTurn }),
+    [channelId, onOpenPost, onOpenTurn],
   );
   return (
     <div

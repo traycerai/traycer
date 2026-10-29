@@ -75,6 +75,8 @@ const mocks = vi.hoisted(() => ({
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   // Whether the tab's host advertises `host.usage.summary`.
   usageSupported: false,
+  // The host each read of that support asked about.
+  usageSupportHosts: [] as Array<string | null>,
   // What each write's mutation reports as its error; `null` = no refusal.
   refusal: {
     title: null as string | null,
@@ -107,7 +109,10 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   },
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
-  useUsageSummarySupported: () => mocks.usageSupported,
+  useUsageSummarySupported: (hostId: string | null) => {
+    mocks.usageSupportHosts.push(hostId);
+    return mocks.usageSupported;
+  },
 }));
 // The usage dialog has its own suite; here it only shows which epic it reads.
 vi.mock("@/components/epic-canvas/panels/epic-usage-dialog", () => ({
@@ -289,6 +294,7 @@ beforeEach(() => {
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
   mocks.usageSupported = false;
+  mocks.usageSupportHosts.length = 0;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
   mocks.notificationReadError = null;
@@ -833,6 +839,8 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     mountChannelPanel({ personal: true, owner: null, environmentBots: null });
 
     expect(groupTitles()).toContain("Usage");
+    // Whether the host can read usage is asked of the tab's own host.
+    expect(new Set(mocks.usageSupportHosts)).toEqual(new Set(["host-1"]));
     expect(screen.queryByTestId("stub-usage-dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "View usage" }));
 
@@ -846,6 +854,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
 
     expect(groupTitles()).not.toContain("Usage");
     expect(screen.queryByRole("button", { name: "View usage" })).toBeNull();
+    expect(new Set(mocks.usageSupportHosts)).toEqual(new Set(["host-1"]));
   });
 
   it("groups a personal bot's channel with its reply mode, and no members or bots", () => {

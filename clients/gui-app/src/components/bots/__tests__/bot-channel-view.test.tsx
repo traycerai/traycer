@@ -415,6 +415,9 @@ function mount(options: MountOptions): {
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
+            trunkChatId="trunk-chat"
+            openTurn={null}
+            onOpenTurn={vi.fn()}
             resolveMember={resolveMember}
             tasks={[]}
             openThread={openThread}

@@ -100,10 +100,10 @@ export const useBotTabsStore = create<BotTabsState>()(
         const next = { ...get().tabs };
         delete next[botId];
         set({ tabs: next });
-        // Every close comes through here: a reopened tab starts with no
-        // thread open and no unsent drafts, and nothing follows the closed
+        // Every close comes through here: a reopened tab starts with nothing
+        // in its rail and no unsent drafts, and nothing follows the closed
         // one's session.
-        useBotOpenThreadStore.getState().setOpenThread(botId, null);
+        useBotOpenThreadStore.getState().setRail(botId, null);
         useBotDraftsStore.getState().forgetBot(botId);
       },
       setBotTabTitle: (botId, title) => {

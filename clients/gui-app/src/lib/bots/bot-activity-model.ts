@@ -1,6 +1,7 @@
 import type {
   BotActivity,
   BotActivityTarget,
+  BotCheckinTurn,
   BotSessionActivity,
   BotTaskCheckinRecord,
   BotTaskEntry,
@@ -226,6 +227,8 @@ export type BotCheckinRow =
       readonly at: number;
       readonly hostName: string | null;
       readonly said: string;
+      /** The turn the bot took on it; `null` where the host recorded none. */
+      readonly turn: BotCheckinTurn | null;
     }
   | {
       readonly kind: "missed";
@@ -256,6 +259,7 @@ export function checkinRowsOf(
       at: last.deliveredAt,
       hostName: null,
       said: describeLastCheckin(last),
+      turn: null,
     },
   ];
 }
@@ -278,6 +282,7 @@ function checkinRowOf(
     at: record.receivedAt,
     hostName: record.hostName,
     said: describeReport(record),
+    turn: record.turn,
   };
 }
 

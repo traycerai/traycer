@@ -805,6 +805,9 @@ describe("a task id in a bot's row", () => {
     chooseOption: null,
     questions: null,
     failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
   };
 
   function botRow(markdown: string): ChatMessageModel {

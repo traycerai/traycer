@@ -2,10 +2,16 @@ import {
   Fragment,
   useContext,
   useEffect,
+  useState,
   type ReactElement,
   type ReactNode,
 } from "react";
-import { MessageSquareText, Pencil, RotateCcw } from "lucide-react";
+import {
+  ChevronRight,
+  MessageSquareText,
+  Pencil,
+  RotateCcw,
+} from "lucide-react";
 import {
   isConversationRequestMessageId,
   type BotAnnouncement,
@@ -15,12 +21,24 @@ import {
 } from "@traycer/protocol/persistence/epic/messages";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { Button } from "@/components/ui/button";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
 import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRelativeTimestamp } from "@/lib/relative-time";
+import { formatClockDuration } from "@/lib/format-duration";
+import { firstLineOf } from "@/lib/bots/bot-trunk-model";
+import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
+import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
+import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
+import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { cn } from "@/lib/utils";
 import {
   AvatarStack,
@@ -32,10 +50,12 @@ import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   ChatBotPresentationContext,
+  type ChatBotFailedRecovery,
   type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotQuestions,
   type ChatBotThreadLine,
+  type ChatBotTurnReceipt,
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
@@ -75,7 +95,15 @@ import { TextSegment } from "./segments/text-segment";
  * (`answerThreads`). Any other announcement takes no thread. A member's
  * message
  * the bot failed to answer adds Retry and Edit to them, and says under its
- * text that it was not answered and why, with the same actions inline.
+ * text that it was not answered and why, with the same actions inline: the
+ * agent chat's reason and actions where the bot's session names the post's
+ * turn as its last failed attempt, and the receipt of that turn under them.
+ *
+ * Under a reply of the bot, the receipt of the turn that wrote it (Tracy
+ * Bots T86): what the turn did and how long it took, shown while the row is
+ * hovered or the receipt has keyboard focus, and always while the turn
+ * runs. It opens the turn beside the channel. A touch screen has no hover:
+ * a long press on the reply offers it in a sheet instead.
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.
@@ -107,7 +135,10 @@ export function ChatBotMessage(props: {
       : presentation.threadLine(postId);
   const replyInThread =
     postId === null ? null : memberReplyInThread(message, postId, presentation);
-  const failed = failedActionsOf(message, presentation);
+  const { failed, recovery, failedReceipt } = memberFailureOf(
+    message,
+    presentation,
+  );
   return (
     <BotMessageFrame
       avatar={
@@ -126,9 +157,15 @@ export function ChatBotMessage(props: {
       hoverActions={hoverActions}
       replyInThread={replyInThread}
       failed={failed}
+      longPress={null}
     >
       {body}
-      {failed === null ? null : <UnansweredLine failed={failed} />}
+      {failed === null ? null : (
+        <UnansweredLine failed={failed} recovery={recovery} />
+      )}
+      {failedReceipt === null ? null : (
+        <TurnReceiptLine receipt={failedReceipt} alwaysShown />
+      )}
       {message.conversationRequest === undefined ? null : (
         <AnsweredReplyLink
           request={message.conversationRequest}
@@ -148,13 +185,44 @@ export function ChatBotMessage(props: {
 }
 
 /**
+ * A member's message the bot failed to answer: its actions, the agent chat's
+ * recovery where the session names the post's turn, and that turn's receipt;
+ * all `null` on any other message.
+ */
+function memberFailureOf(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation,
+): {
+  readonly failed: FailedMessageActions | null;
+  readonly recovery: ChatBotFailedRecovery | null;
+  readonly failedReceipt: ChatBotTurnReceipt | null;
+} {
+  const requestId = message.conversationRequest?.requestId ?? null;
+  const recovery =
+    requestId === null || presentation.failedRecovery === null
+      ? null
+      : presentation.failedRecovery(requestId);
+  const failed = failedActionsOf(message, presentation, recovery);
+  const failedReceipt =
+    failed === null ||
+    requestId === null ||
+    presentation.requestReceipt === null
+      ? null
+      : presentation.requestReceipt(requestId);
+  return { failed, recovery, failedReceipt };
+}
+
+/**
  * Why a member's message the bot failed to answer was not answered, and its
  * Retry and Edit bound to the message's text; `null` on any other. A held
- * (parked) answer offers Retry alone, on the line and on hover alike.
+ * (parked) answer offers Retry alone, on the line and on hover alike. Where
+ * the agent chat's actions recover the turn (`recovery`), they stand in for
+ * the bot's Retry and Sign in, and Edit stays.
  */
 function failedActionsOf(
   message: ChatMessageModel,
   presentation: ChatBotPresentation,
+  recovery: ChatBotFailedRecovery | null,
 ): FailedMessageActions | null {
   const request = message.conversationRequest;
   const failed =
@@ -167,6 +235,16 @@ function failedActionsOf(
   if (failed === null) return null;
   const { retry, edit } = failed;
   const parked = failed.state === "parked";
+  if (recovery !== null) {
+    return {
+      state: failed.state,
+      summary: recovery.label,
+      onSignIn: null,
+      onRetry: null,
+      retrying: false,
+      onEdit: edit === null ? null : () => edit(message.content),
+    };
+  }
   return {
     state: failed.state,
     summary: failed.summary,
@@ -194,6 +272,8 @@ function BotRow(props: {
   const question = message.question ?? null;
   const questions = question === null ? null : presentation.questions;
   const { replyInThread, threadLine } = botRowThread(message, presentation);
+  const receipt = replyReceiptFor(message, presentation);
+  const sheet = useReceiptSheet(receipt !== null && hoverActions);
   return (
     <BotMessageFrame
       avatar={<BotAvatar size="lg" />}
@@ -205,6 +285,7 @@ function BotRow(props: {
       hoverActions={hoverActions}
       replyInThread={replyInThread}
       failed={null}
+      longPress={sheet.longPress}
     >
       {question !== null && questions !== null ? (
         <BotQuestionCard
@@ -222,6 +303,12 @@ function BotRow(props: {
           onChoose={presentation.chooseOption}
         />
       )}
+      {receipt === null ? null : (
+        <TurnReceiptLine
+          receipt={receipt}
+          alwaysShown={receipt.endedAt === null}
+        />
+      )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
@@ -229,8 +316,57 @@ function BotRow(props: {
           onOpen={replyInThread}
         />
       )}
+      {receipt === null || sheet.longPress === null ? null : (
+        <ReplyReceiptSheet
+          open={sheet.open}
+          onOpenChange={sheet.setOpen}
+          botTitle={presentation.botTitle}
+          replyText={message.content}
+          receipt={receipt}
+        />
+      )}
     </BotMessageFrame>
   );
+}
+
+/**
+ * A touch screen has no hover to reveal a reply's receipt with: a long press
+ * on the reply offers it in a sheet. `longPress` is `null` where the row
+ * offers no receipt (`enabled` false).
+ */
+function useReceiptSheet(enabled: boolean): {
+  readonly open: boolean;
+  readonly setOpen: (open: boolean) => void;
+  readonly longPress: LongPress | null;
+} {
+  const [open, setOpen] = useState(false);
+  const longPress = useLongPress({
+    onLongPress: () => setOpen(true),
+    disabled: !enabled,
+    acceptsMouse: false,
+  });
+  return { open, setOpen, longPress: enabled ? longPress : null };
+}
+
+/** The receipt under a reply of the bot; an announcement has none. */
+function replyReceiptFor(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation,
+): ChatBotTurnReceipt | null {
+  if (
+    message.announcement !== undefined ||
+    presentation.replyReceipt === null
+  ) {
+    return null;
+  }
+  return presentation.replyReceipt(replyMessageIdsOf(message));
+}
+
+/** The message ids a reply's row carries: its own, and every record of its turn. */
+function replyMessageIdsOf(message: ChatMessageModel): ReadonlyArray<string> {
+  const ids = message.turnMessageIds ?? [];
+  const own = message.persistentMessageId;
+  return own === null || ids.includes(own) ? ids : [own, ...ids];
 }
 
 /** A bot row's text, on its announcement's coloured bar where it is one. */
@@ -430,16 +566,31 @@ function BotMessageFrame(props: {
   readonly replyInThread: (() => void) | null;
   /** Retry and Edit, among the hover actions of a message the bot failed to answer. */
   readonly failed: FailedMessageActions | null;
+  /** A long press that opens the row's sheet on a touch screen; `null` for a row with none. */
+  readonly longPress: LongPress | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
   // A bot's card needs the surface's bot; outside one the row is plain.
   const identity = useBotIdentity();
   const carded = props.bot && identity !== null;
+  const { longPress } = props;
   return (
     <div
       data-testid={props.testId}
       className="group/message relative flex w-full gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3"
+      {...longPress?.handlers}
+      // The click a long press ends with opened the sheet already; it does
+      // not also reach what was under the finger.
+      onClickCapture={
+        longPress === null
+          ? undefined
+          : (event) => {
+              if (!longPress.consumedTap()) return;
+              event.preventDefault();
+              event.stopPropagation();
+            }
+      }
     >
       {carded ? (
         <BotIdentityTrigger>
@@ -514,8 +665,10 @@ type FailedMessageActions = {
  */
 function UnansweredLine(props: {
   readonly failed: FailedMessageActions;
+  /** The agent chat's actions for the failed turn, drawn under the line; `null` for the bot's own. */
+  readonly recovery: ChatBotFailedRecovery | null;
 }): ReactElement {
-  const { failed } = props;
+  const { failed, recovery } = props;
   const parked = failed.state === "parked";
   const actions: ReadonlyArray<{
     readonly label: string;
@@ -554,7 +707,7 @@ function UnansweredLine(props: {
           },
         ]),
   ];
-  return (
+  const line = (
     <p
       data-testid="bot-message-unanswered"
       data-state={failed.state}
@@ -581,6 +734,101 @@ function UnansweredLine(props: {
         </Fragment>
       ))}
     </p>
+  );
+  if (recovery === null) return line;
+  return (
+    <div data-testid="bot-message-recovery" className="flex flex-col">
+      {line}
+      {recovery.actions}
+    </div>
+  );
+}
+
+/**
+ * The receipt under a reply, or under a post the bot did not answer: the
+ * turn's activity and how long it took, or while it runs how long it has
+ * been running, in the muted style of Slack's "3 replies"; it opens the
+ * turn. Revealed while the row is hovered or the receipt has keyboard focus,
+ * and hidden on a touch screen, unless `alwaysShown`.
+ */
+function TurnReceiptLine(props: {
+  readonly receipt: ChatBotTurnReceipt;
+  readonly alwaysShown: boolean;
+}): ReactElement {
+  const { receipt, alwaysShown } = props;
+  const label = turnReceiptLabel(receipt);
+  return (
+    <button
+      type="button"
+      data-testid="bot-turn-receipt"
+      data-running={receipt.endedAt === null ? "true" : "false"}
+      onClick={receipt.open}
+      className={cn(
+        "-ml-1 flex w-fit max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-ui-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
+        !alwaysShown &&
+          "opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100 pointer-coarse:hidden",
+      )}
+    >
+      <span className="min-w-0 truncate">
+        {label ?? <RunningFor startedAt={receipt.startedAt} />}
+      </span>
+      <ChevronRight aria-hidden="true" className="size-3 shrink-0" />
+    </button>
+  );
+}
+
+/** How long a running turn has been running, counting each second. */
+function RunningFor(props: { readonly startedAt: number }): ReactElement {
+  const seconds = useElapsedSeconds(props.startedAt, 0, null);
+  return <span className="tabular-nums">{formatClockDuration(seconds)}</span>;
+}
+
+/**
+ * The sheet a long press on a reply opens on a touch screen, which has no
+ * hover to show the receipt with: one action, "How Tracy answered", with
+ * the receipt's label.
+ */
+function ReplyReceiptSheet(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly botTitle: string;
+  readonly replyText: string;
+  readonly receipt: ChatBotTurnReceipt;
+}): ReactElement {
+  const { open, onOpenChange, botTitle, replyText, receipt } = props;
+  // The drawer portals to <body>; re-assert the theme there, as every sheet
+  // does.
+  const { resolvedTheme, themePreset } = useResolvedTheme();
+  const label = turnReceiptLabel(receipt);
+  return (
+    <Drawer direction="bottom" open={open} onOpenChange={onOpenChange}>
+      <DrawerContent
+        data-testid="bot-reply-sheet"
+        data-theme={themePreset}
+        className={cn(resolvedTheme === "dark" && "dark")}
+      >
+        <div className="flex flex-col border-b border-canvas-border/70 p-4">
+          <DrawerTitle>{botTitle}</DrawerTitle>
+          <DrawerDescription>{firstLineOf(replyText) ?? ""}</DrawerDescription>
+        </div>
+        <div className="flex flex-col px-2 pt-1 pb-safe-bottom-gutter">
+          <button
+            type="button"
+            data-testid="bot-reply-sheet-receipt"
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-start text-ui-sm text-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:bg-foreground/8"
+            onClick={() => {
+              onOpenChange(false);
+              receipt.open();
+            }}
+          >
+            <span className="min-w-0 truncate">
+              {`How ${botTitle} answered · `}
+              {label ?? <RunningFor startedAt={receipt.startedAt} />}
+            </span>
+          </button>
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 

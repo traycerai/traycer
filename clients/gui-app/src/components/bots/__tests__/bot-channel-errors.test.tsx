@@ -236,6 +236,9 @@ function mount(openThread: BotOpenThread | null): void {
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={CHANNEL_ID}
+            trunkChatId="trunk-chat"
+            openTurn={null}
+            onOpenTurn={vi.fn()}
             resolveMember={resolveMember}
             tasks={[]}
             openThread={openThread}

@@ -45,6 +45,8 @@ import {
   botConversationSendRequestSchemaV11,
   botConversationSendResponseSchema,
   botThreadListRequestSchema,
+  botTurnLocateRequestSchema,
+  botTurnLocateResponseSchema,
   botThreadListResponseSchema,
   botThreadListResponseSchemaV10,
 } from "./conversation-schemas";
@@ -279,6 +281,20 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
   to: botThreadListV11.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, threadAnchors: null }),
+});
+
+/**
+ * `bot.turn.locate@1.0` (T86): the session turns behind a bot's replies, its
+ * not-answered posts and its check-ins, for the receipt under a reply and
+ * the turn it opens. Answered by the bound host from its own record and by
+ * any other from the bot's environment room. Same optional posture as the
+ * namespace: a host without it shows no receipt.
+ */
+export const botTurnLocateV10 = defineRpcContract({
+  method: "bot.turn.locate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botTurnLocateRequestSchema,
+  responseSchema: botTurnLocateResponseSchema,
 });
 
 /**

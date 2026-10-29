@@ -41,6 +41,7 @@ import {
   type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
+  type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatMessage } from "@/components/chat/chat-message";
@@ -95,6 +96,9 @@ function channelPresentation(
     chooseOption: null,
     questions: null,
     failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
   };
 }
 
@@ -472,6 +476,9 @@ describe("<ChatMessage /> in a bot thread", () => {
         chooseOption: null,
         questions: null,
         failedRequest: null,
+        failedRecovery: null,
+        replyReceipt: null,
+        requestReceipt: null,
         replyFollowsPost: null,
       },
     );
@@ -727,6 +734,9 @@ describe("<ChatMessage /> bot rows", () => {
     chooseOption: null,
     questions: null,
     failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
   };
 
   it("labels a bot's reply with the bot's current title and no tag", () => {
@@ -848,6 +858,9 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       chooseOption: input.chooseOption,
       questions: null,
       failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
     };
   }
 
@@ -865,6 +878,55 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       .getByTestId("bot-announcement")
       .querySelector("[data-announcement-kind]");
     expect(bar?.classList.contains("border-l-chart-2")).toBe(true);
+  });
+
+  it("draws no turn receipt under a question or proposal, though the presentation names a turn for any ids", () => {
+    const replyReceipt = vi.fn<
+      (messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null
+    >(() => ({
+      summary: "Read 1 file",
+      startedAt: 0,
+      endedAt: 1_000,
+      open: vi.fn(),
+    }));
+    renderRow(announcementRow("question"), {
+      ...withActions({
+        threadLine: NO_THREAD_LINE,
+        openAnnouncementThread: null,
+        chooseOption: null,
+      }),
+      replyReceipt,
+    });
+
+    expect(screen.queryByTestId("bot-turn-receipt")).toBeNull();
+    expect(replyReceipt).not.toHaveBeenCalled();
+  });
+
+  it("asks for a reply's turn by its own message id and every record its row carries", () => {
+    const replyReceipt = vi.fn<
+      (messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null
+    >(() => null);
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "record-3",
+        turnMessageIds: ["record-1", "record-2"],
+      },
+      {
+        ...withActions({
+          threadLine: null,
+          openAnnouncementThread: null,
+          chooseOption: null,
+        }),
+        replyReceipt,
+      },
+    );
+
+    expect(replyReceipt).toHaveBeenCalledWith([
+      "record-3",
+      "record-1",
+      "record-2",
+    ]);
   });
 
   it("draws a reply's options as buttons and posts the clicked choice", async () => {
@@ -1026,6 +1088,9 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     chooseOption: null,
     questions: null,
     failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
   };
 
   function resolvedPost(direct: boolean): ChatMessageModel {
@@ -1542,6 +1607,9 @@ describe("<ChatEmptyState /> in a bot channel", () => {
       chooseOption: null,
       questions: null,
       failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
     });
 
     expect(document.body.textContent).toBe("");
