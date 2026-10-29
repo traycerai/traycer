@@ -211,12 +211,19 @@ const DEFAULT_FOLLOW_LATCH_OPTIONS = {
   isCorrectionSuppressed: undefined,
   resolveSuppressedEndLanding: undefined,
   isReattachSuppressed: undefined,
+  isTurnRunning: undefined,
 };
 
 interface FakeListRef {
   readonly current: LegendListRef;
   /** Moves the list's last row, as rows above it remeasuring would. */
   readonly setLastRowTop: (top: number) => void;
+  /** Places a row, after the others if it is new. */
+  readonly setRowTop: (key: string, top: number) => void;
+  /** Unmounts a row: the list no longer knows its position. */
+  readonly removeRow: (key: string) => void;
+  /** The size the list laid out, which the DOM may lag. */
+  readonly setContentLength: (length: number) => void;
   readonly cancelPendingScroll: Mock<() => boolean>;
   readonly scrollToEnd: Mock<() => Promise<void>>;
   readonly scrollToOffset: Mock<
@@ -232,11 +239,14 @@ const FAKE_LAST_ROW_TOP_PX = 1000;
 
 /** The slice of the list's state the latch reads - its rows and where they
  *  sit - over a state otherwise at rest. */
-function makeFakeListState(rowTops: ReadonlyMap<string, number>) {
+function makeFakeListState(
+  rowTops: ReadonlyMap<string, number>,
+  contentLength: number,
+) {
   const keys = [...rowTops.keys()];
   const state: LegendListState = {
     activeStickyIndex: -1,
-    contentLength: 0,
+    contentLength,
     data: keys,
     elementAtIndex: () => null,
     end: 0,
@@ -270,6 +280,7 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
   const rowTops = new Map<string, number>([
     [FAKE_LAST_ROW_KEY, FAKE_LAST_ROW_TOP_PX],
   ]);
+  let contentLength = 0;
   const cancelPendingScroll = vi.fn((): boolean => false);
   const scrollToEnd = vi.fn((): Promise<void> => Promise.resolve());
   const scrollToOffset = vi.fn((): Promise<void> => Promise.resolve());
@@ -281,7 +292,7 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     getNativeScrollRef: () => node,
     getScrollableNode: () => node,
     getScrollResponder: () => null,
-    getState: () => makeFakeListState(rowTops),
+    getState: () => makeFakeListState(rowTops, contentLength),
     reportContentInset: notImplemented,
     scrollIndexIntoView: notImplemented,
     scrollItemIntoView: notImplemented,
@@ -296,6 +307,11 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
   return {
     current,
     setLastRowTop: (top) => rowTops.set(FAKE_LAST_ROW_KEY, top),
+    setRowTop: (key, top) => rowTops.set(key, top),
+    removeRow: (key) => rowTops.delete(key),
+    setContentLength: (length) => {
+      contentLength = length;
+    },
     cancelPendingScroll,
     scrollToEnd,
     scrollToOffset,
@@ -452,6 +468,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -819,6 +836,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -866,6 +884,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -912,6 +931,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -944,6 +964,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1029,6 +1050,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1557,6 +1579,456 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
+  describe("a reader the end pad's reset clamps onto the new end", () => {
+    const WHEEL_UP = {
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    } as const;
+    const PAD_PX = 56;
+    const NOTCH_PX = 40;
+    const END = 1000;
+
+    /** A following reader whose correction landed at the padded end, then a
+     *  wheel notch up published their departure. The pad then resets, and
+     *  the browser clamps them onto the new end with a report there. */
+    function clampedOntoNewEnd(isTurnRunning: () => boolean) {
+      const node = shim.makeNode({
+        scrollTop: END,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isTurnRunning,
+        }),
+      );
+      shim.setGeometry(node, { scrollHeight: 1500 + PAD_PX });
+      result.current.followEndIfPermitted();
+      expect(node.scrollTop).toBe(END + PAD_PX);
+
+      result.current.noteReaderGesture(WHEEL_UP);
+      shim.setGeometry(node, { scrollTop: END + PAD_PX - NOTCH_PX });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      // The pad resets; the offset clamps onto the new end.
+      shim.setGeometry(node, { scrollHeight: 1500, scrollTop: END });
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+      listRef.scrollToEnd.mockClear();
+      return { node, listRef, onFollowIntentChange, result };
+    }
+
+    it("M2: stays detached while the turn runs, even as the end grows past them", () => {
+      const { node, listRef, onFollowIntentChange, result } = clampedOntoNewEnd(
+        () => true,
+      );
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      shim.setGeometry(node, { scrollHeight: 1528 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(END);
+    });
+
+    it("order A: follows at the clamp report when the turn had already finished", () => {
+      const { onFollowIntentChange } = clampedOntoNewEnd(() => false);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("order B: held through the clamp while the turn runs, follows once the turn ends", () => {
+      let turnRunning = true;
+      const { node, listRef, onFollowIntentChange, result } = clampedOntoNewEnd(
+        () => turnRunning,
+      );
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      turnRunning = false;
+      result.current.reconcileTurnAtRest();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      shim.setGeometry(node, { scrollHeight: 1528 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    // Control: a held reader the turn's end finds away from the strict
+    // bottom has nothing to follow into.
+    it("control: a held reader away from the strict bottom stays detached when the turn ends", () => {
+      const { node, onFollowIntentChange, result } = clampedOntoNewEnd(
+        () => true,
+      );
+      shim.setGeometry(node, { scrollTop: END - NOTCH_PX });
+
+      result.current.reconcileTurnAtRest();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+  });
+
+  interface ElementLayout {
+    /** Offset in the list's content, so its screen top is this minus the
+     *  node's scrollTop. */
+    offset: number;
+    readonly height: number;
+  }
+
+  /** Gives the node a real edge: the list's content container, a row that
+   *  spans the node's top edge, and an element inside it that crosses the
+   *  edge. jsdom has no layout, so rects follow `scrollTop`. */
+  function installEdgeLayout(node: HTMLDivElement): (offset: number) => void {
+    const content = document.createElement("div");
+    content.className = "legend-list-content-container";
+    const row = document.createElement("div");
+    const edgeElement = document.createElement("div");
+    const edgeLayout: ElementLayout = { offset: 1000, height: 100 };
+    row.appendChild(edgeElement);
+    content.appendChild(row);
+    node.appendChild(content);
+    const layouts = new Map<Element, ElementLayout>([
+      [content, { offset: 0, height: node.scrollHeight }],
+      [row, { offset: 900, height: 400 }],
+      [edgeElement, edgeLayout],
+    ]);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element): DOMRect {
+        const layout = layouts.get(this);
+        let top = 0;
+        let height = 0;
+        if (this === node) {
+          height = node.clientHeight;
+        } else if (layout !== undefined) {
+          top = layout.offset - node.scrollTop;
+          height = layout.height;
+        }
+        return {
+          x: 0,
+          y: top,
+          top,
+          left: 0,
+          width: 0,
+          height,
+          bottom: top + height,
+          right: 0,
+          toJSON: () => ({}),
+        };
+      },
+    );
+    return (offset) => {
+      edgeLayout.offset = offset;
+    };
+  }
+
+  describe("a following reader's finger toward the end while the stream grows", () => {
+    const TAIL_ROW_KEY = "tail-row";
+
+    function mountWithFinger(
+      initialScrollAtEnd: boolean,
+      isCorrectionSuppressed: (() => boolean) | undefined,
+      withTailRow: boolean,
+    ) {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const moveEdgeElement = installEdgeLayout(node);
+      const listRef = makeFakeListRef(node);
+      // The first row below the viewport's top edge at contact; without it,
+      // the last row spans the whole view.
+      if (withTailRow) listRef.setRowTop(TAIL_ROW_KEY, 1200);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const onReaderGesture = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, initialScrollAtEnd, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          onReaderGesture,
+          isCorrectionSuppressed,
+        }),
+      );
+      fireTouch(node, "touchstart", 300);
+      // The stream grows the end under the held correction.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      return {
+        node,
+        listRef,
+        moveEdgeElement,
+        onFollowIntentChange,
+        onReaderGesture,
+        result,
+      };
+    }
+
+    it("N1: a report toward the end does not detach them, and the lift reaches the tail", () => {
+      const { node, listRef, onFollowIntentChange, onReaderGesture } =
+        mountWithFinger(true, undefined, true);
+
+      shim.setGeometry(node, { scrollTop: 1030 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(onReaderGesture).not.toHaveBeenCalled();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+      fireTouch(node, "touchend", 300);
+
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(1200);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("N1: movement toward the end that never reports before the lift reaches the tail at the lift", () => {
+      const { node, listRef, onFollowIntentChange, onReaderGesture } =
+        mountWithFinger(true, undefined, true);
+
+      shim.setGeometry(node, { scrollTop: 1030 });
+      fireTouch(node, "touchend", 300);
+
+      expect(node.scrollTop).toBe(1200);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(onReaderGesture).not.toHaveBeenCalled();
+    });
+
+    // The list compensates growth above the view by moving scrollTop with
+    // the rows: the view's net movement against the reference row, and the
+    // edge element's rise on screen, are the finger's, and here it is away
+    // from the end.
+    it("still detaches a finger away from the end whose scrollTop the list moved toward it", () => {
+      const {
+        node,
+        listRef,
+        moveEdgeElement,
+        onFollowIntentChange,
+        onReaderGesture,
+      } = mountWithFinger(true, undefined, true);
+
+      // Rows above grew by 100: the reference row and the edge element,
+      // below the growth, moved with them. scrollTop is +70 net (list +100,
+      // finger -30), so the edge element sits 30 lower on screen.
+      listRef.setRowTop(TAIL_ROW_KEY, 1300);
+      moveEdgeElement(1100);
+      shim.setGeometry(node, { scrollTop: 1070 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+    });
+
+    // One row spans the whole view and grows inside, above the edge element.
+    // The list compensates scrollTop by the growth and the row's top does not
+    // move, so the row measure alone reads a finger away by 30 as toward the
+    // end; the edge element, held still by the compensation, sank on screen.
+    it("still detaches a finger away from the end over a spanning row that grew above the edge", () => {
+      const { node, moveEdgeElement, onFollowIntentChange, onReaderGesture } =
+        mountWithFinger(true, undefined, false);
+
+      moveEdgeElement(1050);
+      shim.setGeometry(node, { scrollTop: 1020 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+    });
+
+    // Rows between the edge element and the reference row grew by 100 and
+    // the list anchored the reference row: scrollTop is +100 and the row
+    // moved with it, while the edge element, above the growth, did not. It
+    // rose on screen, so the edge measure alone reads a finger away by 30 as
+    // toward the end; the row measure nets the list's move out.
+    it("still detaches a finger away from the end when the list anchored a row below the edge element", () => {
+      const { node, listRef, onFollowIntentChange, onReaderGesture } =
+        mountWithFinger(true, undefined, true);
+
+      listRef.setRowTop(TAIL_ROW_KEY, 1300);
+      shim.setGeometry(node, { scrollTop: 1070 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes a departure when the reference row has gone, rather than reading it as toward the end", () => {
+      const { node, listRef, onFollowIntentChange } = mountWithFinger(
+        true,
+        undefined,
+        true,
+      );
+
+      listRef.removeRow(TAIL_ROW_KEY);
+      shim.setGeometry(node, { scrollTop: 1030 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    // The exemption needs follow held: a detached reader's finger toward the
+    // end is their reading position, published while a restore holds the
+    // saved one.
+    it("still publishes a detached reader's finger toward the end", () => {
+      const { node, onReaderGesture } = mountWithFinger(
+        false,
+        () => true,
+        true,
+      );
+
+      shim.setGeometry(node, { scrollTop: 1030 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("an end correction's write while the list pads its content end", () => {
+    const PAD_PX = 80;
+
+    function followingBeforeGrowth(input: {
+      readonly padded: boolean;
+      readonly contentLength: number;
+      readonly scrollTop: number;
+    }) {
+      const node = shim.makeNode({
+        scrollTop: input.scrollTop,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const content = document.createElement("div");
+      content.className = "legend-list-content-container";
+      if (input.padded) content.style.paddingBottom = `${PAD_PX}px`;
+      node.appendChild(content);
+      const listRef = makeFakeListRef(node);
+      listRef.setContentLength(input.contentLength);
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(
+          listRef,
+          true,
+          true,
+          DEFAULT_FOLLOW_LATCH_OPTIONS,
+        ),
+      );
+      return { node, listRef, result };
+    }
+
+    it("lands at the list's end, not inside its padding", () => {
+      const { node, listRef, result } = followingBeforeGrowth({
+        padded: true,
+        contentLength: 1700,
+        scrollTop: 1000,
+      });
+
+      // The DOM end includes the pad: 1700 laid out + 80 of padding.
+      shim.setGeometry(node, { scrollHeight: 1700 + PAD_PX });
+      result.current.followEndIfPermitted();
+
+      expect(node.scrollTop).toBe(1700 - 500);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("never moves the view back from where the list already put it", () => {
+      const { node, result } = followingBeforeGrowth({
+        padded: true,
+        contentLength: 1700,
+        scrollTop: 1250,
+      });
+
+      shim.setGeometry(node, { scrollHeight: 1700 + PAD_PX });
+      result.current.followEndIfPermitted();
+
+      expect(node.scrollTop).toBe(1250);
+    });
+
+    // Without the pad the DOM is the truth: it grew before the list
+    // re-measured, and the list's size is the stale one.
+    it("lands at the DOM end when no padding is held, even where the list's size lags", () => {
+      const { node, result } = followingBeforeGrowth({
+        padded: false,
+        contentLength: 1600,
+        scrollTop: 1000,
+      });
+
+      shim.setGeometry(node, { scrollHeight: 1780 });
+      result.current.followEndIfPermitted();
+
+      expect(node.scrollTop).toBe(1780 - 500);
+    });
+  });
+
+  describe("a wheel away the end absorbs, across the turn's end", () => {
+    function followingAtStrictBottom(isTurnRunning: () => boolean) {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const onReaderGesture = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          onReaderGesture,
+          isTurnRunning,
+        }),
+      );
+      return { node, listRef, onFollowIntentChange, onReaderGesture, result };
+    }
+
+    it("an absorbed wheel up does not outlive the turn", () => {
+      const { node, listRef, onFollowIntentChange, onReaderGesture, result } =
+        followingAtStrictBottom(() => false);
+
+      // The end absorbs the wheel: nothing scrolls and nothing grows.
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      result.current.reconcileTurnAtRest();
+      onReaderGesture.mockClear();
+
+      // The next turn's growth is followed, not read as the wheel's departure.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(1200);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(onReaderGesture).not.toHaveBeenCalled();
+    });
+
+    it("R3's departure and the end pad's clamp agree: held through the turn, following after it", () => {
+      let turnRunning = true;
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom(() => turnRunning);
+
+      // The wheel up leaves nothing to report; the tail growing under it is
+      // the departure, published at the offset the reader holds.
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      shim.setGeometry(node, { scrollHeight: 1556 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      // The end pad drops: the end clamps below the departure offset.
+      shim.setGeometry(node, { scrollHeight: 1450, scrollTop: 950 });
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+      turnRunning = false;
+      result.current.reconcileTurnAtRest();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+  });
+
   it("blocks a maintain correction between touch intent and native scroll", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
@@ -1572,6 +2044,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1607,6 +2080,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1715,6 +2189,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1743,6 +2218,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1772,6 +2248,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1813,6 +2290,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1852,6 +2330,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -1884,6 +2363,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2019,6 +2499,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2055,6 +2536,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2246,6 +2728,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2275,6 +2758,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2308,6 +2792,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2340,6 +2825,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2367,6 +2853,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2389,6 +2876,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: () => true,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2748,6 +3236,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2796,6 +3285,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
     fireNativeScroll(node); // confirm following at the strict bottom
@@ -2828,6 +3318,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
     fireNativeScroll(node); // confirm following at the strict bottom
@@ -2859,6 +3350,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -2887,6 +3379,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
     fireNativeScroll(node); // confirm at the strict bottom
@@ -2948,6 +3441,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: () => true,
+          isTurnRunning: undefined,
         }),
       );
 
@@ -2972,6 +3466,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: undefined,
+          isTurnRunning: undefined,
         }),
       );
 
@@ -2997,6 +3492,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: undefined,
+          isTurnRunning: undefined,
         }),
       );
 
@@ -3034,6 +3530,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: undefined,
+          isTurnRunning: undefined,
         }),
       );
 
@@ -3066,6 +3563,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: undefined,
+          isTurnRunning: undefined,
         }),
       );
 
@@ -3092,6 +3590,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: undefined,
+          isTurnRunning: undefined,
         }),
       );
 
@@ -3116,6 +3615,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -3149,6 +3649,7 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
       }),
     );
 
@@ -3184,6 +3685,7 @@ describe("useChatTimelineFollowLatch", () => {
           isCorrectionSuppressed: undefined,
           resolveSuppressedEndLanding: undefined,
           isReattachSuppressed: () => suppressed,
+          isTurnRunning: undefined,
         }),
       );
       return {

@@ -55,6 +55,7 @@ export function Harness() {
     isCorrectionSuppressed: undefined,
     resolveSuppressedEndLanding: undefined,
     isReattachSuppressed: undefined,
+    isTurnRunning: undefined,
   });
 
   useLayoutEffect(() => {

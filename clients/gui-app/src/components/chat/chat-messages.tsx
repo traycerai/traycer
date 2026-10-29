@@ -11,6 +11,7 @@ import {
 import {
   type ChatTimelineFollowLatch,
   type ChatTimelineReaderGestureIntent,
+  chatTimelineEndScrollTop,
   isChatTimelineAtStrictBottom,
 } from "@/components/chat/chat-timeline-follow-latch";
 import {
@@ -757,11 +758,8 @@ function chatKeyboardScrollDelta(
 function applyChatKeyboardScroll(
   scroller: HTMLElement,
   action: ChatKeyboardScrollAction,
+  maxScrollTop: number,
 ): void {
-  const maxScrollTop = Math.max(
-    0,
-    scroller.scrollHeight - scroller.clientHeight,
-  );
   if (action === "top") {
     scroller.scrollTop = 0;
     return;
@@ -2781,11 +2779,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (drillInScroller !== null) {
         event.preventDefault();
         event.stopPropagation();
-        applyChatKeyboardScroll(drillInScroller, scrollAction);
+        applyChatKeyboardScroll(
+          drillInScroller,
+          scrollAction,
+          Math.max(
+            0,
+            drillInScroller.scrollHeight - drillInScroller.clientHeight,
+          ),
+        );
         return;
       }
-      const scroller = chatTimelineRef.current?.getScrollableNode();
-      if (!scroller) return;
+      const timeline = chatTimelineRef.current;
+      const scroller = timeline?.getScrollableNode();
+      if (!timeline || !scroller) return;
       event.preventDefault();
       event.stopPropagation();
       // Freeze an owned native smooth-scroll at its current pixel first, then
@@ -2802,7 +2808,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
       });
-      applyChatKeyboardScroll(scroller, scrollAction);
+      applyChatKeyboardScroll(
+        scroller,
+        scrollAction,
+        chatTimelineEndScrollTop(timeline, scroller),
+      );
     },
     [cancelTimelineLiveFollowForUserNavigation],
   );
@@ -4513,6 +4523,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const turnRunning =
     lastAssistantMessage !== undefined &&
     lastAssistantMessage.completedAt === null;
+  // Read through a ref by the latch's scroll and layout callbacks, which no
+  // render accompanies. The turn finishing releases a reader the end fell
+  // onto while it ran.
+  const turnRunningRef = useRef(turnRunning);
+  useLayoutEffect(() => {
+    turnRunningRef.current = turnRunning;
+    if (!turnRunning) followLatchRef.current?.reconcileTurnAtRest();
+  }, [turnRunning]);
+  const isTurnRunning = useCallback((): boolean => turnRunningRef.current, []);
   useStopReadingOnNewReply(instanceId, lastAssistantMessage?.id ?? null);
   const contextWorkingVerb = use(WorkingVerbContext);
   const workingVerb =
@@ -4590,6 +4609,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
                   isReattachSuppressed={isReattachSuppressed}
+                  isTurnRunning={isTurnRunning}
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }
