@@ -58,6 +58,7 @@ function Channel(): ReactNode {
       trunkChatId={TRUNK_ID}
       resolveMember={resolveMember}
       tasks={[]}
+      surfaceActions={null}
       openThread={openThread}
       onOpenThread={(open) =>
         setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })

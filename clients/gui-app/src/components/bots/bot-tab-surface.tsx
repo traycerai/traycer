@@ -596,6 +596,7 @@ function BotTabContent(props: {
                   trunkChatId={snapshot.bot.trunkChatId}
                   resolveMember={resolveMember}
                   tasks={snapshot.tasks}
+                  surfaceActions={snapshot.surfaceActions}
                   openThread={openThread}
                   onOpenThread={setOpenThread}
                   openTurn={openTurn}

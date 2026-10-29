@@ -245,6 +245,7 @@ function mount(openThread: BotOpenThread | null): void {
             botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenActivity={onOpenActivity}

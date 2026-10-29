@@ -343,6 +343,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.notificationLevel.set": "target-host",
   "bot.notifications.stop": "target-host",
   "bot.read": "target-host",
+  "bot.surface.act": "target-host",
   "bot.task.runNow": "target-host",
   "bot.task.setPaused": "target-host",
   "bot.task.stop": "target-host",

@@ -46,6 +46,7 @@ import {
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
+import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -583,29 +584,31 @@ function BotChatTranscriptBody(props: {
               directive={intro.directive}
             />
           ) : (
-            <ChatMessages
-              taskTitle={title}
-              taskId={chatId}
-              epicId={botId}
-              hostId={hostId}
-              messages={messages}
-              transcriptWindow={transcriptWindow}
-              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-              onFindReadOrdinalChange={state.requestFindReadOrdinal}
-              baselineEpoch={state.transcriptBaselineEpoch}
-              hydrationSequence={state.transcriptHydrationSequence}
-              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-              backgroundItems={state.backgroundItems}
-              getMessageActions={getMessageActions}
-              nextStepActions={null}
-              instanceId={instanceId}
-              visible
-              systemOverlayActive={false}
-              scrollRequest={scrollRequest}
-              onScrollRequestSettled={onScrollRequestSettled}
-              composerOverlayHeight={0}
-              subagentDrillIn={subagentDrillIn}
-            />
+            <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
+              <ChatMessages
+                taskTitle={title}
+                taskId={chatId}
+                epicId={botId}
+                hostId={hostId}
+                messages={messages}
+                transcriptWindow={transcriptWindow}
+                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+                onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                baselineEpoch={state.transcriptBaselineEpoch}
+                hydrationSequence={state.transcriptHydrationSequence}
+                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                backgroundItems={state.backgroundItems}
+                getMessageActions={getMessageActions}
+                nextStepActions={null}
+                instanceId={instanceId}
+                visible
+                systemOverlayActive={false}
+                scrollRequest={scrollRequest}
+                onScrollRequestSettled={onScrollRequestSettled}
+                composerOverlayHeight={0}
+                subagentDrillIn={subagentDrillIn}
+              />
+            </TasklessMarkdownLinkProvider>
           )}
         </div>
       </ChatBotPresentationContext.Provider>

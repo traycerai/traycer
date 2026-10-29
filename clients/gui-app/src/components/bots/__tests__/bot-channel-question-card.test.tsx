@@ -446,6 +446,7 @@ function mountChannel(openThread: BotOpenThread | null): {
               botNameOf={() => null}
               resolveMember={resolveMember}
               tasks={[]}
+              surfaceActions={null}
               openThread={open}
               onOpenThread={onOpenThread}
               onOpenActivity={vi.fn()}

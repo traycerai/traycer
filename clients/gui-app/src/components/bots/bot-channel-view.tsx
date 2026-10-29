@@ -14,7 +14,10 @@ import {
   type BotThreadListResponse,
   type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotSurfaceActionState,
+  BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -51,6 +54,11 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotSurfaceActMutation } from "@/hooks/bots/use-bot-surface-act";
+import {
+  BotSurfaceCardsContext,
+  type BotSurfaceCards,
+} from "@/components/bots/bot-surface-card-context";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import {
@@ -176,8 +184,17 @@ export function BotChannelView(props: {
   /** The bot's trunk session, which answers the channel's direct posts. */
   readonly trunkChatId: string;
   readonly resolveMember: BotMemberResolver;
-  /** The bot's tasks: the open thread lists the ones it set up. */
+  /**
+   * The bot's tasks: the open thread lists the ones it set up, and a surface
+   * post's card reads what each task waits on.
+   */
   readonly tasks: ReadonlyArray<BotTaskEntry>;
+  /**
+   * The viewer's own answers and decisions from surface cards still on
+   * their way to a task, as the serving host holds them; `null` from a host
+   * that predates them.
+   */
+  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
   /** The thread open beside the channel; `null` for none. */
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
@@ -205,6 +222,7 @@ export function BotChannelView(props: {
     trunkChatId,
     resolveMember,
     tasks,
+    surfaceActions,
     openThread: open,
     onOpenThread,
     openTurn,
@@ -482,6 +500,16 @@ export function BotChannelView(props: {
     ],
   );
 
+  const surfaceCards = useSurfaceCards({
+    client,
+    hostId,
+    botId,
+    viewer,
+    resolveMember,
+    tasks,
+    surfaceActions,
+  });
+
   const trunkReply = channelTrunkReply(activity);
 
   // The rail holds one of a thread, a turn or the memory: a turn or the
@@ -580,112 +608,167 @@ export function BotChannelView(props: {
     );
   }
   return (
-    <div className="@container flex min-h-0 flex-1">
-      <div className="flex min-h-0 w-full">
-        <section
-          ref={setChannelSection}
-          aria-label={botTitle}
-          data-testid="bot-channel"
-          data-conversation-id={channel.conversationId}
-          className={cn(
-            "min-h-0 min-w-0 flex-1 flex-col",
-            railOpen ? "hidden @3xl:flex" : "flex",
-          )}
-        >
-          <BotChatTranscript
-            botId={botId}
-            chatId={channel.conversationId}
-            hostId={hostId}
-            title={botTitle}
-            instanceId={`bot-channel:${botId}`}
-            surface={surface}
-            resolveMember={resolveMember}
-            showConnecting
-            landOn={landing}
-          />
-          <BotReplyingStrip
-            botTitle={botTitle}
-            activity={trunkReply}
-            testId="bot-channel-replying"
-          />
-          <BotRoutingCard
-            botId={botId}
-            hostId={hostId}
-            sessionChatId={trunkChatId}
-          />
-          <BotMessageComposer
-            botId={botId}
-            conversationId={channel.conversationId}
-            threadId={null}
-            announcementId={null}
-            sendable
-            placeholder={`Message ${botTitle}`}
-            label={`Message ${botTitle}`}
-            testId="bot-channel-composer"
-            failure={sendFailure}
-            edit={edit}
-            onEditEnd={endEdit}
-            seed={null}
-            keptDraft={null}
-            onSent={openPostedThread}
-          />
-        </section>
-        <ChannelTurnPane
-          botId={botId}
-          hostId={hostId}
-          botTitle={botTitle}
-          channelId={channel.conversationId}
-          turn={openTurn}
-          resolveMember={resolveMember}
-          onOpenThread={onOpenThread}
-          onOpenTurn={onOpenTurn}
-        />
-        <ChannelMemoryPane
-          memory={openMemory}
-          render={(memory) => (
-            <BotMemoryPanel
+    <BotSurfaceCardsContext.Provider value={surfaceCards}>
+      <div className="@container flex min-h-0 flex-1">
+        <div className="flex min-h-0 w-full">
+          <section
+            ref={setChannelSection}
+            aria-label={botTitle}
+            data-testid="bot-channel"
+            data-conversation-id={channel.conversationId}
+            className={cn(
+              "min-h-0 min-w-0 flex-1 flex-col",
+              railOpen ? "hidden @3xl:flex" : "flex",
+            )}
+          >
+            <BotChatTranscript
               botId={botId}
+              chatId={channel.conversationId}
               hostId={hostId}
-              environmentId={environmentId}
-              botTitle={botTitle}
-              channelId={channel.conversationId}
-              trunkChatId={trunkChatId}
-              threads={threadList.data?.threads ?? null}
-              botNameOf={botNameOf}
-              back={memory.back}
-              onBack={
-                memory.back === null ? null : () => onOpenThread(memory.back)
-              }
-              onClose={() => onOpenMemory(null)}
-              navigation={memoryNavigation}
-            />
-          )}
-        />
-        <ChannelThreadPane
-          postId={railThreadPostId}
-          render={(postId) => (
-            <BotThreadPanel
-              key={postId}
-              botId={botId}
-              hostId={hostId}
-              boundHostId={boundHostId}
-              botTitle={botTitle}
-              conversationId={channel.conversationId}
-              originMessageId={postId}
-              sent={open?.sent ?? null}
-              thread={panelThread}
-              tasks={tasks}
-              anchorSenderLabel={anchorSenderLabel}
+              title={botTitle}
+              instanceId={`bot-channel:${botId}`}
+              surface={surface}
               resolveMember={resolveMember}
-              onClose={() => onOpenThread(null)}
-              onOpenActivity={onOpenActivity}
-              onEditPost={editPostFromThread}
-              onOpenTurn={openTurnFromThread}
+              showConnecting
+              landOn={landing}
             />
-          )}
-        />
+            <BotReplyingStrip
+              botTitle={botTitle}
+              activity={trunkReply}
+              testId="bot-channel-replying"
+            />
+            <BotRoutingCard
+              botId={botId}
+              hostId={hostId}
+              sessionChatId={trunkChatId}
+            />
+            <BotMessageComposer
+              botId={botId}
+              conversationId={channel.conversationId}
+              threadId={null}
+              announcementId={null}
+              sendable
+              placeholder={`Message ${botTitle}`}
+              label={`Message ${botTitle}`}
+              testId="bot-channel-composer"
+              failure={sendFailure}
+              edit={edit}
+              onEditEnd={endEdit}
+              seed={null}
+              keptDraft={null}
+              onSent={openPostedThread}
+            />
+          </section>
+          <ChannelTurnPane
+            botId={botId}
+            hostId={hostId}
+            botTitle={botTitle}
+            channelId={channel.conversationId}
+            turn={openTurn}
+            resolveMember={resolveMember}
+            onOpenThread={onOpenThread}
+            onOpenTurn={onOpenTurn}
+          />
+          <ChannelMemoryPane
+            memory={openMemory}
+            render={(memory) => (
+              <BotMemoryPanel
+                botId={botId}
+                hostId={hostId}
+                environmentId={environmentId}
+                botTitle={botTitle}
+                channelId={channel.conversationId}
+                trunkChatId={trunkChatId}
+                threads={threadList.data?.threads ?? null}
+                botNameOf={botNameOf}
+                back={memory.back}
+                onBack={
+                  memory.back === null ? null : () => onOpenThread(memory.back)
+                }
+                onClose={() => onOpenMemory(null)}
+                navigation={memoryNavigation}
+              />
+            )}
+          />
+          <ChannelThreadPane
+            postId={railThreadPostId}
+            render={(postId) => (
+              <BotThreadPanel
+                key={postId}
+                botId={botId}
+                hostId={hostId}
+                boundHostId={boundHostId}
+                botTitle={botTitle}
+                conversationId={channel.conversationId}
+                originMessageId={postId}
+                sent={open?.sent ?? null}
+                thread={panelThread}
+                tasks={tasks}
+                anchorSenderLabel={anchorSenderLabel}
+                resolveMember={resolveMember}
+                onClose={() => onOpenThread(null)}
+                onOpenActivity={onOpenActivity}
+                onEditPost={editPostFromThread}
+                onOpenTurn={openTurnFromThread}
+              />
+            )}
+          />
+        </div>
       </div>
-    </div>
+    </BotSurfaceCardsContext.Provider>
+  );
+}
+
+/**
+ * What a surface post's card reads and sends (T89): each task's open
+ * surfaces and the viewer's forwarded actions from the bot's subscription,
+ * and the send through the tab's host, which offers it only where that host
+ * takes it.
+ */
+function useSurfaceCards(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string;
+  readonly botId: string;
+  readonly viewer: AuthProfile | null;
+  readonly resolveMember: BotMemberResolver;
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
+  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
+}): BotSurfaceCards {
+  const {
+    client,
+    hostId,
+    botId,
+    viewer,
+    resolveMember,
+    tasks,
+    surfaceActions,
+  } = args;
+  const actSupported = useHostMethodSupport(hostId, "bot.surface.act") === true;
+  const { mutateAsync: actAsync } = useBotSurfaceActMutation(client);
+  return useMemo<BotSurfaceCards>(
+    () => ({
+      botId,
+      viewerUserId: viewer?.userId ?? null,
+      memberName: (userId) => botMemberName(userId, viewer, resolveMember),
+      openSurfaces: (taskId) =>
+        tasks.find((task) => task.taskId === taskId)?.inputNeeded ?? null,
+      hostAction: (actionId) =>
+        surfaceActions?.find((action) => action.actionId === actionId) ?? null,
+      postActions: (messageId) =>
+        surfaceActions?.filter((action) => action.messageId === messageId) ??
+        [],
+      act: actSupported && client !== null ? actAsync : null,
+    }),
+    [
+      actAsync,
+      actSupported,
+      botId,
+      client,
+      resolveMember,
+      surfaceActions,
+      tasks,
+      viewer,
+    ],
   );
 }
 

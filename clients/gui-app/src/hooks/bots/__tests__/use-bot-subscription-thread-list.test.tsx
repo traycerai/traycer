@@ -63,6 +63,7 @@ function snapshot(
     openRequestCount,
     conversationsRevision,
     notificationSubscriptions: null,
+    surfaceActions: null,
     stoppedNotificationWatches: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity: null,

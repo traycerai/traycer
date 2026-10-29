@@ -424,6 +424,7 @@ function mount(options: MountOptions): {
             botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenActivity={onOpenActivity}

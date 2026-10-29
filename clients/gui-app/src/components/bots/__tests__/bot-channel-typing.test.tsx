@@ -369,6 +369,7 @@ function emitActivity(activity: BotActivity): void {
       openRequestCount: null,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      surfaceActions: null,
       stoppedNotificationWatches: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
@@ -510,6 +511,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       botNameOf={() => null}
       resolveMember={resolveMember}
       tasks={[]}
+      surfaceActions={null}
       openThread={openThread}
       onOpenThread={(open) =>
         useBotOpenThreadStore

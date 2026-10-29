@@ -13,6 +13,7 @@ export const botMutationKeys = {
   delete: () => ["bot.delete"] as const,
   open: () => ["bot.open"] as const,
   conversationSend: () => ["bot.conversation.send"] as const,
+  surfaceAct: () => ["bot.surface.act"] as const,
   onboardingChoose: () => ["bot.onboarding.choose"] as const,
   onboardingComplete: () => ["bot.onboarding.complete"] as const,
   taskRunNow: () => ["bot.task.runNow"] as const,

@@ -70,7 +70,11 @@ export interface ChatLinkPolicyDeps {
   readonly activeHostId: string | null;
   /** The currently-open epic id; same-epic links preview, others navigate. */
   readonly openEpicId: string;
-  readonly epicHandle: OpenEpicStoreHandle;
+  /**
+   * The open epic's store, for a same-epic preview; `null` on a surface that
+   * is no task (a bot's channel), where every artifact link navigates.
+   */
+  readonly epicHandle: OpenEpicStoreHandle | null;
   readonly queryClient: QueryClient;
   /**
    * Client for the ARTIFACT-resolve RPC, bound to `activeHostId` and used to
@@ -244,7 +248,8 @@ export function openResolvedArtifact(
 ): void {
   const { artifact, target, onUnavailable } = resolved;
   const { artifactEpicId, resolveHostId } = target;
-  if (artifactEpicId === deps.openEpicId) {
+  const epicHandle = deps.epicHandle;
+  if (artifactEpicId === deps.openEpicId && epicHandle !== null) {
     // Same epic: open a replaceable PREVIEW tile stamped with the active
     // host. Route through the projection waiter (passing the PREVIEW
     // opener, D3) so an artifact not yet projected opens as soon as it
@@ -254,7 +259,7 @@ export function openResolvedArtifact(
     // click or an unmount can tear down the subscribe + 30s timeout.
     lifecycle.setPendingProjectedOpenCancel(
       openProjectedSidebarNodeInTabWhenAvailable({
-        epicHandle: deps.epicHandle,
+        epicHandle,
         nodeId: artifact.artifactId,
         fallbackHostId: resolveHostId,
         openNode: (node) => {
