@@ -482,6 +482,7 @@ describe("<HomeBotRow /> tasks", () => {
     label: null,
     originRequestId: null,
     createdByChatId: null,
+    checkins: null,
   };
 
   it("counts the tasks the bot spun and says nothing of check-ins", () => {

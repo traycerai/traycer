@@ -59,6 +59,7 @@ import type {
   CommandItem,
   CommandSubpage,
 } from "@/lib/commands/types";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 function terminalWorkspaceLeaf(props: {
   readonly ctx: CommandContext;
@@ -87,7 +88,7 @@ function terminalWorkspaceLeaf(props: {
         // that offered this launch a moment ago went stale between listing
         // and selection (host dropped its lease, session died).
         toast(
-          `Can't create a terminal on ${liveEntry?.label ?? target.hostId} right now - it's not reachable.`,
+          `Can't create a terminal on ${hostNameFromLabel(liveEntry?.label ?? null, target.hostId)} right now - it's not reachable.`,
         );
         return;
       }

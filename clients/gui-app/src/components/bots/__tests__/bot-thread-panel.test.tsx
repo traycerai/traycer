@@ -63,6 +63,7 @@ import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 type ThreadTranscriptState = Pick<
@@ -161,6 +162,13 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
     if (args.target === null) return null;
     mocks.locateTargets.push(args.target);
     return mocks.locatedOrdinal;
+  },
+  useChatLocateRowAnswer: (args: ChatLocateRowArgs) => {
+    if (args.target === null) return { status: "waiting" };
+    mocks.locateTargets.push(args.target);
+    return mocks.locatedOrdinal === null
+      ? { status: "waiting" }
+      : { status: "found", ordinal: mocks.locatedOrdinal };
   },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
@@ -419,8 +427,9 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               }
               resolveMember={resolveMember}
               onClose={vi.fn()}
-              onOpenUnderTheHood={vi.fn()}
+              onOpenActivity={vi.fn()}
               onEditPost={onEditPost}
+              onOpenTurn={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
@@ -460,6 +469,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   resetBotFailedRequestSupport();
   mocks.handle = null;
@@ -501,6 +512,7 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
         announcementId: "question-1",
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -571,6 +583,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
         announcementId: "answer-1",
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -786,6 +799,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -928,6 +942,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -1000,6 +1015,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
           announcementId: null,
           redeliver: null,
           supersedes: null,
+          answer: null,
         },
       ]);
     });
@@ -1015,7 +1031,6 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
 
     view.rerender(panelTree(listed("user-teammate")));
 
-    expect(screen.getByTestId("bot-thread-under-the-hood")).toBeTruthy();
     expect(screen.getByTestId("bot-thread-replies")).toBeTruthy();
     expect(replyBox()).toBe(box);
     expect(box.value).toBe("And the nightly?");
@@ -1289,7 +1304,6 @@ describe("<BotThreadPanel /> the anchor", () => {
             name: "Olive Owner",
             avatarUrl: null,
           },
-          openActivity: null,
         }}
       >
         {panelTree(listed(null))}
@@ -1440,6 +1454,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: REPLY_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -1485,6 +1500,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
     await waitFor(() => {
@@ -1543,6 +1559,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
   });
@@ -1565,6 +1582,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: "answer-1",
         redeliver: null,
         supersedes: REPLY_REQUEST,
+        answer: null,
       },
     ]);
   });
@@ -1653,6 +1671,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         announcementId: null,
         redeliver: { requestId: POST_REQUEST },
         supersedes: null,
+        answer: null,
       },
     ]);
   });
@@ -1810,7 +1829,6 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       expect(sent).toHaveLength(1);
       const notice = await screen.findByTestId("bot-thread-send-failed");
       expect(notice.textContent).toBe("Couldn't send. Try again.");
-      expect(notice.textContent).not.toContain("Edit");
     },
   );
 
@@ -1931,6 +1949,7 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       label: null,
       originRequestId: null,
       createdByChatId: THREAD_ID,
+      checkins: null,
       ...overrides,
     };
   }

@@ -14,6 +14,7 @@ import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
 import {
   getTileSurfaceEnvironment,
@@ -102,6 +103,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   }),
   useCloudChatHasCloudAuthorization: () => true,
   cloudChatListAuthorizesRecordSweep: () => false,
+  useCloudChatViewerId: () => "",
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -241,22 +243,27 @@ function presentedInstanceIds(): ReadonlyArray<string> {
   );
 }
 
+// The tab's banner names its host through a query, which needs a client.
+const queryClient = new QueryClient();
+
 function mobileView(view: {
   readonly epicId: string;
   readonly viewTabId: string;
 }): ReactNode {
   return (
-    <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
-      <PaneVisibilityContext.Provider value>
-        <PaneSurfaceActivityContext.Provider
-          value={{ visible: true, focused: true }}
-        >
-          <PaneFocusProbeContext.Provider value={() => true}>
-            <MobileEpicTileView epicId={view.epicId} tabId={view.viewTabId} />
-          </PaneFocusProbeContext.Provider>
-        </PaneSurfaceActivityContext.Provider>
-      </PaneVisibilityContext.Provider>
-    </EpicSessionContext.Provider>
+    <QueryClientProvider client={queryClient}>
+      <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
+        <PaneVisibilityContext.Provider value>
+          <PaneSurfaceActivityContext.Provider
+            value={{ visible: true, focused: true }}
+          >
+            <PaneFocusProbeContext.Provider value={() => true}>
+              <MobileEpicTileView epicId={view.epicId} tabId={view.viewTabId} />
+            </PaneFocusProbeContext.Provider>
+          </PaneSurfaceActivityContext.Provider>
+        </PaneVisibilityContext.Provider>
+      </EpicSessionContext.Provider>
+    </QueryClientProvider>
   );
 }
 

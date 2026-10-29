@@ -86,6 +86,25 @@ describe("parseLandingDraft", () => {
     });
   });
 
+  it("keeps a given-back message's sandbox, so it survives a reload", () => {
+    const returnedSandbox = {
+      target: { kind: "existing", hostId: "host-s", sandboxId: "sbx-1" },
+      clientRequestId: null,
+    };
+    expect(
+      parseLandingDraft({
+        id: "draft-returned",
+        content: { type: "doc" },
+        selection: null,
+        lastTouchedAt: 1,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+        returnedSandbox,
+      })?.returnedSandbox,
+    ).toEqual(returnedSandbox);
+  });
+
   it("preserves closed:true and defaults a missing closed to null", () => {
     const content = { type: "doc" };
     expect(

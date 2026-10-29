@@ -207,6 +207,11 @@ export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
 interface StagedSandboxStoreState {
   /** Keyed by the composer surface's host-pin key. */
   readonly bySurface: Readonly<Partial<Record<string, StagedSandbox>>>;
+  /**
+   * Counts `clearAll` teardowns, and nothing else: a stage gone with one was
+   * not sent or replaced, so a shown draft's returned sandbox is put back.
+   */
+  readonly teardowns: number;
   /** Stages a pick, replacing whatever the surface had staged. */
   readonly stage: (surfaceKey: string, target: StagedSandboxTarget) => void;
   /** Drops the stage: another pick, or the handoff completed. */
@@ -265,7 +270,11 @@ interface StagedSandboxStoreState {
     userId: string | null,
     action: PendingStageRetryAction,
   ) => Promise<string | null>;
-  /** Drops every stage: the account changed. */
+  /**
+   * The account changed: drops every composer's stage. A send's stage stays:
+   * it may name a create the server accepted, and is that send's only record
+   * of it. Only its own account's driver reads it again.
+   */
   readonly clearAll: () => void;
 }
 
@@ -317,6 +326,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
   persist(
     (set, get) => ({
       bySurface: {},
+      teardowns: 0,
       stage: (surfaceKey, target) =>
         set((state) => ({
           bySurface: { ...state.bySurface, [surfaceKey]: freshStage(target) },
@@ -419,7 +429,11 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
         if (id !== null) await useStagedSandboxStore.persist.rehydrate();
         return id;
       },
-      clearAll: () => set({ bySurface: {} }),
+      clearAll: () =>
+        set((state) => ({
+          bySurface: persistedStages(state.bySurface),
+          teardowns: state.teardowns + 1,
+        })),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.stagedSandboxSend)),

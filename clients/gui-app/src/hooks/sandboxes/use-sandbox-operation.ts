@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { hashKey, type Mutation } from "@tanstack/react-query";
 import {
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   sandboxSupportReference,
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
@@ -106,6 +107,23 @@ export function useSandboxOperation(
     reference,
     destroyRequest: destroyRetryRequest(latest.variables),
   };
+}
+
+/**
+ * The operation a surface shows, by what it offers now. A transition refused
+ * as a conflict only says the sandbox moved; once the surface no longer
+ * offers that verb, its state line says where, and a Retry would ask the same
+ * question again. Every other failure stays: its Retry can still succeed.
+ */
+export function sandboxOperationShown(
+  operation: SandboxRowOperation | null,
+  offers: (verb: SandboxRowVerb) => boolean,
+): SandboxRowOperation | null {
+  return operation?.kind === "failed" &&
+    operation.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT &&
+    !offers(operation.verb)
+    ? null
+    : operation;
 }
 
 function isRowVerb(value: unknown): value is SandboxRowVerb {

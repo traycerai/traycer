@@ -81,6 +81,11 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
 }));
+// No turn receipts here: the transcript asks for none from a host this
+// suite does not stand up.
+vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
+  useBotTurnLocateQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: (args: ChatLocateRowArgs) => {
     mocks.locateRow(args);
@@ -266,7 +271,12 @@ function createReplyJumpStore(
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
+  answerQuestion: null,
+  discussQuestion: null,
   failedRequest: () => null,
+  openTurn: null,
+  sessionChatId: null,
+  originPost: { chatId: "conversation-app", messageId: "origin-post" },
 };
 
 /** The member directory a mounted transcript reads; none by default. */
@@ -293,6 +303,7 @@ function mountTranscript(
           surface={surface}
           resolveMember={members}
           showConnecting
+          landOnMessageId={null}
         />
       </QueryClientProvider>
     </StrictMode>
@@ -466,7 +477,11 @@ describe("<BotChatTranscript /> in the channel", () => {
       openAnnouncementThread,
       answerThreads: false,
       chooseOption,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
       intro: { botTitle: "Release Bot", directive: null },
     };
   }
@@ -541,7 +556,11 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openAnnouncementThread: vi.fn(),
       answerThreads: false,
       chooseOption,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
       intro: { botTitle: "Release Bot", directive: null },
     };
   }

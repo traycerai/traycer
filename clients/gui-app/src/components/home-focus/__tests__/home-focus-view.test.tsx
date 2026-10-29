@@ -137,7 +137,6 @@ function activationRow(
     resolvedAt: null,
     sourceRef: null,
     originHostId: null,
-    providerPackAttribution: null,
     category: "task",
     ...overrides,
   };

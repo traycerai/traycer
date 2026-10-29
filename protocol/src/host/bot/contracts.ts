@@ -26,6 +26,7 @@ import {
   botSubscribeServerFrameSchemaV10,
   botSubscribeServerFrameSchemaV11,
   botSubscribeServerFrameSchemaV12,
+  botSubscribeServerFrameSchemaV13,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -41,8 +42,11 @@ import {
   botConversationListResponseSchema,
   botConversationSendRequestSchema,
   botConversationSendRequestSchemaV10,
+  botConversationSendRequestSchemaV11,
   botConversationSendResponseSchema,
   botThreadListRequestSchema,
+  botTurnLocateRequestSchema,
+  botTurnLocateResponseSchema,
   botThreadListResponseSchema,
   botThreadListResponseSchemaV10,
 } from "./conversation-schemas";
@@ -207,7 +211,7 @@ export const botConversationSendV10 = defineRpcContract({
 export const botConversationSendV11 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV11,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
@@ -221,6 +225,26 @@ export const botConversationSendUpgradeV10ToV11 = defineUpgradePath<
     redeliver: null,
     supersedes: null,
   }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.2` (T91): a send may answer or skip a question a
+ * bot asked without waiting (`answer`). A 1.1 request answers none.
+ */
+export const botConversationSendV12 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV11ToV12 = defineUpgradePath<
+  typeof botConversationSendV11,
+  typeof botConversationSendV12
+>({
+  from: botConversationSendV11.schemaVersion,
+  to: botConversationSendV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, answer: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -257,6 +281,20 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
   to: botThreadListV11.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, threadAnchors: null }),
+});
+
+/**
+ * `bot.turn.locate@1.0` (T86): the session turns behind a bot's replies, its
+ * not-answered posts and its check-ins, for the receipt under a reply and
+ * the turn it opens. Answered by the bound host from its own record and by
+ * any other from the bot's environment room. Same optional posture as the
+ * namespace: a host without it shows no receipt.
+ */
+export const botTurnLocateV10 = defineRpcContract({
+  method: "bot.turn.locate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botTurnLocateRequestSchema,
+  responseSchema: botTurnLocateResponseSchema,
 });
 
 /**
@@ -334,6 +372,20 @@ export const botSubscribeV12 = defineStreamRpcContract({
 export const botSubscribeV13 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV13,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.4` (T86): each task entry carries its check-in history
+ * (`checkins`), and each notification subscription when it started
+ * (`since`). A 1.3 subscriber's snapshot carries neither, and reads the last
+ * check-in alone.
+ */
+export const botSubscribeV14 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,

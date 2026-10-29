@@ -92,7 +92,6 @@ import {
   type ComposerHostNoticeState,
 } from "@/components/home/composer/composer-host-notice";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
-import { ChatSecretExportNotices } from "./chat-secret-export-notices";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "./profile-disabled-banner";
 import {
@@ -105,7 +104,6 @@ import {
   promptSuggestionAllowed,
 } from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
-import { clearChatComposerDraft } from "./clear-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
@@ -275,9 +273,10 @@ interface ChatComposerProps {
   readonly suggestedPrompt: string | undefined;
   /**
    * The sandbox this chat is bound to, while it rests and the next message
-   * wakes it; `null` otherwise. Such a chat is drawn by its published copy,
-   * bound to the host SERVING that copy, so the tab's host is not where the
-   * send runs: the run gates and the toolbar's pick answer for the sandbox.
+   * wakes it; `null` otherwise. The tab's host is not where that send runs: it
+   * serves the chat's published copy, or - a tab opened while the sandbox was
+   * awake - it is the resting sandbox itself, which answers nothing. So the
+   * run gates and the toolbar's pick answer for the sandbox.
    */
   readonly restingSandbox: RestingChatSandbox | null;
 }
@@ -568,7 +567,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // and their catalog subscriptions. Visible split partners retain their body.
   // The catalog is the TAB host's (`hostClient`), like every other read in
   // this composer - a tab bound to another host offers that host's harnesses
-  // and models, never the app-wide default's.
+  // and models, never the app-wide default's. A resting chat's Traycer models
+  // are the cloud catalog's instead (`sendsToRestingSandbox`).
   const toolbarStore = useComposerToolbarStore(
     focused ? "chat-tile" : null,
     seedSource,
@@ -664,13 +664,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     focused,
   );
-  // "Cancel the message": withdrawn, not sent - the composer clears as a send
-  // clears it, and the refusal it answered closes.
+  // "Cancel the message": not sent - the refusal it answered closes, and the
+  // text stays in the composer, unsent.
   const [cancelledMessages, setCancelledMessages] = useState(0);
   const cancelMessage = useCallback((): void => {
-    clearChatComposerDraft({ taskId, pickerStore, editorRef });
     setCancelledMessages((count) => count + 1);
-  }, [pickerStore, taskId]);
+  }, []);
   const boundSandboxRemedies = useBoundSandboxRemedies({
     chatId: taskId,
     epicId: currentEpicId,
@@ -1038,7 +1037,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
             eligibility={profileEligibility}
             onChooseProfile={toggleActiveModelPicker}
           />
-          <ChatSecretExportNotices chatId={taskId} />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}

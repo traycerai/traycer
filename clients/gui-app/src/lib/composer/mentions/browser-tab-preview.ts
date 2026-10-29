@@ -14,10 +14,11 @@ import { v4 as uuidv4 } from "uuid";
 import { captureBrowserTabPreview } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { BrowserTabMentionEntry } from "@/lib/composer/types";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /** The one line the agent reads; it names the host so "localhost" is not ambiguous. */
 export function browserTabPreviewText(entry: BrowserTabMentionEntry): string {
-  const hostName = entry.hostLabel ?? entry.hostId;
+  const hostName = hostNameFromLabel(entry.hostLabel, entry.hostId);
   return `browser tab on ${hostName}: ${entry.label} - ${entry.url}`;
 }
 

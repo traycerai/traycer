@@ -4,6 +4,8 @@ import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-s
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { BotTaskCheckins } from "@/components/bots/bot-task-checkins";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
@@ -14,12 +16,17 @@ import {
   threadOpenOf,
   type BotTaskRequestPost,
 } from "@/lib/bots/bot-trunk-model";
+import { taskKindOf } from "@/lib/bots/bot-activity-model";
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotOpenThread,
+  BotOpenTurn,
+} from "@/stores/bots/bot-open-thread-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_TASK_IDS: ReadonlyArray<string> = [];
@@ -35,6 +42,8 @@ export type BotTaskListPlace =
       /** The bot's channel; `null` from a host that does not name it. */
       readonly channelId: string | null;
       readonly onOpenPost: (open: BotOpenThread) => void;
+      /** Opens a check-in's turn beside the channel. */
+      readonly onOpenTurn: (open: BotOpenTurn) => void;
     }
   | { readonly kind: "thread"; readonly threadId: string };
 
@@ -65,11 +74,14 @@ function taskCreator(
 }
 
 /**
- * A bot's tasks (Tracy Bots T82), one row each: the task's title, opening
- * the task, what the bot named it, the post it was set up for, the thread
- * that set it up, and an automation's interval. A one-off task shows no
- * interval, and an entry from a host that predates where a task came from
- * shows neither the post nor the thread.
+ * A bot's tasks (Tracy Bots T82), one row each: the task's title, what the
+ * bot named it, the post it was set up for, the thread that set it up, and
+ * an automation's interval. A one-off task shows no interval, and an entry
+ * from a host that predates where a task came from shows neither the post
+ * nor the thread. In a thread's panel the title opens the task; on the bot's
+ * Activity page (T86) the row also names its kind, its next check-in and the
+ * host that last reported it, opens the task from "Open the brief", and
+ * lists its check-ins under it.
  */
 export function BotTaskList(props: {
   readonly botId: string;
@@ -125,6 +137,18 @@ function BotTaskRow(props: {
   const navigate = useNavigate();
   const tracking = task.state === "tracking";
   const interval = describeTaskInterval(task);
+  const onBotPage = place.kind === "bot";
+  const openTask = (): void =>
+    navigateToTabIntent(
+      navigate,
+      openEpicFromListIntent({
+        epicId: task.taskId,
+        focus: undefined,
+        name: title ?? undefined,
+        replaceEmptyDraftId: null,
+      }),
+      undefined,
+    );
   return (
     <div
       data-testid="bot-task-row"
@@ -136,25 +160,10 @@ function BotTaskRow(props: {
       )}
     >
       <span className="flex items-center gap-2">
-        <button
-          type="button"
-          data-testid="bot-task-open"
-          className="min-w-0 flex-1 truncate text-left text-ui-sm text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-          onClick={() =>
-            navigateToTabIntent(
-              navigate,
-              openEpicFromListIntent({
-                epicId: task.taskId,
-                focus: undefined,
-                name: title ?? undefined,
-                replaceEmptyDraftId: null,
-              }),
-              undefined,
-            )
-          }
-        >
-          {title ?? task.taskId}
-        </button>
+        <TaskTitle
+          title={title ?? task.taskId}
+          onOpen={onBotPage ? null : openTask}
+        />
         {working > 0 ? (
           <Badge variant="success" size="xs">
             {working === 1 ? "1 agent working" : `${working} agents working`}
@@ -179,13 +188,16 @@ function BotTaskRow(props: {
           <span data-testid="bot-task-interval">{interval}</span>
         )}
         {place.kind === "bot" ? (
-          <BotViewOriginLines
-            botId={botId}
-            hostId={hostId}
-            post={post}
-            creator={creator}
-            place={place}
-          />
+          <>
+            <BotPageTaskFacts task={task} />
+            <BotViewOriginLines
+              botId={botId}
+              hostId={hostId}
+              post={post}
+              creator={creator}
+              place={place}
+            />
+          </>
         ) : (
           <ThreadPanelRequestLine
             botId={botId}
@@ -196,7 +208,75 @@ function BotTaskRow(props: {
         )}
         {task.endedReason === null ? null : <span>{task.endedReason}</span>}
       </span>
+      {onBotPage ? (
+        <>
+          <span className="flex">
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              data-testid="bot-task-open"
+              onClick={openTask}
+            >
+              Open the brief
+            </Button>
+          </span>
+          <BotTaskCheckins
+            botId={botId}
+            hostId={hostId}
+            task={task}
+            onOpenTurn={place.onOpenTurn}
+          />
+        </>
+      ) : null}
     </div>
+  );
+}
+
+/** The task's title, opening the task where the row has no "Open the brief". */
+function TaskTitle(props: {
+  readonly title: string;
+  readonly onOpen: (() => void) | null;
+}): ReactNode {
+  if (props.onOpen === null) {
+    return (
+      <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
+        {props.title}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      data-testid="bot-task-open"
+      className="min-w-0 flex-1 truncate text-left text-ui-sm text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+      onClick={props.onOpen}
+    >
+      {props.title}
+    </button>
+  );
+}
+
+/**
+ * What the Activity page says of a task beside its interval: its kind in
+ * words, an automation's next check-in, and the host whose report its newest
+ * check-in was.
+ */
+function BotPageTaskFacts(props: { readonly task: BotTaskEntry }): ReactNode {
+  const { task } = props;
+  const reported = task.checkins?.find((record) => record.kind === "received");
+  return (
+    <>
+      <span data-testid="bot-task-kind">{taskKindOf(task)}</span>
+      {task.state === "tracking" && task.nextAt !== null ? (
+        <span data-testid="bot-task-next" className="tabular-nums">
+          next {formatAbsoluteDateTime(task.nextAt)}
+        </span>
+      ) : null}
+      {reported?.kind === "received" ? (
+        <span data-testid="bot-task-host">on {reported.hostName}</span>
+      ) : null}
+    </>
   );
 }
 

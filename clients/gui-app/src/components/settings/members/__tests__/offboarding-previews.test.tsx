@@ -71,9 +71,7 @@ describe("RemovePreviewDialog", () => {
     expect(rowValue("Can't be recalled")).toBe(
       'Files Priya already copied off a host and work already done upstream with Acme\'s services. What Priya started stays, labelled "started by a former member".',
     );
-    expect(text).toContain(
-      'Removal shows as pending until every Acme host has confirmed it, then as done. Priya is told once: "You are no longer a member of Acme."',
-    );
+    expect(text).toContain("Removal shows as pending until it commits.");
   });
 
   it("leaves the host out of the work row when the window cannot label it", () => {

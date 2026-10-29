@@ -210,6 +210,8 @@ const CASES: readonly VerbCase[] = [
     reached: "destroyed",
   },
 ];
+const STOP_CASE = CASES.find((entry) => entry.verb === "stop");
+if (STOP_CASE === undefined) throw new Error("Expected the Stop case");
 
 function Rows(): ReactNode {
   const list = useSandboxList();
@@ -607,6 +609,130 @@ describe("sandbox row operations", () => {
       answer.resolve({ kind: "ok", settled: true, state: "suspended" });
       await answer.promise;
     });
+  });
+
+  it("closes an open Stop confirmation when the row suspends, sends nothing, and keeps it closed when the row wakes", async () => {
+    const { binding, client, main, other } = setup(STOP_CASE);
+    const row = await screen.findByRole("region", { name: "build-box" });
+    await userEvent.click(
+      within(row).getByRole("button", { name: "More actions for build-box" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Stop" }),
+    );
+    expect(screen.getByRole("dialog").textContent).toContain("Stop build-box?");
+
+    const listing = async (state: HostSandboxState): Promise<void> => {
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [{ ...main, state }, other] },
+      });
+      await act(() => client.invalidateQueries());
+    };
+    await listing("suspended");
+    // An open modal hides the row from role queries; look through it.
+    await within(row).findByRole("button", { name: "Resume", hidden: true });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
+
+    await listing("awake");
+    // An open modal hides the row from role queries; look through it.
+    await within(row).findByRole("button", { name: "Suspend", hidden: true });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("asks for the name again after a Destroy the row closed on its own", async () => {
+    const resumeCase = CASES.find((entry) => entry.verb === "resume");
+    if (resumeCase === undefined) throw new Error("Expected the Resume case");
+    const { binding, client, main, other } = setup(resumeCase);
+    const row = await screen.findByRole("region", { name: "build-box" });
+    const openDestroy = async (): Promise<HTMLElement> => {
+      await userEvent.click(
+        within(row).getByRole("button", {
+          name: "More actions for build-box",
+        }),
+      );
+      await userEvent.click(
+        await screen.findByRole("menuitem", { name: "Destroy" }),
+      );
+      return screen.getByRole("dialog");
+    };
+    const listing = async (state: HostSandboxState): Promise<void> => {
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [{ ...main, state }, other] },
+      });
+      await act(() => client.invalidateQueries());
+    };
+    await userEvent.type(
+      within(await openDestroy()).getByRole("textbox", {
+        name: "Type the name to confirm",
+      }),
+      "build-box",
+    );
+
+    // Another member resumes it: the resuming row offers no Destroy.
+    await listing("resuming");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await listing("awake");
+    await within(row).findByRole("button", { name: "Suspend" });
+
+    const reopened = await openDestroy();
+    expect(
+      within(reopened).getByRole<HTMLInputElement>("textbox", {
+        name: "Type the name to confirm",
+      }).value,
+    ).toBe("");
+    expect(
+      within(reopened)
+        .getByRole("button", { name: "Destroy" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("drops a Stop refused as a conflict, on the row and the card, once neither offers Stop", async () => {
+    const { answer, binding, client, main, other } = setup(STOP_CASE);
+    const card = (state: HostSandboxState) => (
+      <QueryClientProvider client={client}>
+        <SandboxCard
+          hostName={main.displayName}
+          hostState="online"
+          sandbox={{
+            state,
+            frozen: false,
+            summary: { ...main, state },
+            teamOwned: false,
+          }}
+          onDestroyed={null}
+        />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(card("awake"));
+    const row = await press(STOP_CASE);
+    await act(async () => {
+      answer.resolve(refusal(409, "sandbox_transition_conflict"));
+      await answer.promise;
+    });
+    // While the list still reads awake, Stop is offered and so is its Retry.
+    const failure = await within(row).findByRole("alert");
+    expect(failure.textContent).toContain("Couldn't stop build-box · SBX-0701");
+    expect(within(failure).getByRole("button", { name: "Retry" })).toBeTruthy();
+    const sandboxCard = screen.getByTestId("sandbox-card");
+    expect(within(sandboxCard).getByRole("alert").textContent).toContain(
+      "Couldn't stop build-box · SBX-0701",
+    );
+
+    binding.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [{ ...main, state: "suspended" }, other] },
+    });
+    await act(() => client.invalidateQueries());
+    await within(row).findByRole("button", { name: "Resume" });
+    expect(within(row).queryByRole("alert")).toBeNull();
+    rerender(card("suspended"));
+    expect(
+      within(screen.getByTestId("sandbox-card")).queryByRole("alert"),
+    ).toBeNull();
   });
 
   it("uses the refusal's mapped support reference before the verb's reference", async () => {

@@ -231,9 +231,11 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     restoreDraftWorkspaceForHost: vi.fn(),
     setDraftContent: vi.fn(),
   };
+  // A store API, not just a selector hook: the landing composer also reads
+  // it through `useStoreWithEqualityFn` (its returned sandbox).
   const useLandingDraftStore = Object.assign(
     (selector: (value: typeof state) => unknown) => selector(state),
-    { getState: () => state },
+    { getState: () => state, subscribe: () => () => undefined },
   );
   return {
     useLandingDraftStore,

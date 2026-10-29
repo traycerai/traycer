@@ -111,6 +111,7 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     label: `Watching shard ${String(index + 1)}`,
     originRequestId: null,
     createdByChatId: THREAD_ID,
+    checkins: null,
   }),
 );
 
@@ -185,8 +186,9 @@ export function Pane(): ReactElement {
                   anchorSenderLabel={() => "You"}
                   resolveMember={UNRESOLVED_BOT_MEMBERS}
                   onClose={noop}
-                  onOpenUnderTheHood={noop}
+                  onOpenActivity={noop}
                   onEditPost={noop}
+                  onOpenTurn={noop}
                 />
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>

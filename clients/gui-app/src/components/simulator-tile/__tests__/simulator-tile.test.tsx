@@ -107,7 +107,10 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 vi.mock("@/hooks/host/use-request-context-user-id", () => ({
   useRequestContextUserId: () => fakes.viewerUserId,
 }));
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => ({
     status: fakes.reachability,
     hostLabel: "Studio Mac",

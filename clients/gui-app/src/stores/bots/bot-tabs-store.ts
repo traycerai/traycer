@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 /**
@@ -99,9 +100,11 @@ export const useBotTabsStore = create<BotTabsState>()(
         const next = { ...get().tabs };
         delete next[botId];
         set({ tabs: next });
-        // Every close comes through here: a reopened tab starts with no
-        // thread open, and nothing follows the closed one's session.
-        useBotOpenThreadStore.getState().setOpenThread(botId, null);
+        // Every close comes through here: a reopened tab starts with nothing
+        // in its rail and no unsent drafts, and nothing follows the closed
+        // one's session.
+        useBotOpenThreadStore.getState().setRail(botId, null);
+        useBotDraftsStore.getState().forgetBot(botId);
       },
       setBotTabTitle: (botId, title) => {
         const existing = lookupBotTab(get().tabs, botId);

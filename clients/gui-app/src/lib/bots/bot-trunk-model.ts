@@ -1,79 +1,12 @@
+/**
+ * How a bot's views describe its tasks and the posts they came from (Tracy
+ * Bots): the thread panel's task list and the bot's Activity page.
+ */
+
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import type {
-  ChatQueuedTaskCheckinItem,
-  ChatQueuedTaskOverdueItem,
-  OpenChatQueuedItem,
-} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
-
-/**
- * What the "Under the hood" panel reads off a bot's TRUNK chat (Tracy Bots).
- *
- * A delivered check-in is not stored as a section: the trunk keeps only an
- * `autonomous_resume` block whose trigger is titled {@link
- * TASK_CHECKIN_TRIGGER_TITLE} and carries a one-line summary, and a check-in
- * the trunk has not consumed yet is a `task-checkin` item on its queue.
- */
-export const TASK_CHECKIN_TRIGGER_TITLE = "Task check-in";
-
-export interface DeliveredTaskCheckin {
-  readonly key: string;
-  readonly at: number;
-  readonly summary: string;
-  readonly status: "completed" | "failed" | "stopped";
-}
-
-export function pendingTaskCheckins(
-  items: ReadonlyArray<OpenChatQueuedItem>,
-): ReadonlyArray<ChatQueuedTaskCheckinItem> {
-  const pending: ChatQueuedTaskCheckinItem[] = [];
-  for (const item of items) {
-    if (item.kind === "task-checkin") pending.push(item);
-  }
-  return pending;
-}
-
-/** The overdue nudge waiting on the trunk's queue, if one is (one per trunk at a time). */
-export function pendingTaskOverdue(
-  items: ReadonlyArray<OpenChatQueuedItem>,
-): ChatQueuedTaskOverdueItem | null {
-  for (const item of items) {
-    if (item.kind === "task-overdue") return item;
-  }
-  return null;
-}
-
-/** Delivered check-in summaries in transcript order (oldest first). */
-export function deliveredTaskCheckins(
-  messages: ReadonlyArray<OpenMessage>,
-): ReadonlyArray<DeliveredTaskCheckin> {
-  const delivered: DeliveredTaskCheckin[] = [];
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const block of message.blocks) {
-      if (block.type !== "autonomous_resume") continue;
-      block.triggers.forEach((trigger, index) => {
-        if (!isTaskCheckinTrigger(trigger.title)) return;
-        delivered.push({
-          key: `${block.blockId}:${index}`,
-          at: block.timestamp,
-          summary: trigger.summary,
-          status: trigger.status,
-        });
-      });
-    }
-  }
-  return delivered;
-}
-
-function isTaskCheckinTrigger(title: string): boolean {
-  return (
-    title === TASK_CHECKIN_TRIGGER_TITLE ||
-    title.startsWith(`${TASK_CHECKIN_TRIGGER_TITLE}:`)
-  );
-}
 
 const MINUTE_S = 60;
 const HOUR_S = 3600;

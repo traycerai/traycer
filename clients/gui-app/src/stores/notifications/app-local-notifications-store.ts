@@ -13,6 +13,7 @@ import {
 } from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
 import { taskVerdictCopy } from "@/lib/chats/fatal-close-copy";
+import { quotedHostReference } from "@/hooks/agent/use-host-reachability";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
 import {
@@ -861,7 +862,7 @@ export function emitTerminalClosedNotification(input: {
 }): void {
   const message = input.sandboxStopped
     ? `Terminal closed: ${input.hostLabel} was stopped.`
-    : `Terminal closed: host "${input.hostLabel}" is unreachable.`;
+    : `Terminal closed: ${quotedHostReference(input.hostLabel, false)} is unreachable.`;
   useAppLocalNotificationsStore.getState().upsertReplacingPreservingReadState({
     id: `terminal.closed:${input.instanceId}`,
     originHostId: input.hostId,

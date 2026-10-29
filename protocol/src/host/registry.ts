@@ -647,9 +647,12 @@ import {
   botConversationSendV10,
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
+  botConversationSendV12,
+  botConversationSendUpgradeV11ToV12,
   botThreadListV10,
   botThreadListV11,
   botThreadListUpgradeV10ToV11,
+  botTurnLocateV10,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
@@ -665,6 +668,7 @@ import {
   botSubscribeV11,
   botSubscribeV12,
   botSubscribeV13,
+  botSubscribeV14,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -9319,7 +9323,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9330,6 +9334,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botConversationSendV11,
           upgradeFromPreviousVersion: botConversationSendUpgradeV10ToV11,
+        },
+        // @1.2 answers or skips a bot's question from its card (`answer`, T91).
+        2: {
+          contract: botConversationSendV12,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9350,6 +9359,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botThreadListV11,
           upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The session turns behind a bot's replies, posts and check-ins (T86).
+  "bot.turn.locate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTurnLocateV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -15624,7 +15647,10 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.3 says where each task came from (`spun`, `label`,
       // `originRequestId`, `createdByChatId`, T82); @1.2 and earlier bind
       // the task entry frozen without them.
-      latestMinor: 3,
+      // @1.4 carries each task's check-in history (`checkins`) and when each
+      // notification subscription started (`since`, T86); @1.3 is frozen
+      // without them.
+      latestMinor: 4,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15637,6 +15663,9 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         3: {
           contract: botSubscribeV13,
+        },
+        4: {
+          contract: botSubscribeV14,
         },
       },
     },

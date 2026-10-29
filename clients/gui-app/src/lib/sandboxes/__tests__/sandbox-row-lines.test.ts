@@ -14,7 +14,6 @@ import {
   SANDBOX_ROW_FILTER_NONE,
   sandboxClockLine,
   sandboxDestroyAllIdleOffered,
-  sandboxFailedChatLine,
   sandboxReleasedChatLine,
   sandboxFilterCount,
   sandboxFrozenClock,
@@ -433,17 +432,19 @@ describe("sandboxClockLine", () => {
 
     it("reads by its support reference, never its raw code", () => {
       const line = failedLine("create:kube-create-service-account");
-      expect(line).toMatch(
-        /^Failed to start \(SBX-0412\) at \d{1,2}:\d{2}.* · Nothing is billed for a sandbox that never woke · support reference in Details$/,
+      expect(line).toBe(
+        "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
       );
-      expect(line).not.toContain("create:");
     });
 
-    it("drops the parentheses for a code with no support reference", () => {
-      const line = failedLine("zzz");
-      expect(line).toMatch(/^Failed to start at /);
-      expect(line).not.toContain("(");
-    });
+    it.each(["zzz", null])(
+      "omits the support-reference segment cleanly for %s",
+      (code) => {
+        expect(failedLine(code)).toBe(
+          "Couldn't start build-box at 11:01 · nothing was charged",
+        );
+      },
+    );
   });
 
   it("copies the support reference with the sandbox id, or the id alone with none", () => {
@@ -486,38 +487,7 @@ describe("sandboxClockLine", () => {
   });
 });
 
-describe("a failed or released sandbox's line in its chat", () => {
-  const FAILED_AT = new Date(2026, 9, 25, 11, 1).getTime();
-
-  function failedRow(failureCode: string): SandboxSummary {
-    return sandboxSummaryFixture({
-      displayName: "e2e-sbx-p1",
-      state: "failed",
-      failureCode,
-      lastTransitionAt: FAILED_AT,
-    });
-  }
-
-  it.each(["boot-timeout", "zzz"])(
-    "says the failed row's own line, code and time included, with the sandbox as its subject (%s)",
-    (failureCode) => {
-      const summary = failedRow(failureCode);
-      const row = sandboxClockLine({
-        summary,
-        configuration: { kind: "personal" },
-        cost: null,
-        wakeString: null,
-        viewerUserId: null,
-        reachability: { unreachable: false, lastContactAt: null },
-        now: NOW,
-      });
-
-      expect(sandboxFailedChatLine(summary)).toBe(
-        `e2e-sbx-p1 f${row.slice(1)}`,
-      );
-    },
-  );
-
+describe("a released sandbox's line in its chat", () => {
   it("says the released Automations row's own line with the sandbox as its subject", () => {
     const row = sandboxClockLine({
       summary: sandboxSummaryFixture({

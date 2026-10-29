@@ -101,9 +101,11 @@ export function useHostOverviewStatusQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
   readonly hostId: string | null;
+  /** A new lifecycle needs its own answer, never a previous wake's status. */
+  readonly cacheKeyIdentity?: ReadonlyArray<unknown>;
 }) {
   return useHostQuery<HostRpcRegistry, "host.status">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: input.cacheKeyIdentity,
     client: input.client,
     method: "host.status",
     params: EMPTY_PARAMS,
@@ -121,7 +123,10 @@ export function useHostOverviewStatusQuery(input: {
       // cannot empty `data` and unmount the busy chip for a round trip.
       // A host mismatch drops the prior payload (never show host A's work
       // as host B's).
-      placeholderData: keepPreviousDataForSameHost(input.hostId),
+      placeholderData:
+        input.cacheKeyIdentity === undefined
+          ? keepPreviousDataForSameHost(input.hostId)
+          : undefined,
     },
   });
 }

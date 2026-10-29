@@ -573,7 +573,8 @@ function seedCanvasWithActivePane(
   });
 }
 
-// The chat tab's routing menu mounts a mutation hook, which needs a client.
+// The chat tab's routing menu mounts a mutation hook, and the banner's host
+// name a query, so every tree needs a client.
 const routingMenuQueryClient = new QueryClient();
 
 function groupView(
@@ -617,20 +618,22 @@ function hostedGroupView(
   onPointerDownCapture: (() => void) | undefined,
 ): ReactNode {
   return (
-    <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
-      <TooltipProvider>
-        <PaneVisibilityContext.Provider value>
-          <div onPointerDownCapture={onPointerDownCapture}>
-            <TabGroupView
-              epicId="epic-1"
-              tabId={VIEW_TAB_ID}
-              pane={pane([CHAT], CHAT.instanceId)}
-            />
-            <StableTileSurfaceHost renderRecordBody={renderRecordBody} />
-          </div>
-        </PaneVisibilityContext.Provider>
-      </TooltipProvider>
-    </EpicSessionContext.Provider>
+    <QueryClientProvider client={routingMenuQueryClient}>
+      <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
+        <TooltipProvider>
+          <PaneVisibilityContext.Provider value>
+            <div onPointerDownCapture={onPointerDownCapture}>
+              <TabGroupView
+                epicId="epic-1"
+                tabId={VIEW_TAB_ID}
+                pane={pane([CHAT], CHAT.instanceId)}
+              />
+              <StableTileSurfaceHost renderRecordBody={renderRecordBody} />
+            </div>
+          </PaneVisibilityContext.Provider>
+        </TooltipProvider>
+      </EpicSessionContext.Provider>
+    </QueryClientProvider>
   );
 }
 
@@ -1120,22 +1123,24 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
 
     const snapshots: OwnershipSnapshot[] = [];
     const tree = (): ReactNode => (
-      <TooltipProvider>
-        <PaneVisibilityContext.Provider value>
-          <TabGroupView
-            epicId="epic-1"
-            tabId={VIEW_TAB_ID}
-            pane={pane(tabs, CHAT.instanceId)}
-          />
-          <StableTileSurfaceHost
-            renderRecordBody={() => <div data-testid="hosted-body-stub" />}
-          />
-          <LayoutPhaseOwnershipProbe
-            instanceId={CHAT.instanceId}
-            onSnapshot={(snapshot) => snapshots.push(snapshot)}
-          />
-        </PaneVisibilityContext.Provider>
-      </TooltipProvider>
+      <QueryClientProvider client={routingMenuQueryClient}>
+        <TooltipProvider>
+          <PaneVisibilityContext.Provider value>
+            <TabGroupView
+              epicId="epic-1"
+              tabId={VIEW_TAB_ID}
+              pane={pane(tabs, CHAT.instanceId)}
+            />
+            <StableTileSurfaceHost
+              renderRecordBody={() => <div data-testid="hosted-body-stub" />}
+            />
+            <LayoutPhaseOwnershipProbe
+              instanceId={CHAT.instanceId}
+              onSnapshot={(snapshot) => snapshots.push(snapshot)}
+            />
+          </PaneVisibilityContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>
     );
 
     const { rerender } = render(tree());
