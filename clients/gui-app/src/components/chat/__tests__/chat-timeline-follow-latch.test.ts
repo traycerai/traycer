@@ -885,17 +885,49 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
+    it("does not follow a free reader whose view only jitters below a pixel under the clamp", () => {
+      const { node, listRef, onFollowIntentChange } = liftedAfterASmallDrag();
+
+      shim.setGeometry(node, { scrollHeight: 1450 });
+      fireResizeObservers();
+      // The clamp leaves the view a fraction of a pixel further down, as a
+      // fractional device pixel ratio does. The reader did not travel.
+      shim.setGeometry(node, { scrollHeight: 1500, scrollTop: 950.5 });
+      fireResizeObservers();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
     it("control: a fling that a clamp interrupts still arrives when it carries on past the clamp", () => {
       const { node, listRef, onFollowIntentChange } = flingTowardEnd();
 
       shim.setGeometry(node, { scrollTop: 900 });
       fireNativeScroll(node);
-      // The end drops onto the view mid-fling.
-      shim.setGeometry(node, { scrollHeight: 1400 });
+      // The end drops toward the view mid-fling, stopping short of it: the
+      // clamp alone leaves the view off the strict bottom, so a follow here
+      // is the momentum arriving and nothing else.
+      shim.setGeometry(node, { scrollHeight: 1450 });
       fireResizeObservers();
-      // The end grows back and the fling moves on toward it, short of the
-      // strict bottom.
-      shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 1000 });
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      // The fling carries on past the clamped end while the tail grows: it
+      // reaches that end, still short of the strict bottom.
+      shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 960 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("control: a fling whose closing step is a pixel still arrives at the end", () => {
+      const { node, listRef, onFollowIntentChange } = flingTowardEnd();
+
+      shim.setGeometry(node, { scrollTop: 998 });
+      fireNativeScroll(node);
+      // The last pixel of the fling lands with a chunk that grew the tail:
+      // the view reached the end it was headed for without the report ever
+      // seeing the strict bottom.
+      shim.setGeometry(node, { scrollTop: 999, scrollHeight: 1540 });
       fireNativeScroll(node);
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);

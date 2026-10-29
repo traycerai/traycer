@@ -215,12 +215,14 @@ interface ReaderEndCandidate {
  *  the momentum reached this one even after a chunk has moved it on. */
 interface ReaderMomentumEnd {
   readonly targetScrollTop: number;
-  /** Where the view was when this end was recorded. Momentum moves the view
-   *  toward the end; an end that came up to a still view was the list's. */
-  readonly scrollTop: number;
   /** As `ReaderEndCandidate.lastRow`: rows above that the list remeasures
    *  move the reader with them, and this end by as much. */
   readonly lastRow: ListRowTop | null;
+  /** Where the view was when the finger lifted, with the row the list moves
+   *  it by. The end moves on while the momentum runs; the lift it started
+   *  from does not, so this is what says whether the view has travelled. */
+  readonly liftScrollTop: number;
+  readonly liftLastRow: ListRowTop | null;
 }
 
 type ArmedReaderDeparture =
@@ -502,9 +504,25 @@ function readerMomentumEndFor(
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
 ): ReaderMomentumEnd {
+  const lastRow = lastListRowTop(list);
   return {
     targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
-    scrollTop: geometry.scrollTop,
+    lastRow,
+    liftScrollTop: geometry.scrollTop,
+    liftLastRow: lastRow,
+  };
+}
+
+/** The same momentum, headed for the end this observation sees. Only the end
+ *  moves on; the lift the momentum started from stays as it was recorded. */
+function readerMomentumEndMovedOn(
+  momentum: ReaderMomentumEnd,
+  geometry: ChatTimelineScrollGeometry,
+  list: LegendListRef | null,
+): ReaderMomentumEnd {
+  return {
+    ...momentum,
+    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
     lastRow: lastListRowTop(list),
   };
 }
@@ -1438,17 +1456,22 @@ export function useChatTimelineFollowLatch(
         return false;
       }
       const list = listRef.current;
-      readerMomentumEndRef.current = readerMomentumEndFor(geometry, list);
-      // Net of the list moving rows, the view must also have moved toward
-      // the end since the record: an end clamped up to a reader who has not
-      // moved since, then grown back, is not their momentum arriving.
-      const shift = listRowShift(list, momentum.lastRow);
+      readerMomentumEndRef.current = readerMomentumEndMovedOn(
+        momentum,
+        geometry,
+        list,
+      );
+      // Net of the list moving rows, the view must also have travelled
+      // toward the end since the lift: an end clamped up to a reader who
+      // has not moved, then grown back, is not their momentum arriving.
+      // Measured from the lift, not from the last observation, so a fling
+      // whose closing step is a pixel is still a view that travelled.
       return (
-        geometry.scrollTop - shift >
-          momentum.scrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
+        geometry.scrollTop - listRowShift(list, momentum.liftLastRow) >
+          momentum.liftScrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         geometry.scrollTop >=
           momentum.targetScrollTop +
-            shift -
+            listRowShift(list, momentum.lastRow) -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
