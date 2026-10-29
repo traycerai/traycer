@@ -334,9 +334,7 @@ export function SandboxDestroyDialog(
   const [typed, setTyped] = useState("");
   const destroy = useSandboxDestroy(props.sandbox);
   const operation = useSandboxOperation(props.sandbox.id);
-  const configuration = useDialogConfiguration(props.sandbox);
   const report = useDialogSessions(props.sandbox, props.open);
-  const team = configuration.kind === "team";
   const name = props.sandbox.displayName;
   const reason = sandboxTypedNameReason(typed, name);
   // A stopped or failed sandbox has no process left to end; one mid-destroy
@@ -352,7 +350,7 @@ export function SandboxDestroyDialog(
         props.onOpenChange(next);
       }}
       title={`Destroy ${name}?`}
-      description={`${sandboxDestroySessionsSentence(report, team, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
+      description={`${sandboxDestroySessionsSentence(report, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
       cascadeSummary={null}
       actionLabel="Destroy"
       isPending={operation?.kind === "pending" && operation.verb === "destroy"}

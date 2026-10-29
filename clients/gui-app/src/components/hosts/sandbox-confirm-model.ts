@@ -67,15 +67,21 @@ export const NOTHING_IS_RUNNING_ON_IT = "Nothing is running on it.";
 /**
  * The Destroy sentence's first clause: `Destroying ends 1 agent and
  * 2 terminals.` from the live split, or that nothing runs on a sandbox whose
- * processes have ended (`runsNothing`) or whose live count is zero.
+ * processes have ended (`runsNothing`) or whose live count is zero. It names
+ * other members' agents only when the live list holds one: the host sends an
+ * agent's task only to its owner, and every agent runs in a task, so an
+ * agent with no task is another member's.
  */
 export function sandboxDestroySessionsSentence(
   report: SandboxSessionReport,
-  team: boolean,
   runsNothing: boolean,
 ): string {
   if (runsNothing) return NOTHING_IS_RUNNING_ON_IT;
-  const others = team ? ", including other members' running agents." : ".";
+  const others =
+    report.kind === "live" &&
+    report.sessions.agents.some((agent) => agent.taskId === null)
+      ? ", including other members' running agents."
+      : ".";
   if (report.kind === "live") {
     if (report.count === 0) return NOTHING_IS_RUNNING_ON_IT;
     const kinds = sandboxSessionKindNames(report);
