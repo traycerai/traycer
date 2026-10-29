@@ -349,6 +349,8 @@ async function runStashConversion(
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: true,
       returnedSandbox: null,
+      // The stash entry stays until the receipt below, written once saved.
+      durability: "saved",
     });
     // `installLandingDraft` only reaches the store. On desktop the row is
     // persisted by the per-window projection, which debounces 100ms and is

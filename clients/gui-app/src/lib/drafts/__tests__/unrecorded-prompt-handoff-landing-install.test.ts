@@ -189,6 +189,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const draft = installed(draftId);
@@ -218,6 +219,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const rendered = contentText(installed(draftId).content);
@@ -245,6 +247,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const rendered = contentText(installed(draftId).content);
@@ -271,6 +274,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
@@ -301,6 +305,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const draft = installed(draftId);
@@ -338,6 +343,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const rendered = contentText(installed(draftId).content);
@@ -371,6 +377,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
@@ -423,6 +430,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => current,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     expect(draftId).toBeNull();
@@ -443,6 +451,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage: () => Promise.resolve(null),
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "saved",
     });
 
     expect(draftId).toBe("recovered-draft-1");
@@ -469,6 +478,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
         readHashImage: () => Promise.resolve(null),
         stillCurrent: () => true,
         returnedSandbox: null,
+        durability: "saved",
       });
 
     const first = await run();
@@ -535,6 +545,7 @@ describe("unrecorded prompt handoff - a returned sandbox rides in the install", 
         }),
       stillCurrent: () => true,
       returnedSandbox: RETURNED,
+      durability: "saved",
     });
 
     await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
@@ -569,6 +580,7 @@ describe("unrecorded prompt handoff - a returned sandbox rides in the install", 
           Promise.resolve(candidate === hash ? bytes : null),
         stillCurrent: () => true,
         returnedSandbox: RETURNED,
+        durability: "saved",
       });
 
       expect(contentText(installed(draftId).content)).toContain(
@@ -624,6 +636,7 @@ describe("unrecorded prompt handoff - a refused draft write", () => {
           Promise.resolve(candidate === hash ? bytes : null),
         stillCurrent: () => true,
         returnedSandbox: null,
+        durability: "saved",
       }),
     ).rejects.toThrow("No room");
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
@@ -642,6 +655,7 @@ describe("unrecorded prompt handoff - a refused draft write", () => {
         }),
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "saved",
     });
     const rejected = expect(pending).rejects.toThrow("No room");
 
@@ -667,6 +681,7 @@ describe("unrecorded prompt handoff - a refused draft write", () => {
             Promise.resolve(candidate === hash ? bytes : null),
           stillCurrent: () => true,
           returnedSandbox: null,
+          durability: "saved",
         }),
       ).rejects.toThrow("No room");
       expect(useLandingDraftStore.getState().drafts).toEqual([]);

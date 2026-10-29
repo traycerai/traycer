@@ -7316,6 +7316,9 @@ export function createChatSessionStoreWithNotificationDependencies(
               draftImageByteTargetForHost(options.hostId),
             ),
           returnedSandbox: null,
+          // The session is torn down: a row only memory holds is still the
+          // last copy the person can read.
+          durability: "in-memory",
         })
           // SECOND chance, text-only. The handoff's own fallback covers a
           // document whose IMAGES it cannot resolve; this covers an install
@@ -7336,6 +7339,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               cause: "capacity",
               stillCurrent,
               returnedSandbox: null,
+              durability: "in-memory",
             }),
           )
           // The roots outlive the INSTALL, not just the call: see

@@ -41,8 +41,22 @@ function snapshot(
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
     returnedSandbox: null,
+    durability: "saved",
     ...overrides,
   };
+}
+
+/** The landing drafts' snapshot does not fit; every other key does. */
+function refuseLandingDraftWrites(): () => void {
+  const write = localStorage.setItem.bind(localStorage);
+  const refuse = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation((name, value) => {
+      if (name === LANDING_DRAFT_PERSIST_KEY)
+        throw new DOMException("No room", "QuotaExceededError");
+      write(name, value);
+    });
+  return () => refuse.mockRestore();
 }
 
 function readDraft(id: string) {
@@ -89,18 +103,11 @@ describe("landing draft store: installLandingDraft", () => {
     expect(draft.supersedes).toBeNull();
   });
 
-  it("leaves the store as it was and throws when the install cannot be saved", () => {
+  it("leaves the store as it was and throws when a saved install cannot be saved", () => {
     useLandingDraftStore.getState().installLandingDraft(snapshot("saved", {}));
     const drafts = useLandingDraftStore.getState().drafts;
     const stored = localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
-    const write = localStorage.setItem.bind(localStorage);
-    const refuse = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation((name, value) => {
-        if (name === LANDING_DRAFT_PERSIST_KEY)
-          throw new DOMException("No room", "QuotaExceededError");
-        write(name, value);
-      });
+    const allowWrites = refuseLandingDraftWrites();
     try {
       expect(() =>
         useLandingDraftStore
@@ -112,7 +119,7 @@ describe("landing draft store: installLandingDraft", () => {
       expect(useLandingDraftStore.getState().drafts).toBe(drafts);
       expect(localStorage.getItem(LANDING_DRAFT_PERSIST_KEY)).toBe(stored);
     } finally {
-      refuse.mockRestore();
+      allowWrites();
     }
     // Once storage has room, the same install goes through.
     expect(
@@ -120,6 +127,29 @@ describe("landing draft store: installLandingDraft", () => {
         .getState()
         .installLandingDraft(snapshot("refused", {})),
     ).toBe(true);
+  });
+
+  it("keeps the row readable and throws when an in-memory install cannot be saved", () => {
+    useLandingDraftStore.getState().installLandingDraft(snapshot("saved", {}));
+    const stored = localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+    const allowWrites = refuseLandingDraftWrites();
+    try {
+      expect(() =>
+        useLandingDraftStore
+          .getState()
+          .installLandingDraft(
+            snapshot("last-copy", { durability: "in-memory" }),
+          ),
+      ).toThrow("No room");
+
+      // The last copy there is stays readable, though storage never took it.
+      expect(readDraft("last-copy").content).toEqual(
+        snapshot("last-copy", {}).content,
+      );
+      expect(localStorage.getItem(LANDING_DRAFT_PERSIST_KEY)).toBe(stored);
+    } finally {
+      allowWrites();
+    }
   });
 
   it("installs an OPEN row when asked, without making it active", () => {
