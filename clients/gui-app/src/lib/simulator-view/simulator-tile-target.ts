@@ -34,8 +34,15 @@ import type {
  * version. An iOS clone's instance key IS the udid its tile carries; an
  * Android instance is keyed by its AVD name while its tile carries the serial
  * its emulator runs on, two different strings, so that clone is resolved
- * through whichever read names the pair - this task's `sessions`, or the
- * host-wide `instances`. Null when the host lists none.
+ * through whichever read names the pair - the tile's OWN `instanceKey`,
+ * recorded from the answer that placed it, then this task's `sessions`, then
+ * the host-wide `instances`. The tile's own is the only one of the three
+ * that outlives the instance running: both reads drop a clone whose emulator
+ * has exited, where the device rows still carry its cold ledger row. It is
+ * also the only one that can be STALE, because instance keys are reused by
+ * design - so what it buys is that an exited clone's tile is answered with a
+ * clone's row and not with its source device's, never that the row is
+ * certainly the same copy. Null when the host lists none.
  */
 export function findSimulatorForTile(
   simulators: readonly SimulatorSummary[],
@@ -43,6 +50,8 @@ export function findSimulatorForTile(
     readonly simulatorId: string;
     readonly platform: SimulatorPlatform;
     readonly name: string;
+    /** The instance this tile's id was the id of; null for an older tile. */
+    readonly instanceKey: string | null;
   },
   sessions: readonly SimulatorSession[],
   /**
@@ -64,12 +73,13 @@ export function findSimulatorForTile(
       (item) =>
         item.instanceKey === tile.simulatorId ||
         (item.cloneOf !== null &&
-          hostNamesPair(
-            sessions,
-            hostInstances ?? [],
-            tile.simulatorId,
-            item.instanceKey,
-          )),
+          (item.instanceKey === tile.instanceKey ||
+            hostNamesPair(
+              sessions,
+              hostInstances ?? [],
+              tile.simulatorId,
+              item.instanceKey,
+            ))),
     );
     if (instance === undefined) continue;
     return {

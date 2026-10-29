@@ -333,6 +333,7 @@ function renderTile(): () => void {
       simulatorId: UDID,
       platform: "ios",
       name: "iPhone 16",
+      instanceKey: null,
     }),
   );
 }
@@ -764,6 +765,7 @@ describe("SimulatorTile", () => {
         simulatorId: serial,
         platform: "android",
         name: avd,
+        instanceKey: null,
       }),
     );
     expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
@@ -1010,13 +1012,30 @@ describe("SimulatorTile on a @1.1 host", () => {
     instanceKey: CLONE_AVD,
     platform: "android",
   });
-  /** A clone's tile as Boot another on the source device places it: that device's name. */
+  /**
+   * A clone's tile as Boot another on the source device places it: that
+   * device's name, and - stored before the tile carried an instance, or
+   * placed from a device row - no instance of its own, so only a live read
+   * can tell it from the device it is named after.
+   */
   function cloneTileNamedAfterSource(): SimulatorTileRef {
     return makeSimulatorTileRef({
       hostId: HOST,
       simulatorId: CLONE_SERIAL,
       platform: "android",
       name: SOURCE_AVD,
+      instanceKey: null,
+    });
+  }
+
+  /** The same tile with the instance its open answered with recorded on it. */
+  function cloneTileNamingItsInstance(): SimulatorTileRef {
+    return makeSimulatorTileRef({
+      hostId: HOST,
+      simulatorId: CLONE_SERIAL,
+      platform: "android",
+      name: SOURCE_AVD,
+      instanceKey: CLONE_AVD,
     });
   }
 
@@ -1046,6 +1065,7 @@ describe("SimulatorTile on a @1.1 host", () => {
         simulatorId: "emulator-5554",
         platform: "android",
         name: avd,
+        instanceKey: null,
       }),
     );
 
@@ -1177,6 +1197,7 @@ describe("SimulatorTile on a @1.1 host", () => {
         simulatorId: CLONE,
         platform: "ios",
         name: "iPhone 16 · 2",
+        instanceKey: null,
       }),
     );
     // Live first, so `wasLive` latches and the tile will not auto-attach when
@@ -1209,6 +1230,7 @@ describe("SimulatorTile on a @1.1 host", () => {
         simulatorId: CLONE_SERIAL,
         platform: "android",
         name: "Pixel_8_API_35 · 2",
+        instanceKey: null,
       }),
     );
     expect(await screen.findByTestId("simulator-toolbar")).toBeTruthy();
@@ -1264,6 +1286,41 @@ describe("SimulatorTile on a @1.1 host", () => {
       platform: "android",
       boot: true,
     });
+  });
+
+  it("offers an exited clone's own tile its Boot and connect, off the instance the tile names", async () => {
+    // The clone's emulator has exited: no session, and the host-wide read has
+    // ANSWERED with nothing booted, so neither read ties its key to this
+    // tile's serial any more and the AVD-name fallback is free to match the
+    // source device. The tile recorded that pair when its open answered, and
+    // the device rows still carry the clone's cold ledger row - so it is
+    // resolved as the clone it is, not as the device it is named after.
+    fakes.sessions = sessions({
+      state: {
+        ...CLONE_STATE,
+        simulators: CLONE_STATE.simulators.map((simulator) =>
+          simulator.simulatorId === SOURCE_SERIAL
+            ? {
+                ...simulator,
+                instances: [
+                  SOURCE_OWN_INSTANCE,
+                  { ...CLONE_INSTANCE, booted: false },
+                ],
+              }
+            : simulator,
+        ),
+      },
+    });
+    renderTileFor(cloneTileNamingItsInstance());
+    await flush();
+
+    const inventory = await screen.findByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(inventory.textContent).toContain("Pixel_8_API_35 · 2");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Boot and connect",
+    );
+    expect(fakes.open).not.toHaveBeenCalled();
   });
 
   it("names a clone's instance from the host's own rows when no catalog record does", async () => {

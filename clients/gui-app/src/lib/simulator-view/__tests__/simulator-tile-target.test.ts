@@ -251,6 +251,65 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
     ).toBeNull();
   });
 
+  it("resolves an exited clone by the key its own tile carries, never the device it was named after", () => {
+    // The clone's emulator has exited, so it is in neither pair-naming read:
+    // this task's `sessions` have nothing on it and the host-wide read lists
+    // only what is booted. Its ledger row is still there, cold - and the tile
+    // has carried its key since the open answered, which is that same pair
+    // recorded once at placement instead of read again now.
+    const exitedClone = {
+      ...OWN_INSTANCE,
+      instanceKey: "Pixel_8_API_35_traycer_3",
+      name: "Pixel_8_API_35 · 3",
+      cloneOf: OWN_INSTANCE.instanceKey,
+      booted: false,
+    } as const;
+    const tile = {
+      simulatorId: cloneTile.simulatorId,
+      platform: "android",
+      name: BOOTED_EMULATOR.name,
+      instanceKey: exitedClone.instanceKey,
+    } as const;
+    expect(
+      findSimulatorForTile(
+        [{ ...source, instances: [OWN_INSTANCE, exitedClone] }],
+        tile,
+        NO_SESSIONS,
+        NO_INSTANCES,
+      ),
+    ).toEqual({
+      simulatorId: cloneTile.simulatorId,
+      platform: "android",
+      name: "Pixel_8_API_35 · 3",
+      version: "Android 15.0",
+      booted: false,
+      physical: false,
+    });
+  });
+
+  it("still boots a cold AVD for a root device's serial tile that carries its own key", () => {
+    // A root device's tile carries its instance key too, and that key IS
+    // listed - as the device's own instance, cold. Synthesising from it would
+    // offer the dead serial to boot, so only a CLONE is resolved this way.
+    const cold: SimulatorSummary = {
+      ...COLD_AVD,
+      instances: [{ ...OWN_INSTANCE, booted: false }],
+    };
+    expect(
+      findSimulatorForTile(
+        [cold],
+        {
+          simulatorId: BOOTED_EMULATOR.simulatorId,
+          platform: "android",
+          name: "Pixel_8_API_35",
+          instanceKey: OWN_INSTANCE.instanceKey,
+        },
+        NO_SESSIONS,
+        NO_INSTANCES,
+      ),
+    ).toBe(cold);
+  });
+
   it("still boots a cold AVD by name for a root device's serial tile", () => {
     // A root device always has a row of its own - cold under its AVD name
     // once its emulator has exited - so its instance is never synthesised:

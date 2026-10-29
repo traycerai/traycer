@@ -380,6 +380,7 @@ function useSimulatorConnect(args: {
                 simulatorId: response.simulator.simulatorId,
                 platform: response.simulator.platform,
                 name: response.simulator.name,
+                instanceKey: response.session.instanceKey ?? null,
               }),
             );
           },

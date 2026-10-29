@@ -418,9 +418,13 @@ type PickInstance = "auto" | "new" | { readonly key: string };
 const NO_RUNNING_DEVICES: ReadonlySet<string> = new Set();
 
 /**
- * The devices whose OWN copy is running, under the key a device is listed by:
- * an instance's `instanceKey` is its device's id on both platforms, where its
- * `simulatorId` becomes the booted Android serial.
+ * The devices whose OWN copy is running, under the key a COLD device is
+ * listed by: an instance's `instanceKey` is its device's id while that device
+ * is cold on both platforms - an iOS udid for life, an Android AVD name until
+ * its emulator takes a serial - where the instance's own `simulatorId` is
+ * that serial. So this set is only ever probed with a row the device list
+ * calls cold, which is all `coldMatches` below asks it, and never with a
+ * booted Android row, whose id is a serial no key equals.
  *
  * The picker folds two separately cached reads, and the instance read is the
  * fresher one - it polls while the picker is open, where `simulator.list`

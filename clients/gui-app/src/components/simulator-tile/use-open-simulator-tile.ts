@@ -57,6 +57,10 @@ export function useOpenSimulatorTile(args: {
         simulatorId: simulator.simulatorId,
         platform: simulator.platform,
         name: simulator.name,
+        // A device row names no instance; the tile's own open answers with one
+        // and places that instance's tile itself when the id turns out to
+        // differ.
+        instanceKey: null,
       });
       // Filed before the tile exists: the gate reads it on mount, or at once
       // when the row's tile is already open and showing its inventory.

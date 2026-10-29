@@ -111,6 +111,8 @@ export function useSimulatorInstanceOpen(epicId: string): {
             simulatorId: response.simulator.simulatorId,
             platform: response.simulator.platform,
             name: response.simulator.name,
+            // The answer names the pair: this id, and the instance it is of.
+            instanceKey: response.session.instanceKey ?? null,
           }),
         );
         return null;
@@ -166,6 +168,8 @@ export function useSimulatorInstanceOpen(epicId: string): {
           simulatorId: target.simulatorId,
           platform: target.platform,
           name: target.name,
+          // A `@1.0` host has no instances, and this path names a device.
+          instanceKey: null,
         });
         requestSimulatorConnect(ref.id);
         place(ref);
