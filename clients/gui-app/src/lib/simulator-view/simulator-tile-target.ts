@@ -1,4 +1,5 @@
 import type {
+  SimulatorHostInstance,
   SimulatorPlatform,
   SimulatorSession,
   SimulatorState,
@@ -21,8 +22,8 @@ import type {
  * version. An iOS clone's instance key IS the udid its tile carries; an
  * Android instance is keyed by its AVD name while its tile carries the serial
  * its emulator runs on, two different strings, so that clone is resolved
- * through `sessions` - the one place the host names a serial and an instance
- * key together. Null when the host lists none.
+ * through whichever read names the pair - this task's `sessions`, or the
+ * host-wide `instances`. Null when the host lists none.
  */
 export function findSimulatorForTile(
   simulators: readonly SimulatorSummary[],
@@ -32,6 +33,7 @@ export function findSimulatorForTile(
     readonly name: string;
   },
   sessions: readonly SimulatorSession[],
+  hostInstances: readonly SimulatorHostInstance[],
 ): SimulatorSummary | null {
   const byId = simulators.find(
     (simulator) => simulator.simulatorId === tile.simulatorId,
@@ -42,7 +44,12 @@ export function findSimulatorForTile(
       (item) =>
         item.instanceKey === tile.simulatorId ||
         (item.cloneOf !== null &&
-          sessionsName(sessions, tile.simulatorId, item.instanceKey)),
+          hostNamesPair(
+            sessions,
+            hostInstances,
+            tile.simulatorId,
+            item.instanceKey,
+          )),
     );
     if (instance === undefined) continue;
     return {
@@ -64,24 +71,41 @@ export function findSimulatorForTile(
 }
 
 /**
- * Whether a session on this host names both of these: one `simulatorId` and
- * the instance it is the id of. A `@1.1` session carries the pair, which is
- * what ties an Android clone's AVD-name key to the serial its tile holds, and
- * every session counts - an agent's and another person's alike - because this
- * is the host's own mapping rather than a hold on the instance. Only a CLONE
- * is resolved through it: a root device's session names an AVD name too, and
- * that device has a row of its own, cold under that name once its emulator
- * has exited, which is the row to boot again.
+ * Whether the host names both of these together: one `simulatorId` and the
+ * instance it is the id of. That pair is what ties an Android clone's
+ * AVD-name key to the serial its tile holds, and two `@1.1` reads carry it.
+ *
+ * A session carries it, and every session counts - an agent's and another
+ * person's alike - because this is the host's own mapping rather than a hold
+ * on the instance. But a clone outlives its sessions: one booted by Traycer
+ * stays up until its idle deadline, or indefinitely while kept running, so
+ * the last session ending anywhere would otherwise take the mapping with it
+ * and leave the tile with nothing to reconnect to. The host-wide instance
+ * read answers the same question without one, naming the id each booted
+ * instance is reached by now beside its key, so it is consulted as well. It
+ * is a polled read where sessions are pushed, which is why both are here.
+ *
+ * Only a CLONE is resolved through either: a root device names an AVD name in
+ * both reads too, and that device has a row of its own, cold under that name
+ * once its emulator has exited, which is the row to boot again.
  */
-function sessionsName(
+function hostNamesPair(
   sessions: readonly SimulatorSession[],
+  hostInstances: readonly SimulatorHostInstance[],
   simulatorId: string,
   instanceKey: string,
 ): boolean {
-  return sessions.some(
-    (session) =>
-      session.simulatorId === simulatorId &&
-      session.instanceKey === instanceKey,
+  return (
+    sessions.some(
+      (session) =>
+        session.simulatorId === simulatorId &&
+        session.instanceKey === instanceKey,
+    ) ||
+    hostInstances.some(
+      (instance) =>
+        instance.simulatorId === simulatorId &&
+        instance.instanceKey === instanceKey,
+    )
   );
 }
 

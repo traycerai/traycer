@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
+  SimulatorHostInstance,
   SimulatorOpenRequest,
   SimulatorOpenResponse,
   SimulatorPackState,
@@ -74,6 +75,8 @@ const fakes = vi.hoisted(() => ({
   negotiated: { major: 1, minor: 0 } as SchemaVersion | false | null,
   viewerUserId: "user-1" as string | null,
   sessions: null as SimulatorSessionsState | null,
+  /** What `simulator.instances` says is booted on the machine, host-wide. */
+  hostInstances: [] as SimulatorHostInstance[],
   configSet: vi.fn(),
   open: vi.fn<OpenOnHost>(() => new Promise<SimulatorOpenResponse>(() => {})),
   close: vi.fn(),
@@ -159,6 +162,9 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
       supported: true,
     }),
     useSimulatorActionMutation: () => gated(fakes.action),
+    useSimulatorInstancesQuery: () => ({
+      data: { instances: fakes.hostInstances },
+    }),
     useSimulatorScreenshotMutation: () => gated(vi.fn()),
     useSimulatorDetailQuery: () => ({
       data: undefined,
@@ -382,6 +388,7 @@ beforeEach(() => {
   fakes.negotiated = { major: 1, minor: 0 };
   fakes.viewerUserId = "user-1";
   fakes.sessions = sessions({});
+  fakes.hostInstances = [];
   fakes.streamState = STREAMING;
 });
 
@@ -1178,6 +1185,37 @@ describe("SimulatorTile on a @1.1 host", () => {
 
     const inventory = await screen.findByTestId("simulator-inventory");
     expect(inventory.textContent).not.toContain("no longer lists");
+    expect(screen.getByTestId("simulator-connect").textContent).toContain(
+      "Connect",
+    );
+
+    // The agent's session ends too, so nothing in this task's `sessions` ties
+    // the AVD-name key to the serial any more - and the clone is still booted,
+    // kept running past its idle deadline. The host-wide read names the pair,
+    // so the tile still offers Connect rather than calling the clone gone.
+    fakes.hostInstances = [
+      {
+        instanceKey: CLONE_AVD,
+        name: "Pixel_8_API_35 · 2",
+        booted: true,
+        cloneOf: "Pixel_8_API_35",
+        drivenByAgent: false,
+        keepRunning: true,
+        idleUntil: null,
+        simulatorId: CLONE_SERIAL,
+        platform: "android",
+        version: "Android 15.0",
+        cloneOfName: "Pixel_8_API_35",
+        bootedByTraycer: true,
+        tasks: [],
+        otherTaskCount: 0,
+      },
+    ];
+    fakes.sessions = sessions({ state: { ...cloneState, sessions: [] } });
+    rerender();
+
+    const alone = await screen.findByTestId("simulator-inventory");
+    expect(alone.textContent).not.toContain("no longer lists");
     expect(screen.getByTestId("simulator-connect").textContent).toContain(
       "Connect",
     );

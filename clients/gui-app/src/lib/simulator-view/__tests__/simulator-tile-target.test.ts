@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SimulatorSummary } from "@traycer/protocol/host/simulator/schemas";
 import type {
+  SimulatorHostInstance,
   SimulatorSession,
   SimulatorState,
 } from "@traycer/protocol/host/simulator/schemas";
@@ -35,6 +36,8 @@ const IPHONE: SimulatorSummary = {
 };
 /** A `@1.0` host, or a `@1.1` one with nothing open on this machine. */
 const NO_SESSIONS: readonly SimulatorSession[] = [];
+/** A `@1.0` host, or a `@1.1` one whose host-wide read has not answered yet. */
+const NO_INSTANCES: readonly SimulatorHostInstance[] = [];
 
 describe("findSimulatorForTile", () => {
   it("matches by id first, and an Android serial's tile by AVD name once the serial is gone", () => {
@@ -48,18 +51,26 @@ describe("findSimulatorForTile", () => {
         [COLD_AVD, BOOTED_EMULATOR],
         serialTile,
         NO_SESSIONS,
+        NO_INSTANCES,
       ),
     ).toBe(BOOTED_EMULATOR);
     // Powered off: the host lists the AVD cold under its name.
     expect(
-      findSimulatorForTile([IPHONE, COLD_AVD], serialTile, NO_SESSIONS),
+      findSimulatorForTile(
+        [IPHONE, COLD_AVD],
+        serialTile,
+        NO_SESSIONS,
+        NO_INSTANCES,
+      ),
     ).toBe(COLD_AVD);
     // Booted again elsewhere under a new serial: that row, to connect to.
     const rebooted = { ...BOOTED_EMULATOR, simulatorId: "emulator-5556" };
-    expect(findSimulatorForTile([rebooted], serialTile, NO_SESSIONS)).toBe(
-      rebooted,
-    );
-    expect(findSimulatorForTile([IPHONE], serialTile, NO_SESSIONS)).toBeNull();
+    expect(
+      findSimulatorForTile([rebooted], serialTile, NO_SESSIONS, NO_INSTANCES),
+    ).toBe(rebooted);
+    expect(
+      findSimulatorForTile([IPHONE], serialTile, NO_SESSIONS, NO_INSTANCES),
+    ).toBeNull();
   });
 
   it("never matches an iOS tile by name: a udid is for life", () => {
@@ -68,7 +79,9 @@ describe("findSimulatorForTile", () => {
       platform: "ios",
       name: "iPhone 16",
     } as const;
-    expect(findSimulatorForTile([IPHONE], tile, NO_SESSIONS)).toBeNull();
+    expect(
+      findSimulatorForTile([IPHONE], tile, NO_SESSIONS, NO_INSTANCES),
+    ).toBeNull();
   });
 });
 
@@ -105,7 +118,9 @@ describe("findSimulatorForTile on a @1.1 host", () => {
 
   it("finds a clone's tile under its source's instances, with the source's version", () => {
     // A clone is never listed as a device on @1.1, so only `instances` has it.
-    expect(findSimulatorForTile([source], cloneTile, NO_SESSIONS)).toEqual({
+    expect(
+      findSimulatorForTile([source], cloneTile, NO_SESSIONS, NO_INSTANCES),
+    ).toEqual({
       simulatorId: "udid-clone",
       platform: "ios",
       name: "iPhone 16 · 2",
@@ -121,6 +136,7 @@ describe("findSimulatorForTile on a @1.1 host", () => {
         [{ ...source, instances: [] }],
         cloneTile,
         NO_SESSIONS,
+        NO_INSTANCES,
       ),
     ).toBeNull();
   });
@@ -200,11 +216,12 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
     // an agent's counts: it is the host's mapping, not a hold on the device.
     // The sibling clone's session names its own serial, never this one's.
     expect(
-      findSimulatorForTile([source], cloneTile, [
-        personOnSource,
-        agentOnTheSibling,
-        agentOnTheClone,
-      ]),
+      findSimulatorForTile(
+        [source],
+        cloneTile,
+        [personOnSource, agentOnTheSibling, agentOnTheClone],
+        NO_INSTANCES,
+      ),
     ).toEqual({
       simulatorId: cloneTile.simulatorId,
       platform: "android",
@@ -217,15 +234,20 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
 
   it("answers null when no session names this tile's serial, or the host lists no instance", () => {
     expect(
-      findSimulatorForTile([source], cloneTile, [
-        personOnSource,
-        agentOnTheSibling,
-      ]),
+      findSimulatorForTile(
+        [source],
+        cloneTile,
+        [personOnSource, agentOnTheSibling],
+        NO_INSTANCES,
+      ),
     ).toBeNull();
     expect(
-      findSimulatorForTile([{ ...source, instances: [] }], cloneTile, [
-        agentOnTheClone,
-      ]),
+      findSimulatorForTile(
+        [{ ...source, instances: [] }],
+        cloneTile,
+        [agentOnTheClone],
+        NO_INSTANCES,
+      ),
     ).toBeNull();
   });
 
@@ -242,9 +264,93 @@ describe("findSimulatorForTile for an Android clone on a @1.1 host", () => {
       platform: "android",
       name: "Pixel_8_API_35",
     } as const;
-    expect(findSimulatorForTile([cold], serialTile, [personOnSource])).toBe(
-      cold,
-    );
+    expect(
+      findSimulatorForTile([cold], serialTile, [personOnSource], NO_INSTANCES),
+    ).toBe(cold);
+  });
+
+  /**
+   * The host's own host-wide read of what is booted. It carries no epic and no
+   * session, and it names the id each instance is reached by NOW beside that
+   * instance's AVD-name key - the pair a session used to be the only place to
+   * find. `tasks` is empty here because the clone's last session has ended;
+   * `keepRunning` is what keeps it booted with none.
+   */
+  const cloneRunningHostWide: SimulatorHostInstance = {
+    ...OWN_INSTANCE,
+    instanceKey: "Pixel_8_API_35_traycer_3",
+    name: "Pixel_8_API_35 · 3",
+    cloneOf: OWN_INSTANCE.instanceKey,
+    keepRunning: true,
+    simulatorId: cloneTile.simulatorId,
+    platform: "android",
+    version: "Android 15.0",
+    cloneOfName: "Pixel_8_API_35",
+    bootedByTraycer: true,
+    tasks: [],
+    otherTaskCount: 0,
+  };
+
+  it("resolves a still-booted clone host-wide once its last session has ended", () => {
+    // The last session on the clone ended in another window, so nothing in
+    // `sessions` ties its key to this tile's serial any more - and the clone
+    // is still booted, kept running or waiting out its idle deadline. The
+    // host-wide read names that serial, so the tile can still reconnect.
+    expect(
+      findSimulatorForTile([source], cloneTile, NO_SESSIONS, [
+        cloneRunningHostWide,
+      ]),
+    ).toEqual({
+      simulatorId: cloneTile.simulatorId,
+      platform: "android",
+      name: "Pixel_8_API_35 · 3",
+      version: "Android 15.0",
+      booted: true,
+      physical: false,
+    });
+  });
+
+  it("takes only the instance reached by this tile's own serial", () => {
+    // A sibling clone of the same source runs on a serial of its own, so a
+    // host-wide read that lists it says nothing about this tile.
+    expect(
+      findSimulatorForTile([source], cloneTile, NO_SESSIONS, [
+        {
+          ...cloneRunningHostWide,
+          instanceKey: "Pixel_8_API_35_traycer_2",
+          name: "Pixel_8_API_35 · 2",
+          simulatorId: "emulator-5556",
+        },
+      ]),
+    ).toBeNull();
+  });
+
+  it("never synthesises a root device from the host-wide read either", () => {
+    // The two reads are two moments: a device booted since the cached
+    // `simulator.list` is listed host-wide under its serial while that list
+    // still has it cold. The cold row is the one to boot again, so the AVD
+    // name still decides - the same rule the sessions path follows.
+    const cold: SimulatorSummary = {
+      ...COLD_AVD,
+      instances: [{ ...OWN_INSTANCE, booted: false }],
+    };
+    const serialTile = {
+      simulatorId: BOOTED_EMULATOR.simulatorId,
+      platform: "android",
+      name: "Pixel_8_API_35",
+    } as const;
+    expect(
+      findSimulatorForTile([cold], serialTile, NO_SESSIONS, [
+        {
+          ...cloneRunningHostWide,
+          instanceKey: OWN_INSTANCE.instanceKey,
+          name: OWN_INSTANCE.name,
+          cloneOf: null,
+          cloneOfName: null,
+          simulatorId: serialTile.simulatorId,
+        },
+      ]),
+    ).toBe(cold);
   });
 });
 
