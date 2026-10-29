@@ -59,6 +59,11 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
+// An open epic: the card names and links its receiver as the epic resolves it.
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: vi.fn() }),
 }));

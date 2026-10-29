@@ -1,4 +1,4 @@
-import { createContext } from "react";
+import { createContext, type ReactNode } from "react";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
 
@@ -45,6 +45,33 @@ export interface ChatBotFailedRequest {
    * Retry is `null`.
    */
   readonly edit: ((text: string) => void) | null;
+}
+
+/**
+ * The turn of the bot's session behind a reply, or behind a post it did not
+ * answer, as the line under the row says it (Tracy Bots T86): the agent
+ * chat's collapsed activity label and how long the turn took, or, while it
+ * runs, how long it has been running.
+ */
+export interface ChatBotTurnReceipt {
+  /** The turn's activity as the agent chat's collapsed group labels it; `null` while it runs. */
+  readonly summary: string | null;
+  readonly startedAt: number;
+  /** When the turn ended; `null` while it runs. */
+  readonly endedAt: number | null;
+  /** Opens the turn beside the channel, "How Tracy answered". */
+  readonly open: () => void;
+}
+
+/**
+ * What the agent chat says and offers for a failed turn, where the bot's
+ * session names the failed post's turn as its last failed attempt: the
+ * reason in its words, and its actions (Retry, Switch to…, Wait until), in
+ * place of the bot's own Retry.
+ */
+export interface ChatBotFailedRecovery {
+  readonly label: string;
+  readonly actions: ReactNode;
 }
 
 /**
@@ -152,6 +179,25 @@ export interface ChatBotPresentation {
         requestId: string,
         senderUserId: string | null,
       ) => ChatBotFailedRequest | null)
+    | null;
+  /**
+   * The agent chat's reason and actions for a failed post, by its request
+   * id; `null` where the bot's session does not name the post's turn as its
+   * last failed attempt, and the row keeps `failedRequest`'s.
+   */
+  readonly failedRecovery:
+    | ((requestId: string) => ChatBotFailedRecovery | null)
+    | null;
+  /**
+   * The turn behind a reply of the bot, by the message ids its row carries;
+   * `null` where the host does not say, and the row draws no receipt.
+   */
+  readonly replyReceipt:
+    | ((messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null)
+    | null;
+  /** The turn that failed a post, by its request id; `null` where the host does not say. */
+  readonly requestReceipt:
+    | ((requestId: string) => ChatBotTurnReceipt | null)
     | null;
 }
 

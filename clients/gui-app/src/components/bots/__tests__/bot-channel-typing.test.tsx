@@ -47,8 +47,8 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatLocateRowArgs } from "@/hooks/chats/use-chat-locate-row";
 import {
-  useBotOpenThread,
   useBotOpenThreadStore,
+  useBotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -489,7 +489,8 @@ function emitSnapshot(chatId: string, state: SessionState): void {
 
 /** Holds the open thread in its store, as the bot tab above the view does. */
 function ChannelHarness(props: { readonly directive: string }): ReactNode {
-  const openThread = useBotOpenThread(BOT_ID);
+  const rail = useBotRail(BOT_ID);
+  const openThread = rail?.kind === "thread" ? rail : null;
   return (
     <BotChannelView
       botId={BOT_ID}
@@ -499,11 +500,16 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       botTitle="Tracy"
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
+      trunkChatId="trunk-chat"
+      openTurn={null}
+      onOpenTurn={vi.fn()}
       resolveMember={resolveMember}
       tasks={[]}
       openThread={openThread}
       onOpenThread={(open) =>
-        useBotOpenThreadStore.getState().setOpenThread(BOT_ID, open)
+        useBotOpenThreadStore
+          .getState()
+          .setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
       }
       onOpenActivity={vi.fn()}
     />

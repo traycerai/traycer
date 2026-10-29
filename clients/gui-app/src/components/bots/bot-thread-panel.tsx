@@ -12,7 +12,14 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
-import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import {
+  BotChatTranscript,
+  type BotTurnOpen,
+} from "@/components/bots/bot-chat-transcript";
+import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
+import { BotRoutingCard } from "@/components/bots/bot-routing-card";
+import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
+import { botTurnIndexOf } from "@/lib/bots/bot-turn-receipt";
 import {
   BotMessageComposer,
   type BotComposerEdit,
@@ -44,6 +51,7 @@ import type { QuestionAnswerSend } from "@/components/bots/bot-chat-transcript";
 import type {
   ChatBotPresentation,
   ChatBotQuestions,
+  ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
@@ -107,6 +115,10 @@ export type BotThreadPanelThread =
  * edited in the thread's box; the post the thread opens on is edited in the
  * channel's box (`onEditPost`), since its replacement is a new post.
  *
+ * A reply's receipt, and a failed post's, opens its turn in the rail in the
+ * thread's place (`onOpenTurn`), whose header brings the thread back. The
+ * thread session's routing card sits above the panel's box.
+ *
  * A question card in the thread answers in the thread. A member whose answer
  * someone else's overtook takes it to the discussion: the thread's box, with
  * their draft in it unsent - a question's own thread for a question in the
@@ -135,6 +147,8 @@ export function BotThreadPanel(props: {
   readonly onClose: () => void;
   readonly onOpenActivity: () => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
+  /** Opens a turn of the bot in the rail, in the thread's place. */
+  readonly onOpenTurn: BotTurnOpen;
 }): ReactNode {
   const { botTitle, onClose, onOpenActivity } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
@@ -211,6 +225,7 @@ type ThreadPanelBodyProps = {
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
   readonly onEditPost: (edit: BotComposerEdit) => void;
+  readonly onOpenTurn: BotTurnOpen;
   readonly sendFailure: BotSendFailure;
 };
 
@@ -238,6 +253,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     anchorSenderLabel,
     resolveMember,
     onEditPost,
+    onOpenTurn,
     sendFailure,
   } = props;
   const client = useTabHostClient();
@@ -245,6 +261,54 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const failedOnPost = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
+  );
+  // The post's turn, while the bot failed to answer it: its receipt, and the
+  // agent chat's reason and actions where the thread's session names it as
+  // its last failed attempt.
+  const listed = props.thread.kind === "listed" ? props.thread.thread : null;
+  const originRequestId = listed?.anchor?.requestId ?? sent?.requestId ?? null;
+  const failedOrigin =
+    originRequestId !== null && failedOnPost(originRequestId) !== null
+      ? [originRequestId]
+      : NO_IDS;
+  const located = useBotTurnLocateQuery({
+    client,
+    hostId,
+    botId,
+    messageIds: NO_IDS,
+    requestIds: failedOrigin,
+    turns: NO_TURN_KEYS,
+  });
+  const turnIndex = useMemo(
+    () => botTurnIndexOf(located.data?.turns),
+    [located.data],
+  );
+  const turnOfRequest = useCallback(
+    (requestId: string) => turnIndex.byRequestId.get(requestId) ?? null,
+    [turnIndex],
+  );
+  const failedRecovery = useBotFailedRecovery({
+    botId,
+    hostId,
+    sessionChatId: listed?.sessionChatId ?? null,
+    turnOfRequest,
+  });
+  const requestReceipt = useCallback(
+    (requestId: string): ChatBotTurnReceipt | null => {
+      const ref = turnOfRequest(requestId);
+      if (ref === null) return null;
+      return {
+        summary: ref.summary,
+        startedAt: ref.startedAt,
+        endedAt: ref.endedAt,
+        open: () =>
+          onOpenTurn(ref, {
+            chatId: conversationId,
+            messageId: originMessageId,
+          }),
+      };
+    },
+    [conversationId, onOpenTurn, originMessageId, turnOfRequest],
   );
   const failedRequest = useBotFailedRequest({
     client,
@@ -268,17 +332,28 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     }),
     [anchorSenderLabel, botId, viewerUserId],
   );
+  const turns = useMemo(
+    () => ({ failedRecovery, requestReceipt }),
+    [failedRecovery, requestReceipt],
+  );
   const loadedPresentation = useMemo(
-    () => originPresentation(botTitle, questions, failedRequest),
-    [botTitle, failedRequest, questions],
+    () => originPresentation(botTitle, questions, failedRequest, turns),
+    [botTitle, failedRequest, questions, turns],
   );
   const unloadedPresentation = useMemo(
     () =>
-      originPresentation(botTitle, questions, (requestId, senderUserId) => {
-        const failed = failedRequest(requestId, senderUserId);
-        return failed === null ? null : { ...failed, retry: null, edit: null };
-      }),
-    [botTitle, failedRequest, questions],
+      originPresentation(
+        botTitle,
+        questions,
+        (requestId, senderUserId) => {
+          const failed = failedRequest(requestId, senderUserId);
+          return failed === null
+            ? null
+            : { ...failed, retry: null, edit: null };
+        },
+        { failedRecovery: null, requestReceipt: turns.requestReceipt },
+      ),
+    [botTitle, failedRequest, questions, turns],
   );
   const anchor =
     props.thread.kind === "listed" ? props.thread.thread.anchor : null;
@@ -412,6 +487,7 @@ function originPresentation(
   botTitle: string,
   questions: ChatBotQuestions,
   failedRequest: ChatBotPresentation["failedRequest"],
+  turns: Pick<ChatBotPresentation, "failedRecovery" | "requestReceipt">,
 ): ChatBotPresentation {
   return {
     botTitle,
@@ -424,8 +500,17 @@ function originPresentation(
     chooseOption: null,
     questions,
     failedRequest,
+    failedRecovery: turns.failedRecovery,
+    replyReceipt: null,
+    requestReceipt: turns.requestReceipt,
   };
 }
+
+const NO_IDS: ReadonlyArray<string> = [];
+const NO_TURN_KEYS: ReadonlyArray<{
+  readonly chatId: string;
+  readonly turnId: string;
+}> = [];
 
 /** A thread state that has a box under it. */
 type BoxedThread = Exclude<
@@ -501,6 +586,13 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           onDiscuss={discuss}
         />
       )}
+      <BotRoutingCard
+        botId={props.botId}
+        hostId={props.hostId}
+        sessionChatId={
+          thread.kind === "listed" ? thread.thread.sessionChatId : null
+        }
+      />
       <BotMessageComposer
         botId={props.botId}
         conversationId={box.conversationId}
@@ -610,6 +702,8 @@ function KnownThread(
     sendFailure,
     onEdit,
     onDiscuss,
+    onOpenTurn,
+    originMessageId,
   } = props;
   const client = useTabHostClient();
   const {
@@ -707,6 +801,9 @@ function KnownThread(
       answerQuestion: sendable && answersTaken ? answerQuestion : null,
       discussQuestion: onDiscuss,
       failedRequest: failedRequestShown,
+      openTurn: onOpenTurn,
+      sessionChatId: listed?.sessionChatId ?? null,
+      originPost: { chatId: conversationId, messageId: originMessageId },
     }),
     [
       answerQuestion,
@@ -716,7 +813,10 @@ function KnownThread(
       conversationId,
       failSend,
       failedRequestShown,
+      listed?.sessionChatId,
       onDiscuss,
+      onOpenTurn,
+      originMessageId,
       send,
       sendable,
       sending,
@@ -757,6 +857,7 @@ function KnownThread(
             surface={surface}
             resolveMember={resolveMember}
             showConnecting={hasReplies}
+            landOnMessageId={null}
           />
         </div>
       )}

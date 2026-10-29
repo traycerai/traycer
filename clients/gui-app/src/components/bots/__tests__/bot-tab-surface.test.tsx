@@ -22,7 +22,10 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotOpenThread,
+  BotOpenTurn,
+} from "@/stores/bots/bot-open-thread-store";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
@@ -239,6 +242,8 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     botTitle: string;
     appConversationChatId: string | null;
     openThread: BotOpenThread | null;
+    openTurn: BotOpenTurn | null;
+    trunkChatId: string;
     onOpenActivity: () => void;
     resolveMember: (
       userId: string,
@@ -251,6 +256,9 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-open-thread={props.openThread?.anchorMessageId ?? "none"}
+      data-open-turn={props.openTurn?.ref.turnIds[0] ?? "none"}
+      data-open-turn-back={props.openTurn?.back?.anchorMessageId ?? "none"}
+      data-trunk-chat-id={props.trunkChatId}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
       }
@@ -269,6 +277,7 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
     boundHost: { hostId: string | null; isThisHost: boolean };
     onOpenPost: (open: BotOpenThread) => void;
+    onOpenTurn: (open: BotOpenTurn) => void;
   }) => (
     <div
       data-testid="stub-activity"
@@ -284,6 +293,27 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
             announcement: false,
             answer: false,
             sent: null,
+          })
+        }
+      />
+      <button
+        type="button"
+        data-testid="stub-activity-open-turn"
+        onClick={() =>
+          props.onOpenTurn({
+            ref: {
+              chatId: "trunk-1",
+              turnIds: ["turn-checkin"],
+              userMessageId: "prompt-checkin",
+              threadId: null,
+              startedAt: 1_000,
+              endedAt: 2_000,
+              summary: null,
+              messageIds: [],
+              requestIds: [],
+            },
+            question: null,
+            back: null,
           })
         }
       />
@@ -1192,6 +1222,39 @@ describe("<BotTabSurface /> views", () => {
     expect(
       screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
     ).toBe("post-1");
+  });
+});
+
+describe("<BotTabSurface /> a check-in's turn from Activity", () => {
+  it("returns to Messages with the turn open in the rail, in place of the thread that was open, and nothing to go back to", async () => {
+    const user = userEvent.setup();
+    useBotOpenThreadStore.getState().setRail(BOT_ID, {
+      kind: "thread",
+      anchorMessageId: "post-1",
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
+    render(surface());
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+
+    await user.click(screen.getByTestId("stub-activity-open-turn"));
+
+    expect(
+      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
+    ).toBe("true");
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-open-turn")).toBe("turn-checkin");
+    expect(channel.getAttribute("data-open-turn-back")).toBe("none");
+    expect(channel.getAttribute("data-open-thread")).toBe("none");
+  });
+
+  it("gives the channel the bot's trunk session", () => {
+    render(surface());
+
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-trunk-chat-id"),
+    ).toBe("trunk-1");
   });
 });
 

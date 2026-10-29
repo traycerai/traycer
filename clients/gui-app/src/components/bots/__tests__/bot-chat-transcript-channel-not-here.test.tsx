@@ -78,6 +78,11 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
 }));
+// No turn receipts here: the transcript asks for none from a host this
+// suite does not stand up.
+vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
+  useBotTurnLocateQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: () => null,
 }));
@@ -114,6 +119,8 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   answerQuestion: null,
   discussQuestion: null,
   failedRequest: () => null,
+  openTurn: null,
+  sessionChatId: null,
   intro: { botTitle: "Release Bot", directive: null },
 };
 
@@ -169,6 +176,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         surface={surface}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
         showConnecting
+        landOnMessageId={null}
       />
     </QueryClientProvider>
   );
@@ -334,6 +342,9 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       answerQuestion: null,
       discussQuestion: null,
       failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
+      originPost: { chatId: "conversation-app", messageId: "origin-post" },
     });
 
     expect(screen.queryByRole("status")).toBeNull();
