@@ -484,7 +484,8 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel: stage === null ? null : stagedLabel(stage, stagedFacts),
+      stagedLabel:
+        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -720,7 +721,11 @@ export function restingVerb(
   return null;
 }
 
-function stagedLabel(stage: StagedSandbox, facts: NewRowFacts | null): string {
+function stagedLabel(
+  stage: StagedSandbox,
+  facts: NewRowFacts | null,
+  hosts: readonly HostScopeOption[],
+): string {
   const { target } = stage;
   if (target.kind === "existing") {
     // Its wake is ticked once the line is past it: the sandbox is awake now.
@@ -731,7 +736,13 @@ function stagedLabel(stage: StagedSandbox, facts: NewRowFacts | null): string {
     ) {
       return awakePickLabel(target.name);
     }
-    return target.verb === "resume"
+    // The row says what the sandbox is now. A draft's returned sandbox keeps
+    // the verb its give-back knew; only an unlisted one goes by it.
+    const row = hosts.find((host) => host.hostId === target.hostId)?.sandbox;
+    const verb =
+      row === undefined || row === null ? target.verb : restingVerb(row.state);
+    if (verb === null) return awakePickLabel(target.name);
+    return verb === "resume"
       ? suspendedPickLabel(target.name)
       : stoppedPickLabel(target.name);
   }
