@@ -99,11 +99,14 @@ function useReturnedSandboxStage(
     if (surfaceKey === null) return;
     return () => {
       // Runs before the next shown draft installs its own. A stage the
-      // person picked has already superseded this draft's, so never matches.
+      // person picked has already superseded this draft's, so never matches,
+      // and one a send or create has taken up is left to it.
       const live = read();
+      const stage = readStagedSandbox(surfaceKey);
       if (
         live !== null &&
-        stageIsReturnedSandbox(readStagedSandbox(surfaceKey), live)
+        stage?.phase === "staged" &&
+        stageIsReturnedSandbox(stage, live)
       )
         useStagedSandboxStore.getState().clear(surfaceKey);
     };

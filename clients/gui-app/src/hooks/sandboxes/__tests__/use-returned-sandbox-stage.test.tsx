@@ -168,6 +168,36 @@ describe("a restored stage leaves with its draft", () => {
   });
 });
 
+describe("a restored stage a send has taken up", () => {
+  it.each(["creating", "handoff"] as const)(
+    "stays on the surface when the composer closes in %s",
+    (phase) => {
+      act(() => {
+        const drafts = useNewConversationModalStore.getState();
+        drafts.setContent(EPIC_ID, MESSAGE);
+        drafts.setReturnedSandbox(EPIC_ID, RETURNED);
+      });
+      const composer = renderHook(() =>
+        useNewConversationReturnedSandbox(EPIC_ID, null),
+      );
+      act(() => {
+        const staged = useStagedSandboxStore.getState();
+        staged.begin(SURFACE, false, Date.now(), true);
+        if (phase === "handoff") staged.report(SURFACE, { phase: "handoff" });
+      });
+      expect(readStagedSandbox(SURFACE)?.phase).toBe(phase);
+
+      composer.unmount();
+
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase,
+        target: RETURNED.target,
+      });
+      expect(returnedOnDraft()).toEqual(RETURNED);
+    },
+  );
+});
+
 describe("useLandingReturnedSandbox", () => {
   const WINDOW_SURFACE = "landing:window-test";
 
