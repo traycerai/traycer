@@ -188,7 +188,7 @@ describe("providerRailStateWord", () => {
     ).toBe("not checked");
   });
 
-  it("stays null, never 'not checked', while the probe is still running - P1-b's 'checking' reads authPending itself", () => {
+  it("stays null, never 'not checked', while the probe is still running - a surface that wants 'checking' reads authPending itself", () => {
     expect(
       providerRailStateWord(
         state({

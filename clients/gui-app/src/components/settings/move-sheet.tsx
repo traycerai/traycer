@@ -105,7 +105,7 @@ function MoveSheetBody(props: {
   const { target } = props;
   // Read only while the sheet is open: the same reads the Environment
   // dropdown makes, which the app-wide mount must not hold open otherwise.
-  const runningPersonal = useHostsRunningPersonal();
+  const runningPersonal = useHostsRunningPersonal(true);
   const client = useHostClientForHostId(target.hostId);
   const supported = useHostMethodSupport(
     target.hostId,

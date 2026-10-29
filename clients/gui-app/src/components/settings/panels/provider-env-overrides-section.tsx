@@ -180,7 +180,7 @@ export function ProviderEnvOverridesSection({
   // cloud read answers, while this computer's own status can still be
   // unresolved and held out of `hosts` a moment longer - presenting any of
   // that as an exact "on N hosts" would misstate the reach the save has.
-  const hostsRunningPersonal = useHostsRunningPersonal();
+  const hostsRunningPersonal = useHostsRunningPersonal(!local);
   const applyingHostsCount =
     !local &&
     hostsRunningPersonal.state === "ready" &&

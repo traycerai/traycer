@@ -147,7 +147,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   // Complete once a second computer runs Personal: the computers Personal
   // reaches, not the account's host list, which leaves out a computer with
   // remote access off.
-  const running = useHostsRunningPersonal();
+  const running = useHostsRunningPersonal(true);
   const user = useAuthUser().data ?? null;
   const staged = useStagedSandboxInThisWindow();
   return {

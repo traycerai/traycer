@@ -44,15 +44,22 @@ const hostsRunningPersonalMock = vi.hoisted(
     current: { hosts: [], state: "ready" },
   }),
 );
+/** Records whether the section asked for the read at all, per call. */
+const useHostsRunningPersonalSpy = vi.hoisted(() =>
+  vi.fn<(enabled: boolean) => void>(),
+);
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({
-    useHostsRunningPersonal: () => ({
-      ...hostsRunningPersonalMock.current,
-      collisions: [],
-      retry: () => {},
-      reread: () => {},
-    }),
+    useHostsRunningPersonal: (enabled: boolean) => {
+      useHostsRunningPersonalSpy(enabled);
+      return {
+        ...hostsRunningPersonalMock.current,
+        collisions: [],
+        retry: () => {},
+        reread: () => {},
+      };
+    },
   }),
 );
 
@@ -1153,6 +1160,23 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           expect(screen.queryByText(/Applying on/)).toBeNull();
         },
       );
+    });
+
+    it("issues no host-list read on a Local row, which never shows a host count", async () => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "local", hostId: "host-a", hostName: "dev-box" },
+      });
+      renderProviderEnvTab("cursor", null, []);
+      await screen.findByRole("button", { name: "Add a variable" });
+
+      expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(false);
+    });
+
+    it("control: a configuration row (not Local) does ask for the read", async () => {
+      renderProviderEnvTab("cursor", null, []);
+      await screen.findByRole("button", { name: "Add a variable" });
+
+      expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(true);
     });
   });
 });

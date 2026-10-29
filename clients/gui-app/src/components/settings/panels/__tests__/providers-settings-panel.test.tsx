@@ -850,7 +850,6 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 // with `useQueryClient()`.
 vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
   useSecretClaimedNames: () => new Map<string, string>(),
-  useSecretNames: () => new Set<string>(),
 }));
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
