@@ -157,4 +157,43 @@ describe("providerRailStateWord", () => {
       ),
     ).toBeNull();
   });
+
+  it("says not checked for a provider with a terminal login whose settled check answered neither way (NEW-154-10)", () => {
+    expect(
+      providerRailStateWord(
+        state({
+          profiles: [profile("ambient", "unavailable")],
+          auth: { ...SIGNED_IN, status: "unavailable" },
+        }),
+      ),
+    ).toBe("not checked");
+    expect(
+      providerRailStateWord(
+        state({
+          profiles: [profile("ambient", "unknown")],
+          auth: { ...SIGNED_IN, status: "unknown" },
+        }),
+      ),
+    ).toBe("not checked");
+  });
+
+  it("stays null, never 'not checked', while the probe is still running - P1-b's 'checking' reads authPending itself", () => {
+    expect(
+      providerRailStateWord(
+        state({
+          profiles: [profile("ambient", "unavailable")],
+          auth: { ...SIGNED_IN, status: "unavailable" },
+          authPending: true,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("control: a provider with no terminal login to check says nothing, never 'not checked'", () => {
+    expect(
+      providerRailStateWord(
+        state({ auth: { ...SIGNED_IN, status: "unavailable" } }),
+      ),
+    ).toBeNull();
+  });
 });

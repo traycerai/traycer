@@ -157,7 +157,7 @@ function renderSection(input: {
 }
 
 describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
-  it("states the variables are used to set Cursor up, not when it runs", () => {
+  it("states the variables are used to set Cursor's tools up, not its conversations (NEW-154-15)", () => {
     // Cursor is the production carrier of this scope, but the copy must be
     // driven by the descriptor — not by providerId === "cursor".
     renderSection({
@@ -167,10 +167,10 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
 
     expect(
       screen.getByText(
-        "Used when Traycer sets Cursor up, not when Cursor runs.",
+        "Set for Cursor when Traycer sets up its tools, such as MCP servers, on every computer and sandbox running Personal. Cursor's conversations don't get them. Unset removes a variable Cursor would otherwise get from the shell.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/each time it starts/)).toBeNull();
+    expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
   it("uses the native-config-only copy for any providerId when the descriptor says so", () => {
@@ -180,9 +180,11 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     });
 
     expect(
-      screen.getByText("Used when Traycer sets Codex up, not when Codex runs."),
+      screen.getByText(
+        "Set for Codex when Traycer sets up its tools, such as MCP servers, on every computer and sandbox running Personal. Codex's conversations don't get them. Unset removes a variable Codex would otherwise get from the shell.",
+      ),
     ).toBeTruthy();
-    expect(screen.queryByText(/each time it starts/)).toBeNull();
+    expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
   it("says where Personal's variables are set for the default harness-and-native-config scope", () => {
@@ -1016,6 +1018,41 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           providerId: "codex",
           key: "ENV_R2_OTHER",
         });
+      });
+    });
+
+    describe("a saved variable that shares a Personal secret's own name without being claimed (NEW-154-11)", () => {
+      const SHADOW_KEY = "ENV_R2_S3_CLAIM";
+      const unrelatedSecretNamedTheSame: EnvironmentSecretV12 = {
+        secretId: "sec-shadow",
+        name: SHADOW_KEY,
+        kind: "api_key",
+        protocol: null,
+        destinations: [],
+        mode: "exposed",
+        state: "live",
+        currentVersionId: "ver-shadow",
+        revoked: false,
+        updatedAt: 1,
+        variables: [],
+        providerVariables: [],
+      };
+
+      it("notes that the provider gets this value instead of the secret, with a link to Secrets", async () => {
+        renderClaudeEnvTab(
+          { localOverrides: [], secrets: [unrelatedSecretNamedTheSame] },
+          [{ key: SHADOW_KEY, value: "r2-override" }],
+        );
+
+        const note = await screen.findByTestId("env-row-note");
+        expect(note.textContent).toBe(
+          `Claude Code gets this value instead of the secret ${SHADOW_KEY} · Secrets`,
+        );
+        expect(screen.queryByTestId("env-claimed-row")).toBeNull();
+        expect(screen.getByLabelText(`Value for ${SHADOW_KEY}`)).toBeTruthy();
+
+        fireEvent.click(within(note).getByRole("button", { name: "Secrets" }));
+        expect(navigation.toSection).toHaveBeenCalledWith("secrets");
       });
     });
   });

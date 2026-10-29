@@ -330,6 +330,13 @@ export function EnvOverrideEditor(props: {
   readonly keyRefusal: KeyRefusalFor;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
+  /**
+   * The hosts a SET save propagates to, for the pending row's own label
+   * ("Applying on `<n>` hosts…"); `null` for a save that reaches only this
+   * computer (a Local row, or the Shell host-process caller), which keeps
+   * the plain Adding/Saving/Removing text instead.
+   */
+  readonly applyingHostsCount?: number | null;
   /** Resolves after the write and its post-write overrides read complete. */
   readonly onCommit: (
     oldKey: string,
@@ -400,9 +407,17 @@ export function EnvOverrideEditor(props: {
   };
   let pendingLabel: string | null = null;
   if (pending !== null) {
-    let action = pending.oldKey === "" ? "Adding" : "Saving";
-    if (pending.action === "remove") action = "Removing";
-    pendingLabel = `${pending.key} · ${action}`;
+    const hostCount = props.applyingHostsCount ?? null;
+    if (pending.action === "put" && hostCount !== null) {
+      pendingLabel =
+        hostCount === 1
+          ? "Applying on 1 host…"
+          : `Applying on ${hostCount} hosts…`;
+    } else {
+      let action = pending.oldKey === "" ? "Adding" : "Saving";
+      if (pending.action === "remove") action = "Removing";
+      pendingLabel = `${pending.key} · ${action}`;
+    }
   }
 
   return (

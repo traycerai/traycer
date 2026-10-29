@@ -850,6 +850,7 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 // with `useQueryClient()`.
 vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
   useSecretClaimedNames: () => new Map<string, string>(),
+  useSecretNames: () => new Set<string>(),
 }));
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
@@ -3242,6 +3243,59 @@ describe("<ProvidersSettingsPanel />", () => {
       );
       expect(container2.querySelector("[inert]")).toBeNull();
     });
+
+    it("names the reason at the top of the greyed tabs (NEW-154-12)", () => {
+      singleProvider({ enabled: false });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(
+        screen.getByText(
+          "Traycer is off. Turn it on to add a key or change its settings.",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("control: names no reason once the provider is on", () => {
+      singleProvider({ enabled: true });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
+    });
+  });
+
+  it("describes Cursor as its coding agent, signed in with its own API key (NEW-154-15)", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "Cursor's coding agent, signed in with your Cursor API key.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/SDK-driven agents/)).toBeNull();
   });
 
   it("renders capability-driven tabs and hides unsupported ones", () => {
@@ -4314,6 +4368,11 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   describe("the own-login row on a Local pick", () => {
+    // Both sources of the reconciled verdict (`isProviderAmbientSignedOut` /
+    // `isProviderAmbientAuthenticated`) are driven from the SAME status here,
+    // as a real `providers.list` row keeps them: the top-level summary and
+    // the ambient profile row answer together, never one lagging the other
+    // in a fixture that only varies one of the two (NEW-154-10).
     function renderOwnLogin(
       authStatus: ProviderProfile["auth"]["status"],
     ): HTMLElement {
@@ -4324,35 +4383,45 @@ describe("<ProvidersSettingsPanel />", () => {
           hostName: "windows-test-machine",
         },
       });
+      const auth: ProviderAuth = {
+        status: authStatus,
+        badgeText: null,
+        label: null,
+        detail: null,
+      };
       providerMocks.listResult.data = {
         providers: [
           {
-            ...providerState({
-              providerId: "claude-code",
-              selected: { kind: "bundled" },
-              candidates: [
-                {
-                  kind: "bundled",
-                  path: "/opt/traycer/bin/claude",
-                  version: "1.0.0",
-                  available: true,
-                  versionPending: false,
-                },
-              ],
-              envOverrides: [],
-              profiles: [
-                profile({
-                  profileId: "ambient",
-                  kind: "ambient",
-                  label: "Terminal account",
-                  email: null,
-                  tier: null,
-                  authStatus,
-                  duplicateOfProfileId: null,
-                  ambientDriftNotice: null,
-                }),
-              ],
-            }),
+            ...providerStateWithAuth(
+              {
+                providerId: "claude-code",
+                selected: { kind: "bundled" },
+                candidates: [
+                  {
+                    kind: "bundled",
+                    path: "/opt/traycer/bin/claude",
+                    version: "1.0.0",
+                    available: true,
+                    versionPending: false,
+                  },
+                ],
+                envOverrides: [],
+              },
+              auth,
+              false,
+            ),
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: null,
+                tier: null,
+                authStatus,
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
             loginCapability: {
               oauthArgs: ["auth", "login"],
               token: null,
@@ -4370,9 +4439,11 @@ describe("<ProvidersSettingsPanel />", () => {
         </TooltipProvider>,
       );
       openProfilesTab();
-      const row = screen
-        .getByText("works on this computer only")
-        .closest('[data-slot="profile-summary-actions"]');
+      // The ambient profile is the only one here, so it is also the
+      // selected row: one match regardless of which branch it renders.
+      const row = document.querySelector(
+        '[data-slot="profile-summary-actions"]',
+      );
       if (!(row instanceof HTMLElement))
         throw new Error("Expected own-login row");
       return row;
@@ -4382,25 +4453,34 @@ describe("<ProvidersSettingsPanel />", () => {
       const row = renderOwnLogin("authenticated");
 
       expect(
+        within(row).getByText("works on this computer only"),
+      ).toBeDefined();
+      expect(
         within(row).getByText("Signed in", { selector: '[data-slot="badge"]' }),
       ).toBeDefined();
-      expect(within(row).queryByText(/couldn't be checked/)).toBeNull();
+      expect(within(row).queryByText(/isn't signed in/)).toBeNull();
+      expect(within(row).queryByText(/Couldn't check/)).toBeNull();
     });
 
-    it("badges an unauthenticated login Signed out", () => {
+    it("shows no own-login row for a definitively signed-out login, only Sign in (NEW-154-10)", () => {
       const row = renderOwnLogin("unauthenticated");
 
+      expect(within(row).getByText(/isn't signed in on/)).toBeDefined();
+      expect(within(row).queryByText("works on this computer only")).toBeNull();
       expect(
-        within(row).getByText("Signed out", {
+        within(row).queryByText("Signed out", {
           selector: '[data-slot="badge"]',
         }),
+      ).toBeNull();
+      expect(
+        within(row).getByRole("button", { name: "Sign in" }),
       ).toBeDefined();
     });
 
-    it("says an unavailable login couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
+    it("says a failed check couldn't be checked, never Unavailable, and Retry refreshes the providers (NEW-154-10)", () => {
       const row = renderOwnLogin("unavailable");
 
-      expect(within(row).getByText(/couldn't be checked/)).toBeDefined();
+      expect(within(row).getByText(/Couldn't check/)).toBeDefined();
       expect(within(row).queryByText(/Unavailable/i)).toBeNull();
       expect(
         within(row).queryByText("Signed in", {

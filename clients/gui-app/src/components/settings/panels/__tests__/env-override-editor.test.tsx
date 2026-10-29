@@ -33,6 +33,7 @@ interface EditorInput {
   readonly credentialRefusal: string | null;
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
+  readonly applyingHostsCount?: number | null;
 }
 
 function editorElement(input: EditorInput) {
@@ -50,6 +51,7 @@ function editorElement(input: EditorInput) {
       emptyLabel="No environment variables."
       onCommit={input.onCommit}
       onDelete={input.onDelete}
+      applyingHostsCount={input.applyingHostsCount}
     />
   );
 }
@@ -124,6 +126,89 @@ describe("EnvOverrideEditor", () => {
       screen.getByRole("button", { name: "Remove OPENAI_API_KEY" }),
     ).toBeTruthy();
     expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a pending SET save as Applying on <n> hosts…, not the row's name (NEW-154-9c)", async () => {
+    let finishRead: () => void = () => {
+      throw new Error("read has not started");
+    };
+    const completedWrite = new Promise<void>((resolve) => {
+      finishRead = resolve;
+    });
+    const onCommit = vi.fn<EnvCommit>(() => completedWrite);
+    const onDelete = vi.fn<EnvDelete>();
+    const input: EditorInput = {
+      overrides: [],
+      credentialRefusal: null,
+      onCommit,
+      onDelete,
+      applyingHostsCount: 3,
+    };
+
+    const view = renderEditor(input);
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "ANTHROPIC_BASE_URL" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "https://example.invalid" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    expect(screen.getByRole("status").textContent).toBe("Applying on 3 hosts…");
+    expect(screen.queryByText(/ANTHROPIC_BASE_URL · Adding/)).toBeNull();
+
+    await act(async () => {
+      view.rerender(
+        editorElement({
+          ...input,
+          overrides: [
+            { key: "ANTHROPIC_BASE_URL", value: "https://example.invalid" },
+          ],
+        }),
+      );
+      finishRead();
+      await completedWrite;
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("reads a single applying host without the plural (NEW-154-9c)", () => {
+    const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
+    renderEditor({
+      overrides: [],
+      credentialRefusal: null,
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      applyingHostsCount: 1,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "ANTHROPIC_BASE_URL" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    expect(screen.getByRole("status").textContent).toBe("Applying on 1 host…");
+  });
+
+  it("control: with no host count, a pending SET save keeps the plain Adding text", () => {
+    const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
+    renderEditor({
+      overrides: [],
+      credentialRefusal: null,
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      applyingHostsCount: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "ANTHROPIC_BASE_URL" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "ANTHROPIC_BASE_URL · Adding",
+    );
   });
 
   it("discards a staged environment variable without applying it", () => {

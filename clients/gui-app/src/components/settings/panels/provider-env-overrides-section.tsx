@@ -5,6 +5,7 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
@@ -16,18 +17,26 @@ import {
   usePersonalRowNotes,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
+import {
+  useSecretClaimedNames,
+  useSecretNames,
+} from "@/components/settings/personal/use-secret-claimed-names";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
 import { useHostBinding } from "@/lib/host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   EnvOverrideEditor,
   type KeyRefusal,
   type KeyRefusalFor,
 } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
-import { providerEnvSubtitle } from "./provider-env-subtitle";
+import {
+  providerEnvSubtitle,
+  providerNativeConfigOnlyEnvSubtitle,
+} from "./provider-env-subtitle";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
@@ -160,6 +169,16 @@ export function ProviderEnvOverridesSection({
     keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
   });
   const claimedBy = useSecretClaimedNames({ kind: "provider", providerId });
+  // Every Personal secret's own name, so a plain override of the same name -
+  // one this provider's secret binding does NOT claim - can be told apart
+  // from an unrelated variable: it shadows the secret rather than reads from
+  // it, and the row says so.
+  const secretNames = useSecretNames();
+  // The hosts this save propagates to, for the pending row's own label; a
+  // Local row's save reaches only this computer, so it keeps the plain
+  // Adding/Saving/Removing text instead.
+  const hostsRunningPersonal = useHostsRunningPersonal();
+  const applyingHostsCount = local ? null : hostsRunningPersonal.hosts.length;
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -172,6 +191,13 @@ export function ProviderEnvOverridesSection({
       />,
     );
   }
+  addShadowedSecretNotes({
+    rowNotes,
+    overrides,
+    claimedBy,
+    secretNames,
+    providerName,
+  });
 
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
@@ -229,6 +255,7 @@ export function ProviderEnvOverridesSection({
         namePlaceholder={envNamePlaceholder(providerId)}
         emptyLabel={`No variables for ${providerName}.`}
         staleRefusal={null}
+        applyingHostsCount={applyingHostsCount}
         renderDetails={(key) => (
           <AppliedProviderItemDetails
             kind="env_override"
@@ -263,16 +290,71 @@ function ProviderEnvSubtitleLine(props: {
       </p>
     );
   }
+  const configuration = props.local
+    ? { kind: "local" as const }
+    : { kind: "personal" as const };
   return props.nativeConfigOnly ? (
     <p className="text-ui-xs text-muted-foreground">
-      Used when Traycer sets {providerName} up, not when {providerName} runs.
+      {providerNativeConfigOnlyEnvSubtitle(providerName, configuration)}
     </p>
   ) : (
     <p className="text-ui-xs text-muted-foreground">
-      {providerEnvSubtitle(
-        providerName,
-        props.local ? { kind: "local" } : { kind: "personal" },
-      )}
+      {providerEnvSubtitle(providerName, configuration)}
     </p>
+  );
+}
+
+/**
+ * Adds a {@link ShadowedSecretNote} for every override that shares a
+ * Personal secret's own name without that secret claiming it, skipping a key
+ * that already carries a note (a host's own value, say) or that the secret
+ * does claim (`EnvClaimedRow` already says so).
+ */
+function addShadowedSecretNotes(props: {
+  readonly rowNotes: Map<string, ReactNode>;
+  readonly overrides: readonly {
+    readonly key: string;
+    readonly value: string | null;
+  }[];
+  readonly claimedBy: ReadonlyMap<string, string>;
+  readonly secretNames: ReadonlySet<string>;
+  readonly providerName: string;
+}): void {
+  const { rowNotes, claimedBy, secretNames, providerName } = props;
+  for (const entry of props.overrides) {
+    if (rowNotes.has(entry.key)) continue;
+    if (claimedBy.has(entry.key)) continue;
+    if (!secretNames.has(entry.key)) continue;
+    rowNotes.set(
+      entry.key,
+      <ShadowedSecretNote providerName={providerName} secretName={entry.key} />,
+    );
+  }
+}
+
+/**
+ * A row note for a plain override that happens to share a Personal secret's
+ * own name without being one of the names that secret is bound to: accepted
+ * as an ordinary variable, but worth saying so, since the person may expect
+ * the secret's value here instead.
+ */
+function ShadowedSecretNote(props: {
+  readonly providerName: string;
+  readonly secretName: string;
+}): ReactNode {
+  return (
+    <>
+      {props.providerName} gets this value instead of the secret{" "}
+      <span className="font-mono">{props.secretName}</span>
+      {" · "}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        onClick={() => navigateToSettingsSection("secrets")}
+      >
+        Secrets
+      </Button>
+    </>
   );
 }
