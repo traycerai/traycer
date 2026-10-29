@@ -414,20 +414,33 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     /**
      * This computer, whose `environment.status` answers whatever `answer`
      * holds: the move's own state as the host reports it over time.
+     *
+     * `reads` counts the answers the host has given each read. A mount shows
+     * no toast until both have answered once (`held`/`move` are `pending`
+     * until then), so the counts are what says a mount has got far enough for
+     * a claim about what it did NOT show to mean anything.
      */
     function computerWhoseStatusChanges(
       answer: () => EnvironmentStatusResponseV11,
-    ): void {
+    ): { readonly reads: () => { status: number; review: number } } {
+      let status = 0;
+      let review = 0;
       const { client } = buildEnvironmentClient({
         hostId: "old",
         handlers: {
-          "environment.review": () => ({
-            entries: [],
-            shownAt: null,
-            acknowledgedAt: null,
-            evidence: { version: null, at: null },
-          }),
-          "environment.status": () => answer(),
+          "environment.review": () => {
+            review += 1;
+            return {
+              entries: [],
+              shownAt: null,
+              acknowledgedAt: null,
+              evidence: { version: null, at: null },
+            };
+          },
+          "environment.status": () => {
+            status += 1;
+            return answer();
+          },
         },
       });
       recordNegotiatedHostManifest("old", {
@@ -435,6 +448,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
         "environment.status": { major: 1, minor: 1 },
       });
       thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+      return { reads: () => ({ status, review }) };
     }
 
     it("carries its own id, so the setup reminder never stands in its place", async () => {
@@ -498,7 +512,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       // they come back. The toast is still up, unanswered, so no reminder may
       // take its turn beside it.
       let answer = NOT_MOVED_STATUS;
-      computerWhoseStatusChanges(() => answer);
+      const host = computerWhoseStatusChanges(() => answer);
       const first = mountGuide();
       await waitFor(() =>
         expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
@@ -508,9 +522,20 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       answer = environmentStatusFixture({});
       mountGuide();
 
-      await waitFor(() =>
-        expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull(),
-      );
+      // The second mount publishes nothing of its own - the invitation is
+      // already up and the reminder is held back - so there is no toast to
+      // wait on. Wait for its own reads instead, and flush the render they
+      // cause: without that, the claim below could be made before a regressed
+      // reminder effect had run at all.
+      await waitFor(() => {
+        const { status, review } = host.reads();
+        expect(Math.min(status, review)).toBeGreaterThan(1);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull();
       expect(toastState).not.toHaveBeenCalledWith(
         "You're all set",
         expect.anything(),
