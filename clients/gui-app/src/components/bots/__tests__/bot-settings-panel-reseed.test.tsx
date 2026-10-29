@@ -8,6 +8,7 @@
  * the row's tuple and Apply has nothing left to apply.
  */
 import { StrictMode, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -176,17 +177,22 @@ const BOT: BotRecord = {
   appConversationChatId: null,
 };
 
+// The app's root query client, fresh for every test.
+let queryClient = new QueryClient();
+
 function panel(bot: BotRecord): ReactNode {
   return (
     <StrictMode>
-      <BotChannelSettingsPanel
-        bot={bot}
-        isMain={null}
-        personal={false}
-        channelId={null}
-        environmentBots={null}
-        onClose={vi.fn()}
-      />
+      <QueryClientProvider client={queryClient}>
+        <BotChannelSettingsPanel
+          bot={bot}
+          isMain={null}
+          personal={false}
+          channelId={null}
+          environmentBots={null}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
     </StrictMode>
   );
 }
@@ -207,6 +213,7 @@ function applyButton(): HTMLButtonElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  queryClient = new QueryClient();
   mocks.tabHostClient = buildTabHostClient();
   mocks.stores.length = 0;
   mocks.runSettingsClients.length = 0;
