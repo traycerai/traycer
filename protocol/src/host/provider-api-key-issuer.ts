@@ -1,9 +1,11 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderId } from "./provider-schemas";
 
 /**
- * Recognizable issuers. Acceptance never requires a target's own shape —
- * an unrecognized value, or a target absent here, both stay accepted — but
- * a target's own row is read to name its shape in the refusal.
+ * Recognizable issuers. A value accepted here is either of no recognizable
+ * shape, or of the target's own shape; a target absent from this table is
+ * refused the same as one present, if the value matches another issuer's
+ * shape — absence only drops the refusal's prefix guidance, never the
+ * refusal itself.
  */
 const API_KEY_ISSUERS = [
   // https://platform.claude.com/docs/en/manage-claude/authentication
