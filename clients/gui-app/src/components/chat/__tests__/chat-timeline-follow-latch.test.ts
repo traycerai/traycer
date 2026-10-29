@@ -3597,7 +3597,7 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
-  it("departs a following reader when a scrollbar press's own drag reports", () => {
+  it("keeps a following reader whose press never moved across an end pad that dropped and reopened", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
@@ -3621,13 +3621,63 @@ describe("useChatTimelineFollowLatch", () => {
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
     });
-    // The drag's own scroll lands, up and away from the end: this is the
-    // reader actually moving the view.
-    shim.setGeometry(node, { scrollTop: 800 });
+    // The end pad drops mid-press and the browser clamps the view down with
+    // it, unannounced, reported at the new strict bottom. The offset the
+    // press is measured from comes down with the end: an offset past it is
+    // one the view can no longer hold.
+    shim.setGeometry(node, { scrollHeight: 1400, scrollTop: 900 });
+    fireNativeScroll(node);
+    // The pad reopens: the end alone moves away, with no scroll report. The
+    // view now sits below the offset the press ARMED at, through no scroll of
+    // the reader's - which is what must not read as the press's own landing.
+    shim.setGeometry(node, { scrollHeight: 1500 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    node.dispatchEvent(new PointerEvent("pointerup"));
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("departs a following reader whose press stepped to an end only a maintain read saw", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    // An append moves the end away from the held press.
+    shim.setGeometry(node, { scrollHeight: 1800 });
+    result.current.followEndIfPermitted();
+    // The press drags to the new end, and its coalesced report has not
+    // arrived: a maintain trigger is what observes the view there. That read
+    // ends the step, as it does for a finger (`reconcileStrictBottom`).
+    shim.setGeometry(node, { scrollTop: 1300 });
+    result.current.followEndIfPermitted();
+    // The press drags back off the end, to the very offset it pressed at:
+    // measured from the step, this is the reader leaving the end.
+    shim.setGeometry(node, { scrollTop: 1000 });
     fireNativeScroll(node);
 
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
-    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
   it("departs a following reader whose scrollbar drag reports after growth the press alone held off", () => {
