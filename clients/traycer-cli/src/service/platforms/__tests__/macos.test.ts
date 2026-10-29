@@ -14,11 +14,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
-  SHUTDOWN_FORCE_EXIT_MS,
-  STOP_EXIT_GRACE_MARGIN_MS,
-} from "@traycer/protocol/host/lifecycle-constants";
-
-import {
   buildLaunchAgentPlist,
   classifyLaunchdPrintOutput,
   createMacosController,
@@ -27,7 +22,9 @@ import {
   type ProcessRunner,
 } from "../macos";
 import {
+  LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
   LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+  LAUNCHD_EXIT_TIMEOUT_SECONDS,
   LAUNCHD_THROTTLE_INTERVAL_SECONDS,
 } from "../../spawn-edge-bounds";
 import {
@@ -276,6 +273,19 @@ describe("macOS service lifecycle", () => {
     <integer>8192</integer>
   </dict>`);
     expect(plist).not.toContain("HardResourceLimits");
+  });
+
+  // Without the key launchd SIGKILLs the supervisor 5 s after a `bootout` or
+  // `kickstart -k`, mid-way through a host shutdown that takes 5 to 7 s,
+  // and the host child lives on as an orphan.
+  it("gives the job the host's whole shutdown budget before launchd kills it", () => {
+    const plist = buildLaunchAgentPlist({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: [] },
+    });
+
+    expect(plist).toContain(`<key>ExitTimeOut</key>
+  <integer>${LAUNCHD_EXIT_TIMEOUT_SECONDS}</integer>`);
   });
 
   it("binds adoption to the loaded SMAppService agent label", async () => {
@@ -721,6 +731,48 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // Both print probes (CLI + agent label) + bootout attempted;
     // bootstrap/kickstart never run.
     expect(calls.map((c) => c.args[0])).toEqual(["print", "print", "bootout"]);
+  });
+
+  // `bootstrap` over a job still draining its shutdown fails with
+  // `Bootstrap failed: 5: Input/output error`, and a bare `bootout` returns
+  // when launchd accepts the request, not when the job has exited.
+  it("waits for the old job to exit before it bootstraps over it, on the install and on the reload race", async () => {
+    const calls: Array<{
+      readonly args: readonly string[];
+      readonly timeoutMs: number | undefined;
+    }> = [];
+    let bootstrapAttempts = 0;
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({ args, timeoutMs: options.timeoutMs });
+      if (args[0] === "bootstrap") {
+        bootstrapAttempts += 1;
+        if (bootstrapAttempts === 1) {
+          throw buildLaunchctlError({
+            command,
+            cmdArgs: args,
+            stderr: "Bootstrap failed: 37: Service is already loaded\n",
+            stdout: "",
+            exitCode: 37,
+          });
+        }
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await controller.install({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: [] },
+      enableLinger: false,
+    });
+
+    const bootouts = calls.filter((c) => c.args[0] === "bootout");
+    expect(bootouts).toHaveLength(2);
+    for (const bootout of bootouts) {
+      expect(bootout.args[1]).toBe("--wait");
+      expect(bootout.timeoutMs).toBe(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
+    }
   });
 
   it("on bootstrap 'already loaded' races, reloads via bootout → bootstrap rather than kickstarting the cache", async () => {
@@ -1176,7 +1228,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           "--wait",
           `gui/${process.getuid?.() ?? 0}/${label.id}.agent`,
         ],
-        timeoutMs: SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS,
+        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       },
       {
@@ -1185,7 +1237,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           "--wait",
           `gui/${process.getuid?.() ?? 0}/${label.id}`,
         ],
-        timeoutMs: SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS,
+        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       },
     ]);
@@ -2690,10 +2742,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
         expect(recycleCall?.args).toEqual(["kickstart", "-k", cliOwnedTarget]);
         const timeoutMs = recycleCall?.options.timeoutMs;
-        // Independent floor, built only from symbols that exist on the
-        // unmodified code: 20s launchd ExitTimeOut ceiling + ThrottleInterval.
+        // Independent floor: the job's `ExitTimeOut` + ThrottleInterval.
         expect(timeoutMs).toBeGreaterThanOrEqual(
-          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+          (LAUNCHD_EXIT_TIMEOUT_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
+            1_000,
         );
         expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
       });
@@ -2710,7 +2762,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(recycleCall?.args).toEqual(["kickstart", "-k", cliOwnedTarget]);
         const timeoutMs = recycleCall?.options.timeoutMs;
         expect(timeoutMs).toBeGreaterThanOrEqual(
-          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+          (LAUNCHD_EXIT_TIMEOUT_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
+            1_000,
         );
         expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
       });
@@ -2779,7 +2832,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(recycleCall?.args).toEqual(["kickstart", "-k", agentTarget]);
         const timeoutMs = recycleCall?.options.timeoutMs;
         expect(timeoutMs).toBeGreaterThanOrEqual(
-          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+          (LAUNCHD_EXIT_TIMEOUT_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
+            1_000,
         );
         expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
       });
@@ -2796,7 +2850,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(recycleCall?.args).toEqual(["kickstart", "-k", agentTarget]);
         const timeoutMs = recycleCall?.options.timeoutMs;
         expect(timeoutMs).toBeGreaterThanOrEqual(
-          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+          (LAUNCHD_EXIT_TIMEOUT_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
+            1_000,
         );
         expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
       });

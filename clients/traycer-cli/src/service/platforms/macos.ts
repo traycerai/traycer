@@ -99,9 +99,11 @@ import { runAtStopTargetEdge } from "../stop-target";
 import { markRegistrationCommitted } from "../cli-invocation-record";
 import { atServiceInstallEdge, atServiceSpawnEdge } from "../spawn-edge";
 import {
+  LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
   LAUNCHCTL_CALL_TIMEOUT_MS,
   LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS,
   LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+  LAUNCHD_EXIT_TIMEOUT_SECONDS,
   LAUNCHD_THROTTLE_INTERVAL_SECONDS,
 } from "../spawn-edge-bounds";
 
@@ -442,7 +444,7 @@ async function takeoverDesktopRegistration(
     {
       env: undefined,
       cwd: undefined,
-      timeoutMs: STOP_EXIT_TIMEOUT_MS,
+      timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
       tolerateNonZeroExit: true,
     },
   );
@@ -1060,7 +1062,7 @@ async function unloadCliLabelJob(
   const bootout = await run("launchctl", ["bootout", "--wait", serviceTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: STOP_EXIT_TIMEOUT_MS,
+    timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   const postBootout = await verifyAgentBootedOut(serviceTarget, run);
@@ -1211,10 +1213,14 @@ async function installService(
   // race where another process re-bootstraps between our probe and our
   // bootstrap call.
   if (ownership.kind !== "not-loaded") {
-    await run("launchctl", ["bootout", serviceTarget], {
+    // `--wait`: a bare bootout returns when launchd ACCEPTS the request, and
+    // a job still draining its shutdown makes the bootstrap below fail with
+    // `Bootstrap failed: 5: Input/output error`. The wait is bounded by the
+    // job's `ExitTimeOut`.
+    await run("launchctl", ["bootout", "--wait", serviceTarget], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+      timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     }).catch((cause: unknown) => {
       // An authority loss - a stop's confirmed host replaced included - is
@@ -1349,12 +1355,17 @@ async function reloadRegisteredService(
     });
   }
   try {
-    await options.run("launchctl", ["bootout", options.serviceTarget], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
-      tolerateNonZeroExit: false,
-    });
+    // `--wait` for the reason the install's own bootout carries it.
+    await options.run(
+      "launchctl",
+      ["bootout", "--wait", options.serviceTarget],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+        tolerateNonZeroExit: false,
+      },
+    );
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     // Race may have cleared the job between the failed bootstrap and
@@ -1733,11 +1744,11 @@ async function uninstallService(
       await run("launchctl", ["bootout", "--wait", target], {
         env: undefined,
         cwd: undefined,
-        // `--wait` is launchd's authoritative completion barrier but may
-        // block indefinitely. Keep the subprocess bound above the host's
-        // own forced shutdown watchdog so normal graceful shutdown has
-        // time to finish.
-        timeoutMs: STOP_EXIT_TIMEOUT_MS,
+        // `--wait` is launchd's authoritative completion barrier and returns
+        // once the job has exited, at worst after its whole `ExitTimeOut`.
+        // Keep the subprocess bound above that so a host that takes its full
+        // forced shutdown watchdog is waited on, not abandoned.
+        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       });
     } catch (cause) {
@@ -2455,7 +2466,7 @@ async function retireCompetingRegistration(
       await run("launchctl", ["bootout", "--wait", serviceTarget], {
         env: undefined,
         cwd: undefined,
-        timeoutMs: STOP_EXIT_TIMEOUT_MS,
+        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       });
       bootedOut = true;
@@ -2998,6 +3009,8 @@ ${programArgsXml}
   </dict>
   <key>ThrottleInterval</key>
   <integer>${LAUNCHD_THROTTLE_INTERVAL_SECONDS}</integer>
+  <key>ExitTimeOut</key>
+  <integer>${LAUNCHD_EXIT_TIMEOUT_SECONDS}</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>SoftResourceLimits</key>
