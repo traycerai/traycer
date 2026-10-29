@@ -219,13 +219,14 @@ export function useHostOverviewUpdates(input: {
   // the query's latest answer below.
   //
   // `installDiscovered` is STICKY: `cli-unavailable` and `externally-managed`
-  // are facts about how this host is set up, not about this attempt, and
-  // neither is knowable before we try. Once either is seen the whole region
-  // retires and says so, because for an externally-managed host there is no
-  // fallback control left to point at: it skips the update reconciler
-  // outright, so neither this list nor the auto-update switch reaches it.
-  // Leaving Check-now behind would keep offering the one action we have just
-  // been told can never lead anywhere.
+  // are facts about how this host is set up, not about this attempt. A host
+  // on `host.status@1.10` states the second up front and the page passes it
+  // in as `installDegrade`; an older host only reveals it here, by refusing.
+  // Once either is seen the whole region retires and says so, because for an
+  // externally-managed host there is no fallback control left to point at: it
+  // skips the update reconciler outright, so neither this list nor the
+  // auto-update switch reaches it. Leaving Check-now behind would keep
+  // offering the one action we have just been told can never lead anywhere.
   //
   // Sticky is not PERMANENT, though — `HostScopeGate` keeps this subtree
   // mounted across disconnect/reconnect, so a latch that nothing refutes

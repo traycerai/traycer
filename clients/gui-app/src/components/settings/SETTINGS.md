@@ -6693,11 +6693,16 @@ computer`. A team's host draws no card. The move sheet names the moving computer
       leaving the auto-update policy as the only update control, plus one line
       saying why - without the methods, without a
       CLI (`cli-unavailable`, from the check side or the install side), or on an
-      `externally-managed` refusal. The last two are knowable only from an
-      ATTEMPT, so they are discovered rather than negotiated, and once seen they
-      are STICKY for the mounting: both are facts about how the host is set up,
-      not about that attempt, and leaving Check-now behind would keep offering
-      the one action the host has just said can never lead anywhere.
+      externally managed host. A host on `host.status@1.10` says the last one
+      up front (`updatesExternallyManaged: true`), and the page retires the
+      region from that read, before any catalog is fetched: the check waits
+      for the first status answer so no version list flashes and then
+      disappears. An older host only reveals it by refusing an install
+      (`externally-managed`), as a missing CLI is revealed by either side's
+      attempt; those two are discovered rather than negotiated, and once seen
+      they are STICKY for the mounting: both are facts about how the host is
+      set up, not about that attempt, and leaving Check-now behind would keep
+      offering the one action the host has just said can never lead anywhere.
       `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
       going wrong with the mechanism intact - so the controls stay and an inline
       `host-overview-update-attempt-failed` notice clears on the next try. A
