@@ -28,7 +28,6 @@ import {
 import {
   BotMessageComposer,
   type BotComposerEdit,
-  type BotComposerSeed,
 } from "@/components/bots/bot-message-composer";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
@@ -63,6 +62,7 @@ import {
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
@@ -89,22 +89,6 @@ function subscribeWindowForeground(listener: () => void): () => void {
     window.removeEventListener("focus", listener);
     window.removeEventListener("blur", listener);
   };
-}
-
-/** A member's overtaken answer, taken to the thread of the question it answered. */
-interface QuestionDiscussion {
-  readonly anchorMessageId: string;
-  readonly seed: BotComposerSeed;
-}
-
-/** The draft the open thread's box takes: the discussion's, where it is that thread. */
-function discussionDraft(
-  discussion: QuestionDiscussion | null,
-  openThreadPostId: string | null,
-): BotComposerSeed | null {
-  return discussion !== null && discussion.anchorMessageId === openThreadPostId
-    ? discussion.seed
-    : null;
 }
 
 /**
@@ -323,21 +307,19 @@ export function BotChannelView(props: {
     [onOpenThread],
   );
   // A member whose answer someone else's overtook takes it to the question's
-  // thread: the thread opens with their draft in its box, unsent.
-  const [discussion, setDiscussion] = useState<QuestionDiscussion | null>(null);
-  // A host without the thread list has no thread to discuss in.
+  // thread: the thread opens with their draft in its box, unsent, kept under
+  // the bot until it is sent. A host without the thread list has no thread
+  // to discuss in.
+  const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
   const discussQuestion = useMemo(
     () =>
       threadListSupported
         ? (questionMessageId: string, draft: string) => {
-            setDiscussion({
-              anchorMessageId: questionMessageId,
-              seed: { text: draft },
-            });
+            seedThreadBox(botId, questionMessageId, draft);
             openAnnouncementThread(questionMessageId, false);
           }
         : null,
-    [openAnnouncementThread, threadListSupported],
+    [botId, openAnnouncementThread, seedThreadBox, threadListSupported],
   );
 
   // A post whose answer lands in a thread (reply mode `threaded`) opens that
@@ -559,6 +541,7 @@ export function BotChannelView(props: {
             edit={edit}
             onEditEnd={endEdit}
             seed={null}
+            keptDraft={null}
             onSent={openPostedThread}
           />
         </section>
@@ -580,7 +563,6 @@ export function BotChannelView(props: {
               conversationId={channel.conversationId}
               originMessageId={openThreadPostId}
               sent={open?.sent ?? null}
-              draft={discussionDraft(discussion, openThreadPostId)}
               thread={panelThread}
               tasks={tasks}
               anchorSenderLabel={anchorSenderLabel}

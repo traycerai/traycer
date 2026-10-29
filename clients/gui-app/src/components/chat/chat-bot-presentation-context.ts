@@ -52,13 +52,19 @@ export interface ChatBotFailedRequest {
  * (decision 121) can do on this surface, and how it names who answered.
  */
 export interface ChatBotQuestions {
+  /** The bot whose card it is: the person's unsent answers are kept under it. */
+  readonly botId: string;
+  /** Who is viewing, so their own answer landing reads as theirs; `null` when nobody is signed in. */
+  readonly viewerUserId: string | null;
   /** A member's name, as the surface shows it, for who answered. */
   readonly memberName: (userId: string) => string;
   /**
    * Sends the person's answer or Skip to the question on the row
-   * `questionMessageId`: resolves once the host takes it, and rejects when it
-   * does not, the card keeping the person's draft. `null` where nothing can
-   * send it, and the card offers no actions.
+   * `questionMessageId`: resolves once the host takes it - written, or
+   * queued for a bot's host that is away - and rejects when it does not.
+   * Either way the card holds the answer until the question shows settled,
+   * or, on a rejection, gives it back to edit. `null` where nothing can send
+   * it, and the card offers no actions.
    */
   readonly answer:
     | ((questionMessageId: string, answer: QuestionCardAnswer) => Promise<void>)

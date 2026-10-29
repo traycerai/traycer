@@ -1,4 +1,10 @@
-import { Fragment, useContext, type ReactElement, type ReactNode } from "react";
+import {
+  Fragment,
+  useContext,
+  useEffect,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { MessageSquareText, Pencil, RotateCcw } from "lucide-react";
 import {
   isConversationRequestMessageId,
@@ -33,7 +39,16 @@ import {
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import {
+  answerDraftKey,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
+import {
+  EMPTY_QUESTION_CARD_DRAFT,
+  questionCardView,
+  type QuestionCardSettlement,
+} from "./question-card-view";
 import { TextSegment } from "./segments/text-segment";
 
 /**
@@ -234,7 +249,12 @@ function BotRowBody(props: {
 
 /**
  * The card of the questions a bot's row asks, each settlement named as this
- * surface names its members; without actions until the row is written.
+ * surface names its members, and the person's own answers kept under the bot
+ * (`useBotDraftsStore`) so they outlive the view; without actions until the
+ * row is written. A sent answer that the host does not take is given back to
+ * edit; one whose question shows settled, or a draft with nothing of the
+ * person's left in it, is spent. Discuss takes the draft off the card into
+ * the discussion's box.
  */
 function BotQuestionCard(props: {
   /** The row, by its message id; `null` before it is written. */
@@ -244,45 +264,93 @@ function BotQuestionCard(props: {
   readonly questions: ChatBotQuestions;
 }): ReactElement {
   const { messageId, question, botTitle, questions } = props;
-  const { memberName, answer, discuss } = questions;
+  const { botId, viewerUserId, memberName, answer, discuss } = questions;
+  const drafts = useBotDraftsStore((state) => state.answers[botId]);
+  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
   const cardQuestions = question.questions.map(
     (item, index): QuestionCardQuestion => ({
       index,
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
-      settlement:
-        item.settlement === null
-          ? null
-          : {
-              answer: item.settlement.answer,
-              skipped: item.settlement.skipped,
-              by:
-                item.settlement.by.kind === "bot"
-                  ? { kind: "asker" }
-                  : {
-                      kind: "person",
-                      name: memberName(item.settlement.by.userId),
-                    },
-            },
+      settlement: cardSettlement(item.settlement, memberName, viewerUserId),
+      draft:
+        messageId === null
+          ? EMPTY_QUESTION_CARD_DRAFT
+          : (drafts?.[answerDraftKey(messageId, index)] ??
+            EMPTY_QUESTION_CARD_DRAFT),
     }),
   );
+  const spent =
+    messageId === null
+      ? ""
+      : cardQuestions
+          .filter(
+            (item) =>
+              drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
+              questionCardView(item.settlement, item.draft).kind === "settled",
+          )
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (spent.length === 0) return;
+    for (const key of spent.split("\n")) setAnswer(botId, key, null);
+  }, [botId, setAnswer, spent]);
+  const keyOf = (index: number): string | null =>
+    messageId === null ? null : answerDraftKey(messageId, index);
   return (
     <QuestionCard
       asker={botTitle}
       questions={cardQuestions}
-      onAnswer={
-        messageId === null || answer === null
+      onDraft={
+        answer === null
           ? null
-          : (given) => answer(messageId, given)
+          : (index, draft) => {
+              const key = keyOf(index);
+              if (key !== null) setAnswer(botId, key, draft);
+            }
       }
+      onAnswer={(given) => {
+        const key = keyOf(given.questionIndex);
+        if (messageId === null || key === null || answer === null) return;
+        answer(messageId, given).catch(() => {
+          const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+          if (latest !== undefined) {
+            setAnswer(botId, key, { ...latest, sent: null });
+          }
+        });
+      }}
       onDiscuss={
         messageId === null || discuss === null
           ? null
-          : (draft) => discuss(messageId, draft)
+          : (index, draft) => {
+              discuss(messageId, draft);
+              setAnswer(botId, answerDraftKey(messageId, index), null);
+            }
       }
     />
   );
+}
+
+/** A question's settlement as the card names it. */
+function cardSettlement(
+  settlement: BotQuestion["questions"][number]["settlement"],
+  memberName: (userId: string) => string,
+  viewerUserId: string | null,
+): QuestionCardSettlement | null {
+  if (settlement === null) return null;
+  return {
+    answer: settlement.answer,
+    skipped: settlement.skipped,
+    by:
+      settlement.by.kind === "bot"
+        ? { kind: "asker" }
+        : {
+            kind: "person",
+            name: memberName(settlement.by.userId),
+            viewer: settlement.by.userId === viewerUserId,
+          },
+  };
 }
 
 /**

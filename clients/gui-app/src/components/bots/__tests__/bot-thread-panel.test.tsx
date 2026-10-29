@@ -63,6 +63,7 @@ import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 type ThreadTranscriptState = Pick<
@@ -412,7 +413,6 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               conversationId={CONVERSATION_ID}
               originMessageId={originOf(thread)}
               sent={panelSent}
-              draft={null}
               thread={thread}
               tasks={panelTasks}
               anchorSenderLabel={(senderUserId) =>
@@ -461,6 +461,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   resetBotFailedRequestSupport();
   mocks.handle = null;

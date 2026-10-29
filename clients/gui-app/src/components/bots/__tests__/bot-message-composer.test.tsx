@@ -26,14 +26,31 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn<
     (variables: BotConversationSendRequest, callbacks: SendCallbacks) => void
   >(),
+  /** Each send's callbacks, to the send settling once the box has taken its outcome. */
+  settled: new WeakMap<SendCallbacks, Promise<void>>(),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
+  // The box settles its send through the promise; the case settles it
+  // through the callbacks the promise is built on.
   useBotConversationSendMutation: () => ({
-    mutate: mocks.send,
+    mutateAsync: (variables: BotConversationSendRequest) => {
+      const { promise, resolve, reject } =
+        Promise.withResolvers<BotConversationSendResponse>();
+      const callbacks: SendCallbacks = { onSuccess: resolve, onError: reject };
+      mocks.settled.set(
+        callbacks,
+        promise.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      mocks.send(variables, callbacks);
+      return promise;
+    },
     isPending: false,
   }),
 }));
@@ -75,6 +92,7 @@ function composer(edit: BotComposerEdit | null): ReactNode {
       edit={edit}
       onEditEnd={onEditEnd}
       seed={null}
+      keptDraft={null}
       onSent={onSent}
     />
   );
@@ -91,6 +109,17 @@ function lastSend(): SendCallbacks {
   const call = mocks.send.mock.calls.at(-1);
   if (call === undefined) throw new Error("the box sent nothing");
   return call[1];
+}
+
+/** Settles a send of the box as the host's answer does, and waits for the box to take it. */
+async function settleSend(
+  callbacks: SendCallbacks,
+  outcome: (callbacks: SendCallbacks) => void,
+): Promise<void> {
+  await act(async () => {
+    outcome(callbacks);
+    await mocks.settled.get(callbacks);
+  });
 }
 
 beforeEach(() => {
@@ -112,9 +141,9 @@ describe("<BotMessageComposer /> reporting a send", () => {
     render(composer(null));
     await user.type(box(), "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
-    act(() => {
-      lastSend().onSuccess?.({ ...RESPONSE, delivery: "queued" });
-    });
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.({ ...RESPONSE, delivery: "queued" }),
+    );
   }
 
   it("says a queued send was saved when its owner does not say it", async () => {
@@ -139,9 +168,9 @@ describe("<BotMessageComposer /> reporting a send", () => {
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     expect(onSent).not.toHaveBeenCalled();
 
-    act(() => {
-      lastSend().onSuccess?.(RESPONSE);
-    });
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
 
     expect(onSent).toHaveBeenCalledTimes(1);
     expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
@@ -154,9 +183,9 @@ describe("<BotMessageComposer /> reporting a send", () => {
     await user.type(box(), "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
-    act(() => {
-      lastSend().onError?.(new Error("host refused the post"));
-    });
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onError?.(new Error("host refused the post")),
+    );
 
     expect(onSent).not.toHaveBeenCalled();
     expect(box().value).toBe("Is CI green?");
@@ -167,9 +196,9 @@ describe("<BotMessageComposer /> reporting a send", () => {
     render(composer({ requestId: "request-failed", text: "Is CI green?" }));
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
-    act(() => {
-      lastSend().onSuccess?.(RESPONSE);
-    });
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
 
     expect(onEditEnd).toHaveBeenCalledTimes(1);
     expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
@@ -186,9 +215,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
       composer({ requestId: "request-second", text: "Is the nightly green?" }),
     );
 
-    act(() => {
-      callbacks.onSuccess?.(RESPONSE);
-    });
+    await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
     expect(onSent).not.toHaveBeenCalled();
     expect(onEditEnd).not.toHaveBeenCalled();

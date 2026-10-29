@@ -190,6 +190,7 @@ const activityStore = create<{ activity: BotActivity | null }>()(() => ({
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -441,6 +442,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   resetBotFailedRequestSupport();
   mocks.channelHandle = null;

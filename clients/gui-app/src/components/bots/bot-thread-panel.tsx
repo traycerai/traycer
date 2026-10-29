@@ -17,6 +17,7 @@ import {
   BotMessageComposer,
   type BotComposerEdit,
   type BotComposerSeed,
+  type BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
 import {
   useBotSendFailure,
@@ -39,11 +40,16 @@ import {
 } from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type { QuestionAnswerSend } from "@/components/bots/bot-chat-transcript";
-import type { ChatBotPresentation } from "@/components/chat/chat-bot-presentation-context";
+import type {
+  ChatBotPresentation,
+  ChatBotQuestions,
+} from "@/components/chat/chat-bot-presentation-context";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { cn } from "@/lib/utils";
 
@@ -104,8 +110,9 @@ export type BotThreadPanelThread =
  *
  * A question card in the thread answers in the thread. A member whose answer
  * someone else's overtook takes it to the discussion: the thread's box, with
- * their draft in it unsent (`draft`, for a question in the channel whose
- * thread this is).
+ * their draft in it unsent - a question's own thread for a question in the
+ * channel, this thread for one asked here. What the box holds is kept under
+ * the bot (`useBotDraftsStore`), so it outlives the panel, until it is sent.
  */
 export function BotThreadPanel(props: {
   readonly botId: string;
@@ -120,8 +127,6 @@ export function BotThreadPanel(props: {
   readonly originMessageId: string;
   /** That post as the person sent it, when its send opened the thread; `null` otherwise. */
   readonly sent: BotSentPost | null;
-  /** A draft to put in the thread's box, unsent; `null` for none. */
-  readonly draft: BotComposerSeed | null;
   readonly thread: BotThreadPanelThread;
   /** The bot's tasks: the panel lists the ones this thread set up. */
   readonly tasks: ReadonlyArray<BotTaskEntry>;
@@ -213,7 +218,6 @@ type ThreadPanelBodyProps = {
   readonly conversationId: string;
   readonly originMessageId: string;
   readonly sent: BotSentPost | null;
-  readonly draft: BotComposerSeed | null;
   readonly thread: BotThreadPanelThread;
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
@@ -264,23 +268,28 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
     onEdit: onEditPost,
     failure: sendFailure,
   });
+  const viewerUserId = useAuthStore((state) => state.profile?.userId ?? null);
+  const questions = useMemo<ChatBotQuestions>(
+    () => ({
+      botId,
+      viewerUserId,
+      memberName: anchorSenderLabel,
+      answer: null,
+      discuss: null,
+    }),
+    [anchorSenderLabel, botId, viewerUserId],
+  );
   const loadedPresentation = useMemo(
-    () => originPresentation(botTitle, anchorSenderLabel, failedRequest),
-    [anchorSenderLabel, botTitle, failedRequest],
+    () => originPresentation(botTitle, questions, failedRequest),
+    [botTitle, failedRequest, questions],
   );
   const unloadedPresentation = useMemo(
     () =>
-      originPresentation(
-        botTitle,
-        anchorSenderLabel,
-        (requestId, senderUserId) => {
-          const failed = failedRequest(requestId, senderUserId);
-          return failed === null
-            ? null
-            : { ...failed, retry: null, edit: null };
-        },
-      ),
-    [anchorSenderLabel, botTitle, failedRequest],
+      originPresentation(botTitle, questions, (requestId, senderUserId) => {
+        const failed = failedRequest(requestId, senderUserId);
+        return failed === null ? null : { ...failed, retry: null, edit: null };
+      }),
+    [botTitle, failedRequest, questions],
   );
   const anchor =
     props.thread.kind === "listed" ? props.thread.thread.anchor : null;
@@ -412,7 +421,7 @@ function useCollapsed(element: HTMLElement | null): boolean {
  */
 function originPresentation(
   botTitle: string,
-  memberName: (senderUserId: string | null) => string,
+  questions: ChatBotQuestions,
   failedRequest: ChatBotPresentation["failedRequest"],
 ): ChatBotPresentation {
   return {
@@ -424,7 +433,7 @@ function originPresentation(
     openAnnouncementThread: null,
     answerThreads: false,
     chooseOption: null,
-    questions: { memberName, answer: null, discuss: null },
+    questions,
     failedRequest,
   };
 }
@@ -450,17 +459,35 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // replacement under the post as it does in the thread.
   const [edit, setEdit] = useState<BotComposerEdit | null>(null);
   const endEdit = useCallback(() => setEdit(null), []);
-  // What the box is handed to hold unsent: the channel's draft for the
-  // thread, or one from a question card of the thread itself.
-  const [seed, setSeed] = useState<BotComposerSeed | null>(props.draft);
-  const [heldDraft, setHeldDraft] = useState(props.draft);
-  if (props.draft !== heldDraft) {
-    setHeldDraft(props.draft);
-    if (props.draft !== null) setSeed(props.draft);
+  // What the box holds unsent, kept under the bot: what the person typed,
+  // or a draft Discuss put there, from the channel's card or this thread's.
+  const { botId, originMessageId } = props;
+  const kept = useBotDraftsStore(
+    (state) => state.threadBoxes[botId]?.[originMessageId] ?? null,
+  );
+  const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
+  const typeThreadBox = useBotDraftsStore((state) => state.typeThreadBox);
+  const spendThreadBox = useBotDraftsStore((state) => state.spendThreadBox);
+  const seed: BotComposerSeed | null =
+    kept === null ? null : { id: kept.seedId, text: kept.text };
+  // A draft Discuss puts in the box is a new message: an edit the box held
+  // ends, so the draft replaces nothing.
+  const [heldSeedId, setHeldSeedId] = useState(kept?.seedId ?? null);
+  if ((kept?.seedId ?? null) !== heldSeedId) {
+    setHeldSeedId(kept?.seedId ?? null);
+    if (kept !== null) setEdit(null);
   }
+  const keptDraft = useMemo<BotKeptDraft>(
+    () => ({
+      keep: (text) => typeThreadBox(botId, originMessageId, text),
+      spend: (text) => spendThreadBox(botId, originMessageId, text),
+    }),
+    [botId, originMessageId, spendThreadBox, typeThreadBox],
+  );
   const discuss = useCallback(
-    (_questionMessageId: string, draft: string) => setSeed({ text: draft }),
-    [],
+    (_questionMessageId: string, draft: string) =>
+      seedThreadBox(botId, originMessageId, draft),
+    [botId, originMessageId, seedThreadBox],
   );
   if (thread.kind === "pending" || thread.kind === "failed") {
     return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
@@ -495,6 +522,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         edit={edit}
         onEditEnd={endEdit}
         seed={seed}
+        keptDraft={keptDraft}
         onSent={keepOpenThread}
       />
     </>

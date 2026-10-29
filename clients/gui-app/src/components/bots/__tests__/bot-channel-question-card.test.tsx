@@ -7,8 +7,11 @@
  * suite. What is asserted is what the person sees on the card and what the
  * host RECEIVES: an answer or a Skip goes out as the person's message with
  * the question it settles; the settlement the host writes on the row closes
- * the question for everyone; a member whose answer is overtaken keeps it,
- * loses Submit, and takes it to the question's thread unsent.
+ * the question for everyone, and until it lands the card holds what was sent;
+ * a member whose answer is overtaken keeps it, loses Submit, and takes it to
+ * the question's thread unsent. What a member has not sent outlives the views
+ * that draw it: the channel unmounting, as a switch to Under the hood does,
+ * and the thread closing.
  */
 import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
@@ -25,7 +28,9 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  BotConversationSendDelivery,
   BotConversationSendRequest,
+  BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
@@ -41,6 +46,10 @@ import {
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type {
+  BotActivity,
+  BotSessionActivity,
+} from "@/hooks/bots/use-bot-activity";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type {
@@ -136,7 +145,7 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
-  useBotActivity: () => null,
+  useBotActivity: () => activityStore((state) => state.activity),
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
@@ -165,7 +174,13 @@ vi.mock("@/components/chat/chat-messages", async () => {
   };
 });
 
+/** What the bot is doing, as the scripted `useBotActivity` reads it. */
+const activityStore = create<{ activity: BotActivity | null }>()(() => ({
+  activity: null,
+}));
+
 import { BotChannelView } from "@/components/bots/bot-channel-view";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -329,6 +344,16 @@ function createStore(
 let sent: ReadonlyArray<BotConversationSendRequest>;
 /** While set, the host refuses every send, as it refuses an answer to a settled question. */
 let refuseSends: boolean;
+/** How the host takes each send: `queued` while the bot's host is away. */
+let delivery: BotConversationSendDelivery;
+/** A send the host holds until the case lands it. */
+interface HeldSend {
+  readonly land: () => void;
+  /** The host's answer, once landed. */
+  readonly answered: Promise<BotConversationSendResponse>;
+}
+/** While set, each send waits here until the case lands it. */
+let heldSends: HeldSend[] | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
 
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
@@ -345,12 +370,17 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
             new Error("QUESTION_ALREADY_SETTLED: the question is settled"),
           );
         }
-        return Promise.resolve({
+        const response: BotConversationSendResponse = {
           messageId: "message-new",
           requestId: "req-new",
-          delivery: "written" as const,
+          delivery,
           threadId: null,
-        });
+        };
+        if (heldSends === null) return Promise.resolve(response);
+        const { promise, resolve } =
+          Promise.withResolvers<BotConversationSendResponse>();
+        heldSends.push({ land: () => resolve(response), answered: promise });
+        return promise;
       },
     },
   });
@@ -367,6 +397,16 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(mockRemoteHostEntry);
 }
 
+/** The host takes the oldest send held. */
+async function land(): Promise<void> {
+  const next = heldSends?.shift();
+  if (next === undefined) throw new Error("no send is held");
+  await act(async () => {
+    next.land();
+    await next.answered;
+  });
+}
+
 /** A chat's transcript as its session holds it; `set` writes rows as the host does. */
 function session(
   chatId: string,
@@ -379,6 +419,7 @@ function session(
 
 function mountChannel(openThread: BotOpenThread | null): {
   readonly reopen: (next: BotOpenThread | null) => void;
+  readonly unmount: () => void;
 } {
   const queryClient = new QueryClient();
   const tree = (open: BotOpenThread | null): ReactNode => (
@@ -406,7 +447,10 @@ function mountChannel(openThread: BotOpenThread | null): {
     </StrictMode>
   );
   const result = render(tree(openThread));
-  return { reopen: (next) => result.rerender(tree(next)) };
+  return {
+    reopen: (next) => result.rerender(tree(next)),
+    unmount: () => result.unmount(),
+  };
 }
 
 /** The card in the channel, apart from the copy the open thread's post draws. */
@@ -421,10 +465,14 @@ function cardQuestion(card: HTMLElement, text: string): HTMLElement {
 beforeEach(() => {
   sent = [];
   refuseSends = false;
+  delivery = "written";
+  heldSends = null;
+  activityStore.setState({ activity: null });
   onOpenThread.mockClear();
   mocks.threads = [];
   mocks.handles.clear();
   rowBlocks.clear();
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   mocks.client = hostClientRecordingSends();
   negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
   signInViewer(VIEWER_USER_ID);
@@ -723,6 +771,252 @@ describe("<BotChannelView /> a question settled while a member was answering (de
   });
 });
 
+/** The answer field of the card's question that takes words. */
+function holdField(): HTMLTextAreaElement {
+  const field = within(cardQuestion(channelCard(), HOLD)).getByRole("textbox", {
+    name: "Your answer",
+  });
+  if (!(field instanceof HTMLTextAreaElement)) throw new Error("no field");
+  return field;
+}
+
+/** The question's own thread, as Discuss opens it. */
+const QUESTION_THREAD: BotOpenThread = {
+  anchorMessageId: QUESTION_ID,
+  announcement: true,
+  answer: false,
+  sent: null,
+};
+
+/** The box of the question's thread, which nobody has started. */
+function questionThreadBox(): HTMLTextAreaElement {
+  const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
+    "textbox",
+    { name: "Reply in a new thread" },
+  );
+  if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
+  return box;
+}
+
+describe("<BotChannelView /> an answer the host queued while the bot's host is away", () => {
+  it("holds the sent answer on the card, its choice pressed and nothing left to press, until the room settles it; the member's own settlement closes it", async () => {
+    const user = userEvent.setup();
+    delivery = "queued";
+    const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "After the train",
+      }),
+    );
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    expect(sent).toHaveLength(1);
+    const sending = cardQuestion(channelCard(), DEPLOY);
+    expect(within(sending).getByTestId("question-card-sending")).toBeTruthy();
+    expect(
+      within(sending)
+        .getByRole("button", { name: "After the train" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      within(sending)
+        .getAllByRole("button")
+        .filter((button) => !(button as HTMLButtonElement).disabled),
+    ).toEqual([]);
+
+    write([questionRow([deploy(byPerson(VIEWER_USER_ID, "After the train"))])]);
+    const settled = cardQuestion(channelCard(), DEPLOY);
+    expect(
+      within(settled).getByTestId("question-card-settlement").textContent,
+    ).toBe("Answered by Olive Owner: After the train");
+    expect(within(settled).queryAllByRole("button")).toEqual([]);
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+  });
+
+  it("shows a queued answer overtaken once a teammate's settlement reaches the room first, the draft kept with Copy and Discuss, and sends nothing more", async () => {
+    const user = userEvent.setup();
+    delivery = "queued";
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    expect(
+      within(cardQuestion(channelCard(), HOLD)).getByTestId(
+        "question-card-sending",
+      ),
+    ).toBeTruthy();
+
+    // The bot's host, back, refused it: a teammate's answer reached it first.
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    const question = cardQuestion(channelCard(), HOLD);
+    expect(
+      within(question).getByTestId("question-card-overtaken").textContent,
+    ).toBe("Answered by Tess Teammate while you were answering: Nothing");
+    expect(holdField().value).toBe("Hold the migration");
+    expect(
+      within(question).queryByRole("button", { name: "Submit" }),
+    ).toBeNull();
+    expect(within(question).getByRole("button", { name: "Copy" })).toBeTruthy();
+    expect(
+      within(question).getByRole("button", { name: "Discuss" }),
+    ).toBeTruthy();
+    expect(sent).toHaveLength(1);
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+  });
+});
+
+describe("<BotChannelView /> what a member has not sent, across the views that draw it", () => {
+  /** The card's two questions answered by a teammate first, the viewer's answers to both unsent. */
+  async function overtakenBoth(): Promise<{
+    readonly reopen: (next: BotOpenThread | null) => void;
+    readonly unmount: () => void;
+  }> {
+    const user = userEvent.setup();
+    const write = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    const view = mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train")),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing")),
+      ]),
+    ]);
+    return view;
+  }
+
+  async function discuss(text: string): Promise<void> {
+    await userEvent.setup().click(
+      within(cardQuestion(channelCard(), text)).getByRole("button", {
+        name: "Discuss",
+      }),
+    );
+  }
+
+  it("keeps a card's answers, typed, picked and sent, across the channel unmounting and mounting again, as a switch to Under the hood and back does", async () => {
+    const user = userEvent.setup();
+    delivery = "queued";
+    session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
+    const first = mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await user.type(holdField(), "Hold the migration");
+
+    first.unmount();
+    mountChannel(null);
+
+    const deployQuestion = cardQuestion(channelCard(), DEPLOY);
+    expect(
+      within(deployQuestion).getByTestId("question-card-sending"),
+    ).toBeTruthy();
+    expect(
+      within(deployQuestion)
+        .getByRole("button", { name: "Now" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(holdField().value).toBe("Hold the migration");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("keeps the draft Discuss put in the question's thread, and what was typed after it, across the thread closing and the channel remounting", async () => {
+    const user = userEvent.setup();
+    const view = await overtakenBoth();
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.type(questionThreadBox(), " today");
+
+    view.reopen(null);
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    view.reopen(QUESTION_THREAD);
+    expect(questionThreadBox().value).toBe("Hold the migration today");
+
+    view.unmount();
+    mountChannel(QUESTION_THREAD);
+    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(sent).toEqual([]);
+  });
+
+  it("spends the draft with the send that carries it, even when the send lands after the thread closed", async () => {
+    const user = userEvent.setup();
+    heldSends = [];
+    const view = await overtakenBoth();
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(
+      sent.map((request) => [
+        request.text,
+        request.announcementId,
+        request.answer,
+      ]),
+    ).toEqual([["Hold the migration", QUESTION_ID, null]]);
+
+    view.reopen(null);
+    await land();
+    view.reopen(QUESTION_THREAD);
+
+    expect(questionThreadBox().value).toBe("");
+  });
+
+  it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
+    const user = userEvent.setup();
+    heldSends = [];
+    const view = await overtakenBoth();
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    await discuss(DEPLOY);
+    expect(questionThreadBox().value).toBe("Now");
+    await land();
+
+    expect(questionThreadBox().value).toBe("Now");
+    view.reopen(null);
+    view.reopen(QUESTION_THREAD);
+    expect(questionThreadBox().value).toBe("Now");
+  });
+
+  it("keeps a draft Discuss puts in the thread while it is closed, when an earlier send from its box lands after", async () => {
+    const user = userEvent.setup();
+    heldSends = [];
+    const view = await overtakenBoth();
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    view.reopen(null);
+
+    await discuss(DEPLOY);
+    await land();
+    view.reopen(QUESTION_THREAD);
+
+    expect(questionThreadBox().value).toBe("Now");
+  });
+});
+
 describe("<BotChannelView /> a question a thread's session asks in its thread", () => {
   const THREAD_ID = "thread-1";
   const POST_ID = "post-1";
@@ -807,5 +1101,72 @@ describe("<BotChannelView /> a question a thread's session asks in its thread", 
     );
     expect((box as HTMLTextAreaElement).value).toBe("Now");
     expect(sent).toHaveLength(1);
+  });
+
+  const REPLY_REQUEST = "req-reply";
+
+  /** The viewer's reply in the thread, which the thread's session failed to answer. */
+  function failedReply(): Message {
+    return {
+      role: "user",
+      messageId: "reply-1",
+      sender: { type: "user", userId: VIEWER_USER_ID },
+      message: {
+        kind: "user",
+        content: textDoc("Hold for now"),
+        browserAnnotations: [],
+      },
+      timestamp: 3_000,
+      sessionAnchor: null,
+      conversationRequest: {
+        requestId: REPLY_REQUEST,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    };
+  }
+
+  const FAILED_ON_REPLY: BotSessionActivity = {
+    state: "failed",
+    startedAt: 3_000,
+    step: null,
+    requestId: REPLY_REQUEST,
+    reason: null,
+  };
+
+  it("starts a new message when Discuss puts a draft in the box while it edits a failed reply: what is sent replaces nothing", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({
+      activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
+    });
+    mocks.threads = [postThread()];
+    session(CHANNEL_ID, [memberPost()]);
+    const write = session(THREAD_ID, [threadQuestion(null), failedReply()]);
+    mountChannel(POST_THREAD);
+    const replies = screen.getByTestId("bot-thread-replies");
+    await user.click(within(replies).getByRole("button", { name: "Now" }));
+    write([
+      threadQuestion(byPerson(TEAMMATE_USER_ID, "After the train")),
+      failedReply(),
+    ]);
+    await user.click(within(replies).getByTestId("bot-message-edit"));
+    expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+
+    await user.click(within(replies).getByRole("button", { name: "Discuss" }));
+
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
+      "textbox",
+      { name: "Reply in the thread" },
+    );
+    expect((box as HTMLTextAreaElement).value).toBe("Now");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(
+      sent.map((request) => [
+        request.text,
+        request.threadId,
+        request.supersedes,
+      ]),
+    ).toEqual([["Now", THREAD_ID, null]]);
   });
 });

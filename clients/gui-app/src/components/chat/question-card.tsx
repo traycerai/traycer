@@ -1,29 +1,25 @@
-import { useId, useState, type ReactElement, type ReactNode } from "react";
+import { useId, type ReactElement, type ReactNode } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import {
+  draftText,
+  questionCardView,
+  type QuestionCardDraft,
+  type QuestionCardSettlement,
+} from "@/components/chat/question-card-view";
 
-/** One question of the card, and how it was settled; `null` while open. */
+/** One question of the card, how it was settled, and the person's own answer to it. */
 export interface QuestionCardQuestion {
   /** Its place among the asker's questions, which is how an answer names it. */
   readonly index: number;
   readonly text: string;
   readonly options: ReadonlyArray<string>;
   readonly allowFreeText: boolean;
+  /** `null` while the question is open. */
   readonly settlement: QuestionCardSettlement | null;
-}
-
-/**
- * How a question was settled: a person's answer or Skip, by the name the
- * card shows for them, or the asker's own answer when nobody gave one.
- */
-export interface QuestionCardSettlement {
-  /** The answer; `null` for a Skip. */
-  readonly answer: string | null;
-  readonly skipped: boolean;
-  readonly by:
-    | { readonly kind: "person"; readonly name: string }
-    | { readonly kind: "asker" };
+  readonly draft: QuestionCardDraft;
 }
 
 /** What a person submits for one question: an answer, or a Skip. */
@@ -43,24 +39,30 @@ export const QUESTION_SKIPPED_TEXT = "Skipped";
  * for an answer in the person's own words where the asker takes one, Submit
  * and Skip; a settled question says what it was settled with and by whom,
  * and offers nothing. Every member sees the same card, and the first answer
- * to land settles a question for all of them (decision 122): a member who
- * had picked or typed an answer of their own keeps it in place, is told who
- * answered while they were answering, loses Submit, and can copy what they
- * had or take it to the question's discussion.
+ * to land settles a question for all of them (decision 122). An answer sent
+ * stays on the card, waiting, until the question shows settled: by this
+ * person, and the card says so; or by someone else first, and this person
+ * keeps their answer in place, is told who answered while they were
+ * answering, loses Submit, and can copy what they had or take it to the
+ * question's discussion.
  *
- * Who asks, where an answer goes and where the discussion is are the
- * caller's: `onAnswer` resolves once the answer is taken and rejects when it
- * is not, keeping the person's draft; `null` draws the card without actions.
+ * The card keeps nothing itself: each question's draft is the caller's, so
+ * it outlives the view (`onDraft`), as do where an answer goes (`onAnswer`)
+ * and where the discussion is (`onDiscuss`). `onDraft: null` draws the card
+ * without actions.
  */
 export function QuestionCard(props: {
   /** Who asks, by the name the card shows. */
   readonly asker: string;
   readonly questions: ReadonlyArray<QuestionCardQuestion>;
-  readonly onAnswer: ((answer: QuestionCardAnswer) => Promise<void>) | null;
+  readonly onDraft:
+    | ((questionIndex: number, draft: QuestionCardDraft) => void)
+    | null;
+  readonly onAnswer: (answer: QuestionCardAnswer) => void;
   /** Opens the question's discussion with `draft` in its box, unsent; `null` where there is none. */
-  readonly onDiscuss: ((draft: string) => void) | null;
+  readonly onDiscuss: ((questionIndex: number, draft: string) => void) | null;
 }): ReactElement {
-  const { asker, questions, onAnswer, onDiscuss } = props;
+  const { asker, questions, onDraft, onAnswer, onDiscuss } = props;
   return (
     <div
       data-testid="question-card"
@@ -74,65 +76,35 @@ export function QuestionCard(props: {
           key={question.index}
           asker={asker}
           question={question}
+          onDraft={
+            onDraft === null ? null : (draft) => onDraft(question.index, draft)
+          }
           onAnswer={onAnswer}
-          onDiscuss={onDiscuss}
+          onDiscuss={
+            onDiscuss === null
+              ? null
+              : (draft) => onDiscuss(question.index, draft)
+          }
         />
       ))}
     </div>
   );
 }
 
-/**
- * What one question shows: open; settled; or settled by someone else while
- * this person had an answer of their own, which they keep.
- */
-type QuestionView =
-  | { readonly kind: "open" }
-  | { readonly kind: "settled"; readonly settlement: QuestionCardSettlement }
-  | {
-      readonly kind: "overtaken";
-      readonly settlement: QuestionCardSettlement;
-      readonly draft: string;
-    };
-
-function questionView(
-  settlement: QuestionCardSettlement | null,
-  draft: string | null,
-  sending: boolean,
-): QuestionView {
-  if (settlement === null) return { kind: "open" };
-  // The person's own answer, still on its way, is what settled it.
-  if (draft === null || sending) return { kind: "settled", settlement };
-  return { kind: "overtaken", settlement, draft };
-}
-
 function QuestionCardItem(props: {
   readonly asker: string;
   readonly question: QuestionCardQuestion;
-  readonly onAnswer: ((answer: QuestionCardAnswer) => Promise<void>) | null;
+  readonly onDraft: ((draft: QuestionCardDraft) => void) | null;
+  readonly onAnswer: (answer: QuestionCardAnswer) => void;
   readonly onDiscuss: ((draft: string) => void) | null;
 }): ReactElement {
-  const { asker, question, onAnswer, onDiscuss } = props;
-  const [chosen, setChosen] = useState<string | null>(null);
-  const [typed, setTyped] = useState("");
-  const [sending, setSending] = useState(false);
-  // The person's own answer: what they typed, else the option they picked.
-  const trimmed = typed.trim();
-  const draft = trimmed.length > 0 ? trimmed : chosen;
-  const view = questionView(question.settlement, draft, sending);
-
+  const { asker, question, onDraft, onAnswer, onDiscuss } = props;
+  const { draft } = question;
+  const view = questionCardView(question.settlement, draft);
   const submit = (text: string, skipped: boolean): void => {
-    if (onAnswer === null) return;
-    setSending(true);
-    onAnswer({ questionIndex: question.index, text, skipped }).then(
-      () => {
-        setSending(false);
-        setChosen(null);
-        setTyped("");
-      },
-      // Refused or failed: the draft stays, as the person left it.
-      () => setSending(false),
-    );
+    if (onDraft === null) return;
+    onDraft({ ...draft, sent: { text, skipped } });
+    onAnswer({ questionIndex: question.index, text, skipped });
   };
 
   return (
@@ -165,24 +137,18 @@ function QuestionCardItem(props: {
           ) : null}
           <QuestionDraft
             question={question}
-            chosen={chosen}
-            typed={typed}
-            // An overtaken draft stays the person's to change before they
-            // copy it or take it to the discussion.
-            editable={
-              !sending && (view.kind === "overtaken" || onAnswer !== null)
-            }
-            onChoose={(option) =>
-              setChosen((current) => (current === option ? null : option))
-            }
-            onType={setTyped}
+            // A sent answer waits as it was sent; an overtaken one stays the
+            // person's to change before they copy it or discuss it.
+            editable={view.kind !== "sent" && onDraft !== null}
+            onChange={(next) => onDraft?.({ ...draft, ...next })}
           />
           {view.kind === "overtaken" ? (
             <OvertakenActions draft={view.draft} onDiscuss={onDiscuss} />
           ) : (
             <OpenActions
-              draft={draft}
-              disabled={onAnswer === null || sending}
+              draft={draftText(draft)}
+              disabled={onDraft === null || view.kind === "sent"}
+              sending={view.kind === "sent"}
               onSubmit={(text) => submit(text, false)}
               onSkip={() => submit(QUESTION_SKIPPED_TEXT, true)}
             />
@@ -196,13 +162,13 @@ function QuestionCardItem(props: {
 /** The person's answer as they are making it: the option they picked, and what they typed. */
 function QuestionDraft(props: {
   readonly question: QuestionCardQuestion;
-  readonly chosen: string | null;
-  readonly typed: string;
   readonly editable: boolean;
-  readonly onChoose: (option: string) => void;
-  readonly onType: (text: string) => void;
+  readonly onChange: (
+    next: Pick<QuestionCardDraft, "chosen"> | Pick<QuestionCardDraft, "typed">,
+  ) => void;
 }): ReactNode {
-  const { question, chosen, typed, editable, onChoose, onType } = props;
+  const { question, editable, onChange } = props;
+  const { chosen, typed } = question.draft;
   const fieldId = useId();
   return (
     <>
@@ -221,7 +187,9 @@ function QuestionDraft(props: {
               aria-pressed={chosen === option}
               disabled={!editable}
               data-testid="question-card-option"
-              onClick={() => onChoose(option)}
+              onClick={() =>
+                onChange({ chosen: chosen === option ? null : option })
+              }
             >
               {option}
             </Button>
@@ -242,7 +210,7 @@ function QuestionDraft(props: {
             disabled={!editable}
             className="max-h-40 min-h-8"
             data-testid="question-card-input"
-            onChange={(event) => onType(event.target.value)}
+            onChange={(event) => onChange({ typed: event.target.value })}
           />
         </>
       ) : null}
@@ -250,15 +218,16 @@ function QuestionDraft(props: {
   );
 }
 
-/** Submit for the person's answer, and Skip. */
+/** Submit for the person's answer, and Skip; both held while a sent answer waits. */
 function OpenActions(props: {
   /** The answer Submit sends; `null` while there is none. */
   readonly draft: string | null;
   readonly disabled: boolean;
+  readonly sending: boolean;
   readonly onSubmit: (text: string) => void;
   readonly onSkip: () => void;
 }): ReactElement {
-  const { draft, disabled, onSubmit, onSkip } = props;
+  const { draft, disabled, sending, onSubmit, onSkip } = props;
   return (
     <div className="flex items-center gap-1.5">
       <Button
@@ -271,6 +240,13 @@ function OpenActions(props: {
         }}
       >
         Submit
+        {sending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId="question-card-sending"
+            variant={undefined}
+          />
+        ) : null}
       </Button>
       <Button
         type="button"

@@ -549,6 +549,8 @@ function BotChatTranscriptBody(props: {
     const followsPost = (postMessageId: string, replyMessageId: string) =>
       replyFollowsPost(messages, postMessageId, replyMessageId);
     const questions = {
+      botId,
+      viewerUserId: profile?.userId ?? null,
       memberName: (userId: string) =>
         botMemberName(userId, profile, resolveMember),
       answer: surface.answerQuestion,
@@ -582,7 +584,15 @@ function BotChatTranscriptBody(props: {
       questions,
       failedRequest: surface.failedRequest,
     };
-  }, [messages, profile, resolveMember, scrollToMessage, surface, title]);
+  }, [
+    botId,
+    messages,
+    profile,
+    resolveMember,
+    scrollToMessage,
+    surface,
+    title,
+  ]);
 
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
