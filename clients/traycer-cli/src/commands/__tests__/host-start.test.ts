@@ -6235,14 +6235,14 @@ describe("runHostStart - a child that yields to an incumbent still exiting", () 
     }
   });
 
+  /** The fixture lock's `startedAt`, as `withYieldingFirstAttempt` reports it. */
+  const fixtureLockStartedAtMs = Date.parse("2026-10-16T00:34:11.000Z");
+
   /**
    * The teardown port as the still-alive branch reads it: pid.json (or none)
    * and the identity verdict on whatever it names, with every signal the
    * supervisor sends to a non-child pid recorded.
    */
-  /** The fixture lock's `startedAt`, as `withYieldingFirstAttempt` reports it. */
-  const fixtureLockStartedAtMs = Date.parse("2026-10-16T00:34:11.000Z");
-
   function withIncumbentRecords(
     deps: Partial<RunHostStartDeps>,
     records: {

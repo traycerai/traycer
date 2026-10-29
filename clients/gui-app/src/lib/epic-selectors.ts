@@ -1879,32 +1879,6 @@ function liveArtifactTitleFromHandle(
   return null;
 }
 
-/**
- * Canonical display title for a canvas tile / node. Live state is the single
- * source of truth - the projected record title for record-backed nodes, the
- * HOST's `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
- * keyed by the tab's bound host + session id). The tile's persisted `name`
- * snapshot is only a fallback for tiles that have no live title (workspace
- * files, git diff, pre-hydration, a terminal session the host no longer
- * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
- * through this hook - never the raw `node.name` - so the resolve cannot be
- * forgotten in one place.
- *
- * A chat tab whose record the projection does not hold at all reads the cloud
- * chat list next, before the snapshot. The sidebar renders exactly such a chat
- * as a cloud-list row carrying the cloud title, so without this arm the two
- * surfaces disagree for as long as the record plane lags: the serving host's
- * replica inbox starts empty after a restart and fills by reconciliation, and
- * through that window a tile opened before its title was generated announced
- * "Untitled agent" beside a sidebar row with the real name. The list is read
- * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
- * TanStack cache is shared rather than split by host.
- *
- * `terminalHostClient` is the tab's bound-host client for terminal nodes
- * (`null` for every other node kind). The caller resolves it so one
- * `useHostClientForHostId` per tab serves both title resolution and the
- * rename mutation.
- */
 type EpicTabDisplayTitleNode = {
   readonly id: string;
   readonly name: string;
@@ -1969,6 +1943,32 @@ function useCloudChatTitleForAbsentRecord(
   return title !== null && title.length > 0 ? title : null;
 }
 
+/**
+ * Canonical display title for a canvas tile / node. Live state is the single
+ * source of truth - the projected record title for record-backed nodes, the
+ * HOST's `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
+ * keyed by the tab's bound host + session id). The tile's persisted `name`
+ * snapshot is only a fallback for tiles that have no live title (workspace
+ * files, git diff, pre-hydration, a terminal session the host no longer
+ * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
+ * through this hook - never the raw `node.name` - so the resolve cannot be
+ * forgotten in one place.
+ *
+ * A chat tab whose record the projection does not hold at all reads the cloud
+ * chat list next, before the snapshot. The sidebar renders exactly such a chat
+ * as a cloud-list row carrying the cloud title, so without this arm the two
+ * surfaces disagree for as long as the record plane lags: the serving host's
+ * replica inbox starts empty after a restart and fills by reconciliation, and
+ * through that window a tile opened before its title was generated announced
+ * "Untitled agent" beside a sidebar row with the real name. The list is read
+ * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
+ * TanStack cache is shared rather than split by host.
+ *
+ * `terminalHostClient` is the tab's bound-host client for terminal nodes
+ * (`null` for every other node kind). The caller resolves it so one
+ * `useHostClientForHostId` per tab serves both title resolution and the
+ * rename mutation.
+ */
 export function useEpicTabDisplayTitle(
   node: EpicTabDisplayTitleNode,
   epicId: string,

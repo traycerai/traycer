@@ -961,27 +961,14 @@ function formatMentionForLLMQuery(
       // directory is the only path that resolves for the agent.
       return atRef(attrs.worktreePath || attrs.id || "");
     }
-    case ContextType.Spec: {
+    case ContextType.Spec:
+    case ContextType.Ticket:
+    case ContextType.Story:
+    case ContextType.Review:
+    case ContextType.Html:
+    case ContextType.Canvas:
+    case ContextType.FileArtifact:
       return atRef(requiredArtifactRelPath(attrs));
-    }
-    case ContextType.Ticket: {
-      return atRef(requiredArtifactRelPath(attrs));
-    }
-    case ContextType.Story: {
-      return atRef(requiredArtifactRelPath(attrs));
-    }
-    case ContextType.Review: {
-      return atRef(requiredArtifactRelPath(attrs));
-    }
-    case ContextType.Html: {
-      return atRef(requiredArtifactRelPath(attrs));
-    }
-    case ContextType.Canvas: {
-      return atRef(requiredArtifactRelPath(attrs));
-    }
-    case ContextType.FileArtifact: {
-      return atRef(requiredArtifactRelPath(attrs));
-    }
     case ContextType.Epic:
       return atRef(attrs.relPath || `epic:${attrs.epicId || attrs.id || ""}`);
     case ContextType.GithubIssue:
