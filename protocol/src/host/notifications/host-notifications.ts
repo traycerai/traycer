@@ -416,7 +416,9 @@ export type HostNotificationEntryV23 = z.infer<
 /**
  * The environments redesign's kinds: `environment.move.stalled`,
  * `environment.apply.failed`, `team.role.changed`, `team.host.returned` and
- * `secret.removed`. The server no longer writes this kind; readers drop it.
+ * `secret.removed`. The server no longer writes these kinds and readers drop
+ * them, except `team.role.changed` — the center's one named exception, which
+ * is written and shown; see its payload schema.
  */
 const environmentMoveStalledEntryArm = lazySchema(() =>
   z.object({
