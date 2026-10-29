@@ -232,9 +232,11 @@ export const simulatorOpenRequestSchemaV10 = lazySchema(() =>
 
 /**
  * `instance` on `simulator.open@1.1`: `"auto"` prefers the caller's own live
- * instance on the device, then one no other agent drives, else a clone;
- * `"new"` always creates one; any other value names an instance by its key.
- * Absent means exactly the instance `simulatorId` names, the `@1.0` meaning.
+ * instance on the device, then one no other agent drives, then the device
+ * itself when it is not running, else a clone; `"new"` always creates one,
+ * the device's own state notwithstanding; any other value names an instance
+ * by its key. Absent means exactly the instance `simulatorId` names, the
+ * `@1.0` meaning.
  */
 export const SIMULATOR_INSTANCE_POLICIES = ["auto", "new"] as const;
 export const simulatorInstanceChoiceSchema = lazySchema(() =>

@@ -81,7 +81,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     search: { anchor: "host-overview-tab-simulators" },
     label: "Mobile simulators",
     description:
-      "iOS Simulators and Android Emulators on this host, for you and for agents, and the simulator tools.",
+      "The mobile simulators this host can run, for you and for agents, and the simulator tools.",
     breadcrumb: "Overview",
     availableWhen: alwaysAvailable,
     keywords: [
@@ -359,7 +359,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     search: { contributesTo: "simulatorsTab" },
     label: "Use mobile simulators",
     description:
-      "Run iOS Simulators and Android Emulators on this host in a tile and let agents drive them. Turning this on downloads the simulator tools once, under 60 MB.",
+      "Run this host's mobile simulators in a tile and let agents drive them. Turning this on downloads the simulator tools once, under 60 MB.",
     availableWhen: alwaysAvailable,
     keywords: ["simulator", "emulator", "device", "agent", "mcp"],
   },
