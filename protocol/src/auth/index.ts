@@ -22,7 +22,6 @@ export * from "./token";
 export * from "./mcp-servers";
 export * from "./devices-sessions";
 export * from "./link-login";
-export * from "./credit-offers";
 export type {
   AuthenticatedUser,
   AuthenticatedUserActingAs,

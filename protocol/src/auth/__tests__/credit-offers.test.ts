@@ -46,6 +46,7 @@ describe("listCreditOffersResponseSchema", () => {
   it.each([
     ["a date without a time", { endsAt: "2026-12-31" }],
     ["a locale date", { endsAt: "12/31/2026" }],
+    ["an end with a UTC offset", { endsAt: "2026-12-31T02:00:00+02:00" }],
     ["a start that is not a date", { startsAt: "soon" }],
   ])("drops a card with %s and keeps the cards around it", (_n, dates) => {
     const kept = card({ id: "kept" });
