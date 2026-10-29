@@ -875,9 +875,74 @@ describe("<BotChannelView /> an answer the host queued while the bot's host is a
   });
 });
 
+describe("<BotChannelView /> an answer someone else settled with first, the same member from another window included", () => {
+  it("shows the card's sent answer overtaken when a teammate settled the question first with the same answer", async () => {
+    const user = userEvent.setup();
+    delivery = "queued";
+    const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    write([questionRow([deploy(byPerson(TEAMMATE_USER_ID, "Now"))])]);
+
+    expect(
+      within(cardQuestion(channelCard(), DEPLOY)).getByTestId(
+        "question-card-overtaken",
+      ).textContent,
+    ).toBe("Answered by Tess Teammate while you were answering: Now");
+  });
+
+  it("shows the card's sent answer overtaken, kept with Copy and Discuss, when the member's settlement is a different answer", async () => {
+    const user = userEvent.setup();
+    delivery = "queued";
+    const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "After the train",
+      }),
+    );
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    write([questionRow([deploy(byPerson(VIEWER_USER_ID, "Now"))])]);
+
+    const question = cardQuestion(channelCard(), DEPLOY);
+    expect(
+      within(question).getByTestId("question-card-overtaken").textContent,
+    ).toBe("Answered by Olive Owner while you were answering: Now");
+    expect(
+      within(question)
+        .getByRole("button", { name: "After the train" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(within(question).getByRole("button", { name: "Copy" })).toBeTruthy();
+    expect(
+      within(question).getByRole("button", { name: "Discuss" }),
+    ).toBeTruthy();
+    expect(sent).toHaveLength(1);
+  });
+});
+
 describe("<BotChannelView /> what a member has not sent, across the views that draw it", () => {
-  /** The card's two questions answered by a teammate first, the viewer's answers to both unsent. */
-  async function overtakenBoth(): Promise<{
+  /**
+   * The card's two questions answered by a teammate first, the viewer's
+   * answers to both unsent: `typed` to the one that takes words, Now to the
+   * other.
+   */
+  async function overtakenBoth(typed: string): Promise<{
     readonly reopen: (next: BotOpenThread | null) => void;
     readonly unmount: () => void;
   }> {
@@ -886,7 +951,7 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
       questionRow([deploy(null), hold(null)]),
     ]);
     const view = mountChannel(null);
-    await user.type(holdField(), "Hold the migration");
+    await user.type(holdField(), typed);
     await user.click(
       within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
         name: "Now",
@@ -944,7 +1009,7 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
 
   it("keeps the draft Discuss put in the question's thread, and what was typed after it, across the thread closing and the channel remounting", async () => {
     const user = userEvent.setup();
-    const view = await overtakenBoth();
+    const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
     view.reopen(QUESTION_THREAD);
     await user.type(questionThreadBox(), " today");
@@ -963,7 +1028,7 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
   it("spends the draft with the send that carries it, even when the send lands after the thread closed", async () => {
     const user = userEvent.setup();
     heldSends = [];
-    const view = await overtakenBoth();
+    const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
     view.reopen(QUESTION_THREAD);
     await user.click(screen.getByTestId("bot-thread-composer-send"));
@@ -985,7 +1050,7 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
   it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
     const user = userEvent.setup();
     heldSends = [];
-    const view = await overtakenBoth();
+    const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
     view.reopen(QUESTION_THREAD);
     await user.click(screen.getByTestId("bot-thread-composer-send"));
@@ -1000,13 +1065,14 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
     expect(questionThreadBox().value).toBe("Now");
   });
 
-  it("keeps a draft Discuss puts in the thread while it is closed, when an earlier send from its box lands after", async () => {
+  it("keeps a draft Discuss puts in the thread while it is closed, even with the text an earlier send from its box carried, when that send lands after", async () => {
     const user = userEvent.setup();
     heldSends = [];
-    const view = await overtakenBoth();
+    const view = await overtakenBoth("Now");
     await discuss(HOLD);
     view.reopen(QUESTION_THREAD);
     await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(sent.map((request) => request.text)).toEqual(["Now"]);
     view.reopen(null);
 
     await discuss(DEPLOY);

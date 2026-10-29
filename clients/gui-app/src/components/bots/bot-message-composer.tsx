@@ -167,7 +167,7 @@ export function BotMessageComposer(props: {
     failure.clear();
     const supersedes = edit?.requestId ?? null;
     const started = generation;
-    const held = text;
+    const held = keptDraft?.revision() ?? null;
     // Settled through the promise, not `mutate`'s callbacks, which do not
     // run once the box is gone: a kept draft that was sent is spent whether
     // or not the box is still there.
@@ -189,7 +189,7 @@ export function BotMessageComposer(props: {
           // an edit or a seed loaded since keeps its draft, with nothing said
           // under it.
           if (generationRef.current !== started) return;
-          if (supersedes === null) keptDraft?.spend(held);
+          if (supersedes === null && held !== null) keptDraft?.spend(held);
           if (!mountedRef.current) return;
           setText("");
           if (supersedes !== null) onEditEnd();
@@ -317,8 +317,10 @@ export type BotComposerSeed = {
 export type BotKeptDraft = {
   /** What the box holds now, as the person types it; empty keeps nothing. */
   readonly keep: (text: string) => void;
-  /** `text`, what the box held, was sent: spent, unless a newer draft took its place. */
-  readonly spend: (text: string) => void;
+  /** Which revision of the draft is kept now; `null` while none is. */
+  readonly revision: () => number | null;
+  /** The draft at `revision` was sent: spent, unless a newer draft took its place. */
+  readonly spend: (revision: number) => void;
 };
 
 /** A failed message loaded into the box to be edited and sent again. */

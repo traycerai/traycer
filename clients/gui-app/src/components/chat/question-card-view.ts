@@ -66,11 +66,16 @@ export function questionCardView(
   if (settlement === null) {
     return draft.sent === null ? { kind: "open" } : { kind: "sent" };
   }
-  // The person's own answer landing is what settled it.
+  // The person's own answer landing is what settled it: by them, and with
+  // what this card sent. The same person answering otherwise first, from
+  // another window, overtook it as anyone else would.
+  const { sent } = draft;
   const theirs =
-    draft.sent !== null &&
+    sent !== null &&
     settlement.by.kind === "person" &&
-    settlement.by.viewer;
+    settlement.by.viewer &&
+    settlement.skipped === sent.skipped &&
+    (sent.skipped || settlement.answer === sent.text);
   const own = draftText(draft);
   if (theirs || own === null) return { kind: "settled", settlement };
   return { kind: "overtaken", settlement, draft: own };

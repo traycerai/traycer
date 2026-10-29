@@ -480,7 +480,10 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   const keptDraft = useMemo<BotKeptDraft>(
     () => ({
       keep: (text) => typeThreadBox(botId, originMessageId, text),
-      spend: (text) => spendThreadBox(botId, originMessageId, text),
+      revision: () =>
+        useBotDraftsStore.getState().threadBoxes[botId]?.[originMessageId]
+          ?.revision ?? null,
+      spend: (revision) => spendThreadBox(botId, originMessageId, revision),
     }),
     [botId, originMessageId, spendThreadBox, typeThreadBox],
   );

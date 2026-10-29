@@ -29,6 +29,12 @@ export interface BotThreadBoxDraft {
    * question card), never by typing, so the box loads each one once.
    */
   readonly seedId: number;
+  /**
+   * Which draft this is, new on every change to it, typed or put there, and
+   * never reused: a send spends the revision it carried and nothing newer,
+   * even one with the same text.
+   */
+  readonly revision: number;
 }
 
 /** A lookup misses for a bot or key with nothing kept. */
@@ -60,13 +66,14 @@ interface BotDraftsState {
     text: string,
   ) => void;
   /**
-   * `text` was sent from that box: dropped while the box still holds it, and
-   * kept when a newer draft took its place before the send landed.
+   * The draft at `revision` was sent from that box: dropped while the box
+   * still holds it, and kept when a newer draft took its place before the
+   * send landed.
    */
   readonly spendThreadBox: (
     botId: string,
     anchorMessageId: string,
-    text: string,
+    revision: number,
   ) => void;
   /** Drops every draft of the bot: its tab closed. */
   readonly forgetBot: (botId: string) => void;
@@ -95,6 +102,13 @@ function withEntry<T>(
   return next;
 }
 
+let lastRevision = 0;
+
+function nextRevision(): number {
+  lastRevision += 1;
+  return lastRevision;
+}
+
 /**
  * What a member has not sent yet on a bot's tab and must not lose to the
  * views that draw it: a card's answer, and the draft Discuss put in a
@@ -113,6 +127,7 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
       threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
         text,
         seedId: (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
+        revision: nextRevision(),
       }),
     })),
   typeThreadBox: (botId, anchorMessageId, text) =>
@@ -124,13 +139,19 @@ export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
           state.threadBoxes,
           botId,
           anchorMessageId,
-          text.length === 0 ? null : { text, seedId: current?.seedId ?? 0 },
+          text.length === 0
+            ? null
+            : {
+                text,
+                seedId: current?.seedId ?? 0,
+                revision: nextRevision(),
+              },
         ),
       };
     }),
-  spendThreadBox: (botId, anchorMessageId, text) =>
+  spendThreadBox: (botId, anchorMessageId, revision) =>
     set((state) =>
-      state.threadBoxes[botId]?.[anchorMessageId]?.text === text
+      state.threadBoxes[botId]?.[anchorMessageId]?.revision === revision
         ? {
             threadBoxes: withEntry(
               state.threadBoxes,
