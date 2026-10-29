@@ -335,7 +335,7 @@ describe("buildServiceInstallCommand", () => {
       credentialProvision: { kind: "not-adopted" },
     });
     expect(result.human).toContain(
-      "host not authorized (the host did not confirm it in time)",
+      "host authorization not confirmed (the host did not confirm it in time)",
     );
   });
 

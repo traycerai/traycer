@@ -356,10 +356,12 @@ async function provisionWithStoredAuth(
 // Terminal-line rendering of the provisioning outcome. `null` (not attempted)
 // and "already credentialed" stay quiet; a fresh mint is confirmed; every
 // failure is a warning, because none of them makes the command itself less
-// successful. The failures point at `traycer host doctor` rather than
-// promising that a later client will fix it: on a machine without Desktop no
-// client connects on its own, and the doctor reports a host left without its
-// credential.
+// successful. No failure outcome observed the host reporting `active` - and
+// most never observed its state at all - so they say the authorization is
+// not confirmed rather than asserting the host lacks one. They point at
+// `traycer host doctor` rather than promising that a later client will fix
+// it: on a machine without Desktop no client connects on its own, and the
+// doctor reports a host left without its credential.
 export function formatCredentialProvisionNote(
   outcome: HostCredentialProvisionOutcome | null,
 ): string | null {
@@ -371,18 +373,18 @@ export function formatCredentialProvisionNote(
     case "active":
       return outcome.minted ? "host authorized" : null;
     case "unreachable":
-      return `host not authorized (the host did not respond in time) - ${nextStep}`;
+      return `host authorization not confirmed (the host did not respond in time) - ${nextStep}`;
     case "unsupported":
-      return "host not authorized (this host can't be authorized from this version of the CLI)";
+      return "host authorization not confirmed (this version of the CLI can't authorize this host)";
     case "mint-unavailable":
-      return `host not authorized (the authorization did not complete) - ${nextStep}`;
+      return `host authorization not confirmed (the authorization did not complete) - ${nextStep}`;
     case "not-adopted":
-      return `host not authorized (the host did not confirm it in time) - ${nextStep}`;
+      return `host authorization not confirmed (the host did not confirm it in time) - ${nextStep}`;
     // A dead sign-in stops every client from minting, so the one thing that
     // helps is signing in again - say that directly.
     case "unauthorized":
-      return `host not authorized - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
+      return `host authorization not confirmed - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
-      return `host not authorized (${outcome.message}) - ${nextStep}`;
+      return `host authorization not confirmed (${outcome.message}) - ${nextStep}`;
   }
 }

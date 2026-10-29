@@ -1372,7 +1372,7 @@ describe("buildHostInstallCommand", () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it("{ kind: not-adopted }: human says the host is not authorized, exit code stays 0", async () => {
+    it("{ kind: not-adopted }: human says the authorization is not confirmed, exit code stays 0", async () => {
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue(
         sampleLifecycleHandle(),
@@ -1393,7 +1393,7 @@ describe("buildHostInstallCommand", () => {
         credentialProvision: { kind: "not-adopted" },
       });
       expect(result.human).toContain(
-        "host not authorized (the host did not confirm it in time)",
+        "host authorization not confirmed (the host did not confirm it in time)",
       );
       expect(result.exitCode).toBe(0);
     });
