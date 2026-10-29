@@ -7,6 +7,7 @@ import {
 } from "react";
 import type {
   SimulatorHostInstance,
+  SimulatorPlatformAvailability,
   SimulatorSession,
   SimulatorState,
   SimulatorSummary,
@@ -28,6 +29,7 @@ import {
   useSimulatorInstancesQuery,
   useSimulatorOpenMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
+import { useSimulatorRecheck } from "@/hooks/simulator/use-simulator-recheck";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -168,10 +170,14 @@ export function SimulatorTile(props: SimulatorTileProps) {
   }
   if (sessions.lifecycle === "unsupported") {
     return (
-      <SimulatorUnavailableView
+      <SimulatorUnavailableGate
+        hostId={hostId}
         hostLabel={hostLabel}
         platforms={[]}
         reason={sessions.errorMessage}
+        // The stream itself was refused, so there is nothing to refresh on
+        // it: reopening it is what asks this host again.
+        reread={sessions.retry}
       />
     );
   }
@@ -191,7 +197,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
     state,
     hostId,
     hostLabel,
-    onRetry: sessions.refresh,
+    refresh: sessions.refresh,
   });
   if (notReady !== null) return notReady;
   // Everything below turns on which verbs the host speaks, so the tile waits
@@ -236,18 +242,21 @@ function simulatorNotReadyView(args: {
   readonly state: SimulatorState;
   readonly hostId: string;
   readonly hostLabel: string;
-  readonly onRetry: () => void;
+  /** Asks the host to run discovery again: the platforms, the pack, the inventory. */
+  readonly refresh: () => void;
 }): ReactNode {
   const { state, hostLabel } = args;
   const noPlatform = state.platforms.every((platform) => !platform.available);
   if (state.packState.kind === "unsupported" || noPlatform) {
     return (
-      <SimulatorUnavailableView
+      <SimulatorUnavailableGate
+        hostId={args.hostId}
         hostLabel={hostLabel}
         platforms={state.platforms}
         reason={
           state.packState.kind === "unsupported" ? state.packState.reason : null
         }
+        reread={args.refresh}
       />
     );
   }
@@ -273,7 +282,7 @@ function simulatorNotReadyView(args: {
       <SimulatorFailedView
         title={`Couldn't set up mobile simulators on ${hostLabel}`}
         reason={state.packState.reason}
-        onRetry={args.onRetry}
+        onRetry={args.refresh}
       />
     );
   }
@@ -282,7 +291,7 @@ function simulatorNotReadyView(args: {
       <SimulatorFailedView
         title={`Mobile simulators stopped on ${hostLabel}`}
         reason={state.hubState.lastError}
-        onRetry={args.onRetry}
+        onRetry={args.refresh}
       />
     );
   }
@@ -423,6 +432,38 @@ function useSimulatorConnect(args: {
     [epicId, hostId, mutateAsync, node.simulatorId, onOpened, placeTile],
   );
   return { connect, connecting: awaiting, supported };
+}
+
+/**
+ * The unavailable view, with Check again wired to this host. The tile's own
+ * view follows the sessions stream, so `reread` asks the host there; the
+ * shared recheck moves every other surface's answer with it (Settings, the
+ * sidebar's panel, the pickers), and holds the status read the spinner
+ * follows.
+ */
+function SimulatorUnavailableGate(props: {
+  readonly hostId: string;
+  readonly hostLabel: string;
+  readonly platforms: readonly SimulatorPlatformAvailability[];
+  readonly reason: string | null;
+  readonly reread: () => void;
+}) {
+  const hostClient = useTabHostClient();
+  const { recheck, checking } = useSimulatorRecheck(hostClient, props.hostId);
+  const { reread } = props;
+  const onCheckAgain = useCallback(() => {
+    reread();
+    recheck();
+  }, [recheck, reread]);
+  return (
+    <SimulatorUnavailableView
+      hostLabel={props.hostLabel}
+      platforms={props.platforms}
+      reason={props.reason}
+      onCheckAgain={onCheckAgain}
+      checking={checking}
+    />
+  );
 }
 
 /** The setup view, with the switch wired to this host's `config.simulator.set`. */

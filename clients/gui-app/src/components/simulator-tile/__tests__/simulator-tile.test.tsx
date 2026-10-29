@@ -22,7 +22,10 @@ import type {
   SimulatorShutdownRequest,
   SimulatorShutdownResponse,
   SimulatorState,
+  SimulatorStatusResponse,
 } from "@traycer/protocol/host/simulator/schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import type { SimulatorStreamState } from "@/lib/simulator-view/simulator-stream-controller";
@@ -93,6 +96,9 @@ const fakes = vi.hoisted(() => ({
   openTile: vi.fn(),
   refresh: vi.fn(),
   retry: vi.fn(),
+  readStatus: vi.fn<() => Promise<SimulatorStatusResponse>>(
+    () => new Promise<SimulatorStatusResponse>(() => {}),
+  ),
   screenshot: vi.fn(),
   streamState: null as SimulatorStreamState | null,
   restart: vi.fn(),
@@ -132,7 +138,8 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
   // an answer depends on whether TanStack still delivers it to an observer
   // that may have unmounted, so a hand-rolled fake would pass whatever the
   // tile did with it.
-  const { useMutation } = await import("@tanstack/react-query");
+  const { useMutation, useQuery } = await import("@tanstack/react-query");
+  const { hostQueryKeys } = await import("@/lib/query-keys/host-query-keys");
   const gated = (mutate: unknown) => ({
     mutation: { mutate, isPending: false, variables: undefined },
     supported: true,
@@ -142,6 +149,17 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
       data: { enabled: false },
     }),
     useSimulatorConfigSetMutation: () => gated(fakes.configSet),
+    // A real query under the real key, so a Check again that invalidates it
+    // asks `fakes.readStatus` again.
+    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) =>
+      useQuery({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
+          hostId,
+          "simulator.status",
+          {},
+        ),
+        queryFn: () => fakes.readStatus(),
+      }),
     useSimulatorOpenMutation: () => ({
       mutation: useMutation({
         mutationFn: (variables: SimulatorOpenRequest) => fakes.open(variables),
@@ -256,6 +274,17 @@ const READY_STATE: SimulatorState = {
   booting: [],
 };
 
+/** `simulator.status` on a host that can run neither platform. */
+const NEITHER_STATUS: SimulatorStatusResponse = {
+  platforms: [
+    { platform: "ios", available: false, reason: "Xcode is not installed." },
+    { platform: "android", available: false, reason: "No Android SDK." },
+  ],
+  packState: { kind: "unsupported", reason: null, progress: null },
+  packVersion: null,
+  installed: null,
+};
+
 const STREAMING: SimulatorStreamState = {
   lifecycle: "streaming",
   detail: null,
@@ -327,21 +356,30 @@ function withTargetBooted(state: SimulatorState): SimulatorState {
  * effect or a replayed render is part of what the suite proves.
  */
 function renderTile(): () => void {
-  return renderTileFor(
-    makeSimulatorTileRef({
-      hostId: HOST,
-      simulatorId: UDID,
-      platform: "ios",
-      name: "iPhone 16",
-      instanceKey: null,
-    }),
-  );
+  return renderTileFor(ownTileRef());
+}
+
+function ownTileRef(): SimulatorTileRef {
+  return makeSimulatorTileRef({
+    hostId: HOST,
+    simulatorId: UDID,
+    platform: "ios",
+    name: "iPhone 16",
+    instanceKey: null,
+  });
 }
 
 function renderTileFor(node: SimulatorTileRef): () => void {
-  const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
-  });
+  return renderTileOn(
+    new QueryClient({ defaultOptions: { mutations: { retry: false } } }),
+    node,
+  );
+}
+
+function renderTileOn(
+  queryClient: QueryClient,
+  node: SimulatorTileRef,
+): () => void {
   // A fresh element each time: React skips a subtree handed the very same
   // element object, and the fake hook is only re-read on a real render.
   const tile = () => (
@@ -397,6 +435,7 @@ beforeEach(() => {
   fakes.hostInstances = [];
   fakes.hostInstancesAnswered = true;
   fakes.streamState = STREAMING;
+  fakes.readStatus.mockImplementation(() => Promise.resolve(NEITHER_STATUS));
 });
 
 afterEach(() => {
@@ -448,6 +487,92 @@ describe("SimulatorTile", () => {
     expect(
       screen.getByTestId("simulator-platform-reason-android").textContent,
     ).toContain("No Android SDK.");
+  });
+
+  describe("Check again", () => {
+    const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "simulator.list">(
+      HOST,
+      "simulator.list",
+      { epicId: EPIC },
+    );
+
+    const NO_PLATFORM: SimulatorState = {
+      ...READY_STATE,
+      platforms: NEITHER_STATUS.platforms,
+      packState: { kind: "unsupported", reason: null, progress: null },
+    };
+
+    /**
+     * The tile over a cache holding a `simulator.list` read, once the status
+     * read its unavailable view holds has settled: what is left is the click.
+     */
+    async function renderSettled(): Promise<{
+      readonly queryClient: QueryClient;
+      readonly button: HTMLElement;
+    }> {
+      const queryClient = new QueryClient({
+        defaultOptions: { mutations: { retry: false } },
+      });
+      queryClient.setQueryData(LIST_KEY, { simulators: [], sessions: [] });
+      renderTileOn(queryClient, ownTileRef());
+      const button = await screen.findByRole("button", { name: "Check again" });
+      await waitFor(() => {
+        expect(button).toHaveProperty("disabled", false);
+      });
+      return { queryClient, button };
+    }
+
+    it("on a host whose platforms are missing asks it to look again, and re-reads this host's status and list", async () => {
+      fakes.sessions = sessions({ state: NO_PLATFORM });
+      const { queryClient, button } = await renderSettled();
+      const readsBefore = fakes.readStatus.mock.calls.length;
+
+      fireEvent.click(button);
+
+      expect(fakes.refresh).toHaveBeenCalledTimes(1);
+      expect(fakes.retry).not.toHaveBeenCalled();
+      expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+      await waitFor(() => {
+        expect(fakes.readStatus.mock.calls.length).toBeGreaterThan(readsBefore);
+      });
+    });
+
+    it("on a host that cannot serve the stream reopens it, and re-reads this host's status and list", async () => {
+      fakes.sessions = sessions({
+        lifecycle: "unsupported",
+        state: null,
+        errorMessage:
+          "This host needs an update before it can show simulators.",
+      });
+      const { queryClient, button } = await renderSettled();
+      const readsBefore = fakes.readStatus.mock.calls.length;
+
+      fireEvent.click(button);
+
+      expect(fakes.retry).toHaveBeenCalledTimes(1);
+      expect(fakes.refresh).not.toHaveBeenCalled();
+      expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+      await waitFor(() => {
+        expect(fakes.readStatus.mock.calls.length).toBeGreaterThan(readsBefore);
+      });
+    });
+
+    it("holds the button, spinning, while the status read it sent is out", async () => {
+      fakes.sessions = sessions({ state: NO_PLATFORM });
+      const { button } = await renderSettled();
+      fakes.readStatus.mockImplementation(
+        () => new Promise<SimulatorStatusResponse>(() => {}),
+      );
+
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(button).toHaveProperty("disabled", true);
+      });
+      expect(
+        screen.queryByTestId("simulator-check-again-spinner"),
+      ).not.toBeNull();
+    });
   });
 
   it("shows the setup view with the switch while simulators are off, and turns them on", () => {
