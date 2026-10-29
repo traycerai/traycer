@@ -1100,7 +1100,10 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
     await land();
 
     expect(questionThreadBox().value).toBe("");
-    expect((screen.getByTestId("bot-thread-composer-send") as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByTestId("bot-thread-composer-send") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
     expect(sent).toHaveLength(1);
   });
 
