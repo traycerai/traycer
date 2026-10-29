@@ -63,6 +63,7 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { markReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
@@ -470,11 +471,14 @@ export function returnPendingSandboxSendToSandbox(
   if (pick.clientRequestId !== null)
     staged.report(surfaceKey, { clientRequestId: pick.clientRequestId });
   // The draft now holding the message keeps its destination, so a reload
-  // stages it again (`useReturnedSandboxStage`).
-  drafts.setReturnedSandbox(returned.epicId, {
+  // stages it again (`useReturnedSandboxStage`); the stage is that draft's
+  // restored one, so it leaves the composer with the draft.
+  const returnedSandbox = {
     target: pick.target,
     clientRequestId: pick.clientRequestId,
-  });
+  };
+  drafts.setReturnedSandbox(returned.epicId, returnedSandbox);
+  markReturnedSandboxRestored(surfaceKey, returnedSandbox);
   if (pick.target.kind === "existing")
     pins.setSelection(surfaceKey, pick.target.hostId);
   return returned;

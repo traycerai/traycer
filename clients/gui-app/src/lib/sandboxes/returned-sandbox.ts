@@ -36,9 +36,35 @@ export function onReturnedSandboxSuperseded(
   };
 }
 
+/**
+ * The returned sandbox a composer restored onto each surface. Only a stage
+ * restored there is ever released; a pick drops the mark. In memory only, as
+ * composer stages are: a reload restores, and marks, again.
+ */
+const restoredBySurface = new Map<string, ReturnedSandbox>();
+
 /** A placement the person picked on `surfaceKey` supersedes a returned sandbox. */
 export function supersedeReturnedSandbox(surfaceKey: string): void {
+  restoredBySurface.delete(surfaceKey);
   supersedeBySurface.get(surfaceKey)?.();
+}
+
+/** Records that `returned` was restored onto `surfaceKey`. */
+export function markReturnedSandboxRestored(
+  surfaceKey: string,
+  returned: ReturnedSandbox,
+): void {
+  restoredBySurface.set(surfaceKey, returned);
+}
+
+/** Drops the surface's mark, and says whether it was `returned`'s. */
+export function takeReturnedSandboxRestored(
+  surfaceKey: string,
+  returned: ReturnedSandbox,
+): boolean {
+  const restored = restoredBySurface.get(surfaceKey) ?? null;
+  restoredBySurface.delete(surfaceKey);
+  return sameReturnedSandbox(restored, returned);
 }
 
 /**

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import {
+  markReturnedSandboxRestored,
   onReturnedSandboxSuperseded,
   sameReturnedSandbox,
   stageIsReturnedSandbox,
+  takeReturnedSandboxRestored,
   type ReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
 import {
@@ -79,7 +81,10 @@ export function useLandingReturnedSandbox(
  * Send goes to that sandbox again, with the same create key. A stage of the
  * composer's own always wins. Any pick in the composer's picker forgets the
  * returned sandbox, and so does its stage leaving the composer (sent, or
- * replaced). `surfaceKey` is null while the composer is inactive.
+ * replaced). The restored stage leaves with its draft: when the composer
+ * stops showing the draft, it takes the stage off the surface and the draft
+ * keeps it, to restore when it is shown again. `surfaceKey` is null while
+ * the composer is inactive.
  */
 function useReturnedSandboxStage(
   surfaceKey: string | null,
@@ -91,6 +96,25 @@ function useReturnedSandboxStage(
     if (surfaceKey === null) return;
     return onReturnedSandboxSuperseded(surfaceKey, forget);
   }, [forget, surfaceKey]);
+
+  useEffect(() => {
+    if (surfaceKey === null) return;
+    return () => {
+      // Runs before the next shown draft installs its own. Only a stage this
+      // draft restored is released: a pick has dropped the mark, and one a
+      // send or create has taken up is left to it.
+      const live = read();
+      if (live === null) return;
+      const restored = takeReturnedSandboxRestored(surfaceKey, live);
+      const stage = readStagedSandbox(surfaceKey);
+      if (
+        restored &&
+        stage?.phase === "staged" &&
+        stageIsReturnedSandbox(stage, live)
+      )
+        useStagedSandboxStore.getState().clear(surfaceKey);
+    };
+  }, [read, surfaceKey]);
 
   useEffect(() => {
     if (surfaceKey === null || returned === null) return;
@@ -105,6 +129,7 @@ function useReturnedSandboxStage(
     staged.stage(surfaceKey, returned.target);
     if (returned.clientRequestId !== null)
       staged.report(surfaceKey, { clientRequestId: returned.clientRequestId });
+    markReturnedSandboxRestored(surfaceKey, returned);
   }, [read, returned, surfaceKey]);
 
   const stage = useStagedSandbox(surfaceKey ?? "");
