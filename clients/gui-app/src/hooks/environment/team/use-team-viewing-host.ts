@@ -143,7 +143,9 @@ export function useTeamViewingHost(): TeamViewingHost {
 export function canSwitchViewingHost(scope: TeamViewingHost): boolean {
   const viewing = scope.viewingHost;
   if (viewing === null) return false;
-  const hosts = scope.hosts.isError ? NO_HOSTS : (scope.hosts.data?.hosts ?? NO_HOSTS);
+  const hosts = scope.hosts.isError
+    ? NO_HOSTS
+    : (scope.hosts.data?.hosts ?? NO_HOSTS);
   return hosts.some(
     (host) =>
       host.hostId !== viewing.hostId && scope.canSelectHost(host.hostId),
