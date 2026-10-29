@@ -19,6 +19,14 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
 import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
 import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
+import { hostNameFromLabel, UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
+
+export {
+  hostLabelAtSentenceStart,
+  hostNameFromLabel,
+  quotedHostReference,
+  UNNAMED_HOST_LABEL,
+} from "@/lib/host/host-name";
 
 export type HostReachabilityStatus =
   | "checking"
@@ -75,13 +83,6 @@ export type HostReachabilityBasis = "directory" | "starting-deadline";
  * meaning of the same word. Consumers ask for the kind they care about.
  */
 export type HostReachabilityHostKind = HostKind | "unknown";
-
-/**
- * What copy calls a host the directory has no name for: before it resolves, a
- * host it does not list, a listed one with an empty label. Never the host id,
- * which names nothing a person can act on; keys and diagnostics use `hostId`.
- */
-export const UNNAMED_HOST_LABEL = "the host";
 
 export interface HostReachability {
   readonly status: HostReachabilityStatus;
@@ -255,7 +256,7 @@ export function useHostReachability(hostId: string): HostReachability {
     if (isLocalHostBootingEntry(entry)) {
       return {
         status: "host-starting",
-        hostLabel: entry.label.length > 0 ? entry.label : UNNAMED_HOST_LABEL,
+        hostLabel: hostNameFromLabel(entry.label, hostId),
         unavailability: null,
         basis: "directory",
         hostKind: "local",
@@ -280,7 +281,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // a dead tile — a banner, and for terminals a "permanently closed"
     // notification. So it gates on the REASON, and only the reason that is
     // actually evidence about the host.
-    const hostLabel = entry.label.length > 0 ? entry.label : UNNAMED_HOST_LABEL;
+    const hostLabel = hostNameFromLabel(entry.label, hostId);
     const hostKind = entry.kind;
     const unavailability = hostUnavailability(entry);
     if (unavailability === null) {
@@ -429,29 +430,6 @@ export function resolvedHostLabel(
   return reachability.hostLabel === UNNAMED_HOST_LABEL
     ? null
     : reachability.hostLabel;
-}
-
-/**
- * A host label where it opens a sentence: "The host" when the host has no
- * name, a real name exactly as the host reported it - never recapitalized.
- */
-export function hostLabelAtSentenceStart(hostLabel: string): string {
-  return hostLabel === UNNAMED_HOST_LABEL ? "The host" : hostLabel;
-}
-
-/**
- * A host where copy quotes its name: `host "Ada's Mac"`, or "the host" when it
- * has none - never `host "the host"`. `atSentenceStart` capitalizes the
- * leading word, which is never part of the name.
- */
-export function quotedHostReference(
-  hostLabel: string,
-  atSentenceStart: boolean,
-): string {
-  if (hostLabel === UNNAMED_HOST_LABEL) {
-    return atSentenceStart ? "The host" : UNNAMED_HOST_LABEL;
-  }
-  return `${atSentenceStart ? "Host" : "host"} "${hostLabel}"`;
 }
 
 /**

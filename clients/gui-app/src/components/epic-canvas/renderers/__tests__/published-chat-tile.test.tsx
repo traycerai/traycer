@@ -234,12 +234,48 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
 }));
-vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/agent/use-host-reachability")
-  >()),
-  useHostReachability: (hostId: string) => mockUseHostReachability(hostId),
-}));
+// A case that hands in a directory runs the REAL reachability hook over it;
+// every other case answers from `mockUseHostReachability`.
+const realDirectory = vi.hoisted(
+  (): { entries: HostDirectoryEntry[] | null } => ({ entries: null }),
+);
+vi.mock(
+  "@/hooks/host/use-host-directory-list-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/host/use-host-directory-list-query")
+      >();
+    return {
+      ...actual,
+      useHostDirectoryList: () => {
+        const real = actual.useHostDirectoryList();
+        return realDirectory.entries === null
+          ? real
+          : {
+              ...real,
+              data: realDirectory.entries,
+              fetchStatus: "idle" as const,
+            };
+      },
+    };
+  },
+);
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/agent/use-host-reachability")
+    >();
+  return {
+    ...actual,
+    useHostReachability: (hostId: string) => {
+      const real = actual.useHostReachability(hostId);
+      return realDirectory.entries === null
+        ? mockUseHostReachability(hostId)
+        : real;
+    },
+  };
+});
 // The chat's sandbox state and the viewer's epic role, stubbed at their own
 // seams: both hooks have their own suites, and this one is about the tile's
 // wiring of what they answer. With `sources` set, the REAL state hook runs
@@ -662,6 +698,7 @@ afterEach(() => {
   runtime.messenger = null;
   appHost.client = null;
   appHost.hostsByEnvironmentId.clear();
+  realDirectory.entries = null;
   resetNegotiatedManifests();
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
@@ -1452,6 +1489,47 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
     );
     await waitFor(() => {
       expect(hostListCalls()).toEqual([{ environmentId: "env-personal" }]);
+    });
+  });
+
+  // The registry hands a host it has no display name for to the directory
+  // labelled with its own id (`hostListItemToDirectoryEntry`). Through the
+  // REAL reachability hook, that label is no name: the tile asks the account,
+  // and says "the host" when the account has none either.
+  describe("a listed owner whose directory label is its own id", () => {
+    beforeEach(() => {
+      realDirectory.entries = [
+        remoteEntry("host-1", null),
+        { ...OFFLINE_OWNER_ROW, label: "owner-host-1" },
+      ];
+    });
+
+    it("takes the account's label for the host", async () => {
+      signInOnAppHost(["environment.list", "environment.host.list"]);
+      appHost.hostsByEnvironmentId.set("env-personal", [OWNER_RECORD]);
+
+      const view = await renderTile();
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+        ).toContain(
+          'Clone this agent to continue while "windows-test-machine" is offline; the original stays there.',
+        );
+      });
+      expect(view.container.textContent).not.toContain("owner-host-1");
+    });
+
+    it('says "the host" when the account has no label for it either', async () => {
+      signInOnAppHost(["environment.list", "environment.host.list"]);
+
+      const view = await renderTile();
+      await settled();
+
+      expect(
+        screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+      ).toContain("Clone this agent to continue while the host is offline");
+      expect(view.container.textContent).not.toContain("owner-host-1");
     });
   });
 });

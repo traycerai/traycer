@@ -6,6 +6,7 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
+import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
 
 /**
  * The honest-state gate for a host-scoped panel. Its contract has two planes,
@@ -51,7 +52,7 @@ export function HostScopeGate(props: {
     return (
       <HostScopeNotice
         tone="warn"
-        title={`${scope.hostLabel} is no longer registered`}
+        title={`${hostLabelAtSentenceStart(scope.hostLabel)} is no longer registered`}
         detail="It was removed from your account, or signed out. Nothing here can act on it."
         action={
           <Button

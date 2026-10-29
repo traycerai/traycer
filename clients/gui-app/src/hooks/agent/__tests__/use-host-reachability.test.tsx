@@ -229,6 +229,14 @@ describe("useHostReachability's label for a host it cannot name", () => {
       fetchStatus: "idle",
       status: "reachable",
     },
+    {
+      // The registry lists a host it has no display name for under its id.
+      name: "a listed host labelled with its own id",
+      hostId: "host-a",
+      data: [entry({ label: "host-a" })],
+      fetchStatus: "idle",
+      status: "reachable",
+    },
   ])(
     "is the host, never the id, for $name",
     ({ hostId, data, fetchStatus, status }) => {
