@@ -230,6 +230,13 @@ describe("useHostReachability's label for a host it cannot name", () => {
       status: "reachable",
     },
     {
+      name: "a listed host whose label is only whitespace",
+      hostId: "host-a",
+      data: [entry({ label: "   " })],
+      fetchStatus: "idle",
+      status: "reachable",
+    },
+    {
       // The registry lists a host it has no display name for under its id.
       name: "a listed host labelled with its own id",
       hostId: "host-a",

@@ -1,6 +1,8 @@
 import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
 import {
+  hostNameFromLabel,
   resolvedHostLabel,
+  UNNAMED_HOST_LABEL,
   type HostReachability,
 } from "@/hooks/agent/use-host-reachability";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
@@ -12,7 +14,10 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 
-/** The label a host reported to an environment it is bound to, if any. */
+/**
+ * The name a host reported to an environment it is bound to, if any. A label
+ * that is blank or the id itself names nothing, so the search goes on.
+ */
 function environmentHostLabel(
   hostsByEnvironmentId: ReadonlyMap<
     string,
@@ -22,9 +27,8 @@ function environmentHostLabel(
 ): string | null {
   for (const hosts of hostsByEnvironmentId.values()) {
     const label = hosts.find((host) => host.hostId === hostId)?.hostLabel;
-    if (label !== undefined && label !== null && label.length > 0) {
-      return label;
-    }
+    const name = hostNameFromLabel(label ?? null, hostId);
+    if (name !== UNNAMED_HOST_LABEL) return name;
   }
   return null;
 }

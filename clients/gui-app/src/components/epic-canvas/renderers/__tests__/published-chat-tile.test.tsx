@@ -1426,6 +1426,67 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
     expect(view.container.textContent).not.toContain("owner-host-1");
   });
 
+  // A label the host reported that is its own id names nothing either: the
+  // search goes on to the next environment, and stops at "the host".
+  describe("an account record labelled with the host's own id", () => {
+    const ID_LABELLED_RECORD: EnvironmentHostRecordV12 = {
+      ...OWNER_RECORD,
+      hostLabel: "owner-host-1",
+    };
+
+    it("takes the next environment's name for the host", async () => {
+      signInOnAppHost(["environment.list", "environment.host.list"]);
+      environments.list = {
+        environments: [
+          ...PERSONAL.environments,
+          {
+            environmentId: "env-team",
+            ownerKind: "organization",
+            ownerId: "org-1",
+            roomId: "room-team",
+            label: "acme",
+          },
+        ],
+      };
+      appHost.hostsByEnvironmentId.set("env-personal", [ID_LABELLED_RECORD]);
+      appHost.hostsByEnvironmentId.set("env-team", [OWNER_RECORD]);
+      mockUseHostReachability.mockReturnValue(UNLISTED_OWNER);
+
+      const view = await renderTile();
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("chat-tile-session-view").textContent,
+        ).toContain(
+          "This agent lives on windows-test-machine, which is offline",
+        );
+      });
+      expect(
+        screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+      ).toContain(
+        'Clone this agent to continue while "windows-test-machine" is offline',
+      );
+      expect(view.container.textContent).not.toContain("owner-host-1");
+    });
+
+    it('says "the host" when that is the only record', async () => {
+      signInOnAppHost(["environment.list", "environment.host.list"]);
+      appHost.hostsByEnvironmentId.set("env-personal", [ID_LABELLED_RECORD]);
+      mockUseHostReachability.mockReturnValue(UNLISTED_OWNER);
+
+      const view = await renderTile();
+      await settled();
+
+      expect(
+        screen.getByTestId("chat-tile-session-view").textContent,
+      ).toContain("This agent lives on the host, which is offline");
+      expect(
+        screen.getByTestId("published-chat-dead-tile-chat-1").textContent,
+      ).toContain("Clone this agent to continue while the host is offline");
+      expect(view.container.textContent).not.toContain("owner-host-1");
+    });
+  });
+
   it.each([
     {
       name: "no environment lists the host",

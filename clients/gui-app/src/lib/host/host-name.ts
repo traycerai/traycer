@@ -6,14 +6,14 @@
 
 /**
  * What copy calls a host the directory has no name for: before it resolves, a
- * host it does not list, a listed one whose label is empty or the id itself.
+ * host it does not list, a listed one whose label is blank or the id itself.
  * Never the host id, which names nothing a person can act on; keys and
  * diagnostics use `hostId`.
  */
 export const UNNAMED_HOST_LABEL = "the host";
 
 /**
- * A label as a host's name, or {@link UNNAMED_HOST_LABEL}: an empty label, or
+ * A label as a host's name, or {@link UNNAMED_HOST_LABEL}: a blank label, or
  * one that is the host id itself, names nothing. The registry hands a host it
  * has no display name for to the directory labelled with its id
  * (`hostListItemToDirectoryEntry`), so a label is not a name just for being
@@ -23,7 +23,7 @@ export function hostNameFromLabel(
   label: string | null,
   hostId: string,
 ): string {
-  if (label === null || label.length === 0 || label === hostId) {
+  if (label === null || label.trim().length === 0 || label === hostId) {
     return UNNAMED_HOST_LABEL;
   }
   return label;
