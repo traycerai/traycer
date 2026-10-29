@@ -634,6 +634,31 @@ function liveSendDestination(send: PendingSandboxSend): ReturnedSandbox | null {
   return stage === null ? null : stagedSandboxDestination(stage);
 }
 
+/**
+ * Finishes a withdrawal recorded earlier (a reload, or a failed draft write)
+ * as it was decided: to Drafts or not, and with the sandbox it recorded.
+ */
+export function resumePendingSandboxMessageReturn(
+  id: string,
+): Promise<ReturnedPendingSandboxSend> {
+  const { sends } = usePendingSandboxSendStore.getState();
+  const requested = Object.hasOwn(sends, id)
+    ? sends[id].returnRequested
+    : undefined;
+  if (requested === undefined) return Promise.resolve({ kind: "none" });
+  return returnBoundMessageOnce(
+    id,
+    requested.saveInDrafts,
+    requested.destination ?? null,
+  );
+}
+
+function recordedReturnDestination(id: string): ReturnedSandbox | null {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return null;
+  return sends[id].returnRequested?.destination ?? null;
+}
+
 /** One async hand-back owns the source until the replacement and its reads settle. */
 function returnBoundMessageOnce(
   id: string,
@@ -742,7 +767,7 @@ function boundMessageNeedsSavedDraft(
 async function returnBoundMessage(
   id: string,
   saveInDrafts: boolean,
-  destination: ReturnedSandbox | null,
+  requested: ReturnedSandbox | null,
 ): Promise<ReturnedPendingSandboxSend> {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
@@ -755,8 +780,13 @@ async function returnBoundMessage(
     request.chatId,
     saveInDrafts,
   );
-  if (!usePendingSandboxSendStore.getState().beginReturn(id, toDraft))
+  if (
+    !usePendingSandboxSendStore.getState().beginReturn(id, toDraft, requested)
+  )
     return { kind: "dispatching" };
+  // The decision recorded when the withdrawal began, this one's or an
+  // earlier one's: a replay never decides again.
+  const destination = recordedReturnDestination(id);
   const reason = boundMessageReturnReason(send, request);
   let returned: ReturnedPendingSandboxSend;
   if (toDraft) {

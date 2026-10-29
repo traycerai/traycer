@@ -7,14 +7,21 @@ import {
 } from "@/lib/drafts/unrecorded-prompt-handoff";
 import {
   pendingSandboxRecoveryDraftId,
+  resumePendingSandboxMessageReturn,
   returnPendingSandboxMessage,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
 import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
@@ -347,7 +354,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
 
     expect(
       usePendingSandboxSendStore.getState().sends[SEND_ID]?.returnRequested,
-    ).toEqual({ saveInDrafts: true });
+    ).toEqual({ saveInDrafts: true, destination: null });
     // Settle it: a per-id return left pending would be joined by every later
     // case that reuses this send id.
     outcome.resolve({
@@ -416,6 +423,132 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
       EMPTY_DOC,
     );
+    release();
+  });
+});
+
+/**
+ * A return's decision about the sandbox is recorded with the return, so a
+ * replay (the return driver, or the retry item) consumes it: a draft never
+ * names a sandbox the person turned away from, whoever finishes the return.
+ */
+describe("a bound return's sandbox decision, replayed", () => {
+  const CHAT_SANDBOX = {
+    kind: "existing" as const,
+    hostId: "sandbox-host",
+    sandboxId: "sandbox-1",
+    name: "build-box",
+    configuration: { kind: "personal" as const },
+    verb: "resume" as const,
+  };
+
+  /** The handoff that saves the draft, as the real one does on success. */
+  function savingHandoff(): void {
+    handoff.mockImplementation((input) => {
+      const recovery = input.recovery;
+      if (recovery === undefined) throw new Error("expected a recovery draft");
+      useLandingDraftStore.getState().installLandingDraft({
+        id: recovery.draftId,
+        content: input.content,
+        selection: null,
+        lastTouchedAt: 1,
+        settings: recovery.settings,
+        composerMode: "chat",
+        workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: true,
+      });
+      return Promise.resolve({
+        draftId: recovery.draftId,
+        readsSettled: Promise.resolve(),
+      });
+    });
+  }
+
+  async function ownedOnItsSandbox(): Promise<() => void> {
+    useComposerDraftStore.getState().replaceDraft(CHAT_ID, OCCUPIED_DOC, null);
+    const release = await ownedMessageSend({
+      kind: "message",
+      chatId: CHAT_ID,
+    });
+    const surfaceKey = pendingSendSurfaceKey(SEND_ID);
+    const staged = useStagedSandboxStore.getState();
+    staged.stage(surfaceKey, CHAT_SANDBOX);
+    staged.report(surfaceKey, {
+      createdSandboxId: CHAT_SANDBOX.sandboxId,
+      createdHostId: CHAT_SANDBOX.hostId,
+    });
+    return release;
+  }
+
+  function savedRecord() {
+    return useLandingDraftStore
+      .getState()
+      .drafts.find(
+        (draft) => draft.id === pendingSandboxRecoveryDraftId(SEND_ID),
+      )?.returnedSandbox;
+  }
+
+  it("keeps Choose another host's no-sandbox decision when a failed return is replayed", async () => {
+    const release = await ownedOnItsSandbox();
+    handoff.mockRejectedValueOnce(new Error("draft write failed"));
+
+    await expect(
+      returnPendingSandboxMessage(SEND_ID, false, false),
+    ).rejects.toThrow("draft write failed");
+    const requested =
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.returnRequested;
+    if (requested === undefined) throw new Error("expected a recorded return");
+
+    savingHandoff();
+    // The replay the return driver and the retry item used to make: their
+    // own call keeps the sandbox, and the recorded decision wins.
+    const returned = await returnPendingSandboxMessage(
+      SEND_ID,
+      requested.saveInDrafts,
+      true,
+    );
+
+    expect(returned).toEqual({
+      kind: "landing-draft",
+      draftId: pendingSandboxRecoveryDraftId(SEND_ID),
+    });
+    expect(savedRecord()).toBeNull();
+    release();
+  });
+
+  it("keeps the sandbox a failed return decided to keep when it is replayed after a reload", async () => {
+    const release = await ownedOnItsSandbox();
+    handoff.mockRejectedValueOnce(new Error("draft write failed"));
+
+    await expect(
+      returnPendingSandboxMessage(SEND_ID, false, true),
+    ).rejects.toThrow("draft write failed");
+    // A reload: the record is read back from storage, and the stage the
+    // decision was made from is gone with the window, so only the record
+    // can say where the draft goes.
+    const saved: Array<[string, string]> = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      const value = key === null ? null : localStorage.getItem(key);
+      if (key !== null && value !== null) saved.push([key, value]);
+    }
+    useStagedSandboxStore.setState({ bySurface: {} });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    localStorage.clear();
+    for (const [key, value] of saved) localStorage.setItem(key, value);
+    await usePendingSandboxSendStore.persist.rehydrate();
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.returnRequested,
+    ).toBeDefined();
+
+    savingHandoff();
+    const returned = await resumePendingSandboxMessageReturn(SEND_ID);
+
+    expect(returned.kind).toBe("landing-draft");
+    expect(savedRecord()).toMatchObject({
+      target: CHAT_SANDBOX,
+      clientRequestId: null,
+    });
     release();
   });
 });
