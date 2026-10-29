@@ -468,11 +468,24 @@ describe("what the bot knows, in the rail", () => {
       "4",
     );
     expect(within(pane).getByTestId("bot-memory-meter-line").textContent).toBe(
-      "Release Bot's own memories: 3 of about 80. When it fills, Release Bot is asked to remove the ones that no longer hold.",
+      "Release Bot's own memories: 3, nearly empty. When it fills, Release Bot is asked to tidy them, removing the ones that no longer hold; nothing is dropped on its own.",
     );
+
+    sendMemory({
+      ...MEMORY,
+      own: { entries: 3, chars: 3_600, ceiling: 8_000 },
+    });
+    await waitFor(() =>
+      expect(
+        within(pane).getByRole("meter").getAttribute("aria-valuenow"),
+      ).toBe("45"),
+    );
+    expect(
+      within(pane).getByTestId("bot-memory-meter-line").textContent,
+    ).toMatch(/^Release Bot's own memories: 3, about half full\. /);
   });
 
-  it("marks an entry written while it is open as new, with the date of the entry it replaced", async () => {
+  it("marks an entry written while it is open as new, and claims nothing of the entry it may have replaced", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);
     const pane = await openPane(user, MEMORY);
@@ -496,56 +509,12 @@ describe("what the bot knows, in the rail", () => {
     const [fresh, ...rest] = rowsOf(own);
     expect(fresh.getAttribute("data-new")).toBe("true");
     expect(metaOf(fresh)).toMatch(
-      new RegExp(
-        `^New · Written .+ from "${MEMORY_POST_LINE}" · replaces an entry from .+$`,
-      ),
+      new RegExp(`^New · Written .+ from "${MEMORY_POST_LINE}"$`),
     );
     expect(rest.map((row) => row.getAttribute("data-new"))).toEqual([
       null,
       null,
     ]);
-  });
-
-  it("pairs a replacement written before the old entry goes, and leaves a write that replaced nothing plainly new", async () => {
-    const user = userEvent.setup();
-    render(<MountedKnowingChannel />);
-    const pane = await openPane(user, MEMORY);
-
-    const replacement = entry({
-      id: "01ARZ3NDEKTSV4RRFFQ69G5FA5",
-      text: "The Codex CLI bump is no longer held",
-      tags: [BOT_ID],
-      botId: BOT_ID,
-      chatId: TRUNK_ID,
-      requestId: null,
-      at: NOW,
-      confirmedAt: NOW,
-    });
-    const unrelated = entry({
-      id: "01ARZ3NDEKTSV4RRFFQ69G5FA6",
-      text: "The audit runs at night",
-      tags: ["all"],
-      botId: OTHER_BOT_ID,
-      chatId: "other-chat",
-      requestId: null,
-      at: NOW,
-      confirmedAt: NOW,
-    });
-    // Written first, the old entry removed after, each read on its own.
-    sendMemory(memoryOf([...MEMORY.entries, replacement, unrelated]));
-    const own = within(pane).getByTestId("bot-memory-own");
-    await waitFor(() => expect(textsOf(own)[0]).toBe(replacement.text));
-    expect(metaOf(rowsOf(own)[0])).not.toMatch(/replaces/);
-    sendMemory(
-      memoryOf([FROM_POST, FROM_THREAD, SHARED, replacement, unrelated]),
-    );
-
-    await waitFor(() =>
-      expect(metaOf(rowsOf(own)[0])).toMatch(/ · replaces an entry from .+$/),
-    );
-    const [fresh] = rowsOf(within(pane).getByTestId("bot-memory-shared"));
-    expect(fresh.getAttribute("data-new")).toBe("true");
-    expect(metaOf(fresh)).toMatch(/^New · Written .+ by Audit Bot$/);
   });
 
   it("finds the entries whose text holds what is typed", async () => {

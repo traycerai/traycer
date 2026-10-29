@@ -18,9 +18,9 @@ import {
   type BotMemoryReading,
 } from "@/hooks/bots/use-bot-memory";
 import {
-  aboutCapacity,
   confirmedSinceWritten,
   fillOf,
+  fullnessOf,
   initialMemoryMarks,
   memorySections,
   nextMemoryMarks,
@@ -65,8 +65,7 @@ export interface BotMemoryPanelProps {
  * first, each with when and where it was written and when it was last
  * confirmed; the ones shared with every bot below, with the bot that wrote
  * each; a find box; and how full its own memory is. Live: an entry written
- * while the pane is open is marked new, with the date of the one it
- * replaced. It takes the rail's one slot, a thread included, whose crumb in
+ * while the pane is open is marked new. It takes the rail's one slot, a thread included, whose crumb in
  * the header brings it back.
  */
 export function BotMemoryPanel(props: BotMemoryPanelProps): ReactNode {
@@ -305,7 +304,7 @@ function EmptyLine(props: { readonly text: string }): ReactNode {
  * One entry: its text, then when it was confirmed and when and where it was
  * written - or that it was never confirmed since - and for a shared entry
  * the bot that wrote it. An entry written while the pane is open says it is
- * new, and the date of the entry it replaced.
+ * new.
  */
 function MemoryRow(
   props: ListProps & {
@@ -316,7 +315,6 @@ function MemoryRow(
 ): ReactNode {
   const { entry, marks } = props;
   const isNew = marks.added.has(entry.id);
-  const replaced = marks.added.get(entry.id) ?? null;
   const writer = props.shared ? writerOf(props, entry.writtenBy.botId) : null;
   return (
     <li
@@ -354,9 +352,6 @@ function MemoryRow(
         {isNew || confirmedSinceWritten(entry)
           ? null
           : " · never confirmed since"}
-        {replaced === null ? null : (
-          <Stamp prefix=" · replaces an entry from " at={replaced} />
-        )}
       </p>
     </li>
   );
@@ -476,17 +471,19 @@ function WhereLink(props: {
 }
 
 /**
- * How full the bot's own memory is, as a meter, and the one sentence on
- * what happens when it fills.
+ * How full the bot's own memory is, as a meter and in words, and the one
+ * sentence on what happens when it fills.
  */
 function MemoryMeter(props: {
   readonly botTitle: string;
   readonly usage: BotMemoryTagUsage;
 }): ReactNode {
   const { botTitle, usage } = props;
-  const about = aboutCapacity(usage);
+  const fullness = fullnessOf(usage);
   const over = usage.chars > usage.ceiling;
   const percent = Math.round(fillOf(usage) * 100);
+  const count =
+    fullness === null ? "none yet." : `${usage.entries}, ${fullness}.`;
   return (
     <div className="mt-auto flex flex-col gap-1.5 px-4 pt-4 pb-3">
       <div
@@ -507,19 +504,8 @@ function MemoryMeter(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="bot-memory-meter-line"
       >
-        {`${botTitle}'s own memories: ${countLine(usage, about, over)} When it fills, ${botTitle} is asked to remove the ones that no longer hold.`}
+        {`${botTitle}'s own memories: ${count} When it fills, ${botTitle} is asked to tidy them, removing the ones that no longer hold; nothing is dropped on its own.`}
       </p>
     </div>
   );
-}
-
-/** "7 of about 40.", "none yet." or "41, over its limit." */
-function countLine(
-  usage: BotMemoryTagUsage,
-  about: number | null,
-  over: boolean,
-): string {
-  if (about === null) return "none yet.";
-  if (over) return `${usage.entries}, over its limit.`;
-  return `${usage.entries} of about ${about}.`;
 }

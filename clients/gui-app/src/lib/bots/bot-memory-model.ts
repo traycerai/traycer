@@ -65,85 +65,53 @@ export function confirmedSinceWritten(entry: BotMemoryEntry): boolean {
   );
 }
 
-/**
- * Roughly how many entries of the size the bot keeps fit under its ceiling:
- * the "about 40" of "7 of about 40". `null` with nothing kept to measure by.
- */
-export function aboutCapacity(usage: BotMemoryTagUsage): number | null {
-  if (usage.entries === 0 || usage.chars === 0) return null;
-  return Math.max(
-    usage.entries,
-    Math.round((usage.entries * usage.ceiling) / usage.chars),
-  );
-}
-
 /** How full the tag is, from 0 to 1. */
 export function fillOf(usage: BotMemoryTagUsage): number {
   return Math.min(1, usage.chars / usage.ceiling);
 }
 
 /**
- * What the pane has seen change while it was open: the entries written since
- * (`New`), each with when the entry it took the place of was written, if one
- * went in the same stretch (`replaces an entry from <date>`).
+ * How full the tag is, in words, from the share of its ceiling it uses:
+ * "nearly empty", "less than half full", "about half full", "more than half
+ * full", "nearly full", or "over its limit". `null` with nothing kept.
+ */
+export function fullnessOf(usage: BotMemoryTagUsage): string | null {
+  if (usage.entries === 0) return null;
+  const share = usage.chars / usage.ceiling;
+  if (share > 1) return "over its limit";
+  if (share >= 0.9) return "nearly full";
+  if (share > 0.6) return "more than half full";
+  if (share >= 0.4) return "about half full";
+  if (share >= 0.1) return "less than half full";
+  return "nearly empty";
+}
+
+/**
+ * What the pane has seen arrive while it was open: the entries written since
+ * it first read the memory, marked `New`.
  */
 export interface MemoryMarks {
-  /** The entries of the last reading, by id. */
-  readonly seen: ReadonlyMap<string, BotMemoryEntry>;
-  /** New entries, by id: the replaced entry's write time, `null` for none. */
-  readonly added: ReadonlyMap<string, number | null>;
-  /** Entries gone since, not yet paired with a new one. */
-  readonly removed: ReadonlyArray<BotMemoryEntry>;
+  /** The ids of the last reading. */
+  readonly seen: ReadonlySet<string>;
+  /** The ids of the entries written since, still kept. */
+  readonly added: ReadonlySet<string>;
 }
 
 /** The marks of a pane that has read `entries` first: nothing new yet. */
 export function initialMemoryMarks(
   entries: readonly BotMemoryEntry[],
 ): MemoryMarks {
-  return {
-    seen: new Map(entries.map((entry) => [entry.id, entry])),
-    added: new Map(),
-    removed: [],
-  };
+  return { seen: new Set(entries.map((entry) => entry.id)), added: new Set() };
 }
 
-/**
- * The marks after the pane reads `entries`. An entry gone and an entry
- * written that share a tag pair up, in whichever order they arrive, as one
- * replacing the other: the bot changes a memory by removing it and writing
- * the new one.
- */
+/** The marks after the pane reads `entries`. */
 export function nextMemoryMarks(
   marks: MemoryMarks,
   entries: readonly BotMemoryEntry[],
 ): MemoryMarks {
-  const current = new Map(entries.map((entry) => [entry.id, entry]));
-  const added = new Map(marks.added);
-  const removed = [...marks.removed];
-  for (const [id, entry] of marks.seen) {
-    if (current.has(id)) continue;
-    added.delete(id);
-    const unpaired = [...added].find(
-      ([addedId, replaced]) =>
-        replaced === null && sharesTag(current.get(addedId), entry),
-    );
-    if (unpaired === undefined) removed.push(entry);
-    else added.set(unpaired[0], entry.at);
-  }
-  for (const entry of entries) {
-    if (marks.seen.has(entry.id)) continue;
-    const index = removed.findIndex((gone) => sharesTag(entry, gone));
-    const replaced = index < 0 ? null : (removed.splice(index, 1)[0] ?? null);
-    added.set(entry.id, replaced?.at ?? null);
-  }
-  return { seen: current, added, removed };
-}
-
-function sharesTag(
-  entry: BotMemoryEntry | undefined,
-  other: BotMemoryEntry,
-): boolean {
-  return (
-    entry !== undefined && entry.tags.some((tag) => other.tags.includes(tag))
+  const seen = new Set(entries.map((entry) => entry.id));
+  const added = new Set(
+    [...seen].filter((id) => marks.added.has(id) || !marks.seen.has(id)),
   );
+  return { seen, added };
 }
