@@ -297,13 +297,13 @@ export const epicDeletedArtifactRecordSchema = lazySchema(() =>
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
     deletedHtmlArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, deletionUnderstood: true })
       .extend(epicLaneRowRevisionFields),
     deletedCanvasArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, deletionUnderstood: true })
       .extend(epicLaneRowRevisionFields),
     deletedFileArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, deletionUnderstood: true })
       .extend(epicLaneRowRevisionFields),
   ]),
 );

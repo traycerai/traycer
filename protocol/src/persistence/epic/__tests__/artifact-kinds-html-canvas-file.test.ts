@@ -211,6 +211,8 @@ describe("epic artifact unions", () => {
       expect(parsed.success).toBe(true);
       if (parsed.success) {
         expect(parsed.data.kind).toBe(kind);
+        if ("deletionUnderstood" in parsed.data)
+          expect(parsed.data.deletionUnderstood).toBe(false);
       }
     }
   });
@@ -449,6 +451,7 @@ describe("buildDeletedEpicArtifact", () => {
       id: "art-1",
       kind: "html",
       title: "Title",
+      deletionUnderstood: true,
       artifactRoomId: null,
       deletedAt: DELETED_AT,
       folderName: "art-1",
@@ -498,6 +501,7 @@ describe("buildDeletedEpicArtifact", () => {
     expect(tombstone).toMatchObject({
       kind: "file",
       artifactRoomId: null,
+      deletionUnderstood: true,
       assignee: null,
       status: null,
     });
@@ -510,6 +514,7 @@ describe("buildDeletedEpicArtifact", () => {
     expect(tombstone).toMatchObject({
       kind: "canvas",
       artifactRoomId: "artifact-room-0",
+      deletionUnderstood: true,
       assignee: null,
       status: null,
     });
