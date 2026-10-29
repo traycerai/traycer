@@ -1,4 +1,6 @@
 export const authMutationKeys = {
+  revalidateContextAfterInvalidation: (userId: string | null) =>
+    ["auth", "revalidateContextAfterInvalidation", userId] as const,
   signIn: () => ["auth", "signIn"] as const,
   signInWithLinkCode: () => ["auth", "signInWithLinkCode"] as const,
   respondLinkLogin: () => ["auth", "respondLinkLogin"] as const,
