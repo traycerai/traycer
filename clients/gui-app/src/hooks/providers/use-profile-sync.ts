@@ -1,11 +1,14 @@
 import {
-  useIsMutating,
-  useMutationState,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import {
+  selectMutationVariables,
+  useIsMutatingOf,
+  useMutationStateOf,
+} from "@/hooks/use-mutation-state-of";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProfileSyncOverview,
@@ -188,7 +191,7 @@ export function useProfileSyncNowPending(
   destinationHostId: string,
 ): boolean {
   return (
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: profileSyncKeys.syncNow(sourceHostId, destinationHostId),
       exact: true,
     }) > 0
@@ -202,7 +205,7 @@ export function useProfileSyncAcceptAccountPending(
   sourceProfileId: string,
 ): boolean {
   return (
-    useIsMutating({
+    useIsMutatingOf({
       mutationKey: profileSyncKeys.acceptAccount(
         sourceHostId,
         destinationHostId,
@@ -234,8 +237,8 @@ export function useProfileSyncRequestedKeepInSync(
   sourceHostId: string,
   destinationHostId: string,
 ): boolean | null {
-  const requested = useMutationState({
-    filters: {
+  const requested = useMutationStateOf(
+    {
       mutationKey: profileSyncKeys.setKeepInSync(
         sourceHostId,
         destinationHostId,
@@ -243,7 +246,8 @@ export function useProfileSyncRequestedKeepInSync(
       exact: true,
       status: "pending",
     },
-    select: (mutation) => requestedKeepInSync(mutation.state.variables),
-  });
-  return requested.at(-1) ?? null;
+    selectMutationVariables,
+  );
+  const latest = requested.at(-1);
+  return latest === undefined ? null : requestedKeepInSync(latest);
 }
