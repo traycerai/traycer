@@ -19,6 +19,7 @@ import type {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Two facts about the palette's per-machine inventory read, both about its
@@ -47,11 +48,14 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => hostBindingMock.current,
   useHostDirectory: () => ({ findById: () => mockLocalHostEntry }),
+  useHostClient: () => hostBindingMock.current?.hostClient ?? null,
 }));
 
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { useSimulatorInventories } from "@/hooks/simulator/use-simulator-inventories";
+import { useSimulatorCatalogActions } from "@/hooks/simulator/use-simulator-catalog-actions";
 import {
+  useSimulatorCloseMutation,
   useSimulatorConfigSetMutation,
   useSimulatorShutdownMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
@@ -77,8 +81,12 @@ const LIST: SimulatorListResponse = {
   booting: [],
 };
 
+/** Whether an agent still holds the instance; a close is what ends that. */
+const agentHolds = { on: true };
+
 /** The same device on the `@1.1` branch, where an agent drives its instance. */
-const INSTANCES: SimulatorInstancesResponse = {
+function instancesNow(): SimulatorInstancesResponse {
+  return {
   instances: [
     {
       instanceKey: "udid-1",
@@ -89,15 +97,16 @@ const INSTANCES: SimulatorInstancesResponse = {
       booted: true,
       cloneOf: null,
       cloneOfName: null,
-      drivenByAgent: true,
+      drivenByAgent: agentHolds.on,
       keepRunning: false,
       bootedByTraycer: true,
       idleUntil: null,
-      tasks: [{ epicId: EPIC_ID }],
+      tasks: agentHolds.on ? [{ epicId: EPIC_ID }] : [],
       otherTaskCount: 0,
     },
   ],
-};
+  };
+}
 
 const OPENED: SimulatorOpenResponse = {
   session: {
@@ -136,7 +145,12 @@ function buildSpine(args: { readonly reachable: () => boolean }): {
         if (!args.reachable()) throw new Error("dial refused");
         return LIST;
       },
-      "simulator.instances": () => record("simulator.instances", INSTANCES),
+      "simulator.instances": () => record("simulator.instances", instancesNow()),
+      "simulator.close": () => {
+        // The host ends the session; no agent holds the instance after it.
+        agentHolds.on = false;
+        return record("simulator.close", { closed: 1 });
+      },
       "simulator.open": () => record("simulator.open", OPENED),
       "config.simulator.set": () =>
         record("config.simulator.set", { enabled: false, idleMinutes: 15 }),
@@ -237,10 +251,57 @@ function renderInventoriesWithConfigSet(spine: HostClient<HostRpcRegistry>) {
   );
 }
 
+/**
+ * The palette beside the tile that owns the Close: ending a session leaves
+ * the instance up but changes who holds it, which is this inventory's own
+ * `drivenByAgent`.
+ */
+function renderInventoriesWithClose(spine: HostClient<HostRpcRegistry>) {
+  const client = spine.createRequester(mockLocalHostEntry);
+  return renderHook(
+    () => ({
+      inventories: useSimulatorInventories({
+        hostIds: [HOST_ID],
+        epicId: EPIC_ID,
+        enabled: true,
+      }),
+      close: useSimulatorCloseMutation(client, HOST_ID, "udid-1").mutation,
+    }),
+    { wrapper: wrapper() },
+  );
+}
+
+/** The viewer the spine's own request context is signed in as. */
+const VIEWER = "user-fixture-1";
+
+/** The same palette beside the catalog row's Close, which is not a host hook. */
+function renderInventoriesWithCatalogClose(spine: HostClient<HostRpcRegistry>) {
+  hostBindingMock.current = { hostClient: spine };
+  // The row's Close refuses a viewer the client is not signed in as.
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: { userId: VIEWER, userName: VIEWER, email: "u@example.com" },
+    contextMetadata: { userId: VIEWER, username: VIEWER },
+  });
+  return renderHook(
+    () => ({
+      inventories: useSimulatorInventories({
+        hostIds: [HOST_ID],
+        epicId: EPIC_ID,
+        enabled: true,
+      }),
+      catalog: useSimulatorCatalogActions(EPIC_ID),
+    }),
+    { wrapper: wrapper() },
+  );
+}
+
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   hostBindingMock.current = null;
+  agentHolds.on = true;
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
   vi.clearAllMocks();
 });
 
@@ -428,6 +489,74 @@ describe("useSimulatorInventories", () => {
     // offering a machine's devices and instances for the whole window.
     await waitFor(() => {
       expect(reads()).toBe(2);
+    });
+  });
+
+  it("drops an instance's Agent badge after the tile's close, inside the 60 s freshness window", async () => {
+    negotiateV11();
+    const { spine } = buildSpine({ reachable: () => true });
+    hostBindingMock.current = { hostClient: spine };
+
+    const { result } = renderInventoriesWithClose(spine);
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.entries[0]?.drivenByAgent).toBe(
+        true,
+      );
+    });
+
+    act(() => {
+      result.current.close.mutate({
+        epicId: EPIC_ID,
+        simulatorId: "udid-1",
+        shutdown: false,
+      });
+    });
+
+    // A close takes no device off the machine, so the devices are unmoved -
+    // but who HOLDS the instance is the host-wide read's own, and the
+    // sessions stream carries only this task's half of that census.
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.entries[0]?.drivenByAgent).toBe(
+        false,
+      );
+    });
+  });
+
+  it("drops it after the catalog row's close too, which is no host mutation", async () => {
+    negotiateV11();
+    const { spine } = buildSpine({ reachable: () => true });
+
+    const { result } = renderInventoriesWithCatalogClose(spine);
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.entries[0]?.drivenByAgent).toBe(
+        true,
+      );
+    });
+
+    // The row's Close ends the agent's session beside the person's, so it
+    // moves the same read - and it is sent from outside the mutation module,
+    // which is why the invariant is over every simulator WRITE.
+    act(() => {
+      result.current.catalog.closeRecords(HOST_ID, [
+        {
+          sessionId: "session-agent",
+          hostId: HOST_ID,
+          epicId: EPIC_ID,
+          simulatorId: "udid-1",
+          instanceKey: "udid-1",
+          platform: "ios",
+          name: "iPhone 17",
+          version: "26.0",
+          drivenByAgent: true,
+          endedReason: null,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.entries[0]?.drivenByAgent).toBe(
+        false,
+      );
     });
   });
 

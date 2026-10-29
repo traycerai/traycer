@@ -37,12 +37,16 @@ import {
  *
  * Keys name the host: two tiles on two machines never share pending state.
  *
- * THE INVARIANT every verb here is held to: a simulator mutation declares
- * exactly the reads its effect moves - the host-wide inventory pair
- * ({@link INSTANCE_INVALIDATIONS}) for anything that boots, clones, powers
- * off, switches the machine over or keeps an instance running, and nothing
- * for a session-only change the sessions stream already carries - and sweeps
- * them on SETTLE, because a lost answer still leaves a host that acted.
+ * THE INVARIANT every simulator WRITE is held to - the verbs here, and the
+ * ones sent from elsewhere (`useSimulatorInstanceOpen`,
+ * `useSimulatorCatalogActions`) alike, because a read does not care which
+ * module moved it: a simulator write declares exactly the reads its effect
+ * moves - the host-wide inventory pair ({@link INSTANCE_INVALIDATIONS}) for
+ * anything that boots, clones, powers off, switches the machine over or keeps
+ * an instance running, the instances alone ({@link SESSION_INVALIDATIONS})
+ * for a change to who holds one, and nothing for what the sessions stream
+ * already carries - and sweeps them on SETTLE, because a lost answer still
+ * leaves a host that acted.
  */
 
 type SimulatorMutation<Method extends keyof HostRpcRegistry & string> =
@@ -77,6 +81,24 @@ const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
 export const INSTANCE_INVALIDATIONS: ReadonlyArray<
   keyof HostRpcRegistry & string
 > = ["simulator.instances", "simulator.list"];
+
+/**
+ * The read a close moves, and the devices' is not it: ending a session takes
+ * nothing off the machine, so every device is listed exactly as before. What
+ * moves is who holds the instance - the host-wide read's `tasks`,
+ * `otherTaskCount` and `drivenByAgent`, which is how the palette draws an
+ * Agent badge and Settings names the tasks on an instance.
+ *
+ * The sessions stream is not an answer here: it carries THIS task's sessions,
+ * where these three are the host's census across every task, so a close in
+ * this window left an agent's badge on an instance no agent held any more.
+ *
+ * Shared with the catalog's own Close (`useSimulatorCatalogActions`), which
+ * ends the agent's session beside the person's and so moves the same read.
+ */
+export const SESSION_INVALIDATIONS: ReadonlyArray<
+  keyof HostRpcRegistry & string
+> = ["simulator.instances"];
 
 /**
  * A switch flip moves the pack too (off, installing), so Settings' status
@@ -204,6 +226,11 @@ export function useSimulatorOpenMutation(
   return { mutation, supported };
 }
 
+/**
+ * Ends one session on `simulatorId`, leaving the instance up: the tile's own
+ * Close. It sweeps {@link SESSION_INVALIDATIONS} - the instance is still
+ * there, but this task no longer holds it.
+ */
 export function useSimulatorCloseMutation(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
@@ -214,7 +241,7 @@ export function useSimulatorCloseMutation(
     method: "simulator.close",
     mutationKey: simulatorMutationKeys.close(hostId ?? "", simulatorId),
     errorMessage: "Couldn't close the simulator.",
-    invalidateMethods: NO_INVALIDATIONS,
+    invalidateMethods: SESSION_INVALIDATIONS,
   });
   return { mutation, supported };
 }
