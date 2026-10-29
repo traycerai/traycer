@@ -282,6 +282,240 @@ function bootstrapMain(config: BootstrapConfig): void {
     passive: true,
   });
 
+  // The page's own reveals stay in the frame. A native reveal scrolls every
+  // scroller holding the element, the transcript around the frame included,
+  // and only the reader's input may move the transcript. Each reveal walks
+  // this document's scrollers the way the browser does: the element's
+  // scroll-margin, each scroller's scroll-padding, the caller's alignment
+  // and behaviour. A canvas board keeps the native reveal: no transcript
+  // holds it, and a fullscreen board's stage scrolls outside the frame.
+  type Align = "start" | "center" | "end" | "nearest" | "center-if-needed";
+  type Native = (this: unknown, ...args: unknown[]) => unknown;
+  const isNative = (value: unknown): value is Native =>
+    typeof value === "function";
+  const scrollElementTo: unknown = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollTo",
+  )?.value;
+  const pixels = (value: string): number =>
+    value.endsWith("px") ? Number.parseFloat(value) || 0 : 0;
+  // Spans are `[near, far]` along one axis.
+  const nearestDelta = (
+    [near, far]: readonly [number, number],
+    [portNear, portFar]: readonly [number, number],
+  ): number => {
+    // Covering the port: already as far in view as it can be.
+    if (near < portNear && far > portFar) return 0;
+    const size = far - near;
+    const port = portFar - portNear;
+    if ((near < portNear && size < port) || (far > portFar && size > port))
+      return near - portNear;
+    if ((near < portNear && size > port) || (far > portFar && size < port))
+      return far - portFar;
+    return 0;
+  };
+  const alignDelta = (
+    align: Align,
+    target: readonly [number, number],
+    port: readonly [number, number],
+  ): number => {
+    const [near, far] = target;
+    const [portNear, portFar] = port;
+    const center = (near + far - portNear - portFar) / 2;
+    if (align === "start") return near - portNear;
+    if (align === "end") return far - portFar;
+    if (align === "center") return center;
+    // Wholly out of view: centred. Partly: brought in at the nearer edge.
+    // In view: left as it is.
+    if (align === "center-if-needed" && (far <= portNear || near >= portFar))
+      return center;
+    return nearestDelta(target, port);
+  };
+  // The flat-tree parent, so an element in a shadow root reaches the
+  // scrollers outside it.
+  const parentOf = (element: Element): Element | null => {
+    if (element.assignedSlot !== null) return element.assignedSlot;
+    if (element.parentElement !== null) return element.parentElement;
+    const root = element.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+  const reveal = (
+    target: Element,
+    block: Align,
+    inline: Align,
+    behavior: ScrollBehavior,
+  ): void => {
+    if (target.getClientRects().length === 0) return;
+    const margin = window.getComputedStyle(target);
+    const rect = target.getBoundingClientRect();
+    let top = rect.top - pixels(margin.scrollMarginTop);
+    let bottom = rect.bottom + pixels(margin.scrollMarginBottom);
+    let left = rect.left - pixels(margin.scrollMarginLeft);
+    let right = rect.right + pixels(margin.scrollMarginRight);
+    const viewport = document.scrollingElement;
+    // With the root's overflow `visible`, the body's overflow is the
+    // viewport's, and the body is no scroller of its own.
+    const rootStyle = window.getComputedStyle(document.documentElement);
+    const bodyPropagates =
+      rootStyle.overflowX === "visible" && rootStyle.overflowY === "visible";
+    for (
+      let scroller = parentOf(target);
+      scroller !== null;
+      scroller = parentOf(scroller)
+    ) {
+      const style = window.getComputedStyle(scroller);
+      if (
+        scroller !== viewport &&
+        ((scroller === document.body && bodyPropagates) ||
+          !/auto|scroll|hidden|overlay/.test(style.overflowX + style.overflowY))
+      ) {
+        continue;
+      }
+      const box =
+        scroller === viewport
+          ? { top: 0, left: 0 }
+          : scroller.getBoundingClientRect();
+      const portTop =
+        box.top + (scroller === viewport ? 0 : scroller.clientTop);
+      const portLeft =
+        box.left + (scroller === viewport ? 0 : scroller.clientLeft);
+      const deltaY = alignDelta(
+        block,
+        [top, bottom],
+        [
+          portTop + pixels(style.scrollPaddingTop),
+          portTop + scroller.clientHeight - pixels(style.scrollPaddingBottom),
+        ],
+      );
+      const deltaX = alignDelta(
+        inline,
+        [left, right],
+        [
+          portLeft + pixels(style.scrollPaddingLeft),
+          portLeft + scroller.clientWidth - pixels(style.scrollPaddingRight),
+        ],
+      );
+      const roomY = scroller.scrollHeight - scroller.clientHeight;
+      const roomX = scroller.scrollWidth - scroller.clientWidth;
+      // A right-to-left scroller's offsets run from -room to 0.
+      const minX = style.direction === "rtl" ? -roomX : 0;
+      const fromY = scroller.scrollTop;
+      const fromX = scroller.scrollLeft;
+      const toY = Math.max(0, Math.min(fromY + deltaY, roomY));
+      const toX = Math.max(minX, Math.min(fromX + deltaX, minX + roomX));
+      if ((toY === fromY && toX === fromX) || !isNative(scrollElementTo)) {
+        continue;
+      }
+      scrollElementTo.call(scroller, { top: toY, left: toX, behavior });
+      top -= toY - fromY;
+      bottom -= toY - fromY;
+      left -= toX - fromX;
+      right -= toX - fromX;
+    }
+  };
+  // Same name, length and descriptor as the native; only its source text
+  // (`Function.prototype.toString`) tells them apart.
+  const replace = (
+    owner: object,
+    name: string,
+    wrap: (native: Native) => Native,
+  ): void => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    const native: unknown = descriptor?.value;
+    if (descriptor === undefined || !isNative(native)) return;
+    const replacement = wrap(native);
+    Object.defineProperty(replacement, "name", { value: native.name });
+    Object.defineProperty(replacement, "length", { value: native.length });
+    Object.defineProperty(owner, name, { ...descriptor, value: replacement });
+  };
+  const alignOf = (value: unknown, fallback: Align): Align =>
+    value === "start" ||
+    value === "center" ||
+    value === "end" ||
+    value === "nearest"
+      ? value
+      : fallback;
+  if (!config.canvas) {
+    replace(
+      Element.prototype,
+      "scrollIntoView",
+      (native) =>
+        function (this: unknown, ...args: unknown[]): unknown {
+          if (!(this instanceof Element)) return native.apply(this, args);
+          const options = args[0];
+          if (!isObject(options)) {
+            reveal(
+              this,
+              options === false ? "end" : "start",
+              "nearest",
+              "auto",
+            );
+            return undefined;
+          }
+          reveal(
+            this,
+            alignOf(options.block, "start"),
+            alignOf(options.inline, "nearest"),
+            options.behavior === "smooth" || options.behavior === "instant"
+              ? options.behavior
+              : "auto",
+          );
+          return undefined;
+        },
+    );
+    replace(
+      Element.prototype,
+      "scrollIntoViewIfNeeded",
+      (native) =>
+        function (this: unknown, ...args: unknown[]): unknown {
+          if (!(this instanceof Element)) return native.apply(this, args);
+          const align = args[0] === false ? "nearest" : "center-if-needed";
+          reveal(this, align, align, "auto");
+          return undefined;
+        },
+    );
+    // A focus the caller lets scroll is revealed as the browser reveals it
+    // (centred when out of view), inside the frame only. Focus is read from
+    // the active element: `:focus` matches only while the frame itself has
+    // focus, and the reader may be typing in the app around it.
+    const isFocused = (element: Element): boolean => {
+      let active = document.activeElement;
+      while (active !== null && active !== element) {
+        active = active.shadowRoot?.activeElement ?? null;
+      }
+      return active === element;
+    };
+    const focusables: { readonly prototype: Element }[] = [
+      HTMLElement,
+      SVGElement,
+    ];
+    if ("MathMLElement" in window) focusables.push(MathMLElement);
+    for (const focusable of focusables) {
+      replace(
+        focusable.prototype,
+        "focus",
+        (native) =>
+          function (this: unknown, ...args: unknown[]): unknown {
+            const options = args[0];
+            if (
+              !(this instanceof Element) ||
+              (isObject(options) && options.preventScroll === true)
+            ) {
+              return native.apply(this, args);
+            }
+            const wasFocused = isFocused(this);
+            native.apply(this, [
+              { ...(isObject(options) ? options : {}), preventScroll: true },
+            ]);
+            if (!wasFocused && isFocused(this)) {
+              reveal(this, "center-if-needed", "center-if-needed", "auto");
+            }
+            return undefined;
+          },
+      );
+    }
+  }
+
   // Links the frame follows itself: an anchor within this page, and on a
   // served artifact page another `.html` page of the same folder, which loads
   // through the same server and prelude. Any other file would load without
