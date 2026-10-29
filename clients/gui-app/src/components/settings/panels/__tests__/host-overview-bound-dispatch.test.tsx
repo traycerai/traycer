@@ -441,8 +441,9 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
 
     // (c): the card's own Restart reopens it — `attemptControl.intent ===
-    // "activate"` routes `onRestart` to `openBoundOffer`, which does not
-    // consult `autoOpenedFor` at all (that guard is the AUTO-open's alone).
+    // "activate"` routes `onRestart` to `openBoundOffer`, which never reads
+    // `autoOpenedFor` (that guard is the AUTO-open's alone); it only records
+    // the shot as spent, see the held-gate suite below.
     fireEvent.click(screen.getByTestId("host-overview-operation-restart"));
     await screen.findByTestId("host-busy-force-defer-dialog");
 
@@ -2092,6 +2093,119 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
       await panel.queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
       });
+    });
+    panel.rerender(panelElement(panel.queryClient));
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+  });
+});
+
+/**
+ * The auto-open is on hold while a catalog answer is in flight
+ * (`awaitingAnswer`), and the card's Restart is live through that hold. A
+ * manual open there has to spend the one shot: otherwise the answer landing
+ * fires it for the same attempt and brings back a dialog the person just
+ * deferred.
+ */
+describe("HostOverviewPanel — a manual activate open during the held gate spends the one-shot", () => {
+  it("Restart from the card while the check is in flight, then Defer: the answer landing does not reopen the dialog", async () => {
+    // Falsification: drop the `setAutoOpenedFor` write from `openBoundOffer`
+    // and the final assertion fails — the check answering releases the gate,
+    // `autoOpenedFor` still differs from `a1`, and the auto-open fires.
+    const FIXED_INCARNATION = "fixed-incarnation-held-gate";
+    vi.spyOn(latchStoreModule, "newOverviewIncarnation").mockReturnValue(
+      FIXED_INCARNATION,
+    );
+    useHostServiceWriteLatchStore.getState().armUpdateDispatch("host-a", {
+      attemptId: "a1",
+      incarnation: FIXED_INCARNATION,
+    });
+    useHostServiceWriteLatchStore
+      .getState()
+      .observeUpdateDispatchFrame("host-a", {
+        attemptId: "a1",
+        terminal: false,
+      });
+
+    const okAnswer = {
+      outcome: "ok" as const,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
+      manifest: updateCheckManifest("1.6.0"),
+    };
+    const heldCheck: { resolve: ((value: typeof okAnswer) => void) | null } = {
+      resolve: null,
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.5.0",
+          protocolVersion: { major: 1, minor: 3 },
+          busy: false,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: attempt({
+            attemptId: "a1",
+            phase: "waiting-to-activate",
+            execution: "parked",
+            targetVersion: "1.6.0",
+            busySessionCount: 2,
+          }),
+          updateTransaction: {
+            recordSchemaVersion: 2 as const,
+            authority: "attempt" as const,
+          },
+          storeFormats: null,
+          install: null,
+          processMemory: null,
+          crossHostMessaging: null,
+          sessions: null,
+          updatesExternallyManaged: null,
+        }),
+        // The first ask is held open; every later one answers at once.
+        "host.update.check": () =>
+          heldCheck.resolve === null
+            ? new Promise<typeof okAnswer>((resolve) => {
+                heldCheck.resolve = resolve;
+              })
+            : okAnswer,
+      },
+    });
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const panel = renderPanel();
+
+    // The park is on screen, the check is in flight, and the gate holds the
+    // auto-open: nothing has opened, but the card's Restart is live.
+    await screen.findByTestId("host-overview-operation-card");
+    await waitFor(() => expect(heldCheck.resolve).not.toBeNull());
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    fireEvent.click(screen.getByTestId("host-overview-operation-restart"));
+    await screen.findByTestId("host-busy-force-defer-dialog");
+
+    fireEvent.click(screen.getByTestId("host-busy-defer"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+
+    // The answer lands and the gate releases. The shot was spent by the
+    // manual open, so the deferred dialog stays closed.
+    act(() => {
+      heldCheck.resolve?.(okAnswer);
+    });
+    await waitFor(() => {
+      const checkQueries = panel.queryClient.getQueryCache().findAll({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
+      });
+      expect(checkQueries.length).toBeGreaterThan(0);
+      for (const query of checkQueries) {
+        expect(query.state.status).toBe("success");
+        expect(query.state.fetchStatus).toBe("idle");
+      }
     });
     panel.rerender(panelElement(panel.queryClient));
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
