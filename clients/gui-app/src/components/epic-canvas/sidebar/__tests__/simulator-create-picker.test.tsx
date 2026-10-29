@@ -33,6 +33,7 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 import { resetSimulatorPendingOpensForTests } from "@/stores/epics/simulator-pending-opens-store";
+import { TILE_KIND_SIMULATOR } from "@/stores/epics/canvas/tile-kinds";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
 const HOST = mockLocalHostEntry.hostId;
@@ -110,6 +111,7 @@ vi.mock("sonner", () => ({ toast: { error: world.toastError } }));
 
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { useSimulatorOpenMutation } from "@/hooks/simulator/use-simulator-mutations";
+import { useSimulatorTilePowerOff } from "@/components/simulator-tile/use-simulator-tile-session";
 import { SimulatorCreatePicker } from "../simulator-create-picker";
 
 const DEVICES: SimulatorState["simulators"] = [
@@ -154,8 +156,15 @@ const READY_PACK: SimulatorPackState = {
  */
 const pack: { state: SimulatorPackState } = { state: READY_PACK };
 
-/** The devices this host has booted since the test began. */
+/** The devices this host has booted right now; `DEVICES` carries the seed. */
 const booted = new Set<string>();
+
+function resetBootState(): void {
+  booted.clear();
+  for (const device of DEVICES) {
+    if (device.booted) booted.add(device.simulatorId);
+  }
+}
 
 function listNow(): SimulatorState {
   return {
@@ -163,11 +172,10 @@ function listNow(): SimulatorState {
     packState: pack.state,
     simulators:
       pack.state.kind === "ready"
-        ? DEVICES.map((device) =>
-            booted.has(device.simulatorId)
-              ? { ...device, booted: true }
-              : device,
-          )
+        ? DEVICES.map((device) => ({
+            ...device,
+            booted: booted.has(device.simulatorId),
+          }))
         : [],
   };
 }
@@ -222,6 +230,7 @@ function instancesNow(): SimulatorInstancesResponse {
 }
 
 const opens: unknown[] = [];
+const shutdowns: unknown[] = [];
 /** Whether the picker reached the host at all: the read that handshakes it. */
 const reads = { list: 0 };
 
@@ -282,28 +291,59 @@ async function openPicker() {
   return user;
 }
 
+const PLACED_NODE: SimulatorTileRef = {
+  id: "tile-1",
+  instanceId: "tile-1",
+  type: TILE_KIND_SIMULATOR,
+  name: "iPhone 16",
+  hostId: HOST,
+  simulatorId: "udid-1",
+  platform: "ios",
+};
+
 /**
- * Stands in for the tile the picker PLACES on a `@1.0` host, where the open is
- * the tile's own: the picker sends nothing there, so the device list it reads
- * moves only if that mutation sweeps it.
+ * Stands in for the tile the picker PLACES on a `@1.0` host, where both the
+ * open and the power off are the tile's own: the picker sends neither, so the
+ * device list it reads moves only if those mutations sweep it. Power off goes
+ * through the tile's own hook, which is what routes a `@1.0` host to
+ * `simulator.shutdown`.
  */
 function PlacedTile() {
   const { mutation } = useSimulatorOpenMutation(world.client, HOST);
   const { mutate } = mutation;
+  const { onPowerOff } = useSimulatorTilePowerOff({
+    client: world.client,
+    hostId: HOST,
+    epicId: EPIC,
+    node: PLACED_NODE,
+    instanceKey: "udid-1",
+    platform: "ios",
+    v11: false,
+    onCloseTile: () => undefined,
+  });
   return (
-    <button
-      type="button"
-      onClick={() =>
-        mutate({
-          epicId: EPIC,
-          simulatorId: "udid-cold",
-          platform: "ios",
-          boot: true,
-        })
-      }
-    >
-      Tile open
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          mutate({
+            epicId: EPIC,
+            simulatorId: "udid-cold",
+            platform: "ios",
+            boot: true,
+          })
+        }
+      >
+        Tile open
+      </button>
+      <button
+        type="button"
+        disabled={onPowerOff === null}
+        onClick={() => onPowerOff?.()}
+      >
+        Tile power off
+      </button>
+    </>
   );
 }
 
@@ -312,8 +352,9 @@ describe("SimulatorCreatePicker", () => {
     resetSimulatorPendingOpensForTests();
     freshQueryClient();
     opens.length = 0;
+    shutdowns.length = 0;
     reads.list = 0;
-    booted.clear();
+    resetBootState();
     pack.state = READY_PACK;
     world.support = true;
     world.negotiated = { major: 1, minor: 1 };
@@ -339,6 +380,12 @@ describe("SimulatorCreatePicker", () => {
           // The host boots the device the open names, so both reads move.
           booted.add(params.simulatorId);
           return answer();
+        },
+        "simulator.shutdown": (params) => {
+          shutdowns.push(params);
+          // The `@1.0` power off: the device is off, so its row goes cold.
+          booted.delete(params.simulatorId);
+          return { simulatorId: params.simulatorId, booted: false };
         },
       },
     });
@@ -476,6 +523,50 @@ describe("SimulatorCreatePicker", () => {
     });
   });
 
+  it("offers Boot again after the @1.0 path's power off, where the tile sends the shutdown", async () => {
+    world.negotiated = { major: 1, minor: 0 };
+    queryClient = createAppQueryClient();
+    const user = userEvent.setup();
+    render(
+      wrap(
+        <>
+          <SimulatorCreatePicker
+            epicId={EPIC}
+            tabId="tab-1"
+            onOpened={null}
+            testId="add"
+          />
+          <PlacedTile />
+        </>,
+      ),
+    );
+    await user.click(screen.getByTestId("add"));
+    await screen.findByTestId("simulator-create-picker");
+    await screen.findByTestId("simulator-picker-running-udid-1");
+
+    // Closed with the read cached, as it is while the person works in the
+    // tile: nothing moves the clock here, so only an invalidation can.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByTestId("simulator-create-picker")).toBeNull();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Tile power off" }));
+    await waitFor(() => expect(shutdowns).toHaveLength(1));
+
+    await user.click(screen.getByTestId("add"));
+    await screen.findByTestId("simulator-create-picker");
+
+    // A `@1.0` host has no instances: its booted devices ARE the Running
+    // section, so the one read has to move for the device to offer Boot.
+    await waitFor(() => {
+      expect(screen.queryByTestId("simulator-picker-cold-udid-1")).toBeTruthy();
+      expect(
+        screen.queryByTestId("simulator-picker-running-udid-1"),
+      ).toBeNull();
+    });
+  });
+
   it("leaves the off state and lists the cold devices once the switch is on and the pack has installed", async () => {
     pack.state = { kind: "off", reason: null, progress: null };
     const user = await openPicker();
@@ -564,8 +655,9 @@ describe("useSimulatorInstanceOpen toward a 1.0 host", () => {
     resetSimulatorPendingOpensForTests();
     freshQueryClient();
     opens.length = 0;
+    shutdowns.length = 0;
     reads.list = 0;
-    booted.clear();
+    resetBootState();
     pack.state = READY_PACK;
     world.support = true;
     world.negotiated = { major: 1, minor: 0 };

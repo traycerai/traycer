@@ -201,6 +201,13 @@ export function useSimulatorCloseMutation(
   return { mutation, supported };
 }
 
+/**
+ * The whole power off on a `@1.0` host, which has no `simulator.powerOff`:
+ * the device is off host-wide and every session on it in this epic is gone.
+ * So it sweeps the same reads {@link useSimulatorPowerOffMutation} does - the
+ * one surface that sends it is the tile, whose own path is the sessions
+ * stream, and neither inventory read follows that.
+ */
 export function useSimulatorShutdownMutation(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
@@ -211,7 +218,7 @@ export function useSimulatorShutdownMutation(
     method: "simulator.shutdown",
     mutationKey: simulatorMutationKeys.shutdown(hostId ?? "", simulatorId),
     errorMessage: "Couldn't power the simulator off.",
-    invalidateMethods: NO_INVALIDATIONS,
+    invalidateMethods: INSTANCE_INVALIDATIONS,
   });
   return { mutation, supported };
 }

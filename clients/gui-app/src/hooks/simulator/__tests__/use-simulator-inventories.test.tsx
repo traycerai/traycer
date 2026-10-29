@@ -14,6 +14,7 @@ import type {
   SimulatorInstancesResponse,
   SimulatorListResponse,
   SimulatorOpenResponse,
+  SimulatorShutdownResponse,
 } from "@traycer/protocol/host/simulator/schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -50,6 +51,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 import { useSimulatorInstanceOpen } from "@/hooks/simulator/use-simulator-instance-open";
 import { useSimulatorInventories } from "@/hooks/simulator/use-simulator-inventories";
+import { useSimulatorShutdownMutation } from "@/hooks/simulator/use-simulator-mutations";
 
 /** One booted device, so the `@1.0` branch has an instance row to mint. */
 const LIST: SimulatorListResponse = {
@@ -133,6 +135,11 @@ function buildSpine(args: { readonly reachable: () => boolean }): {
       },
       "simulator.instances": () => record("simulator.instances", INSTANCES),
       "simulator.open": () => record("simulator.open", OPENED),
+      "simulator.shutdown": (params) =>
+        record<SimulatorShutdownResponse>("simulator.shutdown", {
+          simulatorId: params.simulatorId,
+          booted: false,
+        }),
     },
   });
   const spine = new HostClient<HostRpcRegistry>({
@@ -180,6 +187,27 @@ function renderInventories() {
         enabled: true,
       }),
       open: useSimulatorInstanceOpen(EPIC_ID).open,
+    }),
+    { wrapper: wrapper() },
+  );
+}
+
+/**
+ * The palette beside the tile that owns the power off, on a `@1.0` host: the
+ * tile's shutdown is the only write, so this inventory moves only if that
+ * mutation sweeps it.
+ */
+function renderInventoriesWithPowerOff(spine: HostClient<HostRpcRegistry>) {
+  const client = spine.createRequester(mockLocalHostEntry);
+  return renderHook(
+    () => ({
+      inventories: useSimulatorInventories({
+        hostIds: [HOST_ID],
+        epicId: EPIC_ID,
+        enabled: true,
+      }),
+      shutdown: useSimulatorShutdownMutation(client, HOST_ID, "udid-1")
+        .mutation,
     }),
     { wrapper: wrapper() },
   );
@@ -343,6 +371,45 @@ describe("useSimulatorInventories", () => {
 
     // The open's own invalidation, with no refetch of its own and no clock
     // moved: a palette reopened now must not serve the pre-open inventory.
+    await waitFor(() => {
+      expect(reads()).toBe(2);
+    });
+  });
+
+  it("is asked again after a `@1.0` host's shutdown, inside the 60 s freshness window", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "simulator.open": { major: 1, minor: 0 },
+      "simulator.list": { major: 1, minor: 0 },
+      "simulator.shutdown": { major: 1, minor: 0 },
+    });
+    const { spine, methods } = buildSpine({ reachable: () => true });
+    hostBindingMock.current = { hostClient: spine };
+
+    const { result } = renderInventoriesWithPowerOff(spine);
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.status).toBe("ready");
+    });
+    const reads = (): number =>
+      methods.filter((method) => method === "simulator.list").length;
+    expect(reads()).toBe(1);
+    // The `@1.0` stand-in: the booted device IS this host's instance row.
+    expect(result.current.inventories[0]?.entries[0]?.kind).toBe("instance");
+
+    act(() => {
+      result.current.shutdown.mutate({
+        epicId: EPIC_ID,
+        simulatorId: "udid-1",
+        platform: "ios",
+      });
+    });
+    await waitFor(() => {
+      expect(methods).toContain("simulator.shutdown");
+    });
+
+    // `simulator.shutdown` is the whole power off on a `@1.0` host, and it
+    // moves this read exactly as `simulator.powerOff` moves it on a `@1.1`
+    // one: without its sweep the palette goes on listing the device as
+    // running, with no cold Boot row for it, for the whole window.
     await waitFor(() => {
       expect(reads()).toBe(2);
     });
