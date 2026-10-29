@@ -150,12 +150,18 @@ function useSandboxLifecycleRead(
     let active = true;
     const isActive = (): boolean => active;
     const refresh = async (): Promise<void> => {
-      // A request sent before this edge cannot reconcile it. Cancel that
-      // query before starting the event's read under this account's key.
-      await queryClient.cancelQueries({
-        queryKey: sandboxQueryKeys.list(auth, userId),
-        exact: true,
-      });
+      // Neither list can reconcile this edge with a request sent before it.
+      // Cancel both before starting the event's reads under this account.
+      await Promise.all([
+        queryClient.cancelQueries({
+          queryKey: sandboxQueryKeys.list(auth, userId),
+          exact: true,
+        }),
+        queryClient.cancelQueries({
+          queryKey: authQueryKeys.registeredHosts(auth, userId),
+          exact: true,
+        }),
+      ]);
       // The live tile may be replaced by its published copy while the
       // cancellation settles. That copy still needs this shared read;
       // only an account change prevents it from starting.
