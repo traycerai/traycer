@@ -153,6 +153,19 @@ export const SKILLS_DIRECTORY_NOTE =
 
 export const SKILLS_DIRECTORY_NO_RESULTS = "No results";
 
+/** A directory pick the configuration already holds: nothing starts chosen. */
+export function directoryPickInstalledLine(
+  skill: string,
+  configuration: string,
+): string {
+  return `${configuration} already has ${skill}. Choose another skill from this source, or go back.`;
+}
+
+/** A directory pick its source no longer lists: nothing starts chosen. */
+export function directoryPickMissingLine(skill: string): string {
+  return `This source no longer has a skill named ${skill}. Choose from what it holds, or go back.`;
+}
+
 /** A directory result's install count, as the page counts. */
 export function skillInstallsPhrase(count: number): string {
   return count === 1 ? "1 install" : `${formatCount(count)} installs`;

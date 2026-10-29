@@ -29,6 +29,8 @@ import {
   IMPORT_SKILL_DESCRIPTION,
   IMPORT_SKILL_TITLE,
   IMPORT_SOURCE_HINT,
+  directoryPickInstalledLine,
+  directoryPickMissingLine,
   skillImportLimitLine,
   skillImportRefusal,
 } from "./mcp-skills-copy";
@@ -53,23 +55,30 @@ function selectableNames(
 }
 
 /**
- * What a read source starts with chosen: the one skill a directory pick
- * named (`slug`, its folder or its name), else what Select all chooses.
+ * What a read source starts with chosen, and the line that says why when
+ * it is nothing: a typed source starts with what Select all chooses; a
+ * directory pick starts with the one skill it named (`slug`, its folder or
+ * its name) and never with the others, so a pick the configuration already
+ * holds, or that the source no longer lists, starts with nothing chosen.
  */
 function initialSelection(
   candidates: readonly ProviderSkillInspectCandidate[],
   slug: string | null,
-): readonly string[] {
-  const picked =
-    slug === null
-      ? undefined
-      : candidates.find(
-          (candidate) =>
-            !candidate.installed &&
-            (candidate.name === slug ||
-              candidate.relPath.split("/").at(-1) === slug),
-        );
-  return picked === undefined ? selectableNames(candidates) : [picked.name];
+  configuration: string,
+): { readonly names: readonly string[]; readonly note: string | null } {
+  if (slug === null) return { names: selectableNames(candidates), note: null };
+  const picked = candidates.find(
+    (candidate) =>
+      candidate.name === slug || candidate.relPath.split("/").at(-1) === slug,
+  );
+  if (picked === undefined)
+    return { names: [], note: directoryPickMissingLine(slug) };
+  if (picked.installed)
+    return {
+      names: [],
+      note: directoryPickInstalledLine(picked.name, configuration),
+    };
+  return { names: [picked.name], note: null };
 }
 
 /** What an import answer that installed nothing tells the person. */
@@ -138,7 +147,13 @@ export function EnvironmentSkillImportDialog(props: {
             return;
           }
           setInspected({ token: result.token, candidates: result.candidates });
-          setSelected(initialSelection(result.candidates, slug));
+          const initial = initialSelection(
+            result.candidates,
+            slug,
+            configuration,
+          );
+          setSelected(initial.names);
+          setProblem(initial.note);
         },
       },
     );

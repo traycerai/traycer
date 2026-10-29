@@ -2338,6 +2338,69 @@ describe("The Skills page's skills from a source", () => {
         ]);
       });
 
+      it.each<readonly [string, boolean, string, string]>([
+        [
+          "the configuration already holds",
+          true,
+          "triage",
+          "Acme already has triage. Choose another skill from this source, or go back.",
+        ],
+        [
+          "the source no longer lists",
+          false,
+          "sorting",
+          "This source no longer has a skill named sorting. Choose from what it holds, or go back.",
+        ],
+      ])(
+        "selects nothing, never the other skills, for a pick %s",
+        async (_label, triageInstalled, slug, line) => {
+          const several: EnvironmentConfigurationSkillImportResponse = {
+            ...inspected,
+            candidates: [
+              {
+                name: "triage",
+                description: null,
+                relPath: "skills/triage",
+                installed: triageInstalled,
+              },
+              {
+                name: "deploy",
+                description: null,
+                relPath: "skills/deploy",
+                installed: false,
+              },
+            ],
+          };
+          const { dialog } = await openSearch(
+            () => found([{ ...triage, id: `acme/skills/${slug}`, name: slug }]),
+            several,
+          );
+          await userEvent.type(
+            within(dialog).getByLabelText("Search skills.sh"),
+            slug,
+          );
+
+          await userEvent.click(
+            await within(dialog).findByRole("button", {
+              name: new RegExp(slug),
+            }),
+          );
+
+          expect(
+            (
+              await within(dialog).findByRole("checkbox", { name: "deploy" })
+            ).getAttribute("data-state"),
+          ).toBe("unchecked");
+          expect(within(dialog).getByText("0 of 2 selected")).toBeTruthy();
+          expect(within(dialog).getByRole("status").textContent).toBe(line);
+          expect(
+            within(dialog)
+              .getByRole("button", { name: /^Import/ })
+              .hasAttribute("disabled"),
+          ).toBe(true);
+        },
+      );
+
       it.each([
         ["an empty list", () => found([])],
         [
