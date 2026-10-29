@@ -13,6 +13,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
+import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
   type HostScopeStatus,
@@ -268,7 +269,10 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     hosts,
     host,
     hostId: host?.hostId ?? null,
-    hostLabel: host?.name ?? resolved.vanishedHostId ?? "No host",
+    // A vanished pick is a host nothing lists any more: nothing names it.
+    hostLabel:
+      host?.name ??
+      (resolved.vanishedHostId === null ? "No host" : UNNAMED_HOST_LABEL),
     vanishedHostId: resolved.vanishedHostId,
     returnToActive: () => setScopedHostId(null),
     activeHostId,

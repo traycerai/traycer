@@ -217,8 +217,6 @@ export function MembersView(props: {
   readonly environmentId: string;
   readonly teamName: string;
   readonly teamHandle: string;
-  /** The hosts running the team, which a pending removal waits on. */
-  readonly teamHostCount: number | null;
   readonly currentUserId: string;
   readonly viewerRole: TeamRole;
   readonly membersRead: MembersReadState;
@@ -254,7 +252,6 @@ export function MembersView(props: {
     environmentId,
     teamName,
     teamHandle,
-    teamHostCount,
     currentUserId,
     membersRead,
     members,
@@ -451,7 +448,6 @@ export function MembersView(props: {
         <MembersList
           environmentId={environmentId}
           teamName={teamName}
-          teamHostCount={teamHostCount}
           currentUserId={currentUserId}
           viewerIsAdmin={viewerIsAdmin}
           members={members}

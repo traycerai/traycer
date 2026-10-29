@@ -304,12 +304,13 @@ describe("Remove's preview on Personal names the computers that hold a copy", ()
   });
 
   it("names the computers in Personal's host list, though this window cannot dial them, and not its sandboxes", async () => {
+    // Each names itself; the ids are not what the preview prints.
     const listed = (
-      hostId: string,
+      hostLabel: string,
       kind: EnvironmentHostRecordV12["kind"],
     ): EnvironmentHostRecordV12 => ({
-      hostId,
-      hostLabel: hostId,
+      hostId: `id-${hostLabel}`,
+      hostLabel,
       hostPlatform: "darwin",
       enrolledByUserId: "user-me",
       kind,

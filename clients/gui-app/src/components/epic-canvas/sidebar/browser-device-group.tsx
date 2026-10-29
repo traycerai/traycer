@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { BrowserDeviceGroupModel } from "./use-browser-list-model";
+import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
 
 export function BrowserDeviceGroup(props: {
   readonly group: BrowserDeviceGroupModel;
@@ -40,7 +41,7 @@ export function BrowserDeviceGroup(props: {
           )}
         />
         <span className="min-w-0 flex-1 truncate font-medium">
-          {group.name}
+          {hostLabelAtSentenceStart(group.name)}
         </span>
         {group.isLocal ? (
           <span className="shrink-0 text-ui-xs">Local</span>

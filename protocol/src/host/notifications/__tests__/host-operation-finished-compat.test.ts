@@ -7,6 +7,7 @@ import {
 import {
   ALL_HOST_NOTIFICATION_KINDS,
   RELEASED_HOST_NOTIFICATION_KINDS,
+  RETIRED_HOST_NOTIFICATION_KINDS,
   formatHostNotificationPresentation,
   hiddenHostNotificationKinds,
   hostNotificationEntrySchema,
@@ -527,12 +528,13 @@ describe("negotiated-version visibility projection", () => {
   });
 
   it("keeps a fully-capable caller's exclusion to the retired kinds", () => {
-    expect(
-      hiddenHostNotificationKinds(
-        { method: "host.notifications.cloudFeed.subscribe" },
-        { major: 1, minor: 6 },
-      ),
-    ).toEqual(["environment.apply.failed", "sandbox.notice"]);
+    const hidden = hiddenHostNotificationKinds(
+      { method: "host.notifications.cloudFeed.subscribe" },
+      { major: 1, minor: 6 },
+    );
+    expect([...hidden].sort()).toEqual(
+      [...RETIRED_HOST_NOTIFICATION_KINDS].sort(),
+    );
   });
 
   it("covers every kind the entry unions can carry", () => {

@@ -79,7 +79,10 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => testState.navigateNested,
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => testState.reachability,
   resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
     r.status === "checking" ? null : r.hostLabel,

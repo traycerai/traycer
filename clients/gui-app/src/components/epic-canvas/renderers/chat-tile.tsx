@@ -381,10 +381,10 @@ import { ChatTilePreContent } from "./chat-tile-runtime-gate";
 import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import {
   chatPreContentStrip,
-  chatTileHostLabel,
   type ChatLoadWait,
   type ChatTilePreContentFrame,
 } from "./chat-pre-content";
+import { useChatTileHostLabel } from "./use-chat-tile-host-label";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -667,6 +667,7 @@ function ChatTileForChat(props: ChatTileProps) {
   const servingHostId = useChatServingHostId(servingKey);
   const servedAtRest = servingHostId !== tabHostId;
   const reachability = useHostReachability(servingHostId);
+  const hostLabel = useChatTileHostLabel(reachability, tabHostId);
   const sandboxState = useChatSandboxState(
     epicId,
     tabHostId,
@@ -736,7 +737,7 @@ function ChatTileForChat(props: ChatTileProps) {
           tabId={viewTabId}
           chatId={node.id}
           sourceHostId={tabHostId}
-          hostLabel={chatTileHostLabel(reachability, tabHostId)}
+          hostLabel={hostLabel}
           reason="host-offline"
           // This mount's body is a load state or a cached live session -
           // never a published copy the banner could truthfully point at.

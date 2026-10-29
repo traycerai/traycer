@@ -22,7 +22,7 @@ import {
   ChatDeadTileBannerContainer,
   SubstitutedCatchingUpBanner,
 } from "@/components/epic-canvas/renderers/chat-tile";
-import { chatTileHostLabel } from "@/components/epic-canvas/renderers/chat-pre-content";
+import { useChatTileHostLabel } from "@/components/epic-canvas/renderers/use-chat-tile-host-label";
 import {
   ChatDeadTileBanner,
   type ChatDeadTileBannerReason,
@@ -855,6 +855,7 @@ function usePublishedChatFallbackRef(args: {
   const reachability = useHostReachability(
     isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
+  const ownerHostLabel = useChatTileHostLabel(reachability, activeTab.hostId);
   const tabServing = useChatTabServing(activeTab, epicId);
   // The tab's OWN bound host (`activeTab.hostId`), which is exactly the host
   // `chat-tile.tsx` opened the session under - peeking any other host's
@@ -952,7 +953,7 @@ function usePublishedChatFallbackRef(args: {
   );
   return {
     fallbackRef,
-    ownerHostLabel: chatTileHostLabel(reachability, activeTab.hostId),
+    ownerHostLabel,
     bannerReason,
     isCloudKnown: cloudChatRecord !== null,
     cloudListAuthorizesChatAbsence: cloudChatListAuthorizesRecordSweep(

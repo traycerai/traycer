@@ -291,9 +291,6 @@ vi.mock("@/components/chat/fallback/chat-composer-fallback-banners", () => ({
 vi.mock("../chat-composer-banner-portal", () => ({
   ChatComposerBannerPortal: () => null,
 }));
-vi.mock("../chat-secret-export-notices", () => ({
-  ChatSecretExportNotices: () => null,
-}));
 vi.mock("@/components/onboarding/first-task-guide", () => ({
   FirstTaskChatGuide: () => null,
 }));

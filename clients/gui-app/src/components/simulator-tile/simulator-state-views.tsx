@@ -8,6 +8,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
 import { SimulatorSessionBadge } from "@/components/simulator-tile/simulator-session-badge";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
@@ -52,7 +53,7 @@ export function SimulatorHostUnreachableView(props: {
       icon={
         <Smartphone className="size-8 text-muted-foreground/45" aria-hidden />
       }
-      title={props.hostLabel}
+      title={hostLabelAtSentenceStart(props.hostLabel)}
       testId="simulator-host-unreachable"
     >
       <p>Host is unreachable. This tile will reconnect on its own.</p>
@@ -96,7 +97,7 @@ export function SimulatorUnavailableView(props: {
   return (
     <SimulatorStateFrame
       icon={<TriangleAlert className="size-8 text-warning" aria-hidden />}
-      title={`${props.hostLabel} can't run simulators`}
+      title={`${hostLabelAtSentenceStart(props.hostLabel)} can't run simulators`}
       testId="simulator-unavailable"
     >
       {props.reason === null ? null : <p>{props.reason}</p>}
@@ -292,8 +293,8 @@ export function SimulatorInventoryView(props: {
         </p>
         {target === null ? (
           <p>
-            {props.hostLabel} no longer lists this simulator. Pick another
-            below.
+            {hostLabelAtSentenceStart(props.hostLabel)} no longer lists this
+            simulator. Pick another below.
           </p>
         ) : (
           <>
