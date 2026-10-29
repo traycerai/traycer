@@ -1042,6 +1042,163 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
+    // The tail moving away from a reader whose wheel up has not reported is
+    // the reader leaving it: the wheel's movement may come later, or the end
+    // may have come up to absorb it, and no report tells the two apart. Their
+    // scroll-up holds; the tail does not drag them.
+    it("tail growth after a wheel up whose end came up to absorb it is the reader's departure", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollHeight: 1450, scrollTop: 950 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    // A pad drop clamps the view past where the wheel will take it before
+    // the wheel's frame lands. The clamp is not the wheel: its own report
+    // follows, and nothing in between is corrected.
+    it("a clamp past the wheel's target is not corrected before the wheel's own report", () => {
+      const { node, listRef, onFollowIntentChange } = followingAtStrictBottom();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1444, scrollTop: 944 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 904 });
+      fireNativeScroll(node);
+
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    // Absorbed and nothing grew: there is no departure to read, and the
+    // reader is still following.
+    it("a wheel the end absorbed, with no growth, neither departs nor writes", () => {
+      const { node, listRef, onFollowIntentChange } = followingAtStrictBottom();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollHeight: 1450, scrollTop: 950 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    // Only a wheel (or the frame's relay of one) departs on growth. A gesture
+    // noted directly (a key press) keeps the wait for its scroll.
+    it("growth after a directly noted gesture waits for its scroll instead of departing", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom();
+
+      result.current.noteReaderGesture(WHEEL_UP);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("tail growth after a relayed frame gesture away from the end is the reader's departure", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom();
+
+      node.dispatchEvent(
+        new CustomEvent(SANDBOX_SCROLL_GESTURE_EVENT, {
+          bubbles: true,
+          detail: "away-from-end",
+        }),
+      );
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    describe("a wheel canceled by another listener", () => {
+      function wheelUp(target: EventTarget): void {
+        target.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: -120,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+
+      // Control: a wheel nothing cancels is the reader's, so the tail growing
+      // away from it is a departure and is not corrected.
+      it("control: an uncanceled wheel is not corrected back to the tail", () => {
+        const { node, listRef, onFollowIntentChange, result } =
+          followingAtStrictBottom();
+
+        wheelUp(node);
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      });
+
+      // A history swipe's opening tick is canceled by a document capture
+      // listener before the transcript's own runs: it scrolls nothing, so it
+      // is no reader gesture.
+      it("a wheel canceled before the transcript's listener is no gesture", () => {
+        const onReaderGesture = vi.fn();
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const { result } = renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onReaderGesture,
+          }),
+        );
+        const cancel = (event: Event): void => event.preventDefault();
+        document.addEventListener("wheel", cancel, {
+          capture: true,
+          passive: false,
+        });
+        try {
+          wheelUp(node);
+        } finally {
+          document.removeEventListener("wheel", cancel, { capture: true });
+        }
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(onReaderGesture).not.toHaveBeenCalled();
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      // An ancestor's bubble-phase listener runs after the transcript's own:
+      // the wheel was already armed, and the arm would wait for a scroll
+      // that never comes.
+      it("a wheel canceled after the transcript's listener leaves no arm", () => {
+        const { node, listRef, result } = followingAtStrictBottom();
+        const cancel = (event: Event): void => event.preventDefault();
+        document.body.addEventListener("wheel", cancel, { passive: false });
+        try {
+          wheelUp(node);
+        } finally {
+          document.body.removeEventListener("wheel", cancel);
+        }
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+    });
+
     describe("a wheel over a nested scroller", () => {
       function mountWithNestedScroller(childScrollTop: number) {
         const node = shim.makeNode({
@@ -1058,34 +1215,109 @@ describe("useChatTimelineFollowLatch", () => {
         node.appendChild(child);
         const listRef = makeFakeListRef(node);
         const onReaderGesture = vi.fn();
+        const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
         const { result } = renderHook(() =>
           useChatTimelineFollowLatch(listRef, true, true, {
             ...DEFAULT_FOLLOW_LATCH_OPTIONS,
             onReaderGesture,
+            onFollowIntentChange,
           }),
         );
         child.dispatchEvent(
           new WheelEvent("wheel", { deltaY: -120, bubbles: true }),
         );
-        shim.setGeometry(node, { scrollHeight: 1700 });
-        result.current.followEndIfPermitted();
-        return { listRef, onReaderGesture };
+        return {
+          node,
+          child,
+          listRef,
+          onReaderGesture,
+          onFollowIntentChange,
+          result,
+        };
       }
 
       it("is not a transcript gesture while the scroller has room to scroll up", () => {
-        const { listRef, onReaderGesture } = mountWithNestedScroller(50);
+        const { node, listRef, onReaderGesture, result } =
+          mountWithNestedScroller(50);
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
 
         expect(onReaderGesture).not.toHaveBeenCalled();
         expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
       });
 
       // Control: the scroller's top edge cannot take an upward wheel, so the
-      // browser chains it to the transcript.
+      // browser chains it to the transcript, and the tail growing away from
+      // that wheel is the reader's departure.
       it("control: is a transcript gesture once the scroller is at its top edge", () => {
-        const { listRef, onReaderGesture } = mountWithNestedScroller(0);
+        const { node, listRef, onReaderGesture, onFollowIntentChange, result } =
+          mountWithNestedScroller(0);
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
 
         expect(onReaderGesture).toHaveBeenCalledTimes(1);
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
         expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      });
+
+      // Chrome latches a trackpad gesture to the scroller under it. Once that
+      // scroller is at its edge the rest of the wheels move nothing, the
+      // transcript included, and its one `scrollend` at the gesture's end is
+      // all that says so. `scrollend` does not bubble, so the latch hears it
+      // in the capture phase.
+      it("a scrollend from the scroller the wheel was latched to ends the wait for a scroll", () => {
+        const { node, child, listRef, result } = mountWithNestedScroller(0);
+
+        child.dispatchEvent(new Event("scrollend"));
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      // The scrollend only stops the wait: the arm stays, so the reader's
+      // later scroll off the end is still a departure.
+      it("a scrollend does not drop the arm: a later report off the end still departs", async () => {
+        const { node, child, listRef, onFollowIntentChange } =
+          mountWithNestedScroller(0);
+
+        // The scrollend itself corrects the growth the wait held back. At the
+        // strict bottom it would release the arm instead.
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        child.dispatchEvent(new Event("scrollend"));
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+        // The correction it starts lands at the end and validates there,
+        // with no scroll report to reconcile the arm.
+        shim.setGeometry(node, { scrollTop: 1200 });
+        await listRef.scrollToEnd.mock.results[0]?.value;
+        flushAnimationFrame();
+        flushAnimationFrame();
+        shim.setGeometry(node, { scrollTop: 900 });
+        fireNativeScroll(node);
+
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      });
+
+      // Control: with the wait still on, the tail growing away from the wheel
+      // is a departure and writes nothing, where the latched scroller's
+      // scrollend lets the same growth be corrected.
+      it("control: a scrollend from a scroller the wheel was not over leaves the arm blocking", () => {
+        const { node, listRef, onFollowIntentChange, result } =
+          mountWithNestedScroller(0);
+        const unrelated = shim.makeNode({
+          scrollTop: 0,
+          scrollHeight: 400,
+          clientHeight: 100,
+        });
+        unrelated.style.overflowY = "auto";
+        node.appendChild(unrelated);
+
+        unrelated.dispatchEvent(new Event("scrollend"));
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
       });
     });
 

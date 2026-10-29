@@ -137,6 +137,13 @@ type ArmedReaderDeparture =
       /** Live geometry at the gesture's event; null when unmeasurable. Its
        *  own movement is measured from here. */
       readonly geometryAtGesture: ChatTimelineScrollGeometry | null;
+      /** The element a wheel was over; null for any other gesture. A nested
+       *  scroller holding it may own the wheel's whole sequence. */
+      readonly wheelTarget: Element | null;
+      /** A wheel or relayed frame gesture away from the end: while it
+       *  blocks correction, the tail moving away from the reader is their
+       *  departure (`followEndIfPermitted`). */
+      readonly departsOnGrowth: boolean;
     }
   | { readonly source: "owned-navigation" }
   | {
@@ -207,6 +214,8 @@ function readerGestureArm(
     // follow if no native scroll event is emitted.
     blocksAutomaticCorrection,
     geometryAtGesture,
+    wheelTarget: null,
+    departsOnGrowth: false,
   };
 }
 
@@ -216,14 +225,20 @@ function distanceFromEnd(geometry: ChatTimelineScrollGeometry): number {
 
 /**
  * Whether strict-bottom geometry ends a gesture's arm: one that cannot move
- * the view, or one whose own movement it shows - the view moved up from
- * where the gesture began and away from the end, without leaving the edge's
+ * the view, one whose own movement it shows - the view moved up from where
+ * the gesture began and away from the end, without leaving the edge's
  * epsilon. Nothing else is the gesture's: a clamp lowers the offset with the
  * end, growth moves the end alone, and a report queued by an earlier write,
  * or one that comes before a smooth scroll's first frame, has not moved the
- * view at all. A movable gesture with no such evidence keeps its arm until
- * its scroll reports or the next reader input replaces it: a browser that
- * scrolls a wheel frames after its event has no bound to wait out.
+ * view at all. No strict-bottom report tells a wheel whose movement the end
+ * came up to absorb from one that has not moved yet: the browser applies a
+ * wheel's delta to the offset of the frame it lands in, after any clamp. A
+ * movable gesture with no such evidence keeps its arm until its scroll
+ * reports, the tail grows away from a wheel's reader (their departure), a
+ * nested scroller it was latched to ends its scroll
+ * (`gestureScrollEndUnblocks`), or the next reader input replaces it: a
+ * browser that scrolls a wheel frames after its event has no bound to wait
+ * out.
  */
 function strictBottomReleasesGestureArm(
   arm: ArmedReaderDeparture,
@@ -232,10 +247,38 @@ function strictBottomReleasesGestureArm(
   if (arm?.source !== "gesture") return false;
   if (!arm.blocksAutomaticCorrection) return true;
   const start = arm.geometryAtGesture;
+  if (start === null) return false;
   return (
-    start !== null &&
     geometry.scrollTop < start.scrollTop &&
     distanceFromEnd(geometry) > distanceFromEnd(start)
+  );
+}
+
+/**
+ * Whether a `scrollend` ends a blocking wheel arm's wait for its scroll: one
+ * from a nested scroller holding the wheel's target. The browser latched the
+ * wheel's sequence to that scroller, which reached its edge, so the
+ * transcript never moves for it. The transcript's own `scrollend` says
+ * nothing of the kind: a clamp ahead of a smooth scroll's first frame ends
+ * with one too.
+ *
+ * The arm then stops blocking correction but stays: a later report off the
+ * end is still the reader's.
+ */
+function gestureScrollEndUnblocks(
+  arm: ArmedReaderDeparture,
+  target: EventTarget | null,
+  scrollNode: HTMLElement,
+): boolean {
+  if (arm?.source !== "gesture" || !arm.blocksAutomaticCorrection) {
+    return false;
+  }
+  return (
+    target !== scrollNode &&
+    target instanceof Element &&
+    arm.wheelTarget !== null &&
+    scrollNode.contains(target) &&
+    target.contains(arm.wheelTarget)
   );
 }
 
@@ -1102,7 +1145,22 @@ export function useChatTimelineFollowLatch(
     // would inherit that gesture's generation and then mask the departure as
     // correction-owned - and under a finger iOS drops the write anyway, only
     // to land it after the lift.
-    if (armBlocksAutomaticCorrection(armedReaderDepartureRef.current)) return;
+    const armedDeparture = armedReaderDepartureRef.current;
+    if (
+      armedDeparture?.source === "gesture" &&
+      armedDeparture.blocksAutomaticCorrection &&
+      armedDeparture.departsOnGrowth
+    ) {
+      // The tail moved away from a reader whose wheel up has not reported:
+      // they are leaving it, whether the wheel's movement comes later or the
+      // end came up to absorb it, and no report tells the two apart. Their
+      // scroll-up holds; the tail does not drag them.
+      publishArmedDeparture(armedDeparture, geometry);
+      armedReaderDepartureRef.current = null;
+      setFollowIntent(false);
+      return;
+    }
+    if (armBlocksAutomaticCorrection(armedDeparture)) return;
 
     startEndCorrection(list, node);
   }, [
@@ -1111,7 +1169,9 @@ export function useChatTimelineFollowLatch(
     isCorrectionSuppressed,
     listRef,
     noteReaderMomentum,
+    publishArmedDeparture,
     reconcileMaintenanceAtStrictBottom,
+    setFollowIntent,
     startEndCorrection,
   ]);
 
@@ -1142,16 +1202,64 @@ export function useChatTimelineFollowLatch(
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
       });
+      const arm = armedReaderDepartureRef.current;
+      if (arm?.source === "gesture" && direction === "away-from-end") {
+        armedReaderDepartureRef.current = { ...arm, departsOnGrowth: true };
+      }
       if (direction === "toward-end") followEndIfPermitted();
     };
+    // The wheel this handler last armed, until its dispatch ends.
+    let wheelArm: {
+      readonly event: WheelEvent;
+      readonly arm: ArmedReaderDeparture;
+    } | null = null;
     const handleWheel = (event: WheelEvent): void => {
-      if (event.deltaY === 0) return;
+      // A canceled wheel scrolls nothing (a history swipe's opening tick is
+      // canceled before it reaches here).
+      if (event.deltaY === 0 || event.defaultPrevented) return;
       const direction = event.deltaY > 0 ? "toward-end" : "away-from-end";
       // The wheel scrolls a nested element, not the transcript: no gesture
       // of the transcript's, and no arm waiting for a scroll that will not
       // come.
       if (nestedScrollerTakesWheel(event.target, node, direction)) return;
       noteWheelGesture(direction);
+      const arm = armedReaderDepartureRef.current;
+      if (arm?.source !== "gesture") return;
+      armedReaderDepartureRef.current = {
+        ...arm,
+        wheelTarget: event.target instanceof Element ? event.target : null,
+      };
+      wheelArm = { event, arm: armedReaderDepartureRef.current };
+    };
+    // Last in the wheel's dispatch: a listener after ours that canceled it
+    // (an ancestor's, in the bubble phase) means it scrolls nothing, and
+    // the arm it left would wait for a report that never comes.
+    const handleWheelDispatched = (event: WheelEvent): void => {
+      const armed = wheelArm;
+      if (armed?.event !== event) return;
+      wheelArm = null;
+      if (!event.defaultPrevented) return;
+      if (armedReaderDepartureRef.current !== armed.arm) return;
+      armedReaderDepartureRef.current = null;
+      followEndIfPermitted();
+    };
+    const handleScrollEnd = (event: Event): void => {
+      if (
+        !gestureScrollEndUnblocks(
+          armedReaderDepartureRef.current,
+          event.target,
+          node,
+        )
+      ) {
+        return;
+      }
+      const arm = armedReaderDepartureRef.current;
+      if (arm?.source !== "gesture") return;
+      armedReaderDepartureRef.current = {
+        ...arm,
+        blocksAutomaticCorrection: false,
+      };
+      followEndIfPermitted();
     };
     // A wheel or swipe over an agent page or MCP App happens in the frame's
     // document, so the listeners above never see it, yet it chains to this
@@ -1261,6 +1369,13 @@ export function useChatTimelineFollowLatch(
       }
     };
     node.addEventListener("wheel", handleWheel, { passive: true });
+    window.addEventListener("wheel", handleWheelDispatched, { passive: true });
+    // `scrollend` does not bubble: a nested scroller's reaches this node only
+    // in the capture phase.
+    node.addEventListener("scrollend", handleScrollEnd, {
+      capture: true,
+      passive: true,
+    });
     node.addEventListener(
       SANDBOX_SCROLL_GESTURE_EVENT,
       handleFrameScrollGesture,
@@ -1310,6 +1425,8 @@ export function useChatTimelineFollowLatch(
     return () => {
       node.removeEventListener("scroll", observeLiveGeometry);
       node.removeEventListener("wheel", handleWheel);
+      window.removeEventListener("wheel", handleWheelDispatched);
+      node.removeEventListener("scrollend", handleScrollEnd, { capture: true });
       node.removeEventListener(
         SANDBOX_SCROLL_GESTURE_EVENT,
         handleFrameScrollGesture,

@@ -126,6 +126,79 @@ describe("sandbox loader wheel", () => {
   });
 });
 
+describe("sandbox loader touch relay", () => {
+  // The browser gives a swipe to the scroller that can take its first move,
+  // for the whole contact. One the page scrolls never reaches the transcript,
+  // so reporting its direction leaves the transcript waiting for a scroll
+  // that never comes.
+  async function swipe(
+    target: (body: HTMLElement) => Element,
+  ): Promise<readonly unknown[]> {
+    const html = await deliver("page", true);
+    const bootstrap = between(html, "<script>", "</script>");
+    const post = vi
+      .spyOn(window, "postMessage")
+      .mockImplementation(() => undefined);
+    window.eval(bootstrap);
+    const element = target(document.body);
+    const touch = (type: string, clientY: number): void => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, "touches", {
+        value: { item: (index: number) => (index === 0 ? { clientY } : null) },
+      });
+      element.dispatchEvent(event);
+    };
+    touch("touchstart", 300);
+    // Fingers moving up: toward the end of the content.
+    touch("touchmove", 280);
+    touch("touchmove", 250);
+    touch("touchmove", 200);
+    const messages: unknown[] = post.mock.calls.map(
+      (call: unknown[]) => call[0],
+    );
+    return messages.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "method" in message &&
+        message.method === "traycer/notifications/scroll-gesture",
+    );
+  }
+
+  it("leaves a swipe over content the page can scroll to the page", async () => {
+    const posted = await swipe((body) => {
+      const panel = body.appendChild(document.createElement("div"));
+      panel.style.overflowY = "auto";
+      Object.defineProperty(panel, "scrollHeight", { value: 900 });
+      Object.defineProperty(panel, "clientHeight", { value: 300 });
+      return panel.appendChild(document.createElement("span"));
+    });
+
+    expect(posted).toEqual([]);
+  });
+
+  it("control: reports the direction of a swipe over content nothing can scroll", async () => {
+    const posted = await swipe((body) =>
+      body.appendChild(document.createElement("p")),
+    );
+
+    // Earlier tests' bootstraps still listen on this window, so a move is
+    // reported once per copy.
+    expect(posted.length).toBeGreaterThan(0);
+    expect(posted).toSatisfy((messages: readonly unknown[]) =>
+      messages.every(
+        (message) =>
+          JSON.stringify(message) ===
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "traycer/notifications/scroll-gesture",
+            params: { direction: "toward-end" },
+          }),
+      ),
+    );
+  });
+});
+
 describe("served artifact page links", () => {
   /**
    * Clicks a link in a page running the composed bootstrap, in a window of

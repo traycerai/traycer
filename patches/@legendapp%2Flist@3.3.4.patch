@@ -385,10 +385,8 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..496fc9ff0af9c8411b44a04bcc04343c
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -396,7 +394,9 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..496fc9ff0af9c8411b44a04bcc04343c
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
@@ -785,10 +785,8 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..64994dfdff1e47d6f60b0b8904ea23a0
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -796,7 +794,9 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..64994dfdff1e47d6f60b0b8904ea23a0
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
@@ -1398,10 +1398,8 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..def6b1288daa69b7f4943b2af22aedfa
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -1409,7 +1407,9 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..def6b1288daa69b7f4943b2af22aedfa
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
@@ -1985,10 +1985,8 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..087c3054bb42442cddea81f8fa2d5e4f
 +    // Patched: retire the scroll command a reader's own input has ended - one
 +    // still held for its layout to settle, a scrollToEnd waiting for its
 +    // commit, one awaiting completion, or the first-paint scroll in flight -
-+    // with the anchoring it set up: its target, and the anchor lock of the
-+    // data change it came with. From here the reader's view anchors the
-+    // layout. Adjusts deferred under an animated scroll then land, as its
-+    // finish would land them.
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
 +    cancelPendingScroll: () => {
 +      state.mvcpAnchorLock = void 0;
 +      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
@@ -1996,7 +1994,9 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..087c3054bb42442cddea81f8fa2d5e4f
 +      }
 +      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
 +      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
 +      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
 +      state.scrollAdjustHandler.commitPendingAdjust(void 0);
 +      if (isInitialScrollInFlight) {
 +        // It has placed the view: finish it where the reader is. Left
