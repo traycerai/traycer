@@ -229,4 +229,26 @@ describe("the local-host push without sandboxes", () => {
     expect(app.coverage.at(-1)).toBe(true);
     app.dispose();
   });
+
+  it("adopts no sandbox row from a push negotiated at @1.1", async () => {
+    const app = await wired([buildHostListItem("local-host")]);
+
+    app.push(
+      [
+        buildHostListItem("local-host"),
+        { ...buildHostListItem("sandbox-host"), kind: "sandbox" },
+      ],
+      1,
+    );
+
+    // The push is adopted (it arms coverage), but only its personal row
+    // reaches the fleet; a build with sandboxes lists both.
+    await vi.waitFor(() => {
+      expect(app.coverage.at(-1)).toBe(true);
+      expect(app.fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+        "local-host",
+      ]);
+    });
+    app.dispose();
+  });
 });

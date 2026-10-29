@@ -39,6 +39,7 @@ import type {
   IpcHostController,
   IpcHostLifecycle,
 } from "../ipc/runner-ipc-bridge";
+import { UNRELEASED_FEATURES_ENABLED } from "../../unreleased-features";
 
 /**
  * The identity the persisted preference is scoped to, and the generation the
@@ -988,6 +989,10 @@ function scopeRows(
   const personal: HostListItem[] = [];
   const team: HostListItem[] = [];
   for (const row of response.hosts) {
+    // The build that ships without sandboxes adopts no sandbox row from any
+    // read - the poll or a push negotiated at @1.1 - so the fleet holds the
+    // rows a @1.0 subscriber was served, as the release before them.
+    if (!UNRELEASED_FEATURES_ENABLED && row.kind === "sandbox") continue;
     if (registryScopeOf(row) === "team") team.push(row);
     else personal.push(row);
   }
