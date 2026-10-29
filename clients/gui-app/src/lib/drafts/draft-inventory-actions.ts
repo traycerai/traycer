@@ -167,12 +167,17 @@ export function openNewChatDraftRow(
     openEpicTabIntent({ epicId: row.epicId, focus: undefined }),
     undefined,
   );
+  // A message given back on a sandbox opens unnamed, as its give-back does:
+  // the composer then stages that sandbox again, so Send goes there.
+  const returned =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId]
+      ?.returnedSandbox;
   useNewConversationModalOpenStore.getState().open({
     epicId: row.epicId,
     tabId,
     placement: null,
     parentId: null,
-    hostId: row.ownerHostId,
+    hostId: returned === undefined ? row.ownerHostId : null,
   });
   return true;
 }

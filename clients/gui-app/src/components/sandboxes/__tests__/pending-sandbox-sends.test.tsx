@@ -87,6 +87,8 @@ import {
   returnPendingSandboxSendToSandbox,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { useNewConversationReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
+import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
+import type { UseNavigateResult } from "@tanstack/react-router";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
@@ -4970,12 +4972,23 @@ describe("cancelling a send whose create was accepted but not answered", () => {
         target: NEW_TARGET,
       });
       // A reload before the Send: the composer's stage is gone with the
-      // window, and its draft brings it back, key and all.
+      // window. Reopened from Drafts, the draft brings it back, key and all.
       await reloadPendingSandboxStores();
       await reloadTaskDrafts();
       expect(readStagedSandbox(taskSurface)).toBeNull();
       mount();
-      renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
+      act(() => {
+        openNewChatDraftRow(navigateNowhere, {
+          epicId: "epic-1",
+          epicTitle: null,
+          ownerHostId: "owner-host",
+        });
+      });
+      const reopened = useNewConversationModalOpenStore.getState().request;
+      expect(reopened).toMatchObject({ epicId: "epic-1", hostId: null });
+      renderHook(() =>
+        useNewConversationReturnedSandbox("epic-1", reopened?.hostId ?? null),
+      );
       expect(readStagedSandbox(taskSurface)).toMatchObject({
         phase: "staged",
         clientRequestId: key,
@@ -8702,6 +8715,9 @@ function queueBehindForeignHolder(): () => void {
     }
   };
 }
+
+/** The Drafts actions navigate; where this window's route goes is not under test. */
+const navigateNowhere: UseNavigateResult<string> = () => Promise.resolve();
 
 /** Rehydrates the task's new-agent drafts the way a new window does. */
 async function reloadTaskDrafts(): Promise<void> {
