@@ -400,15 +400,24 @@ function BotChatTranscriptBody(props: {
   // id is held as pending, the host locates its ordinal, the store hydrates
   // around it (`requestTranscriptOrdinal`), and the scroll is issued the
   // moment the row renders.
-  const [scrollRequest, setScrollRequest] =
-    useState<ChatMessageScrollRequest | null>(null);
+  // Requests are numbered past every one issued, settled ones included: the
+  // list drops a request whose id it has handled, and a settled request is
+  // cleared.
+  const [scroll, setScroll] = useState<{
+    readonly request: ChatMessageScrollRequest | null;
+    readonly issued: number;
+  }>({ request: null, issued: 0 });
+  const scrollRequest = scroll.request;
   const [pendingReplyId, setPendingReplyId] = useState<string | null>(null);
   const issueScroll = useCallback((rowId: string) => {
-    setScrollRequest((previous) => ({
-      kind: "message",
-      messageId: rowId,
-      blockId: null,
-      requestId: (previous?.requestId ?? 0) + 1,
+    setScroll((previous) => ({
+      request: {
+        kind: "message",
+        messageId: rowId,
+        blockId: null,
+        requestId: previous.issued + 1,
+      },
+      issued: previous.issued + 1,
     }));
   }, []);
   const scrollToMessage = useCallback(
@@ -464,8 +473,10 @@ function BotChatTranscriptBody(props: {
     [requestTranscriptOrdinal],
   );
   const onScrollRequestSettled = useCallback((requestId: number) => {
-    setScrollRequest((current) =>
-      current !== null && current.requestId === requestId ? null : current,
+    setScroll((current) =>
+      current.request !== null && current.request.requestId === requestId
+        ? { request: null, issued: current.issued }
+        : current,
     );
   }, []);
   useLandOnMessage(landOn, state.snapshotLoaded, scrollToMessage);

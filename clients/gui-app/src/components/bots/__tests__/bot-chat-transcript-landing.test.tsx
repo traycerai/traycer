@@ -3,15 +3,18 @@
  * visit lands the list on the post, the same post's second visit included.
  * Drives the REAL `BotChatTranscript` over a session store's messages into the
  * REAL `ChatMessages` and its list, and reads where a landing went the way a
- * person sees it: the row it lands on flashes.
+ * person sees it: the row it lands on flashes. `ChatMessages` is passed
+ * through untouched; only the requests it reports settled are recorded, so a
+ * visit can wait for the one before it to have finished.
  */
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, type ComponentProps, type ReactNode } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
@@ -68,7 +71,29 @@ const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
   locateRow: vi.fn<(args: ChatLocateRowArgs) => number | null>(),
   state: { locatedOrdinal: null as number | null },
+  /** The scroll requests `ChatMessages` reported settled, in order. */
+  settled: [] as Array<{
+    readonly requestId: number;
+    readonly outcome: string;
+  }>,
 }));
+
+vi.mock("@/components/chat/chat-messages", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/chat/chat-messages")>();
+  const RecordingChatMessages = (
+    props: ComponentProps<typeof actual.ChatMessages>,
+  ): ReactNode => (
+    <actual.ChatMessages
+      {...props}
+      onScrollRequestSettled={(requestId, outcome) => {
+        mocks.settled.push({ requestId, outcome });
+        props.onScrollRequestSettled?.(requestId, outcome);
+      }}
+    />
+  );
+  return { ...actual, ChatMessages: RecordingChatMessages };
+});
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
@@ -280,6 +305,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   installLegendListViewportMetrics();
   landing = null;
+  mocks.settled.length = 0;
   members = UNRESOLVED_BOT_MEMBERS;
   requestTranscriptOrdinal = vi.fn<(ordinal: number | null) => void>();
   mocks.state.locatedOrdinal = null;
@@ -299,7 +325,7 @@ function flashing(messageId: string): boolean {
 }
 
 describe("a transcript asked to land on a post", () => {
-  it("lands on it at each visit, the same post's again after the reader has moved on", async () => {
+  it("lands on it at each visit, the same post's again once the first landing has settled and the reader has moved on", async () => {
     const view = mountTranscript(
       [resolvedUserMessage(), otherUserMessage(), reply()],
       THREAD_SURFACE,
@@ -310,6 +336,8 @@ describe("a transcript asked to land on a post", () => {
     view.rerender();
     await settleLegendList();
     expect(flashing("ask-1")).toBe(true);
+    await waitFor(() => expect(mocks.settled).toHaveLength(1));
+    expect(mocks.settled[0]?.outcome).toBe("landed");
 
     // The reader takes over the list, which ends the flash.
     act(() => {
@@ -321,5 +349,7 @@ describe("a transcript asked to land on a post", () => {
     view.rerender();
     await settleLegendList();
     expect(flashing("ask-1")).toBe(true);
+    await waitFor(() => expect(mocks.settled).toHaveLength(2));
+    expect(mocks.settled[1]?.outcome).toBe("landed");
   });
 });
