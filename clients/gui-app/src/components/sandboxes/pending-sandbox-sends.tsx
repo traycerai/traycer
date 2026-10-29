@@ -236,7 +236,7 @@ function returnStoppedPendingSend(id: string): void {
     const saveInDrafts =
       attention === undefined ||
       attention.userId !== (useAuthStore.getState().profile?.userId ?? null);
-    void returnPendingSandboxMessage(id, saveInDrafts)
+    void returnPendingSandboxMessage(id, saveInDrafts, false)
       .then((returned) => {
         if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
           return;
@@ -350,9 +350,11 @@ function PendingMessageReturnDriver(props: {
   const { id, returnRequested } = props.send;
   useEffect(() => {
     if (returnRequested === undefined) return;
-    void returnPendingSandboxMessage(id, returnRequested.saveInDrafts).catch(
-      () => undefined,
-    );
+    void returnPendingSandboxMessage(
+      id,
+      returnRequested.saveInDrafts,
+      true,
+    ).catch(() => undefined);
   }, [id, returnRequested]);
   return null;
 }
@@ -2577,6 +2579,7 @@ function PendingMessageReturnItem(props: {
       returnPendingSandboxMessage(
         send.id,
         send.returnRequested?.saveInDrafts ?? false,
+        true,
       ),
     [send.id, send.returnRequested],
   );
@@ -2928,11 +2931,14 @@ function pendingMessageRemedies(
   if (request.kind !== "message") return otherwise;
   return {
     onChooseModel: () => {
-      void returnPendingSandboxMessage(send.id, false).catch(() => undefined);
+      void returnPendingSandboxMessage(send.id, false, true).catch(
+        () => undefined,
+      );
       openActiveModelPickerForHarness("traycer", null, offeredAgents);
     },
     onChooseAnotherHost: () => {
-      void returnPendingSandboxMessage(send.id, false).then(
+      // Another host is the person's choice: a draft keeps no sandbox.
+      void returnPendingSandboxMessage(send.id, false, false).then(
         (returned) => {
           if (returned.kind === "chat") openChatClone(request.chatId);
         },
@@ -3139,7 +3145,7 @@ function PendingStagedSendItem(props: {
             onKeepWaiting: () => retrySend("keep-waiting"),
             onCancel: () => {
               if (send.request.kind === "message") {
-                void returnPendingSandboxMessage(send.id, false).catch(
+                void returnPendingSandboxMessage(send.id, false, true).catch(
                   () => undefined,
                 );
                 return;

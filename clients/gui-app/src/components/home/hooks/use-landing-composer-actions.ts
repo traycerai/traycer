@@ -231,7 +231,8 @@ export interface LandingStagedSandboxTaskArgs {
   /**
    * Hands the message to the new task, before it opens: `confirm` once the
    * task is created and attached to the sandbox's team, which lets the sandbox
-   * start; `giveBack` returns the message with its stage if setup fails. A
+   * start; `giveBack` returns the message to a draft that records its
+   * sandbox if setup fails, for the composer showing it to stage. A
    * reused source keeps its newer choice: the pending send stays with a
    * created task, and with none the message is saved in Drafts. `null` when
    * there was nothing to hand, and nothing is created.
